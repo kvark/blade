@@ -1,0 +1,15 @@
+[package]
+name = "lame-graphics"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+
+[dependencies]
+wgt = { package = "wgpu-types", version = "0.14" }
+naga = { version = "0.10", features = ["wgsl-in", "spv-out"] }
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+hal = { package = "wgpu-hal", version = "0.14", features = ["metal"] }
+[target.'cfg(not(any(target_os = "ios", target_os = "macos")))'.dependencies]
+hal = { package = "wgpu-hal", version = "0.14", features = ["vulkan"] }

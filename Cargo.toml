@@ -1,0 +1,12 @@
+[package]
+name = "lame"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lame-macros = { version = "0.1", path = "lame-macros" }
+lame-graphics = { version = "0.1", path = "lame-graphics" }
+
+[patch.crates-io]
+"wgpu-types" = { path = "../wgpu/wgpu-types" }
+"wgpu-hal" = { path = "../wgpu/wgpu-hal" }
