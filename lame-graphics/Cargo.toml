@@ -6,10 +6,14 @@ edition = "2021"
 [lib]
 
 [dependencies]
-wgt = { package = "wgpu-types", version = "0.14" }
+bitflags = "1"
 naga = { version = "0.10", features = ["wgsl-in", "spv-out"] }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-hal = { package = "wgpu-hal", version = "0.14", features = ["metal"] }
+block = "0.1"
+foreign-types = "0.3"
+metal = "0.24"
+objc = "0.2.5"
+
 [target.'cfg(not(any(target_os = "ios", target_os = "macos")))'.dependencies]
-hal = { package = "wgpu-hal", version = "0.14", features = ["vulkan"] }
+ash = "0.37"
