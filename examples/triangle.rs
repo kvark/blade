@@ -1,15 +1,13 @@
 use lame;
 
-use std::mem;
-
 //#[derive(lame::ShaderData)]
-struct Globals<'a> {
+struct Globals {
     some_uniform: f32,
     other_vec: [f32; 4],
-    diffuse_tex: &'a lame::TextureView,
+    diffuse_tex: lame::TextureView,
 }
 
-impl<'a> lame::ShaderData<'a> for Globals<'a> {
+impl lame::ShaderData for Globals {
     fn layout() -> lame::ShaderDataLayout {
         lame::ShaderDataLayout {
             plain_size: 32,
@@ -33,17 +31,14 @@ impl<'a> lame::ShaderData<'a> for Globals<'a> {
                 (
                     "diffuse_tex".to_string(),
                     lame::ShaderBinding::Resource {
-                        ty: lame::BindingType::Texture {
-                            sample_type: lame::TextureSampleType::Float { filterable: true },
-                            view_dimension: lame::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
+                        ty: lame::BindingType::Texture,
                     },
                 ),
             ],
         }
     }
-    fn fill(&self, collector: &mut lame::ShaderDataCollector<'a>) {
+    fn fill(&self, collector: &mut lame::ShaderDataCollector) {
+        /*use std::mem;
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &self.some_uniform as *const _ as *const u8,
@@ -59,52 +54,71 @@ impl<'a> lame::ShaderData<'a> for Globals<'a> {
         collector.textures.push(lame::TextureBinding {
             view: &self.diffuse_tex.raw,
             usage: lame::TextureUses::RESOURCE,
-        });
+        });*/
     }
 }
 
 fn main() {
-    let context = lame::Context::init(&lame::ContextDesc { validation: true }).unwrap();
+    let context = unsafe { lame::Context::init(lame::ContextDesc { validation: true }).unwrap() };
 
     let global_layout = <Globals as lame::ShaderData>::layout();
     let shader_source = std::fs::read_to_string("examples/foo.wgsl").unwrap();
-    let shader = context.create_shader(&lame::ShaderDesc {
+    let shader = context.create_shader(lame::ShaderDesc {
         source: &shader_source,
         data_layouts: &[&global_layout],
     });
 
-    let pipeline = context.create_render_pipeline(&lame::RenderPipelineDesc {
+    let pipeline = context.create_render_pipeline(lame::RenderPipelineDesc {
+        name: "main",
         layouts: &[&global_layout],
-        vertex: lame::ShaderStage {
-            shader: &shader,
-            entry_point: "vs",
-        },
-        fragment: lame::ShaderStage {
-            shader: &shader,
-            entry_point: "fs",
-        },
+        vertex: shader.at("vs"),
+        fragment: shader.at("fs"),
     });
 
-    let texture = context.create_texture(&lame::TextureDesc {
+    let res_texture = context.create_texture(lame::TextureDesc {
+        name: "",
         format: lame::TextureFormat::Rgba8Unorm,
     });
-    let view = context.create_texture_view(&lame::TextureViewDesc { texture: &texture });
+    let res_view = context.create_texture_view(lame::TextureViewDesc {
+        name: "",
+        texture: res_texture,
+    });
+
+    let target_texture = context.create_texture(lame::TextureDesc {
+        name: "target",
+        format: lame::TextureFormat::Rgba8Unorm,
+    });
+    let target_view = context.create_texture_view(lame::TextureViewDesc {
+        name: "target",
+        texture: target_texture,
+    });
 
     //let mut frame = window.acquire_frame(&context);
 
-    let mut command_encoder = context.create_command_encoder();
-    command_encoder.begin();
-    let mut pc = command_encoder.with_pipeline(&pipeline);
-    pc.bind_data(
-        0,
-        &Globals {
-            some_uniform: 0.0,
-            other_vec: [0.0; 4],
-            diffuse_tex: &view,
-        },
-    );
-    pc.draw(0, 3, 0, 1);
-    command_encoder.submit();
+    let mut command_encoder =
+        context.create_command_encoder(lame::CommandEncoderDesc { name: "main" });
+    command_encoder.start();
+    {
+        let mut pass = command_encoder.with_render_targets(lame::RenderTargetSet {
+            colors: &[lame::RenderTarget {
+                view: target_view,
+                init_op: lame::InitOp::Clear(lame::TextureColor::TransparentBlack),
+                finish_op: lame::FinishOp::Store,
+            }],
+            depth_stencil: None,
+        });
+        let mut pc = pass.with_pipeline(&pipeline);
+        pc.bind_data(
+            0,
+            &Globals {
+                some_uniform: 0.0,
+                other_vec: [0.0; 4],
+                diffuse_tex: res_view,
+            },
+        );
+        pc.draw(0, 3, 0, 1);
+    }
+    context.submit(&mut command_encoder);
 
     //frame.present();
 }
