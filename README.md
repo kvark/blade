@@ -38,9 +38,18 @@ Basic *resources*, such buffers and textures, are small `Copy` structs.
 
 *Bindings* are pushed directly to command encoders. This is similar to Metal Argument Buffers. There are no descriptor sets or pools. You take a structure and push it to the state. This structure includes any uniform data directly. Changing a pipeline invalidates all bindings, just like in DX12.
 
+In addition, several features may be added late or not added at all for the sake of keeping everything simple:
+
+  - vertex buffers (use storage buffers instead)
+  - multisampling (too expensive)
+
 ### Backends
 
-At first, the API should run on Vulkan and Metal. There is no DX12 support planned. On Metal side we should be able to support all versions. On Vulkan we'll require certain features to make the translation simple:
+At first, the API should run on Vulkan and Metal. There is no DX12 support planned.
+
+On Metal side we'll likely need the argument buffer support.
+
+On Vulkan we'll require certain features to make the translation simple:
 
   - [VK_KHR_push_descriptor](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VK_KHR_push_descriptor.html)
   - [VK_KHR_descriptor_update_template](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VK_KHR_descriptor_update_template.html)

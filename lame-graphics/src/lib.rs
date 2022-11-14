@@ -28,6 +28,7 @@ pub use naga::VectorSize;
 #[cfg_attr(any(target_os = "ios", target_os = "macos"), path = "metal/mod.rs")]
 #[cfg_attr(not(any(target_os = "ios", target_os = "macos")), path = "vulkan/mod.rs")]
 mod hal;
+mod shader;
 
 pub use hal::*;
 
@@ -53,7 +54,7 @@ pub struct BufferDesc<'a> {
     pub memory: Memory,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
 pub enum TextureFormat {
     Rgba8Unorm,
 }
@@ -72,6 +73,7 @@ pub struct TextureViewDesc<'a> {
 
 pub struct Shader {
     module: naga::Module,
+    info: naga::valid::ModuleInfo,
 }
 
 pub struct ShaderFunction<'a> {
@@ -112,6 +114,7 @@ pub enum ShaderBinding {
     Plain {
         ty: PlainType,
         container: PlainContainer,
+        //TODO: do we need it?
         offset: u32,
     },
 }
@@ -130,6 +133,160 @@ pub struct CommandEncoderDesc<'a> {
     pub name: &'a str,
 }
 
+/// Primitive type the input mesh is composed of.
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+pub enum PrimitiveTopology {
+    /// Vertex data is a list of points. Each vertex is a new point.
+    PointList,
+    /// Vertex data is a list of lines. Each pair of vertices composes a new line.
+    ///
+    /// Vertices `0 1 2 3` create two lines `0 1` and `2 3`
+    LineList,
+    /// Vertex data is a strip of lines. Each set of two adjacent vertices form a line.
+    ///
+    /// Vertices `0 1 2 3` create three lines `0 1`, `1 2`, and `2 3`.
+    LineStrip,
+    /// Vertex data is a list of triangles. Each set of 3 vertices composes a new triangle.
+    ///
+    /// Vertices `0 1 2 3 4 5` create two triangles `0 1 2` and `3 4 5`
+    #[default]
+    TriangleList,
+    /// Vertex data is a triangle strip. Each set of three adjacent vertices form a triangle.
+    ///
+    /// Vertices `0 1 2 3 4 5` creates four triangles `0 1 2`, `2 1 3`, `2 3 4`, and `4 3 5`
+    TriangleStrip,
+}
+
+/// Vertex winding order which classifies the "front" face of a triangle.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum FrontFace {
+    /// Triangles with vertices in counter clockwise order are considered the front face.
+    ///
+    /// This is the default with right handed coordinate spaces.
+    #[default]
+    Ccw,
+    /// Triangles with vertices in clockwise order are considered the front face.
+    ///
+    /// This is the default with left handed coordinate spaces.
+    Cw,
+}
+
+/// Face of a vertex.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Face {
+    /// Front face
+    Front,
+    /// Back face
+    Back,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PrimitiveState {
+    /// The primitive topology used to interpret vertices.
+    pub topology: PrimitiveTopology,
+    /// The face to consider the front for the purpose of culling and stencil operations.
+    pub front_face: FrontFace,
+    /// The face culling mode.
+    pub cull_mode: Option<Face>,
+    /// If set to true, the polygon depth is not clipped to 0-1 before rasterization.
+    pub unclipped_depth: bool,
+    /// If true, only the primitive edges are rasterized..
+    pub wireframe: bool,
+}
+
+/// Comparison function used for depth and stencil operations.
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+pub enum CompareFunction {
+    /// Function never passes
+    Never,
+    /// Function passes if new value less than existing value
+    Less,
+    /// Function passes if new value is equal to existing value. When using
+    /// this compare function, make sure to mark your Vertex Shader's `@builtin(position)`
+    /// output as `@invariant` to prevent artifacting.
+    Equal,
+    /// Function passes if new value is less than or equal to existing value
+    LessEqual,
+    /// Function passes if new value is greater than existing value
+    Greater,
+    /// Function passes if new value is not equal to existing value. When using
+    /// this compare function, make sure to mark your Vertex Shader's `@builtin(position)`
+    /// output as `@invariant` to prevent artifacting.
+    NotEqual,
+    /// Function passes if new value is greater than or equal to existing value
+    GreaterEqual,
+    /// Function always passes
+    Always,
+}
+
+/// Operation to perform on the stencil value.
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+pub enum StencilOperation {
+    /// Keep stencil value unchanged.
+    #[default]
+    Keep,
+    /// Set stencil value to zero.
+    Zero,
+    /// Replace stencil value with value provided.
+    Replace,
+    /// Bitwise inverts stencil value.
+    Invert,
+    /// Increments stencil value by one, clamping on overflow.
+    IncrementClamp,
+    /// Decrements stencil value by one, clamping on underflow.
+    DecrementClamp,
+    /// Increments stencil value by one, wrapping on overflow.
+    IncrementWrap,
+    /// Decrements stencil value by one, wrapping on underflow.
+    DecrementWrap,
+}
+
+/// Describes stencil state in a render pipeline.
+///
+/// If you are not using stencil state, set this to [`StencilFaceState::IGNORE`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StencilFaceState {
+    /// Comparison function that determines if the fail_op or pass_op is used on the stencil buffer.
+    pub compare: CompareFunction,
+    /// Operation that is preformed when stencil test fails.
+    pub fail_op: StencilOperation,
+    /// Operation that is performed when depth test fails but stencil test succeeds.
+    pub depth_fail_op: StencilOperation,
+    /// Operation that is performed when stencil test success.
+    pub pass_op: StencilOperation,
+}
+
+impl StencilFaceState {
+    /// Ignore the stencil state for the face.
+    pub const IGNORE: Self = StencilFaceState {
+        compare: CompareFunction::Always,
+        fail_op: StencilOperation::Keep,
+        depth_fail_op: StencilOperation::Keep,
+        pass_op: StencilOperation::Keep,
+    };
+}
+
+impl Default for StencilFaceState {
+    fn default() -> Self {
+        Self::IGNORE
+    }
+}
+
+/// State of the stencil operation (fixed-pipeline stage).
+///
+/// For use in [`DepthStencilState`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct StencilState {
+    /// Front face mode.
+    pub front: StencilFaceState,
+    /// Back face mode.
+    pub back: StencilFaceState,
+    /// Stencil values are AND'd with this mask when reading and writing from the stencil buffer. Only low 8 bits are used.
+    pub read_mask: u32,
+    /// Stencil values are AND'd with this mask when writing to the stencil buffer. Only low 8 bits are used.
+    pub write_mask: u32,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DepthBiasState {
     /// Constant depth biasing factor, in basic units of the depth format.
@@ -140,11 +297,190 @@ pub struct DepthBiasState {
     pub clamp: f32,
 }
 
+/// Describes the depth/stencil state in a render pipeline.
+#[derive(Clone, Debug)]
+pub struct DepthStencilState {
+    /// Format of the depth/stencil texture view.
+    pub format: TextureFormat,
+    /// If disabled, depth will not be written to.
+    pub depth_write_enabled: bool,
+    /// Comparison function used to compare depth values in the depth test.
+    pub depth_compare: CompareFunction,
+    /// Stencil state.
+    pub stencil: StencilState,
+    /// Depth bias state.
+    pub bias: DepthBiasState,
+}
+
+/// Alpha blend factor.
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+pub enum BlendFactor {
+    /// 0.0
+    Zero,
+    /// 1.0
+    One,
+    /// S.component
+    Src,
+    /// 1.0 - S.component
+    OneMinusSrc,
+    /// S.alpha
+    SrcAlpha,
+    /// 1.0 - S.alpha
+    OneMinusSrcAlpha,
+    /// D.component
+    Dst,
+    /// 1.0 - D.component
+    OneMinusDst,
+    /// D.alpha
+    DstAlpha,
+    /// 1.0 - D.alpha
+    OneMinusDstAlpha,
+    /// min(S.alpha, 1.0 - D.alpha)
+    SrcAlphaSaturated,
+    /// Constant
+    Constant,
+    /// 1.0 - Constant
+    OneMinusConstant,
+}
+
+/// Alpha blend operation.
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+pub enum BlendOperation {
+    /// Src + Dst
+    #[default]
+    Add,
+    /// Src - Dst
+    Subtract,
+    /// Dst - Src
+    ReverseSubtract,
+    /// min(Src, Dst)
+    Min,
+    /// max(Src, Dst)
+    Max,
+}
+
+/// Describes a blend component of a [`BlendState`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BlendComponent {
+    /// Multiplier for the source, which is produced by the fragment shader.
+    pub src_factor: BlendFactor,
+    /// Multiplier for the destination, which is stored in the target.
+    pub dst_factor: BlendFactor,
+    /// The binary operation applied to the source and destination,
+    /// multiplied by their respective factors.
+    pub operation: BlendOperation,
+}
+
+impl BlendComponent {
+    /// Default blending state that replaces destination with the source.
+    pub const REPLACE: Self = Self {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::Zero,
+        operation: BlendOperation::Add,
+    };
+
+    /// Blend state of (1 * src) + ((1 - src_alpha) * dst)
+    pub const OVER: Self = Self {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
+        operation: BlendOperation::Add,
+    };
+}
+
+impl Default for BlendComponent {
+    fn default() -> Self {
+        Self::REPLACE
+    }
+}
+
+/// Describe the blend state of a render pipeline,
+/// within [`ColorTargetState`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BlendState {
+    /// Color equation.
+    pub color: BlendComponent,
+    /// Alpha equation.
+    pub alpha: BlendComponent,
+}
+
+impl BlendState {
+    /// Blend mode that does no color blending, just overwrites the output with the contents of the shader.
+    pub const REPLACE: Self = Self {
+        color: BlendComponent::REPLACE,
+        alpha: BlendComponent::REPLACE,
+    };
+
+    /// Blend mode that does standard alpha blending with non-premultiplied alpha.
+    pub const ALPHA_BLENDING: Self = Self {
+        color: BlendComponent {
+            src_factor: BlendFactor::SrcAlpha,
+            dst_factor: BlendFactor::OneMinusSrcAlpha,
+            operation: BlendOperation::Add,
+        },
+        alpha: BlendComponent::OVER,
+    };
+
+    /// Blend mode that does standard alpha blending with premultiplied alpha.
+    pub const PREMULTIPLIED_ALPHA_BLENDING: Self = Self {
+        color: BlendComponent::OVER,
+        alpha: BlendComponent::OVER,
+    };
+}
+
+bitflags::bitflags! {
+    /// Color write mask. Disabled color channels will not be written to.
+    #[repr(transparent)]
+    pub struct ColorWrites: u32 {
+        /// Enable red channel writes
+        const RED = 1 << 0;
+        /// Enable green channel writes
+        const GREEN = 1 << 1;
+        /// Enable blue channel writes
+        const BLUE = 1 << 2;
+        /// Enable alpha channel writes
+        const ALPHA = 1 << 3;
+        /// Enable red, green, and blue channel writes
+        const COLOR = Self::RED.bits | Self::GREEN.bits | Self::BLUE.bits;
+        /// Enable writes to all channels.
+        const ALL = Self::RED.bits | Self::GREEN.bits | Self::BLUE.bits | Self::ALPHA.bits;
+    }
+}
+
+impl Default for ColorWrites {
+    fn default() -> Self {
+        Self::ALL
+    }
+}
+
+/// Describes the color state of a render pipeline.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ColorTargetState {
+    /// The [`TextureFormat`] of the image that this pipeline will render to.
+    pub format: TextureFormat,
+    /// The blending that is used for this pipeline.
+    pub blend: Option<BlendState>,
+    /// Mask which enables/disables writes to different color/alpha channel.
+    pub write_mask: ColorWrites,
+}
+
+impl From<TextureFormat> for ColorTargetState {
+    fn from(format: TextureFormat) -> Self {
+        Self {
+            format,
+            blend: None,
+            write_mask: ColorWrites::ALL,
+        }
+    }
+}
+
 pub struct RenderPipelineDesc<'a> {
     pub name: &'a str,
     pub layouts: &'a [&'a ShaderDataLayout],
     pub vertex: ShaderFunction<'a>,
+    pub primitive: PrimitiveState,
+    pub depth_stencil: Option<DepthStencilState>,
     pub fragment: ShaderFunction<'a>,
+    pub color_targets: &'a [&'a ColorTargetState],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -180,21 +516,12 @@ pub struct RenderTargetSet<'a> {
     pub depth_stencil: Option<RenderTarget>,
 }
 
-impl Context {
-    pub fn create_shader(&self, desc: ShaderDesc) -> Shader {
-        unimplemented!()
-    }
-}
-
-#[doc(hidden)]
-pub struct ShaderDataCollector {
-    //pub plain_data: &'a mut [u8],
-    //pub buffers: Vec<hal::BufferBinding<'a, Api>>,
-    //pub samplers: Vec<&'a <Api as hal::Api>::Sampler>,
-    //pub textures: Vec<hal::TextureBinding<'a, Api>>,
+pub trait ShaderDataEncoder {
+    fn set_texture(&mut self, index: u32, view: TextureView);
+    fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P);
 }
 
 pub trait ShaderData {
     fn layout() -> ShaderDataLayout;
-    fn fill(&self, collector: &mut ShaderDataCollector);
+    fn fill<E: ShaderDataEncoder>(&self, encoder: E);
 }

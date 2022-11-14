@@ -37,24 +37,10 @@ impl lame::ShaderData for Globals {
             ],
         }
     }
-    fn fill(&self, collector: &mut lame::ShaderDataCollector) {
-        /*use std::mem;
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &self.some_uniform as *const _ as *const u8,
-                collector.plain_data.as_mut_ptr().add(0),
-                mem::size_of::<f32>(),
-            );
-            std::ptr::copy_nonoverlapping(
-                &self.other_vec as *const _ as *const u8,
-                collector.plain_data.as_mut_ptr().add(16),
-                mem::size_of::<[f32; 4]>(),
-            );
-        }
-        collector.textures.push(lame::TextureBinding {
-            view: &self.diffuse_tex.raw,
-            usage: lame::TextureUses::RESOURCE,
-        });*/
+    fn fill<E: lame::ShaderDataEncoder>(&self, mut encoder: E) {
+        encoder.set_plain(0, self.some_uniform);
+        encoder.set_plain(1, self.other_vec);
+        encoder.set_texture(2, self.diffuse_tex);
     }
 }
 
@@ -72,7 +58,10 @@ fn main() {
         name: "main",
         layouts: &[&global_layout],
         vertex: shader.at("vs"),
+        primitive: lame::PrimitiveState::default(),
+        depth_stencil: None,
         fragment: shader.at("fs"),
+        color_targets: &[&lame::TextureFormat::Rgba8Unorm.into()],
     });
 
     let res_texture = context.create_texture(lame::TextureDesc {

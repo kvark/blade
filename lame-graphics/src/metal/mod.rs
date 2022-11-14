@@ -7,6 +7,7 @@ use foreign_types::{ForeignTypeRef as _};
 use objc::{msg_send, sel, sel_impl};
 
 mod command;
+mod pipeline;
 
 pub struct Context {
     device: Mutex<metal::Device>,
@@ -18,11 +19,15 @@ pub struct Buffer {
     raw: *mut metal::MTLBuffer,
 }
 
-impl Buffer {
-    pub fn is_valid(&self) -> bool {
-        !self.raw.is_null()
+impl Default for Buffer {
+    fn default() -> Self {
+        Self {
+            raw: ptr::null_mut(),
+        }
     }
+}
 
+impl Buffer {
     fn as_ref(&self) -> &metal::BufferRef {
         unsafe { metal::BufferRef::from_ptr(self.raw) }
     }
@@ -30,23 +35,39 @@ impl Buffer {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Texture {
-    raw: ptr::NonNull<metal::MTLTexture>,
+    raw: *mut metal::MTLTexture,
+}
+
+impl Default for Texture {
+    fn default() -> Self {
+        Self {
+            raw: ptr::null_mut(),
+        }
+    }
 }
 
 impl Texture {
     fn as_ref(&self) -> &metal::TextureRef {
-        unsafe { metal::TextureRef::from_ptr(self.raw.as_ptr()) }
+        unsafe { metal::TextureRef::from_ptr(self.raw) }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextureView {
-    raw: ptr::NonNull<metal::MTLTexture>,
+    raw: *mut metal::MTLTexture,
+}
+
+impl Default for TextureView {
+    fn default() -> Self {
+        Self {
+            raw: ptr::null_mut(),
+        }
+    }
 }
 
 impl TextureView {
     fn as_ref(&self) -> &metal::TextureRef {
-        unsafe { metal::TextureRef::from_ptr(self.raw.as_ptr()) }
+        unsafe { metal::TextureRef::from_ptr(self.raw) }
     }
 }
 
@@ -59,11 +80,15 @@ pub struct CommandEncoder {
 #[derive(Debug)]
 pub struct RenderPipeline {
     raw: metal::RenderPipelineState,
+    #[allow(dead_code)]
+    vs_lib: metal::Library,
+    #[allow(dead_code)]
+    fs_lib: metal::Library,
     primitive_type: metal::MTLPrimitiveType,
     triangle_fill_mode: metal::MTLTriangleFillMode,
     front_winding: metal::MTLWinding,
     cull_mode: metal::MTLCullMode,
-    depth_clip_mode: Option<metal::MTLDepthClipMode>,
+    depth_clip_mode: metal::MTLDepthClipMode,
     depth_stencil: Option<(metal::DepthStencilState, super::DepthBiasState)>,
 }
 
@@ -77,6 +102,29 @@ pub struct RenderCommandEncoder<'a> {
 pub struct RenderPipelineContext<'a> {
     encoder: &'a mut metal::RenderCommandEncoder,
     primitive_type: metal::MTLPrimitiveType,
+}
+
+struct ShaderDataEncoder {
+    raw: metal::ArgumentEncoderRef,
+}
+
+impl super::ShaderDataEncoder for ShaderDataEncoder {
+    fn set_texture(&mut self, index: u32, view: TextureView) {
+        self.raw.set_texture(index as _, view.as_ref());
+    }
+    fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P) {
+        unsafe {
+            ptr::write_unaligned(self.raw.constant_data(index as _) as *mut P, data);
+        }
+    }
+}
+
+fn map_texture_format(format: super::TextureFormat) -> metal::MTLPixelFormat {
+    use super::TextureFormat as Tf;
+    use metal::MTLPixelFormat::*;
+    match format {
+        Tf::Rgba8Unorm => RGBA8Unorm,
+    }
 }
 
 impl Context {
@@ -132,10 +180,6 @@ impl Context {
             raw: None,
             queue: Arc::clone(&self.queue),
         }
-    }
-
-    pub fn create_render_pipeline(&self, desc: super::RenderPipelineDesc) -> RenderPipeline {
-        unimplemented!()
     }
 
     pub fn submit(&self, encoder: &mut CommandEncoder) {

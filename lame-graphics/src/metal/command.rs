@@ -94,9 +94,7 @@ impl super::RenderCommandEncoder<'_> {
         self.raw.set_front_facing_winding(pipeline.front_winding);
         self.raw.set_cull_mode(pipeline.cull_mode);
         self.raw.set_triangle_fill_mode(pipeline.triangle_fill_mode);
-        if let Some(depth_clip) = pipeline.depth_clip_mode {
-            self.raw.set_depth_clip_mode(depth_clip);
-        }
+        self.raw.set_depth_clip_mode(pipeline.depth_clip_mode);
         if let Some((ref state, bias)) = pipeline.depth_stencil {
             self.raw.set_depth_stencil_state(state);
             self.raw.set_depth_bias(bias.constant as f32, bias.slope_scale, bias.clamp);
