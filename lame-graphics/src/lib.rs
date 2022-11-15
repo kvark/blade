@@ -59,10 +59,42 @@ pub enum TextureFormat {
     Rgba8Unorm,
 }
 
+/// Dimensionality of a texture.
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+pub enum TextureDimension {
+    /// 1D texture
+    D1,
+    /// 2D texture
+    D2,
+    /// 3D texture
+    D3,
+}
+
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+pub struct Extent {
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+}
+
+bitflags::bitflags! {
+    pub struct TextureUsage: u32 {
+        const COPY = 1 << 0;
+        const TARGET = 1 << 1;
+        const RESOURCE = 1 << 2;
+        const STORAGE = 1 << 3;
+    }
+}
+
 #[derive(Debug)]
 pub struct TextureDesc<'a> {
     pub name: &'a str,
     pub format: TextureFormat,
+    pub size: Extent,
+    pub array_layers: u32,
+    pub mip_level_count: u32,
+    pub dimension: TextureDimension,
+    pub usage: TextureUsage,
 }
 
 #[derive(Debug)]

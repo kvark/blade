@@ -66,6 +66,15 @@ fn main() {
     let res_texture = context.create_texture(lame::TextureDesc {
         name: "",
         format: lame::TextureFormat::Rgba8Unorm,
+        size: lame::Extent {
+            width: 100,
+            height: 100,
+            depth: 1,
+        },
+        dimension: lame::TextureDimension::D2,
+        array_layers: 1,
+        mip_level_count: 1,
+        usage: lame::TextureUsage::RESOURCE,
     });
     let res_view = context.create_texture_view(lame::TextureViewDesc {
         name: "",
@@ -75,6 +84,15 @@ fn main() {
     let target_texture = context.create_texture(lame::TextureDesc {
         name: "target",
         format: lame::TextureFormat::Rgba8Unorm,
+        size: lame::Extent {
+            width: 200,
+            height: 200,
+            depth: 1,
+        },
+        dimension: lame::TextureDimension::D2,
+        array_layers: 1,
+        mip_level_count: 1,
+        usage: lame::TextureUsage::TARGET,
     });
     let target_view = context.create_texture_view(lame::TextureViewDesc {
         name: "target",

@@ -130,6 +130,26 @@ fn map_texture_format(format: super::TextureFormat) -> metal::MTLPixelFormat {
     }
 }
 
+fn map_texture_usage(usage: crate::TextureUsage) -> metal::MTLTextureUsage {
+    use crate::TextureUsage as Tu;
+
+    let mut mtl_usage = metal::MTLTextureUsage::Unknown;
+
+    mtl_usage.set(
+        metal::MTLTextureUsage::RenderTarget,
+        usage.intersects(Tu::TARGET),
+    );
+    mtl_usage.set(
+        metal::MTLTextureUsage::ShaderRead,
+        usage.intersects(
+            Tu::RESOURCE,
+        ),
+    );
+    mtl_usage.set(metal::MTLTextureUsage::ShaderWrite, usage.intersects(Tu::STORAGE));
+
+    mtl_usage
+}
+
 impl Context {
     pub unsafe fn init(desc: super::ContextDesc) -> Result<Self, super::NotSupportedError> {
         if desc.validation {
@@ -152,12 +172,14 @@ impl Context {
                 metal::MTLResourceOptions::StorageModeShared,
             super::Memory::Upload => metal::MTLResourceOptions::StorageModeShared | metal::MTLResourceOptions::CPUCacheModeWriteCombined,
         };
-        let raw = objc::rc::autoreleasepool(|| unsafe {
+        let raw = objc::rc::autoreleasepool(|| {
             let raw = self.device.lock().unwrap().new_buffer(desc.size, options);
             if !desc.name.is_empty() {
                 raw.set_label(&desc.name);
             }
-            msg_send![raw.as_ref(), retain]
+            unsafe {
+                msg_send![raw.as_ref(), retain]
+            }
         });
         Buffer {
             raw,
@@ -171,11 +193,65 @@ impl Context {
     }
 
     pub fn create_texture(&self, desc: super::TextureDesc) -> Texture {
-        unimplemented!()
+        let mtl_format = map_texture_format(desc.format);
+
+        let mtl_type = match desc.dimension {
+            crate::TextureDimension::D1 => {
+                if desc.array_layers > 1 {
+                    metal::MTLTextureType::D1Array
+                } else {
+                    metal::MTLTextureType::D1
+                }
+            }
+            crate::TextureDimension::D2 => {
+                if desc.array_layers > 1 {
+                    metal::MTLTextureType::D2Array
+                } else {
+                    metal::MTLTextureType::D2
+                }
+            }
+            crate::TextureDimension::D3 => {
+                metal::MTLTextureType::D3
+            }
+        };
+        let mtl_usage = map_texture_usage(desc.usage);
+
+        let raw = objc::rc::autoreleasepool(|| {
+            let descriptor = metal::TextureDescriptor::new();
+
+            descriptor.set_texture_type(mtl_type);
+            descriptor.set_width(desc.size.width as u64);
+            descriptor.set_height(desc.size.height as u64);
+            descriptor.set_depth(desc.size.depth as u64);
+            descriptor.set_array_length(desc.array_layers as u64);
+            descriptor.set_mipmap_level_count(desc.mip_level_count as u64);
+            descriptor.set_pixel_format(mtl_format);
+            descriptor.set_usage(mtl_usage);
+            descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+
+            let raw = self.device.lock().unwrap().new_texture(&descriptor);
+            if !desc.name.is_empty() {
+                raw.set_label(desc.name);
+            }
+
+            unsafe {
+                msg_send![raw.as_ref(), retain]
+            }
+        });
+
+        Texture {
+            raw,
+        }
     }
 
     pub fn create_texture_view(&self, desc: super::TextureViewDesc) -> TextureView {
-        unimplemented!()
+        //TODO: proper subresource selection
+        let raw = unsafe {
+            msg_send![desc.texture.raw, retain]
+        };
+        TextureView {
+            raw
+        }
     }
 
     pub fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
