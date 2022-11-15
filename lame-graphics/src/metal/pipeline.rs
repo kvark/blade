@@ -134,7 +134,6 @@ impl super::Context {
     fn load_shader(
         &self,
         sf: crate::ShaderFunction,
-        layouts: &[&crate::ShaderDataLayout],
         flags: ShaderFlags,
         naga_stage: naga::ShaderStage,
     ) -> CompiledShader {
@@ -207,40 +206,41 @@ impl super::Context {
     }
 
     pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
+        let mut bind_groups = Vec::new();
+
+        let triangle_fill_mode = match desc.primitive.wireframe {
+            false => metal::MTLTriangleFillMode::Fill,
+            true => metal::MTLTriangleFillMode::Lines,
+        };
+
+        let (primitive_class, primitive_type) = match desc.primitive.topology {
+            crate::PrimitiveTopology::PointList => (
+                metal::MTLPrimitiveTopologyClass::Point,
+                metal::MTLPrimitiveType::Point,
+            ),
+            crate::PrimitiveTopology::LineList => (
+                metal::MTLPrimitiveTopologyClass::Line,
+                metal::MTLPrimitiveType::Line,
+            ),
+            crate::PrimitiveTopology::LineStrip => (
+                metal::MTLPrimitiveTopologyClass::Line,
+                metal::MTLPrimitiveType::LineStrip,
+            ),
+            crate::PrimitiveTopology::TriangleList => (
+                metal::MTLPrimitiveTopologyClass::Triangle,
+                metal::MTLPrimitiveType::Triangle,
+            ),
+            crate::PrimitiveTopology::TriangleStrip => (
+                metal::MTLPrimitiveTopologyClass::Triangle,
+                metal::MTLPrimitiveType::TriangleStrip,
+            ),
+        };
+
         objc::rc::autoreleasepool(|| {
             let descriptor = metal::RenderPipelineDescriptor::new();
 
-            let triangle_fill_mode = match desc.primitive.wireframe {
-                false => metal::MTLTriangleFillMode::Fill,
-                true => metal::MTLTriangleFillMode::Lines,
-            };
-
-            let (primitive_class, primitive_type) = match desc.primitive.topology {
-                crate::PrimitiveTopology::PointList => (
-                    metal::MTLPrimitiveTopologyClass::Point,
-                    metal::MTLPrimitiveType::Point,
-                ),
-                crate::PrimitiveTopology::LineList => (
-                    metal::MTLPrimitiveTopologyClass::Line,
-                    metal::MTLPrimitiveType::Line,
-                ),
-                crate::PrimitiveTopology::LineStrip => (
-                    metal::MTLPrimitiveTopologyClass::Line,
-                    metal::MTLPrimitiveType::LineStrip,
-                ),
-                crate::PrimitiveTopology::TriangleList => (
-                    metal::MTLPrimitiveTopologyClass::Triangle,
-                    metal::MTLPrimitiveType::Triangle,
-                ),
-                crate::PrimitiveTopology::TriangleStrip => (
-                    metal::MTLPrimitiveTopologyClass::Triangle,
-                    metal::MTLPrimitiveType::TriangleStrip,
-                ),
-            };
-
             let vs = self.load_shader(
                 desc.vertex,
-                desc.layouts,
                 match primitive_class {
                     metal::MTLPrimitiveTopologyClass::Point => ShaderFlags::ALLOW_POINT_SIZE,
                     _ => ShaderFlags::empty(),
@@ -252,7 +252,6 @@ impl super::Context {
             // Fragment shader
             let fs = self.load_shader(
                 desc.fragment,
-                desc.layouts,
                 ShaderFlags::empty(),
                 naga::ShaderStage::Fragment,
             );
@@ -324,6 +323,7 @@ impl super::Context {
                 raw,
                 vs_lib: vs.library,
                 fs_lib: fs.library,
+                bind_groups: bind_groups.into_boxed_slice(),
                 primitive_type,
                 triangle_fill_mode,
                 front_winding: match desc.primitive.front_face {

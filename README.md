@@ -47,7 +47,7 @@ In addition, several features may be added late or not added at all for the sake
 
 At first, the API should run on Vulkan and Metal. There is no DX12 support planned.
 
-On Metal side we'll likely need the argument buffer support.
+On Metal side we take advantage of the argument buffers but do not require them.
 
 On Vulkan we'll require certain features to make the translation simple:
 

@@ -71,6 +71,14 @@ pub struct TextureViewDesc<'a> {
     pub texture: Texture,
 }
 
+bitflags::bitflags! {
+    struct ShaderVisibility: u32 {
+        const COMPUTE = 1 << 0;
+        const VERTEX = 1 << 1;
+        const FRAGMENT = 1 << 2;
+    }
+}
+
 pub struct Shader {
     module: naga::Module,
     info: naga::valid::ModuleInfo,
@@ -126,7 +134,7 @@ pub struct ShaderDataLayout {
 
 pub struct ShaderDesc<'a> {
     pub source: &'a str,
-    pub data_layouts: &'a[&'a ShaderDataLayout],
+    pub data_layouts: &'a[Option<&'a ShaderDataLayout>],
 }
 
 pub struct CommandEncoderDesc<'a> {
@@ -475,7 +483,6 @@ impl From<TextureFormat> for ColorTargetState {
 
 pub struct RenderPipelineDesc<'a> {
     pub name: &'a str,
-    pub layouts: &'a [&'a ShaderDataLayout],
     pub vertex: ShaderFunction<'a>,
     pub primitive: PrimitiveState,
     pub depth_stencil: Option<DepthStencilState>,

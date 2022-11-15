@@ -1,3 +1,35 @@
+struct ShaderDataEncoder<'a> {
+    //raw: metal::ArgumentEncoderRef,
+    cs_encoder: Option<&'a metal::ComputeCommandEncoderRef>,
+    vs_encoder: Option<&'a metal::RenderCommandEncoderRef>,
+    fs_encoder: Option<&'a metal::RenderCommandEncoderRef>,
+    targets: &'a [u32],
+    plain_data: &'a mut [u8],
+}
+
+impl crate::ShaderDataEncoder for ShaderDataEncoder<'_> {
+    fn set_texture(&mut self, index: u32, view: super::TextureView) {
+        //self.raw.set_texture(index as _, view.as_ref());
+        let slot = self.targets[index as usize] as _;
+        let value = Some(view.as_ref());
+        if let Some(encoder) = self.vs_encoder {
+            encoder.set_vertex_texture(slot, value);
+        }
+        if let Some(encoder) = self.fs_encoder {
+            encoder.set_vertex_texture(slot, value);
+        }
+        if let Some(encoder) = self.cs_encoder {
+            encoder.set_texture(slot, value);
+        }
+    }
+    fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P) {
+        let offset = self.targets[index as usize] as usize;
+        unsafe {
+            std::ptr::write_unaligned(self.plain_data.as_mut_ptr().add(offset) as *mut P, data);
+        }
+    }
+}
+
 impl super::CommandEncoder {
     pub fn start(&mut self) {
         let queue = self.queue.lock().unwrap();
@@ -82,14 +114,14 @@ impl super::CommandEncoder {
         });
 
         super::RenderCommandEncoder {
-            owner: self.raw.as_mut().unwrap(),
             raw,
+            plain_data: &mut self.plain_data,
         }
     }
 }
 
 impl super::RenderCommandEncoder<'_> {
-    pub fn with_pipeline(&mut self, pipeline: &super::RenderPipeline) -> super::RenderPipelineContext {
+    pub fn with_pipeline<'p>(&'p mut self, pipeline: &'p super::RenderPipeline) -> super::RenderPipelineContext<'p> {
         self.raw.set_render_pipeline_state(&pipeline.raw);
         self.raw.set_front_facing_winding(pipeline.front_winding);
         self.raw.set_cull_mode(pipeline.cull_mode);
@@ -100,16 +132,47 @@ impl super::RenderCommandEncoder<'_> {
             self.raw.set_depth_bias(bias.constant as f32, bias.slope_scale, bias.clamp);
         }
 
+        let max_data_size = pipeline.bind_groups.iter().map(|bg| bg.plain_data_size as usize).max().unwrap_or_default();
+        self.plain_data.resize(max_data_size, 0);
+
         super::RenderPipelineContext {
             encoder: &mut self.raw,
             primitive_type: pipeline.primitive_type,
+            bind_groups: &pipeline.bind_groups,
+            plain_data: self.plain_data.as_mut(),
         }
     }
 }
 
 impl super::RenderPipelineContext<'_> {
     pub fn bind_data<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
+        let info = &self.bind_groups[group as usize];
 
+        data.fill(ShaderDataEncoder {
+            cs_encoder: None,
+            vs_encoder: if info.visibility.contains(crate::ShaderVisibility::VERTEX) {
+                Some(self.encoder.as_ref())
+            } else {
+                None
+            },
+            fs_encoder:  if info.visibility.contains(crate::ShaderVisibility::FRAGMENT) {
+                Some(self.encoder.as_ref())
+            } else {
+                None
+            },
+            targets: &info.targets,
+            plain_data: self.plain_data,
+        });
+
+        if let Some(slot) = info.plain_buffer_slot {
+            let data = self.plain_data.as_ptr() as *const _;
+            if info.visibility.contains(crate::ShaderVisibility::VERTEX) {
+                self.encoder.set_vertex_bytes(slot as _, info.plain_data_size as _, data);
+            }
+            if info.visibility.contains(crate::ShaderVisibility::FRAGMENT) {
+                self.encoder.set_fragment_bytes(slot as _, info.plain_data_size as _, data);
+            }
+        }
     }
 
     pub fn draw(&mut self, first_vertex: u32, vertex_count: u32, first_instance: u32, instance_count: u32) {

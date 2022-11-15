@@ -51,12 +51,11 @@ fn main() {
     let shader_source = std::fs::read_to_string("examples/foo.wgsl").unwrap();
     let shader = context.create_shader(lame::ShaderDesc {
         source: &shader_source,
-        data_layouts: &[&global_layout],
+        data_layouts: &[Some(&global_layout)],
     });
 
     let pipeline = context.create_render_pipeline(lame::RenderPipelineDesc {
         name: "main",
-        layouts: &[&global_layout],
         vertex: shader.at("vs"),
         primitive: lame::PrimitiveState::default(),
         depth_stencil: None,

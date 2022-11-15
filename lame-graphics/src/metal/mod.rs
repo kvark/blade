@@ -75,6 +75,15 @@ impl TextureView {
 pub struct CommandEncoder {
     raw: Option<metal::CommandBuffer>,
     queue: Arc<Mutex<metal::CommandQueue>>,
+    plain_data: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct BindGroupInfo {
+    visibility: crate::ShaderVisibility,
+    targets: Box<[u32]>,
+    plain_buffer_slot: Option<u32>,
+    plain_data_size: u32,
 }
 
 #[derive(Debug)]
@@ -84,6 +93,7 @@ pub struct RenderPipeline {
     vs_lib: metal::Library,
     #[allow(dead_code)]
     fs_lib: metal::Library,
+    bind_groups: Box<[BindGroupInfo]>,
     primitive_type: metal::MTLPrimitiveType,
     triangle_fill_mode: metal::MTLTriangleFillMode,
     front_winding: metal::MTLWinding,
@@ -94,29 +104,22 @@ pub struct RenderPipeline {
 
 #[derive(Debug)]
 pub struct RenderCommandEncoder<'a> {
-    owner: &'a mut metal::CommandBuffer,
     raw: metal::RenderCommandEncoder,
+    plain_data: &'a mut Vec<u8>,
 }
 
 #[derive(Debug)]
 pub struct RenderPipelineContext<'a> {
     encoder: &'a mut metal::RenderCommandEncoder,
     primitive_type: metal::MTLPrimitiveType,
+    bind_groups: &'a [BindGroupInfo],
+    plain_data: &'a mut [u8],
 }
 
-struct ShaderDataEncoder {
-    raw: metal::ArgumentEncoderRef,
-}
-
-impl super::ShaderDataEncoder for ShaderDataEncoder {
-    fn set_texture(&mut self, index: u32, view: TextureView) {
-        self.raw.set_texture(index as _, view.as_ref());
-    }
-    fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P) {
-        unsafe {
-            ptr::write_unaligned(self.raw.constant_data(index as _) as *mut P, data);
-        }
-    }
+struct PerStageCounter {
+    vs: u32,
+    fs: u32,
+    cs: u32,
 }
 
 fn map_texture_format(format: super::TextureFormat) -> metal::MTLPixelFormat {
@@ -179,6 +182,7 @@ impl Context {
         CommandEncoder {
             raw: None,
             queue: Arc::clone(&self.queue),
+            plain_data: Vec::new(),
         }
     }
 
