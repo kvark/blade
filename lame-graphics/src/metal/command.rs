@@ -144,6 +144,12 @@ impl super::RenderCommandEncoder<'_> {
     }
 }
 
+impl Drop for super::RenderCommandEncoder<'_> {
+    fn drop(&mut self) {
+        self.raw.end_encoding();
+    }
+}
+
 impl super::RenderPipelineContext<'_> {
     pub fn bind_data<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         let info = &self.bind_groups[group as usize];

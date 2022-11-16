@@ -10,6 +10,7 @@ impl super::Context {
         super::Shader {
             module,
             info,
+            bind_groups: desc.data_layouts.iter().map(|opt| opt.cloned()).collect(),
         }
     }
 }

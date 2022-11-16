@@ -114,6 +114,7 @@ bitflags::bitflags! {
 pub struct Shader {
     module: naga::Module,
     info: naga::valid::ModuleInfo,
+    bind_groups: Box<[Option<ShaderDataLayout>]>,
 }
 
 pub struct ShaderFunction<'a> {
@@ -130,37 +131,35 @@ impl Shader {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PlainType {
     F32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PlainContainer {
     Scalar,
     Vector(VectorSize),
 }
 
-#[derive(Debug)]
-pub enum BindingType {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ResourceType {
     Texture,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShaderBinding {
     Resource {
-        ty: BindingType,
+        ty: ResourceType,
     },
     Plain {
         ty: PlainType,
         container: PlainContainer,
-        //TODO: do we need it?
-        offset: u32,
     },
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShaderDataLayout {
-    pub plain_size: u32,
     pub bindings: Vec<(String, ShaderBinding)>,
 }
 

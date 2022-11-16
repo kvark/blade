@@ -10,14 +10,12 @@ struct Globals {
 impl lame::ShaderData for Globals {
     fn layout() -> lame::ShaderDataLayout {
         lame::ShaderDataLayout {
-            plain_size: 32,
             bindings: vec![
                 (
                     "some_uniform".to_string(),
                     lame::ShaderBinding::Plain {
                         ty: lame::PlainType::F32,
                         container: lame::PlainContainer::Scalar,
-                        offset: 0,
                     },
                 ),
                 (
@@ -25,13 +23,12 @@ impl lame::ShaderData for Globals {
                     lame::ShaderBinding::Plain {
                         ty: lame::PlainType::F32,
                         container: lame::PlainContainer::Vector(lame::VectorSize::Quad),
-                        offset: 16,
                     },
                 ),
                 (
                     "diffuse_tex".to_string(),
                     lame::ShaderBinding::Resource {
-                        ty: lame::BindingType::Texture,
+                        ty: lame::ResourceType::Texture,
                     },
                 ),
             ],

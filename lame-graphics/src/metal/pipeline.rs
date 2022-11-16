@@ -205,8 +205,80 @@ impl super::Context {
         }
     }
 
+    fn merge_layouts<'a>(multi_layouts: &[(&'a crate::Shader, crate::ShaderVisibility)]) -> Vec<(Option<&'a crate::ShaderDataLayout>, crate::ShaderVisibility)> {
+        let count = multi_layouts.iter().map(|(shader, _)| shader.bind_groups.len()).max().unwrap_or_default();
+        let mut merged = Vec::with_capacity(count);
+        for i in 0 .. count {
+            let mut layout_maybe = None;
+            let mut visibility = crate::ShaderVisibility::empty();
+            for &(shader, shader_visibility) in multi_layouts {
+                if let Some(data_layout) = shader.bind_groups.get(i).map_or(None, |opt| opt.as_ref()) {
+                    visibility |= shader_visibility;
+                    if let Some(layout) = layout_maybe {
+                        assert_eq!(data_layout, layout);
+                    } else {
+                        layout_maybe = Some(data_layout);
+                    }
+                }
+            }
+            merged.push((layout_maybe, visibility));
+        }
+        merged
+    }
+
     pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
-        let mut bind_groups = Vec::new();
+        let mut bind_group_infos = Vec::new();
+        let layouts = Self::merge_layouts(&[
+            (desc.vertex.shader, crate::ShaderVisibility::VERTEX),
+            (desc.fragment.shader, crate::ShaderVisibility::FRAGMENT),
+        ]);
+        let mut num_buffers = 0;
+        let mut num_textures = 0;
+        for (layout, visibility) in layouts {
+            let bindings = layout.map_or(&[][..], |l| &l.bindings);
+            let mut targets = Vec::with_capacity(bindings.len());
+            let mut plain_data_size = 0;
+            for &(_, ref binding) in bindings.iter() {
+                let target = match *binding {
+                    crate::ShaderBinding::Resource {
+                        ty: crate::ResourceType::Texture,
+                    } => {
+                        num_textures += 1;
+                        num_textures - 1
+                    },
+                    crate::ShaderBinding::Plain {
+                        ty,
+                        container,
+                    } => {
+                        let offset = plain_data_size;
+                        let scalar_size = match ty {
+                            crate::PlainType::F32 => 4u32,
+                        };
+                        let count = match container {
+                            crate::PlainContainer::Scalar => 1u32,
+                            crate::PlainContainer::Vector(size) => size as u32,
+                        };
+                        plain_data_size += scalar_size * count;
+                        //TODO: take alignment into account
+                        offset
+                    }
+                };
+                targets.push(target);
+            }
+
+            let plain_buffer_slot = if plain_data_size != 0 {
+                num_buffers += 1;
+                Some(num_buffers - 1)
+            } else {
+                None
+            };
+            bind_group_infos.push(super::BindGroupInfo {
+                visibility,
+                targets: targets.into_boxed_slice(),
+                plain_buffer_slot,
+                plain_data_size,
+            });
+        }
 
         let triangle_fill_mode = match desc.primitive.wireframe {
             false => metal::MTLTriangleFillMode::Fill,
@@ -323,7 +395,7 @@ impl super::Context {
                 raw,
                 vs_lib: vs.library,
                 fs_lib: fs.library,
-                bind_groups: bind_groups.into_boxed_slice(),
+                bind_groups: bind_group_infos.into_boxed_slice(),
                 primitive_type,
                 triangle_fill_mode,
                 front_winding: match desc.primitive.front_face {
