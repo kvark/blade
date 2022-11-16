@@ -35,6 +35,7 @@ pub use hal::*;
 #[derive(Debug)]
 pub struct ContextDesc {
     pub validation: bool,
+    pub capture: bool,
 }
 
 #[derive(Debug)]

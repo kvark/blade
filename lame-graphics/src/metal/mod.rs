@@ -12,6 +12,7 @@ mod pipeline;
 pub struct Context {
     device: Mutex<metal::Device>,
     queue: Arc<Mutex<metal::CommandQueue>>,
+    capture: Option<metal::CaptureManager>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -158,9 +159,24 @@ impl Context {
         let device = metal::Device::system_default()
             .ok_or(super::NotSupportedError)?;
         let queue = device.new_command_queue();
+
+        let capture = if desc.capture {
+            objc::rc::autoreleasepool(|| {
+                let capture_manager = metal::CaptureManager::shared();
+                let default_capture_scope = capture_manager.new_capture_scope_with_device(&device);
+                capture_manager.set_default_capture_scope(&default_capture_scope);
+                capture_manager.start_capture_with_scope(&default_capture_scope);
+                default_capture_scope.begin_scope();
+                Some(capture_manager.to_owned())
+            })
+        } else {
+            None
+        };
+
         Ok(Context {
             device: Mutex::new(device),
             queue: Arc::new(Mutex::new(queue)),
+            capture,
         })
     }
 
@@ -264,5 +280,16 @@ impl Context {
 
     pub fn submit(&self, encoder: &mut CommandEncoder) {
         encoder.raw.take().unwrap().commit();
+    }
+}
+
+impl Drop for Context {
+    fn drop(&mut self) {
+        if let Some(capture_manager) = self.capture.take() {
+            if let Some(scope) = capture_manager.default_capture_scope() {
+                scope.end_scope();
+            }
+            capture_manager.stop_capture();
+        }
     }
 }

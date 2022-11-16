@@ -42,7 +42,13 @@ impl lame::ShaderData for Globals {
 }
 
 fn main() {
-    let context = unsafe { lame::Context::init(lame::ContextDesc { validation: true }).unwrap() };
+    let context = unsafe {
+        lame::Context::init(lame::ContextDesc {
+            validation: true,
+            capture: true,
+        })
+        .unwrap()
+    };
 
     let global_layout = <Globals as lame::ShaderData>::layout();
     let shader_source = std::fs::read_to_string("examples/foo.wgsl").unwrap();
