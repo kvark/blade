@@ -6,3 +6,6 @@ edition = "2021"
 [dependencies]
 lame-macros = { version = "0.1", path = "lame-macros" }
 lame-graphics = { version = "0.1", path = "lame-graphics" }
+
+[dev-dependencies]
+env_logger = "0.9"

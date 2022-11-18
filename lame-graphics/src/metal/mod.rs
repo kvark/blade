@@ -75,6 +75,7 @@ impl TextureView {
 #[derive(Debug)]
 pub struct CommandEncoder {
     raw: Option<metal::CommandBuffer>,
+    name: String,
     queue: Arc<Mutex<metal::CommandQueue>>,
     plain_data: Vec<u8>,
 }
@@ -115,12 +116,6 @@ pub struct RenderPipelineContext<'a> {
     primitive_type: metal::MTLPrimitiveType,
     bind_groups: &'a [BindGroupInfo],
     plain_data: &'a mut [u8],
-}
-
-struct PerStageCounter {
-    vs: u32,
-    fs: u32,
-    cs: u32,
 }
 
 fn map_texture_format(format: super::TextureFormat) -> metal::MTLPixelFormat {
@@ -273,6 +268,7 @@ impl Context {
     pub fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
         CommandEncoder {
             raw: None,
+            name: desc.name.to_string(),
             queue: Arc::clone(&self.queue),
             plain_data: Vec::new(),
         }

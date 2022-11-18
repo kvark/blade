@@ -120,7 +120,7 @@ fn create_depth_stencil_desc(state: &crate::DepthStencilState) -> metal::DepthSt
 struct CompiledShader {
     library: metal::Library,
     function: metal::Function,
-    wg_size: metal::MTLSize,
+    _wg_size: metal::MTLSize,
 }
 
 bitflags::bitflags! {
@@ -201,13 +201,16 @@ impl super::Context {
         CompiledShader {
             library,
             function,
-            wg_size,
+            _wg_size: wg_size,
         }
     }
 
-    fn merge_layouts<'a>(multi_layouts: &[(&'a crate::Shader, crate::ShaderVisibility)]) -> Vec<(Option<&'a crate::ShaderDataLayout>, crate::ShaderVisibility)> {
+    fn collect_bind_group_infos(multi_layouts: &[(&crate::Shader, crate::ShaderVisibility)]) -> Box<[super::BindGroupInfo]> {
         let count = multi_layouts.iter().map(|(shader, _)| shader.bind_groups.len()).max().unwrap_or_default();
-        let mut merged = Vec::with_capacity(count);
+        let mut bind_group_infos = Vec::with_capacity(count);
+        let mut num_textures = 0;
+        let mut num_samplers = 0;
+        let mut num_buffers = 0;
         for i in 0 .. count {
             let mut layout_maybe = None;
             let mut visibility = crate::ShaderVisibility::empty();
@@ -221,31 +224,20 @@ impl super::Context {
                     }
                 }
             }
-            merged.push((layout_maybe, visibility));
-        }
-        merged
-    }
 
-    pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
-        let mut bind_group_infos = Vec::new();
-        let layouts = Self::merge_layouts(&[
-            (desc.vertex.shader, crate::ShaderVisibility::VERTEX),
-            (desc.fragment.shader, crate::ShaderVisibility::FRAGMENT),
-        ]);
-        let mut num_buffers = 0;
-        let mut num_textures = 0;
-        for (layout, visibility) in layouts {
-            let bindings = layout.map_or(&[][..], |l| &l.bindings);
+            let bindings = layout_maybe.map_or(&[][..], |l| &l.bindings);
             let mut targets = Vec::with_capacity(bindings.len());
             let mut plain_data_size = 0;
             for &(_, ref binding) in bindings.iter() {
                 let target = match *binding {
-                    crate::ShaderBinding::Resource {
-                        ty: crate::ResourceType::Texture,
-                    } => {
+                    crate::ShaderBinding::Texture { .. } => {
                         num_textures += 1;
                         num_textures - 1
-                    },
+                    }
+                    crate::ShaderBinding::Sampler { .. } => {
+                        num_samplers += 1;
+                        num_samplers - 1
+                    }
                     crate::ShaderBinding::Plain {
                         ty,
                         container,
@@ -279,6 +271,14 @@ impl super::Context {
                 plain_data_size,
             });
         }
+        bind_group_infos.into_boxed_slice()
+    }
+
+    pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
+        let bind_groups = Self::collect_bind_group_infos(&[
+            (desc.vertex.shader, crate::ShaderVisibility::VERTEX),
+            (desc.fragment.shader, crate::ShaderVisibility::FRAGMENT),
+        ]);
 
         let triangle_fill_mode = match desc.primitive.wireframe {
             false => metal::MTLTriangleFillMode::Fill,
@@ -395,7 +395,7 @@ impl super::Context {
                 raw,
                 vs_lib: vs.library,
                 fs_lib: fs.library,
-                bind_groups: bind_group_infos.into_boxed_slice(),
+                bind_groups,
                 primitive_type,
                 triangle_fill_mode,
                 front_winding: match desc.primitive.front_face {

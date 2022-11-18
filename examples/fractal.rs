@@ -4,7 +4,7 @@ use lame;
 struct Globals {
     some_uniform: f32,
     other_vec: [f32; 4],
-    diffuse_tex: lame::TextureView,
+    palette: lame::TextureView,
 }
 
 impl lame::ShaderData for Globals {
@@ -26,9 +26,9 @@ impl lame::ShaderData for Globals {
                     },
                 ),
                 (
-                    "diffuse_tex".to_string(),
-                    lame::ShaderBinding::Resource {
-                        ty: lame::ResourceType::Texture,
+                    "palette".to_string(),
+                    lame::ShaderBinding::Texture {
+                        dimension: lame::TextureViewDimension::D1,
                     },
                 ),
             ],
@@ -37,11 +37,12 @@ impl lame::ShaderData for Globals {
     fn fill<E: lame::ShaderDataEncoder>(&self, mut encoder: E) {
         encoder.set_plain(0, self.some_uniform);
         encoder.set_plain(1, self.other_vec);
-        encoder.set_texture(2, self.diffuse_tex);
+        encoder.set_texture(2, self.palette);
     }
 }
 
 fn main() {
+    env_logger::init();
     let context = unsafe {
         lame::Context::init(lame::ContextDesc {
             validation: true,
@@ -51,7 +52,7 @@ fn main() {
     };
 
     let global_layout = <Globals as lame::ShaderData>::layout();
-    let shader_source = std::fs::read_to_string("examples/foo.wgsl").unwrap();
+    let shader_source = std::fs::read_to_string("examples/fractal.wgsl").unwrap();
     let shader = context.create_shader(lame::ShaderDesc {
         source: &shader_source,
         data_layouts: &[Some(&global_layout)],
@@ -67,17 +68,17 @@ fn main() {
     });
 
     let res_texture = context.create_texture(lame::TextureDesc {
-        name: "",
+        name: "palette",
         format: lame::TextureFormat::Rgba8Unorm,
         size: lame::Extent {
-            width: 100,
-            height: 100,
+            width: 256,
+            height: 1,
             depth: 1,
         },
-        dimension: lame::TextureDimension::D2,
+        dimension: lame::TextureDimension::D1,
         array_layers: 1,
         mip_level_count: 1,
-        usage: lame::TextureUsage::RESOURCE,
+        usage: lame::TextureUsage::RESOURCE | lame::TextureUsage::COPY,
     });
     let res_view = context.create_texture_view(lame::TextureViewDesc {
         name: "",

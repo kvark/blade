@@ -34,7 +34,11 @@ impl super::CommandEncoder {
     pub fn start(&mut self) {
         let queue = self.queue.lock().unwrap();
         self.raw = Some(objc::rc::autoreleasepool(|| {
-            queue.new_command_buffer().to_owned()
+            let cmd_buf = queue.new_command_buffer();
+            if !self.name.is_empty() {
+                cmd_buf.set_label(&self.name);
+            }
+            cmd_buf.to_owned()
         }));
     }
 

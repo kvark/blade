@@ -72,6 +72,16 @@ pub enum TextureDimension {
 }
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+pub enum TextureViewDimension {
+    D1,
+    D2,
+    D2Array,
+    Cube,
+    CubeArray,
+    D3,
+}
+
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub struct Extent {
     pub width: u32,
     pub height: u32,
@@ -102,6 +112,7 @@ pub struct TextureDesc<'a> {
 pub struct TextureViewDesc<'a> {
     pub name: &'a str,
     pub texture: Texture,
+    pub dimension: TextureViewDimension,
 }
 
 bitflags::bitflags! {
@@ -144,14 +155,12 @@ pub enum PlainContainer {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ResourceType {
-    Texture,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShaderBinding {
-    Resource {
-        ty: ResourceType,
+    Texture {
+        dimension: TextureViewDimension,
+    },
+    Sampler {
+        comparison: bool,
     },
     Plain {
         ty: PlainType,
