@@ -120,7 +120,7 @@ fn create_depth_stencil_desc(state: &crate::DepthStencilState) -> metal::DepthSt
 struct CompiledShader {
     library: metal::Library,
     function: metal::Function,
-    _wg_size: metal::MTLSize,
+    wg_size: metal::MTLSize,
 }
 
 bitflags::bitflags! {
@@ -201,7 +201,7 @@ impl super::Context {
         CompiledShader {
             library,
             function,
-            _wg_size: wg_size,
+            wg_size,
         }
     }
 
@@ -238,6 +238,10 @@ impl super::Context {
                         num_samplers += 1;
                         num_samplers - 1
                     }
+                    crate::ShaderBinding::Buffer { .. } => {
+                        num_buffers += 1;
+                        num_buffers - 1
+                    }
                     crate::ShaderBinding::Plain {
                         ty,
                         container,
@@ -272,6 +276,41 @@ impl super::Context {
             });
         }
         bind_group_infos.into_boxed_slice()
+    }
+
+    pub fn create_compute_pipeline(&self, desc: crate::ComputePipelineDesc) -> super::ComputePipeline {
+        let bind_groups = Self::collect_bind_group_infos(&[
+            (desc.compute.shader, crate::ShaderVisibility::COMPUTE),
+        ]);
+
+        objc::rc::autoreleasepool(|| {
+            let descriptor = metal::ComputePipelineDescriptor::new();
+
+            let cs = self.load_shader(
+                desc.compute,
+                ShaderFlags::empty(),
+                naga::ShaderStage::Compute,
+            );
+            descriptor.set_compute_function(Some(&cs.function));
+
+            if !desc.name.is_empty() {
+                descriptor.set_label(desc.name);
+            }
+
+            let raw = self
+                .device
+                .lock()
+                .unwrap()
+                .new_compute_pipeline_state(&descriptor)
+                .unwrap();
+
+            super::ComputePipeline {
+                raw,
+                lib: cs.library,
+                bind_groups,
+                wg_size: cs.wg_size,
+            }
+        })
     }
 
     pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {

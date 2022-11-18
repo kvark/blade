@@ -16,10 +16,23 @@ impl crate::ShaderDataEncoder for ShaderDataEncoder<'_> {
             encoder.set_vertex_texture(slot, value);
         }
         if let Some(encoder) = self.fs_encoder {
-            encoder.set_vertex_texture(slot, value);
+            encoder.set_fragment_texture(slot, value);
         }
         if let Some(encoder) = self.cs_encoder {
             encoder.set_texture(slot, value);
+        }
+    }
+    fn set_buffer(&mut self, index: u32, slice: crate::BufferSlice) {
+        let slot = self.targets[index as usize] as _;
+        let value = Some(slice.buffer.as_ref());
+        if let Some(encoder) = self.vs_encoder {
+            encoder.set_vertex_buffer(slot, value, slice.offset);
+        }
+        if let Some(encoder) = self.fs_encoder {
+            encoder.set_fragment_buffer(slot, value, slice.offset);
+        }
+        if let Some(encoder) = self.cs_encoder {
+            encoder.set_buffer(slot, value, slice.offset);
         }
     }
     fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P) {
@@ -40,6 +53,23 @@ impl super::CommandEncoder {
             }
             cmd_buf.to_owned()
         }));
+    }
+
+    pub fn with_pipeline<'p>(&'p mut self, pipeline: &'p super::ComputePipeline) -> super::ComputePipelineContext<'p> {
+        let max_data_size = pipeline.bind_groups.iter().map(|bg| bg.plain_data_size as usize).max().unwrap_or_default();
+        self.plain_data.resize(max_data_size, 0);
+
+        let encoder = objc::rc::autoreleasepool(|| {
+            self.raw.as_mut().unwrap().new_compute_command_encoder().to_owned()
+        });
+        encoder.set_compute_pipeline_state(&pipeline.raw);
+
+        super::ComputePipelineContext {
+            encoder,
+            bind_groups: &pipeline.bind_groups,
+            plain_data: self.plain_data.as_mut(),
+            wg_size: pipeline.wg_size,
+        }
     }
 
     pub fn with_render_targets(&mut self, targets: crate::RenderTargetSet) -> super::RenderCommandEncoder {
@@ -151,6 +181,46 @@ impl super::RenderCommandEncoder<'_> {
 impl Drop for super::RenderCommandEncoder<'_> {
     fn drop(&mut self) {
         self.raw.end_encoding();
+    }
+}
+
+impl super::ComputePipelineContext<'_> {
+    pub fn bind_data<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
+        let info = &self.bind_groups[group as usize];
+
+        data.fill(ShaderDataEncoder {
+            cs_encoder: if info.visibility.contains(crate::ShaderVisibility::COMPUTE) {
+                Some(self.encoder.as_ref())
+            } else {
+                None
+            },
+            vs_encoder: None,
+            fs_encoder: None,
+            targets: &info.targets,
+            plain_data: self.plain_data,
+        });
+
+        if let Some(slot) = info.plain_buffer_slot {
+            let data = self.plain_data.as_ptr() as *const _;
+            if info.visibility.contains(crate::ShaderVisibility::COMPUTE) {
+                self.encoder.set_bytes(slot as _, info.plain_data_size as _, data);
+            }
+        }
+    }
+
+    pub fn dispatch(&mut self, groups: [u32; 3]) {
+        let raw_count = metal::MTLSize {
+            width: groups[0] as u64,
+            height: groups[1] as u64,
+            depth: groups[2] as u64,
+        };
+        self.encoder.dispatch_thread_groups(raw_count, self.wg_size);
+    }
+}
+
+impl Drop for super::ComputePipelineContext<'_> {
+    fn drop(&mut self) {
+        self.encoder.end_encoding();
     }
 }
 

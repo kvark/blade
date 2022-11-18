@@ -89,6 +89,15 @@ struct BindGroupInfo {
 }
 
 #[derive(Debug)]
+pub struct ComputePipeline {
+    raw: metal::ComputePipelineState,
+    #[allow(dead_code)]
+    lib: metal::Library,
+    bind_groups: Box<[BindGroupInfo]>,
+    wg_size: metal::MTLSize,
+}
+
+#[derive(Debug)]
 pub struct RenderPipeline {
     raw: metal::RenderPipelineState,
     #[allow(dead_code)]
@@ -108,6 +117,14 @@ pub struct RenderPipeline {
 pub struct RenderCommandEncoder<'a> {
     raw: metal::RenderCommandEncoder,
     plain_data: &'a mut Vec<u8>,
+}
+
+#[derive(Debug)]
+pub struct ComputePipelineContext<'a> {
+    encoder: metal::ComputeCommandEncoder,
+    wg_size: metal::MTLSize,
+    bind_groups: &'a [BindGroupInfo],
+    plain_data: &'a mut [u8],
 }
 
 #[derive(Debug)]

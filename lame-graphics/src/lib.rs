@@ -23,7 +23,7 @@
     clippy::pattern_type_mismatch,
 )]
 
-pub use naga::VectorSize;
+pub use naga::{StorageAccess, VectorSize};
 
 #[cfg_attr(any(target_os = "ios", target_os = "macos"), path = "metal/mod.rs")]
 #[cfg_attr(not(any(target_os = "ios", target_os = "macos")), path = "vulkan/mod.rs")]
@@ -53,6 +53,21 @@ pub struct BufferDesc<'a> {
     pub name: &'a str,
     pub size: u64,
     pub memory: Memory,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BufferSlice {
+    pub buffer: Buffer,
+    pub offset: u64,
+}
+
+impl Buffer {
+    pub fn at(self, offset: u64) -> BufferSlice {
+        BufferSlice {
+            buffer: self,
+            offset,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
@@ -162,6 +177,10 @@ pub enum ShaderBinding {
     Sampler {
         comparison: bool,
     },
+    Buffer {
+        type_name: &'static str,
+        access: StorageAccess,
+    },
     Plain {
         ty: PlainType,
         container: PlainContainer,
@@ -180,6 +199,11 @@ pub struct ShaderDesc<'a> {
 
 pub struct CommandEncoderDesc<'a> {
     pub name: &'a str,
+}
+
+pub struct ComputePipelineDesc<'a> {
+    pub name: &'a str,
+    pub compute: ShaderFunction<'a>,
 }
 
 /// Primitive type the input mesh is composed of.
@@ -566,6 +590,7 @@ pub struct RenderTargetSet<'a> {
 
 pub trait ShaderDataEncoder {
     fn set_texture(&mut self, index: u32, view: TextureView);
+    fn set_buffer(&mut self, index: u32, slice: BufferSlice);
     fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P);
 }
 
