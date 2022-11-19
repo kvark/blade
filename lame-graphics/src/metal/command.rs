@@ -1,3 +1,21 @@
+use std::marker::PhantomData;
+
+fn map_origin(extent: &crate::Extent) -> metal::MTLOrigin {
+    metal::MTLOrigin {
+        x: extent.width as u64,
+        y: extent.height as u64,
+        z: extent.depth as u64,
+    }
+}
+
+fn map_extent(extent: &crate::Extent) -> metal::MTLSize {
+    metal::MTLSize {
+        width: extent.width as u64,
+        height: extent.height as u64,
+        depth: extent.depth as u64,
+    }
+}
+
 struct ShaderDataEncoder<'a> {
     //raw: metal::ArgumentEncoderRef,
     cs_encoder: Option<&'a metal::ComputeCommandEncoderRef>,
@@ -22,17 +40,17 @@ impl crate::ShaderDataEncoder for ShaderDataEncoder<'_> {
             encoder.set_texture(slot, value);
         }
     }
-    fn set_buffer(&mut self, index: u32, slice: crate::BufferSlice) {
+    fn set_buffer(&mut self, index: u32, segment: crate::BufferSegment) {
         let slot = self.targets[index as usize] as _;
-        let value = Some(slice.buffer.as_ref());
+        let value = Some(segment.buffer.as_ref());
         if let Some(encoder) = self.vs_encoder {
-            encoder.set_vertex_buffer(slot, value, slice.offset);
+            encoder.set_vertex_buffer(slot, value, segment.offset);
         }
         if let Some(encoder) = self.fs_encoder {
-            encoder.set_fragment_buffer(slot, value, slice.offset);
+            encoder.set_fragment_buffer(slot, value, segment.offset);
         }
         if let Some(encoder) = self.cs_encoder {
-            encoder.set_buffer(slot, value, slice.offset);
+            encoder.set_buffer(slot, value, segment.offset);
         }
     }
     fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P) {
@@ -53,6 +71,16 @@ impl super::CommandEncoder {
             }
             cmd_buf.to_owned()
         }));
+    }
+
+    pub fn with_transfers(&mut self) -> super::TransferCommandEncoder {
+        let raw = objc::rc::autoreleasepool(|| {
+            self.raw.as_mut().unwrap().new_blit_command_encoder().to_owned()
+        });
+        super::TransferCommandEncoder {
+            raw,
+            phantom: PhantomData,
+        }
     }
 
     pub fn with_pipeline<'p>(&'p mut self, pipeline: &'p super::ComputePipeline) -> super::ComputePipelineContext<'p> {
@@ -151,6 +179,30 @@ impl super::CommandEncoder {
             raw,
             plain_data: &mut self.plain_data,
         }
+    }
+}
+
+impl super::TransferCommandEncoder<'_> {
+    pub fn copy_buffer_to_texture(&mut self, src: super::Buffer, dst: super::Texture, copy: &crate::BufferTextureCopy) {
+        let dst_origin = map_origin(&copy.texture_base.origin);
+        self.raw.copy_from_buffer_to_texture(
+            src.as_ref(),
+            copy.buffer_layout.offset,
+            copy.buffer_layout.bytes_per_row as u64,
+            0,
+            map_extent(&copy.size),
+            dst.as_ref(),
+            copy.texture_base.array_layer as u64,
+            copy.texture_base.mip_level as u64,
+            dst_origin,
+            metal::MTLBlitOption::empty(),
+        );
+    }
+}
+
+impl Drop for super::TransferCommandEncoder<'_> {
+    fn drop(&mut self) {
+        self.raw.end_encoding();
     }
 }
 

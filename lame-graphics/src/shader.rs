@@ -59,7 +59,7 @@ impl super::Context {
                     }
                 };
 
-                let is_uniform = binding_index != old_binding_index;
+                let is_uniform = binding_index == old_binding_index;
                 has_uniforms |= is_uniform;
                 if let Some(old) = substitutions.insert(name.as_str(), Substitute { group_index, is_uniform }) {
                     panic!("Duplicate binding '{}' in groups {} and {}", name, old.group_index, group_index);
@@ -89,6 +89,7 @@ impl super::Context {
                 writeln!(header, "@group({}) @binding(0) var<uniform> {}{}: _Uniforms{};", group_index, UNIFORM_NAME, group_index, group_index).unwrap();
             }
         }
+        log::debug!("Generated header:\n{}", header);
 
         let mut text = String::new();
         for line in desc.source.lines() {
@@ -122,7 +123,13 @@ impl super::Context {
             text.push_str("\n");
         }
 
-        let module = naga::front::wgsl::parse_str(&text).unwrap();
+        let module = match naga::front::wgsl::parse_str(&text) {
+            Ok(module) => module,
+            Err(ref e) => {
+                e.emit_to_stderr_with_path(&text, "");
+                panic!("Shader compilation failed");
+            }
+        };
 
         let caps = naga::valid::Capabilities::empty();
         let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), caps)

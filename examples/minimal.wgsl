@@ -1,5 +1,5 @@
 struct Output {
-    foo: u32,
+    avg: array<u32>,
 };
 
 #header
@@ -7,4 +7,5 @@ struct Output {
 @compute
 @workgroup_size(8, 8)
 fn main() {
+    $output.avg[0] = 5;
 }

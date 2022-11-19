@@ -1,6 +1,9 @@
 use std::{
+    marker::PhantomData,
     ptr,
     sync::{Arc, Mutex},
+    thread,
+    time,
 };
 
 use foreign_types::{ForeignTypeRef as _};
@@ -31,6 +34,10 @@ impl Default for Buffer {
 impl Buffer {
     fn as_ref(&self) -> &metal::BufferRef {
         unsafe { metal::BufferRef::from_ptr(self.raw) }
+    }
+
+    pub fn data(&self) -> *mut u8 {
+        self.as_ref().contents() as *mut u8
     }
 }
 
@@ -73,6 +80,11 @@ impl TextureView {
 }
 
 #[derive(Debug)]
+pub struct SyncPoint {
+    cmd_buf: metal::CommandBuffer,
+}
+
+#[derive(Debug)]
 pub struct CommandEncoder {
     raw: Option<metal::CommandBuffer>,
     name: String,
@@ -111,6 +123,12 @@ pub struct RenderPipeline {
     cull_mode: metal::MTLCullMode,
     depth_clip_mode: metal::MTLDepthClipMode,
     depth_stencil: Option<(metal::DepthStencilState, super::DepthBiasState)>,
+}
+
+#[derive(Debug)]
+pub struct TransferCommandEncoder<'a> {
+    raw: metal::BlitCommandEncoder,
+    phantom: PhantomData<&'a CommandEncoder>,
 }
 
 #[derive(Debug)]
@@ -291,8 +309,25 @@ impl Context {
         }
     }
 
-    pub fn submit(&self, encoder: &mut CommandEncoder) {
-        encoder.raw.take().unwrap().commit();
+    pub fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+        let cmd_buf = encoder.raw.take().unwrap();
+        cmd_buf.commit();
+        SyncPoint {
+            cmd_buf,
+        }
+    }
+
+    pub fn wait_for(&self, sp: SyncPoint, timeout_ms: u32) -> bool {
+        let start = time::Instant::now();
+        loop {
+            if let metal::MTLCommandBufferStatus::Completed = sp.cmd_buf.status() {
+                return true;
+            }
+            if start.elapsed().as_millis() >= timeout_ms as u128 {
+                return false;
+            }
+            thread::sleep(time::Duration::from_millis(1));
+        }
     }
 }
 

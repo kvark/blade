@@ -56,20 +56,21 @@ pub struct BufferDesc<'a> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct BufferSlice {
+pub struct BufferSegment {
     pub buffer: Buffer,
     pub offset: u64,
 }
 
 impl Buffer {
-    pub fn at(self, offset: u64) -> BufferSlice {
-        BufferSlice {
+    pub fn at(self, offset: u64) -> BufferSegment {
+        BufferSegment {
             buffer: self,
             offset,
         }
     }
 }
 
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
 pub enum TextureFormat {
     Rgba8Unorm,
@@ -96,11 +97,41 @@ pub enum TextureViewDimension {
     D3,
 }
 
-#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
 pub struct Extent {
     pub width: u32,
     pub height: u32,
     pub depth: u32,
+}
+
+impl Extent {
+    pub fn at_mip_level(&self, level: u32) -> Self {
+        Self {
+            width: (self.width >> level).max(1),
+            height: (self.height >> level).max(1),
+            depth: (self.depth >> level).max(1),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TextureCopyBase {
+    pub mip_level: u32,
+    pub array_layer: u32,
+    pub origin: Extent,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct BufferTexelLayout {
+    pub offset: u64,
+    pub bytes_per_row: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct BufferTextureCopy {
+    pub buffer_layout: BufferTexelLayout,
+    pub texture_base: TextureCopyBase,
+    pub size: Extent,
 }
 
 bitflags::bitflags! {
@@ -195,6 +226,14 @@ pub struct ShaderDataLayout {
 pub struct ShaderDesc<'a> {
     pub source: &'a str,
     pub data_layouts: &'a[Option<&'a ShaderDataLayout>],
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum CommandType {
+    Transfer,
+    Compute,
+    #[default]
+    General,
 }
 
 pub struct CommandEncoderDesc<'a> {
@@ -590,7 +629,7 @@ pub struct RenderTargetSet<'a> {
 
 pub trait ShaderDataEncoder {
     fn set_texture(&mut self, index: u32, view: TextureView);
-    fn set_buffer(&mut self, index: u32, slice: BufferSlice);
+    fn set_buffer(&mut self, index: u32, segment: BufferSegment);
     fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P);
 }
 
