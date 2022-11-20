@@ -1,3 +1,5 @@
+use naga::back::msl;
+
 fn map_blend_factor(factor: crate::BlendFactor) -> metal::MTLBlendFactor {
     use crate::BlendFactor as Bf;
     use metal::MTLBlendFactor::*;
@@ -130,36 +132,161 @@ bitflags::bitflags! {
     }
 }
 
+fn build_pipeline_layout(multi_layouts: &[(&crate::Shader, crate::ShaderVisibility)]) -> (super::PipelineLayout, msl::Options) {
+    let mut naga_resources = msl::PerStageResources::default();
+    let combined_visibility = multi_layouts.iter().fold(crate::ShaderVisibility::empty(), |u, &(_, visibility)| { u | visibility });
+    let group_count = multi_layouts.iter().map(|(shader, _)| shader.bind_groups.len()).max().unwrap_or_default();
+    let mut bind_group_infos = Vec::with_capacity(group_count);
+    let mut unsized_buffer_count = 0;
+    let mut num_textures = 0u32;
+    let mut num_samplers = 0u32;
+    let mut num_buffers = 0u32;
+    for group_index in 0 .. group_count {
+        let mut layout_maybe = None;
+        let mut visibility = crate::ShaderVisibility::empty();
+        for &(shader, shader_visibility) in multi_layouts {
+            if let Some(data_layout) = shader.bind_groups.get(group_index).map_or(None, |opt| opt.as_ref()) {
+                visibility |= shader_visibility;
+                if let Some(layout) = layout_maybe {
+                    assert_eq!(data_layout, layout);
+                } else {
+                    layout_maybe = Some(data_layout);
+                }
+            }
+        }
+
+        let bindings = layout_maybe.map_or(&[][..], |l| &l.bindings);
+        let mut targets = Vec::with_capacity(bindings.len());
+        // the order of binding indices has to match the logic in `create_shader`
+        let mut binding_index = 1;
+        let mut plain_data_size = 0;
+        for &(_, ref binding) in bindings.iter() {
+            let resource_binding = naga::ResourceBinding {
+                group: group_index as u32,
+                binding: binding_index,
+            };
+            let mut naga_target = msl::BindTarget::default();
+            let target = match *binding {
+                crate::ShaderBinding::Texture { .. } => {
+                    naga_target.texture = Some(num_textures as _);
+                    binding_index += 1;
+                    num_textures += 1;
+                    num_textures - 1
+                }
+                crate::ShaderBinding::Sampler { .. } => {
+                    naga_target.sampler = Some(msl::BindSamplerTarget::Resource(num_samplers as _));
+                    binding_index += 1;
+                    num_samplers += 1;
+                    num_samplers - 1
+                }
+                crate::ShaderBinding::Buffer { .. } => {
+                    naga_target.buffer = Some(num_buffers as _);
+                    binding_index += 1;
+                    unsized_buffer_count += 1;
+                    num_buffers += 1;
+                    num_buffers - 1
+                }
+                crate::ShaderBinding::Plain {
+                    ty,
+                    container,
+                } => {
+                    let offset = plain_data_size;
+                    let scalar_size = match ty {
+                        crate::PlainType::F32 => 4u32,
+                    };
+                    let count = match container {
+                        crate::PlainContainer::Scalar => 1u32,
+                        crate::PlainContainer::Vector(size) => size as u32,
+                    };
+                    plain_data_size += scalar_size * count;
+                    //TODO: take alignment into account
+                    offset
+                }
+            };
+
+            targets.push(target);
+            if resource_binding.binding != binding_index {
+                naga_resources.resources.insert(resource_binding, naga_target);
+            }
+        }
+
+        let plain_buffer_slot = if plain_data_size != 0 {
+            naga_resources.resources.insert(naga::ResourceBinding {
+                group: group_index as u32,
+                binding: 0,
+            }, msl::BindTarget {
+                buffer: Some(num_buffers as _),
+                .. Default::default()
+            });
+            num_buffers += 1;
+            Some(num_buffers - 1)
+        } else {
+            None
+        };
+        bind_group_infos.push(super::BindGroupInfo {
+            visibility,
+            targets: targets.into_boxed_slice(),
+            plain_buffer_slot,
+            plain_data_size,
+        });
+    }
+
+    let layout = super::PipelineLayout {
+        bind_groups: bind_group_infos.into_boxed_slice(),
+        sizes_buffer_slot: if unsized_buffer_count != 0 {
+            Some(num_buffers)
+        } else {
+            None
+        },
+    };
+    naga_resources.sizes_buffer = layout.sizes_buffer_slot.map(|slot| slot as msl::Slot);
+
+    let naga_options = msl::Options {
+        lang_version: (2, 2),
+        inline_samplers: Default::default(),
+        spirv_cross_compatibility: false,
+        fake_missing_bindings: false,
+        per_stage_map: msl::PerStageMap {
+            //Note: we could technically save one of the copies
+            cs: if combined_visibility.contains(crate::ShaderVisibility::COMPUTE) {
+                naga_resources.clone()
+            } else {
+                Default::default()
+            },
+            vs: if combined_visibility.contains(crate::ShaderVisibility::VERTEX) {
+                naga_resources.clone()
+            } else {
+                Default::default()
+            },
+            fs: if combined_visibility.contains(crate::ShaderVisibility::FRAGMENT) {
+                naga_resources.clone()
+            } else {
+                Default::default()
+            },
+        },
+        bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
+    };
+    (layout, naga_options)
+}
+
 impl super::Context {
     fn load_shader(
         &self,
         sf: crate::ShaderFunction,
         flags: ShaderFlags,
         naga_stage: naga::ShaderStage,
+        naga_options: &msl::Options,
     ) -> CompiledShader {
-        let pipeline_options = naga::back::msl::PipelineOptions {
+        let pipeline_options = msl::PipelineOptions {
             allow_point_size: flags.contains(ShaderFlags::ALLOW_POINT_SIZE),
         };
         let msl_version = metal::MTLLanguageVersion::V2_2;
 
-        let naga_options = naga::back::msl::Options {
-            lang_version: (2, 2),
-            inline_samplers: Default::default(),
-            spirv_cross_compatibility: false,
-            fake_missing_bindings: false,
-            per_stage_map: naga::back::msl::PerStageMap {
-                vs: naga::back::msl::PerStageResources::default(),
-                fs: naga::back::msl::PerStageResources::default(),
-                cs: naga::back::msl::PerStageResources::default(),
-            },
-            bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
-        };
-
         let module = &sf.shader.module;
-        let (source, info) = naga::back::msl::write_string(
+        let (source, info) = msl::write_string(
             module,
             &sf.shader.info,
-            &naga_options,
+            naga_options,
             &pipeline_options,
         ).unwrap();
 
@@ -205,81 +332,8 @@ impl super::Context {
         }
     }
 
-    fn collect_bind_group_infos(multi_layouts: &[(&crate::Shader, crate::ShaderVisibility)]) -> Box<[super::BindGroupInfo]> {
-        let count = multi_layouts.iter().map(|(shader, _)| shader.bind_groups.len()).max().unwrap_or_default();
-        let mut bind_group_infos = Vec::with_capacity(count);
-        let mut num_textures = 0;
-        let mut num_samplers = 0;
-        let mut num_buffers = 0;
-        for i in 0 .. count {
-            let mut layout_maybe = None;
-            let mut visibility = crate::ShaderVisibility::empty();
-            for &(shader, shader_visibility) in multi_layouts {
-                if let Some(data_layout) = shader.bind_groups.get(i).map_or(None, |opt| opt.as_ref()) {
-                    visibility |= shader_visibility;
-                    if let Some(layout) = layout_maybe {
-                        assert_eq!(data_layout, layout);
-                    } else {
-                        layout_maybe = Some(data_layout);
-                    }
-                }
-            }
-
-            let bindings = layout_maybe.map_or(&[][..], |l| &l.bindings);
-            let mut targets = Vec::with_capacity(bindings.len());
-            let mut plain_data_size = 0;
-            for &(_, ref binding) in bindings.iter() {
-                let target = match *binding {
-                    crate::ShaderBinding::Texture { .. } => {
-                        num_textures += 1;
-                        num_textures - 1
-                    }
-                    crate::ShaderBinding::Sampler { .. } => {
-                        num_samplers += 1;
-                        num_samplers - 1
-                    }
-                    crate::ShaderBinding::Buffer { .. } => {
-                        num_buffers += 1;
-                        num_buffers - 1
-                    }
-                    crate::ShaderBinding::Plain {
-                        ty,
-                        container,
-                    } => {
-                        let offset = plain_data_size;
-                        let scalar_size = match ty {
-                            crate::PlainType::F32 => 4u32,
-                        };
-                        let count = match container {
-                            crate::PlainContainer::Scalar => 1u32,
-                            crate::PlainContainer::Vector(size) => size as u32,
-                        };
-                        plain_data_size += scalar_size * count;
-                        //TODO: take alignment into account
-                        offset
-                    }
-                };
-                targets.push(target);
-            }
-
-            let plain_buffer_slot = if plain_data_size != 0 {
-                num_buffers += 1;
-                Some(num_buffers - 1)
-            } else {
-                None
-            };
-            bind_group_infos.push(super::BindGroupInfo {
-                visibility,
-                targets: targets.into_boxed_slice(),
-                plain_buffer_slot,
-                plain_data_size,
-            });
-        }
-        bind_group_infos.into_boxed_slice()
-    }
-
     pub fn create_compute_pipeline(&self, desc: crate::ComputePipelineDesc) -> super::ComputePipeline {
-        let bind_groups = Self::collect_bind_group_infos(&[
+        let (layout, options) = build_pipeline_layout(&[
             (desc.compute.shader, crate::ShaderVisibility::COMPUTE),
         ]);
 
@@ -290,6 +344,7 @@ impl super::Context {
                 desc.compute,
                 ShaderFlags::empty(),
                 naga::ShaderStage::Compute,
+                &options,
             );
             descriptor.set_compute_function(Some(&cs.function));
 
@@ -307,14 +362,14 @@ impl super::Context {
             super::ComputePipeline {
                 raw,
                 lib: cs.library,
-                bind_groups,
+                layout,
                 wg_size: cs.wg_size,
             }
         })
     }
 
     pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
-        let bind_groups = Self::collect_bind_group_infos(&[
+        let (layout, options) = build_pipeline_layout(&[
             (desc.vertex.shader, crate::ShaderVisibility::VERTEX),
             (desc.fragment.shader, crate::ShaderVisibility::FRAGMENT),
         ]);
@@ -357,6 +412,7 @@ impl super::Context {
                     _ => ShaderFlags::empty(),
                 },
                 naga::ShaderStage::Vertex,
+                &options,
             );
             descriptor.set_vertex_function(Some(&vs.function));
 
@@ -365,6 +421,7 @@ impl super::Context {
                 desc.fragment,
                 ShaderFlags::empty(),
                 naga::ShaderStage::Fragment,
+                &options,
             );
             descriptor.set_fragment_function(Some(&fs.function));
 
@@ -434,7 +491,7 @@ impl super::Context {
                 raw,
                 vs_lib: vs.library,
                 fs_lib: fs.library,
-                bind_groups,
+                layout,
                 primitive_type,
                 triangle_fill_mode,
                 front_winding: match desc.primitive.front_face {

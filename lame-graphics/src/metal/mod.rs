@@ -101,11 +101,17 @@ struct BindGroupInfo {
 }
 
 #[derive(Debug)]
+struct PipelineLayout {
+    bind_groups: Box<[BindGroupInfo]>,
+    sizes_buffer_slot: Option<u32>,
+}
+
+#[derive(Debug)]
 pub struct ComputePipeline {
     raw: metal::ComputePipelineState,
     #[allow(dead_code)]
     lib: metal::Library,
-    bind_groups: Box<[BindGroupInfo]>,
+    layout: PipelineLayout,
     wg_size: metal::MTLSize,
 }
 
@@ -116,7 +122,7 @@ pub struct RenderPipeline {
     vs_lib: metal::Library,
     #[allow(dead_code)]
     fs_lib: metal::Library,
-    bind_groups: Box<[BindGroupInfo]>,
+    layout: PipelineLayout,
     primitive_type: metal::MTLPrimitiveType,
     triangle_fill_mode: metal::MTLTriangleFillMode,
     front_winding: metal::MTLWinding,

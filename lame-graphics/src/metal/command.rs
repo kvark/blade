@@ -84,17 +84,22 @@ impl super::CommandEncoder {
     }
 
     pub fn with_pipeline<'p>(&'p mut self, pipeline: &'p super::ComputePipeline) -> super::ComputePipelineContext<'p> {
-        let max_data_size = pipeline.bind_groups.iter().map(|bg| bg.plain_data_size as usize).max().unwrap_or_default();
+        let max_data_size = pipeline.layout.bind_groups.iter().map(|bg| bg.plain_data_size as usize).max().unwrap_or_default();
         self.plain_data.resize(max_data_size, 0);
 
         let encoder = objc::rc::autoreleasepool(|| {
             self.raw.as_mut().unwrap().new_compute_command_encoder().to_owned()
         });
         encoder.set_compute_pipeline_state(&pipeline.raw);
+        if let Some(index) = pipeline.layout.sizes_buffer_slot {
+            //TODO: get real sizes
+            let runtime_sizes = [0u8; 8];
+            encoder.set_bytes(index as _, runtime_sizes.len() as _, runtime_sizes.as_ptr() as *const _);
+        }
 
         super::ComputePipelineContext {
             encoder,
-            bind_groups: &pipeline.bind_groups,
+            bind_groups: &pipeline.layout.bind_groups,
             plain_data: self.plain_data.as_mut(),
             wg_size: pipeline.wg_size,
         }
@@ -209,6 +214,13 @@ impl Drop for super::TransferCommandEncoder<'_> {
 impl super::RenderCommandEncoder<'_> {
     pub fn with_pipeline<'p>(&'p mut self, pipeline: &'p super::RenderPipeline) -> super::RenderPipelineContext<'p> {
         self.raw.set_render_pipeline_state(&pipeline.raw);
+        if let Some(index) = pipeline.layout.sizes_buffer_slot {
+            //TODO: get real sizes
+            let runtime_sizes = [0u8; 8];
+            self.raw.set_vertex_bytes(index as _, runtime_sizes.len() as _, runtime_sizes.as_ptr() as *const _);
+            self.raw.set_fragment_bytes(index as _, runtime_sizes.len() as _, runtime_sizes.as_ptr() as *const _);
+        }
+
         self.raw.set_front_facing_winding(pipeline.front_winding);
         self.raw.set_cull_mode(pipeline.cull_mode);
         self.raw.set_triangle_fill_mode(pipeline.triangle_fill_mode);
@@ -218,13 +230,13 @@ impl super::RenderCommandEncoder<'_> {
             self.raw.set_depth_bias(bias.constant as f32, bias.slope_scale, bias.clamp);
         }
 
-        let max_data_size = pipeline.bind_groups.iter().map(|bg| bg.plain_data_size as usize).max().unwrap_or_default();
+        let max_data_size = pipeline.layout.bind_groups.iter().map(|bg| bg.plain_data_size as usize).max().unwrap_or_default();
         self.plain_data.resize(max_data_size, 0);
 
         super::RenderPipelineContext {
             encoder: &mut self.raw,
             primitive_type: pipeline.primitive_type,
-            bind_groups: &pipeline.bind_groups,
+            bind_groups: &pipeline.layout.bind_groups,
             plain_data: self.plain_data.as_mut(),
         }
     }
