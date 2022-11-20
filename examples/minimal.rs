@@ -4,7 +4,7 @@ use std::slice;
 struct Globals {
     modulator: [f32; 4],
     input: lame::TextureView,
-    output: lame::BufferSegment,
+    output: lame::BufferPiece,
 }
 
 // Using a manual implementation of the trait
@@ -116,18 +116,7 @@ fn main() {
 
     {
         let mut encoder = command_encoder.with_transfers();
-        encoder.copy_buffer_to_texture(
-            upload_buffer,
-            res_texture,
-            &lame::BufferTextureCopy {
-                buffer_layout: lame::BufferTexelLayout {
-                    offset: 0,
-                    bytes_per_row: 16 * 4,
-                },
-                texture_base: lame::TextureCopyBase::default(),
-                size: extent,
-            },
-        );
+        encoder.copy_buffer_to_texture(upload_buffer.into(), 16 * 4, res_texture.into(), extent);
     }
     {
         let mut pc = command_encoder.with_pipeline(&pipeline);

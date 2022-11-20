@@ -56,16 +56,44 @@ pub struct BufferDesc<'a> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct BufferSegment {
+pub struct BufferPiece {
     pub buffer: Buffer,
     pub offset: u64,
 }
 
+impl From<Buffer> for BufferPiece {
+    fn from(buffer: Buffer) -> Self {
+        Self {
+            buffer,
+            offset: 0,
+        }
+    }
+}
+
 impl Buffer {
-    pub fn at(self, offset: u64) -> BufferSegment {
-        BufferSegment {
+    pub fn at(self, offset: u64) -> BufferPiece {
+        BufferPiece {
             buffer: self,
             offset,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TexturePiece {
+    pub texture: Texture,
+    pub mip_level: u32,
+    pub array_layer: u32,
+    pub origin: Extent,
+}
+
+impl From<Texture> for TexturePiece {
+    fn from(texture: Texture) -> Self {
+        Self {
+            texture,
+            mip_level: 0,
+            array_layer: 0,
+            origin: Extent::default(),
         }
     }
 }
@@ -112,26 +140,6 @@ impl Extent {
             depth: (self.depth >> level).max(1),
         }
     }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct TextureCopyBase {
-    pub mip_level: u32,
-    pub array_layer: u32,
-    pub origin: Extent,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct BufferTexelLayout {
-    pub offset: u64,
-    pub bytes_per_row: u32,
-}
-
-#[derive(Clone, Debug)]
-pub struct BufferTextureCopy {
-    pub buffer_layout: BufferTexelLayout,
-    pub texture_base: TextureCopyBase,
-    pub size: Extent,
 }
 
 bitflags::bitflags! {
@@ -629,7 +637,7 @@ pub struct RenderTargetSet<'a> {
 
 pub trait ShaderDataEncoder {
     fn set_texture(&mut self, index: u32, view: TextureView);
-    fn set_buffer(&mut self, index: u32, segment: BufferSegment);
+    fn set_buffer(&mut self, index: u32, piece: BufferPiece);
     fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P);
 }
 

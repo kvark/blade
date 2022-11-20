@@ -40,17 +40,17 @@ impl crate::ShaderDataEncoder for ShaderDataEncoder<'_> {
             encoder.set_texture(slot, value);
         }
     }
-    fn set_buffer(&mut self, index: u32, segment: crate::BufferSegment) {
+    fn set_buffer(&mut self, index: u32, piece: crate::BufferPiece) {
         let slot = self.targets[index as usize] as _;
-        let value = Some(segment.buffer.as_ref());
+        let value = Some(piece.buffer.as_ref());
         if let Some(encoder) = self.vs_encoder {
-            encoder.set_vertex_buffer(slot, value, segment.offset);
+            encoder.set_vertex_buffer(slot, value, piece.offset);
         }
         if let Some(encoder) = self.fs_encoder {
-            encoder.set_fragment_buffer(slot, value, segment.offset);
+            encoder.set_fragment_buffer(slot, value, piece.offset);
         }
         if let Some(encoder) = self.cs_encoder {
-            encoder.set_buffer(slot, value, segment.offset);
+            encoder.set_buffer(slot, value, piece.offset);
         }
     }
     fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P) {
@@ -188,20 +188,55 @@ impl super::CommandEncoder {
 }
 
 impl super::TransferCommandEncoder<'_> {
-    pub fn copy_buffer_to_texture(&mut self, src: super::Buffer, dst: super::Texture, copy: &crate::BufferTextureCopy) {
-        let dst_origin = map_origin(&copy.texture_base.origin);
+    pub fn copy_buffer_to_buffer(&mut self, src: crate::BufferPiece, dst: crate::BufferPiece, size: u64) {
+        self.raw.copy_from_buffer(
+            src.buffer.as_ref(),
+            src.offset,
+            dst.buffer.as_ref(),
+            dst.offset,
+            size,
+        );
+    }
+    pub fn copy_texture_to_texture(&mut self, src: crate::TexturePiece, dst: crate::TexturePiece, size: crate::Extent) {
+        self.raw.copy_from_texture(
+            src.texture.as_ref(),
+            src.array_layer as u64,
+            src.mip_level as u64,
+            map_origin(&src.origin),
+            map_extent(&size),
+            dst.texture.as_ref(),
+            dst.array_layer as u64,
+            dst.mip_level as u64,
+            map_origin(&dst.origin),
+        );
+    }
+    pub fn copy_buffer_to_texture(&mut self, src: crate::BufferPiece, bytes_per_row: u32, dst: crate::TexturePiece, size: crate::Extent) {
         self.raw.copy_from_buffer_to_texture(
-            src.as_ref(),
-            copy.buffer_layout.offset,
-            copy.buffer_layout.bytes_per_row as u64,
+            src.buffer.as_ref(),
+            src.offset,
+            bytes_per_row as u64,
             0,
-            map_extent(&copy.size),
-            dst.as_ref(),
-            copy.texture_base.array_layer as u64,
-            copy.texture_base.mip_level as u64,
-            dst_origin,
+            map_extent(&size),
+            dst.texture.as_ref(),
+            dst.array_layer as u64,
+            dst.mip_level as u64,
+            map_origin(&dst.origin),
             metal::MTLBlitOption::empty(),
         );
+    }
+    pub fn copy_texture_to_buffer(&mut self, src: crate::TexturePiece, dst: crate::BufferPiece, bytes_per_row: u32, size: crate::Extent) {
+        self.raw.copy_from_texture_to_buffer(
+                src.texture.as_ref(),
+                src.array_layer as u64,
+                src.mip_level as u64,
+                map_origin(&src.origin),
+                map_extent(&size),
+                dst.buffer.as_ref(),
+                dst.offset,
+                bytes_per_row as u64,
+                0,
+                metal::MTLBlitOption::empty(),
+            );
     }
 }
 
