@@ -1,5 +1,34 @@
 use std::{collections::HashMap, fmt::Write as _};
 
+fn map_view_dimension(dimension: super::TextureViewDimension) -> &'static str {
+    use super::TextureViewDimension as Tvd;
+    match dimension {
+        Tvd::D1 => "1d",
+        Tvd::D2 => "2d",
+        Tvd::D2Array => "2d_array",
+        Tvd::Cube => "cube",
+        Tvd::CubeArray => "cube_array",
+        Tvd::D3 => "3d",
+    }
+}
+
+fn map_storage_access(access: super::StorageAccess) -> &'static str {
+    if access == super::StorageAccess::LOAD {
+        "read"
+    } else if access == super::StorageAccess::STORE {
+        "write"
+    } else {
+        "read_write"
+    }
+}
+
+fn map_storage_format(format: super::TextureFormat) -> &'static str {
+    use super::TextureFormat as Tf;
+    match format {
+        Tf::Rgba8Unorm => "rgba8unorm",
+    }
+}
+
 impl super::Context {
     pub fn create_shader(&self, desc: super::ShaderDesc) -> super::Shader {
         const UNIFORM_NAME: &str = "_uniforms";
@@ -25,16 +54,17 @@ impl super::Context {
                 let old_binding_index = binding_index;
                 match binding {
                     super::ShaderBinding::Texture { dimension } => {
-                        let dim_name = match dimension {
-                            super::TextureViewDimension::D1 => "1d",
-                            super::TextureViewDimension::D2 => "2d",
-                            super::TextureViewDimension::D2Array => "2d_array",
-                            super::TextureViewDimension::Cube => "cube",
-                            super::TextureViewDimension::CubeArray => "cube_array",
-                            super::TextureViewDimension::D3 => "3d",
-                        };
+                        let dim_str = map_view_dimension(dimension);
                         writeln!(header, "@group({}) @binding({}) var {}: texture_{}<f32>;",
-                            group_index, binding_index, name, dim_name).unwrap();
+                            group_index, binding_index, name, dim_str).unwrap();
+                        binding_index += 1;
+                    }
+                    super::ShaderBinding::TextureStorage { dimension, format, access } => {
+                        let dim_str = map_view_dimension(dimension);
+                        let format_str = map_storage_format(format);
+                        let access_str = map_storage_access(access);
+                        writeln!(header, "@group({}) @binding({}) var {}: texture_storage_{}<{},{}>;",
+                            group_index, binding_index, name, dim_str, format_str, access_str).unwrap();
                         binding_index += 1;
                     }
                     super::ShaderBinding::Sampler { comparison } => {
@@ -44,13 +74,7 @@ impl super::Context {
                         binding_index += 1;
                     }
                     super::ShaderBinding::Buffer { type_name, access } => {
-                        let access_str = if access == super::StorageAccess::LOAD {
-                            "read"
-                        } else if access == super::StorageAccess::STORE {
-                            "write"
-                        } else {
-                            "read_write"
-                        };
+                        let access_str = map_storage_access(access);
                         writeln!(header, "@group({}) @binding({}) var<storage, {}> {}: {};",
                             group_index, binding_index, access_str, name, type_name).unwrap();
                         binding_index += 1;
@@ -71,6 +95,7 @@ impl super::Context {
                 for &(ref name, binding) in layout.bindings.iter() {
                     match binding {
                         super::ShaderBinding::Texture { .. } |
+                        super::ShaderBinding::TextureStorage { .. } |
                         super::ShaderBinding::Sampler { .. } |
                         super::ShaderBinding::Buffer { .. } => continue,
                         super::ShaderBinding::Plain { ty, container } => {

@@ -167,7 +167,8 @@ fn build_pipeline_layout(multi_layouts: &[(&crate::Shader, crate::ShaderVisibili
             };
             let mut naga_target = msl::BindTarget::default();
             let target = match *binding {
-                crate::ShaderBinding::Texture { .. } => {
+                crate::ShaderBinding::Texture { .. } |
+                crate::ShaderBinding::TextureStorage { .. } => {
                     naga_target.texture = Some(num_textures as _);
                     binding_index += 1;
                     num_textures += 1;
@@ -306,7 +307,10 @@ impl super::Context {
             .lock()
             .unwrap()
             .new_library_with_source(source.as_ref(), &options)
-            .unwrap();
+            .unwrap_or_else(|err| {
+                let string = err.replace("\\n", "\n");
+                panic!("MSL compilation error:\n{}", string);
+            });
 
         let ep_index = module
             .entry_points

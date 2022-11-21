@@ -115,6 +115,12 @@ pub struct ComputePipeline {
     wg_size: metal::MTLSize,
 }
 
+impl ComputePipeline {
+    pub fn get_workgroup_size(&self) -> [u32; 3] {
+        [self.wg_size.width as u32, self.wg_size.height as u32, self.wg_size.depth as u32]
+    }
+}
+
 #[derive(Debug)]
 pub struct RenderPipeline {
     raw: metal::RenderPipelineState,
@@ -297,12 +303,55 @@ impl Context {
     }
 
     pub fn create_texture_view(&self, desc: super::TextureViewDesc) -> TextureView {
-        //TODO: proper subresource selection
-        let raw = unsafe {
-            msg_send![desc.texture.raw, retain]
+        use crate::TextureViewDimension as Tvd;
+
+        let texture = desc.texture.as_ref();
+        let mtl_format = map_texture_format(desc.format);
+        let mtl_type = match desc.dimension {
+            Tvd::D1 => metal::MTLTextureType::D1,
+            Tvd::D2 => metal::MTLTextureType::D2,
+            Tvd::D2Array => metal::MTLTextureType::D2Array,
+            Tvd::D3 => metal::MTLTextureType::D3,
+            Tvd::Cube => metal::MTLTextureType::Cube,
+            Tvd::CubeArray => metal::MTLTextureType::CubeArray,
         };
+        let mip_level_count = match desc.subresources.mip_level_count {
+            Some(count) => count.get() as u64,
+            None => texture.mipmap_level_count() - desc.subresources.base_mip_level as u64,
+        };
+        let array_layer_count = match desc.subresources.array_layer_count {
+            Some(count) => count.get() as u64,
+            None => texture.array_length() - desc.subresources.base_array_layer as u64,
+        };
+
+        let raw = objc::rc::autoreleasepool(|| {
+            let raw = texture.new_texture_view_from_slice(
+                mtl_format,
+                mtl_type,
+                metal::NSRange {
+                    location: desc.subresources.base_mip_level as _,
+                    length: mip_level_count,
+                },
+                metal::NSRange {
+                    location: desc.subresources.base_array_layer as _,
+                    length: array_layer_count,
+                },
+            );
+            if !desc.name.is_empty() {
+                raw.set_label(desc.name);
+            }
+            unsafe {
+                msg_send![raw.as_ref(), retain]
+            }
+        });
         TextureView {
             raw
+        }
+    }
+
+    pub fn destroy_texture_view(&self, view: TextureView) {
+        unsafe {
+            let () = msg_send![view.raw, release];
         }
     }
 

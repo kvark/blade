@@ -1,10 +1,12 @@
+#![allow(irrefutable_let_patterns)]
+
 use lame;
-use std::slice;
+use std::{num::NonZeroU32, slice};
 
 struct Globals {
     modulator: [f32; 4],
     input: lame::TextureView,
-    output: lame::BufferPiece,
+    output: lame::TextureView,
 }
 
 // Using a manual implementation of the trait
@@ -28,8 +30,9 @@ impl lame::ShaderData for Globals {
                 ),
                 (
                     "output".to_string(),
-                    lame::ShaderBinding::Buffer {
-                        type_name: "Output",
+                    lame::ShaderBinding::TextureStorage {
+                        format: lame::TextureFormat::Rgba8Unorm,
+                        dimension: lame::TextureViewDimension::D2,
                         access: lame::StorageAccess::STORE,
                     },
                 ),
@@ -39,7 +42,7 @@ impl lame::ShaderData for Globals {
     fn fill<E: lame::ShaderDataEncoder>(&self, mut encoder: E) {
         encoder.set_plain(0, self.modulator);
         encoder.set_texture(1, self.input);
-        encoder.set_buffer(2, self.output);
+        encoder.set_texture(2, self.output);
     }
 }
 
@@ -64,29 +67,44 @@ fn main() {
         name: "main",
         compute: shader.at("main"),
     });
+    let wg_size = pipeline.get_workgroup_size();
 
     let extent = lame::Extent {
         width: 16,
         height: 16,
         depth: 1,
     };
-    let res_texture = context.create_texture(lame::TextureDesc {
+    let mip_level_count = extent.max_mip_levels();
+    let texture = context.create_texture(lame::TextureDesc {
         name: "input",
         format: lame::TextureFormat::Rgba8Unorm,
         size: extent,
         dimension: lame::TextureDimension::D2,
         array_layers: 1,
-        mip_level_count: 1,
-        usage: lame::TextureUsage::RESOURCE | lame::TextureUsage::COPY,
+        mip_level_count,
+        usage: lame::TextureUsage::RESOURCE
+            | lame::TextureUsage::STORAGE
+            | lame::TextureUsage::COPY,
     });
-    let res_view = context.create_texture_view(lame::TextureViewDesc {
-        name: "",
-        texture: res_texture,
-        dimension: lame::TextureViewDimension::D2,
-    });
+    let views = (0..mip_level_count)
+        .map(|i| {
+            context.create_texture_view(lame::TextureViewDesc {
+                name: &format!("mip-{}", i),
+                texture,
+                format: lame::TextureFormat::Rgba8Unorm,
+                dimension: lame::TextureViewDimension::D2,
+                subresources: &lame::TextureSubresources {
+                    base_mip_level: i,
+                    mip_level_count: NonZeroU32::new(1),
+                    base_array_layer: 0,
+                    array_layer_count: None,
+                },
+            })
+        })
+        .collect::<Vec<_>>();
 
-    let buffer = context.create_buffer(lame::BufferDesc {
-        name: "output",
+    let result_buffer = context.create_buffer(lame::BufferDesc {
+        name: "result",
         size: 4,
         memory: lame::Memory::Shared,
     });
@@ -114,26 +132,52 @@ fn main() {
         context.create_command_encoder(lame::CommandEncoderDesc { name: "main" });
     command_encoder.start();
 
-    {
-        let mut encoder = command_encoder.with_transfers();
-        encoder.copy_buffer_to_texture(upload_buffer.into(), 16 * 4, res_texture.into(), extent);
+    if let mut encoder = command_encoder.with_transfers() {
+        encoder.copy_buffer_to_texture(upload_buffer.into(), 16 * 4, texture.into(), extent);
     }
-    {
-        let mut pc = command_encoder.with_pipeline(&pipeline);
-        pc.bind_data(
-            0,
-            &Globals {
-                modulator: [0.2, 0.4, 0.3, 0.0],
-                input: res_view,
-                output: buffer.at(0),
+    if let mut pc = command_encoder.with_pipeline(&pipeline) {
+        for i in 1..mip_level_count {
+            let dst_size = extent.at_mip_level(i);
+            pc.bind_data(
+                0,
+                &Globals {
+                    modulator: if i == 1 {
+                        [0.2, 0.4, 0.3, 0.0]
+                    } else {
+                        [1.0; 4]
+                    },
+                    input: views[i as usize - 1],
+                    output: views[i as usize],
+                },
+            );
+            pc.dispatch([
+                dst_size.width / wg_size[0] + 1,
+                dst_size.height / wg_size[1] + 1,
+                1,
+            ]);
+        }
+    }
+    if let mut encoder = command_encoder.with_transfers() {
+        encoder.copy_texture_to_buffer(
+            lame::TexturePiece {
+                texture,
+                mip_level: mip_level_count - 1,
+                array_layer: 0,
+                origin: Default::default(),
+            },
+            result_buffer.into(),
+            4,
+            lame::Extent {
+                width: 1,
+                height: 1,
+                depth: 1,
             },
         );
-        pc.dispatch([1, 1, 1]);
     }
     let sync_point = context.submit(&mut command_encoder);
 
     let ok = context.wait_for(sync_point, 1000);
     assert!(ok);
-    let answer = unsafe { *(buffer.data() as *mut u32) };
-    println!("Output: {}", answer);
+    let answer = unsafe { *(result_buffer.data() as *mut u32) };
+    println!("Output: 0x{:x}", answer);
 }

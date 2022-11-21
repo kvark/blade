@@ -32,6 +32,8 @@ mod shader;
 
 pub use hal::*;
 
+use std::num::NonZeroU32;
+
 #[derive(Debug)]
 pub struct ContextDesc {
     pub validation: bool,
@@ -133,6 +135,9 @@ pub struct Extent {
 }
 
 impl Extent {
+    pub fn max_mip_levels(&self) -> u32 {
+        self.width.max(self.height).max(self.depth).next_power_of_two().trailing_zeros()
+    }
     pub fn at_mip_level(&self, level: u32) -> Self {
         Self {
             width: (self.width >> level).max(1),
@@ -162,11 +167,21 @@ pub struct TextureDesc<'a> {
     pub usage: TextureUsage,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TextureSubresources {
+    pub base_mip_level: u32,
+    pub mip_level_count: Option<NonZeroU32>,
+    pub base_array_layer: u32,
+    pub array_layer_count: Option<NonZeroU32>,
+}
+
 #[derive(Debug)]
 pub struct TextureViewDesc<'a> {
     pub name: &'a str,
     pub texture: Texture,
+    pub format: TextureFormat,
     pub dimension: TextureViewDimension,
+    pub subresources: &'a TextureSubresources,
 }
 
 bitflags::bitflags! {
@@ -212,6 +227,11 @@ pub enum PlainContainer {
 pub enum ShaderBinding {
     Texture {
         dimension: TextureViewDimension,
+    },
+    TextureStorage {
+        dimension: TextureViewDimension,
+        format: TextureFormat,
+        access: StorageAccess,
     },
     Sampler {
         comparison: bool,

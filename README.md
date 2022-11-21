@@ -55,3 +55,16 @@ On Vulkan we'll require certain features to make the translation simple:
   - [VK_KHR_descriptor_update_template](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VK_KHR_descriptor_update_template.html)
   - [VK_EXT_inline_uniform_block](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VK_EXT_inline_uniform_block.html)
   - [VK_KHR_dynamic_rendering](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VK_KHR_dynamic_rendering.html)
+
+### Assumptions
+
+Lame is based on different set of assumptions from wgpu-hal:
+- *safety*: wgpu places safety first and foremost. Self-sufficient, guarantees no UB. Lame is on the opposite - considers safety to be secondary. Expects users to rely on native API's validation and tooling.
+- *API reach*: wgpu attempts to be everywhere, having backends for all the APIs it can reach. Lame targets only the essential backends: Vulkan and Metal.
+- *errors*: wgpu considers all external errors recoverable. Lame doesn't expect any recovery after the initialization is done.
+- *object copy*: wgpu-hal hides API objects so that they can only be `Clone`, and some of the backends use `Arc` and other heap-allocated backing for them. Lame keeps the API for resources to be are light as possible and allows them to be copied freely.
+- *bind group creation cost*: wgpu considers it expensive, needs to be prepared ahead of time. Lame considers it cheap enough to always create on the fly.
+| bind group invalidation | should be avoided by following pipeline compatibility rules | everything is re-bound on pipeline change |
+- *usage*: wgpu expects to be used as a Rust library. Lame expects to be vendored in and modified according to the needs of a user. Hopefully, some of the changes would appear upstream as PRs.
+
+In other words, this is a bit **experiment**. It may fail horribly, or it may open up new ideas and perspectives.
