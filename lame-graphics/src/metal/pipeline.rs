@@ -70,29 +70,13 @@ fn map_stencil_op(op: crate::StencilOperation) -> metal::MTLStencilOperation {
     }
 }
 
-fn map_compare_function(fun: crate::CompareFunction) -> metal::MTLCompareFunction {
-    use metal::MTLCompareFunction::*;
-    use crate::CompareFunction as Cf;
-
-    match fun {
-        Cf::Never => Never,
-        Cf::Less => Less,
-        Cf::LessEqual => LessEqual,
-        Cf::Equal => Equal,
-        Cf::GreaterEqual => GreaterEqual,
-        Cf::Greater => Greater,
-        Cf::NotEqual => NotEqual,
-        Cf::Always => Always,
-    }
-}
-
 fn create_stencil_desc(
     face: &crate::StencilFaceState,
     read_mask: u32,
     write_mask: u32,
 ) -> metal::StencilDescriptor {
     let desc = metal::StencilDescriptor::new();
-    desc.set_stencil_compare_function(map_compare_function(face.compare));
+    desc.set_stencil_compare_function(super::map_compare_function(face.compare));
     desc.set_read_mask(read_mask);
     desc.set_write_mask(write_mask);
     desc.set_stencil_failure_operation(map_stencil_op(face.fail_op));
@@ -103,7 +87,7 @@ fn create_stencil_desc(
 
 fn create_depth_stencil_desc(state: &crate::DepthStencilState) -> metal::DepthStencilDescriptor {
     let desc = metal::DepthStencilDescriptor::new();
-    desc.set_depth_compare_function(map_compare_function(state.depth_compare));
+    desc.set_depth_compare_function(super::map_compare_function(state.depth_compare));
     desc.set_depth_write_enabled(state.depth_write_enabled);
 
     let s = &state.stencil;
@@ -191,16 +175,24 @@ fn build_pipeline_layout(multi_layouts: &[(&crate::Shader, crate::ShaderVisibili
                     ty,
                     container,
                 } => {
-                    let offset = plain_data_size;
                     let scalar_size = match ty {
+                        crate::PlainType::U32 |
+                        crate::PlainType::I32 |
                         crate::PlainType::F32 => 4u32,
                     };
-                    let count = match container {
-                        crate::PlainContainer::Scalar => 1u32,
-                        crate::PlainContainer::Vector(size) => size as u32,
+                    let (count, alignment) = match container {
+                        crate::PlainContainer::Scalar => (1u32, 1u32),
+                        crate::PlainContainer::Vector(crate::VectorSize::Bi) => (2, 2),
+                        crate::PlainContainer::Vector(size) => (size as u32, 4),
+                        crate::PlainContainer::Matrix(rows, crate::VectorSize::Bi) => (rows as u32 * 2, 2),
+                        crate::PlainContainer::Matrix(rows, cols) => (rows as u32 * cols as u32, 4),
                     };
+                    let remain = plain_data_size % (scalar_size * alignment);
+                    if remain != 0 {
+                        plain_data_size += scalar_size * alignment - remain;
+                    }
+                    let offset = plain_data_size;
                     plain_data_size += scalar_size * count;
-                    //TODO: take alignment into account
                     offset
                 }
             };

@@ -10,9 +10,11 @@ bitflags = "1"
 bytemuck = "1"
 log = "0.4"
 naga = { version = "0.10", features = ["wgsl-in"] }
+raw-window-handle = "0.5"
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 block = "0.1"
+core-graphics-types = "0.1"
 foreign-types = "0.3"
 metal = "0.24"
 objc = "0.2.5"

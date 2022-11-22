@@ -192,6 +192,76 @@ bitflags::bitflags! {
     }
 }
 
+/// How edges should be handled in texture addressing.
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+pub enum AddressMode {
+    /// Clamp the value to the edge of the texture.
+    #[default]
+    ClampToEdge,
+    /// Repeat the texture in a tiling fashion.
+    Repeat,
+    /// Repeat the texture, mirroring it every repeat.
+    MirrorRepeat,
+    /// Clamp the value to the border of the texture.
+    ClampToBorder,
+}
+
+/// Texel mixing mode when sampling between texels.
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+pub enum FilterMode {
+    /// Nearest neighbor sampling.
+    #[default]
+    Nearest,
+    /// Linear Interpolation
+    Linear,
+}
+
+/// Comparison function used for depth and stencil operations.
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+pub enum CompareFunction {
+    /// Function never passes
+    Never,
+    /// Function passes if new value less than existing value
+    Less,
+    /// Function passes if new value is equal to existing value. When using
+    /// this compare function, make sure to mark your Vertex Shader's `@builtin(position)`
+    /// output as `@invariant` to prevent artifacting.
+    Equal,
+    /// Function passes if new value is less than or equal to existing value
+    LessEqual,
+    /// Function passes if new value is greater than existing value
+    Greater,
+    /// Function passes if new value is not equal to existing value. When using
+    /// this compare function, make sure to mark your Vertex Shader's `@builtin(position)`
+    /// output as `@invariant` to prevent artifacting.
+    NotEqual,
+    /// Function passes if new value is greater than or equal to existing value
+    GreaterEqual,
+    /// Function always passes
+    Always,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TextureColor {
+    TransparentBlack,
+    OpaqueBlack,
+    White,
+}
+
+#[derive(Debug, Default)]
+pub struct SamplerDesc<'a> {
+    pub name: &'a str,
+    pub address_modes: [AddressMode; 3],
+    pub mag_filter: FilterMode,
+    pub min_filter: FilterMode,
+    pub mipmap_filter: FilterMode,
+    pub lod_min_clamp: f32,
+    pub lod_max_clamp: Option<f32>,
+    pub compare: Option<CompareFunction>,
+    pub anisotropy_clamp: u32,
+    pub border_color: Option<TextureColor>,
+}
+
 pub struct Shader {
     module: naga::Module,
     info: naga::valid::ModuleInfo,
@@ -214,6 +284,8 @@ impl Shader {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PlainType {
+    U32,
+    I32,
     F32,
 }
 
@@ -221,6 +293,7 @@ pub enum PlainType {
 pub enum PlainContainer {
     Scalar,
     Vector(VectorSize),
+    Matrix(VectorSize, VectorSize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -332,31 +405,6 @@ pub struct PrimitiveState {
     pub unclipped_depth: bool,
     /// If true, only the primitive edges are rasterized..
     pub wireframe: bool,
-}
-
-/// Comparison function used for depth and stencil operations.
-#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-pub enum CompareFunction {
-    /// Function never passes
-    Never,
-    /// Function passes if new value less than existing value
-    Less,
-    /// Function passes if new value is equal to existing value. When using
-    /// this compare function, make sure to mark your Vertex Shader's `@builtin(position)`
-    /// output as `@invariant` to prevent artifacting.
-    Equal,
-    /// Function passes if new value is less than or equal to existing value
-    LessEqual,
-    /// Function passes if new value is greater than existing value
-    Greater,
-    /// Function passes if new value is not equal to existing value. When using
-    /// this compare function, make sure to mark your Vertex Shader's `@builtin(position)`
-    /// output as `@invariant` to prevent artifacting.
-    NotEqual,
-    /// Function passes if new value is greater than or equal to existing value
-    GreaterEqual,
-    /// Function always passes
-    Always,
 }
 
 /// Operation to perform on the stencil value.
@@ -619,14 +667,7 @@ pub struct RenderPipelineDesc<'a> {
     pub primitive: PrimitiveState,
     pub depth_stencil: Option<DepthStencilState>,
     pub fragment: ShaderFunction<'a>,
-    pub color_targets: &'a [&'a ColorTargetState],
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum TextureColor {
-    TransparentBlack,
-    OpaqueBlack,
-    White,
+    pub color_targets: &'a [ColorTargetState],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -655,9 +696,17 @@ pub struct RenderTargetSet<'a> {
     pub depth_stencil: Option<RenderTarget>,
 }
 
+#[derive(Debug)]
+pub struct SurfaceConfig {
+    pub size: Extent,
+    pub usage: TextureUsage,
+    pub frame_count: u32,
+}
+
 pub trait ShaderDataEncoder {
-    fn set_texture(&mut self, index: u32, view: TextureView);
     fn set_buffer(&mut self, index: u32, piece: BufferPiece);
+    fn set_texture(&mut self, index: u32, view: TextureView);
+    fn set_sampler(&mut self, index: u32, sampler: Sampler);
     fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P);
 }
 

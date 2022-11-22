@@ -1,6 +1,5 @@
 #![allow(irrefutable_let_patterns)]
 
-use lame;
 use std::{num::NonZeroU32, slice};
 
 struct Globals {
@@ -133,7 +132,12 @@ fn main() {
     command_encoder.start();
 
     if let mut encoder = command_encoder.with_transfers() {
-        encoder.copy_buffer_to_texture(upload_buffer.into(), 16 * 4, texture.into(), extent);
+        encoder.copy_buffer_to_texture(
+            upload_buffer.into(),
+            extent.width * 4,
+            texture.into(),
+            extent,
+        );
     }
     if let mut pc = command_encoder.with_pipeline(&pipeline) {
         for i in 1..mip_level_count {

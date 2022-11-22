@@ -100,11 +100,14 @@ impl super::Context {
                         super::ShaderBinding::Buffer { .. } => continue,
                         super::ShaderBinding::Plain { ty, container } => {
                             let scalar_name = match ty {
+                                super::PlainType::U32 => "u32",
+                                super::PlainType::I32 => "i32",
                                 super::PlainType::F32 => "f32",
                             };
                             let ty_name = match container {
                                 super::PlainContainer::Scalar => scalar_name.to_string(),
                                 super::PlainContainer::Vector(size) => format!("vec{}<{}>", size as u32, scalar_name),
+                                super::PlainContainer::Matrix(rows, cols) => format!("mat{}x{}<{}>", rows as u32, cols as u32, scalar_name),
                             };
                             writeln!(header, "\t{}: {},", name, ty_name).unwrap();
                         }

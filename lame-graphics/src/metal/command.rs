@@ -26,6 +26,19 @@ struct ShaderDataEncoder<'a> {
 }
 
 impl crate::ShaderDataEncoder for ShaderDataEncoder<'_> {
+    fn set_buffer(&mut self, index: u32, piece: crate::BufferPiece) {
+        let slot = self.targets[index as usize] as _;
+        let value = Some(piece.buffer.as_ref());
+        if let Some(encoder) = self.vs_encoder {
+            encoder.set_vertex_buffer(slot, value, piece.offset);
+        }
+        if let Some(encoder) = self.fs_encoder {
+            encoder.set_fragment_buffer(slot, value, piece.offset);
+        }
+        if let Some(encoder) = self.cs_encoder {
+            encoder.set_buffer(slot, value, piece.offset);
+        }
+    }
     fn set_texture(&mut self, index: u32, view: super::TextureView) {
         //self.raw.set_texture(index as _, view.as_ref());
         let slot = self.targets[index as usize] as _;
@@ -40,17 +53,18 @@ impl crate::ShaderDataEncoder for ShaderDataEncoder<'_> {
             encoder.set_texture(slot, value);
         }
     }
-    fn set_buffer(&mut self, index: u32, piece: crate::BufferPiece) {
+    fn set_sampler(&mut self, index: u32, sampler: super::Sampler) {
+        //self.raw.set_sampler_state(index as _, sampler.as_ref());
         let slot = self.targets[index as usize] as _;
-        let value = Some(piece.buffer.as_ref());
+        let value = Some(sampler.as_ref());
         if let Some(encoder) = self.vs_encoder {
-            encoder.set_vertex_buffer(slot, value, piece.offset);
+            encoder.set_vertex_sampler_state(slot, value);
         }
         if let Some(encoder) = self.fs_encoder {
-            encoder.set_fragment_buffer(slot, value, piece.offset);
+            encoder.set_fragment_sampler_state(slot, value);
         }
         if let Some(encoder) = self.cs_encoder {
-            encoder.set_buffer(slot, value, piece.offset);
+            encoder.set_sampler_state(slot, value);
         }
     }
     fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P) {

@@ -1,7 +1,3 @@
-struct Output {
-    avg: array<u32>,
-};
-
 #header
 
 @compute
