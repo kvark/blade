@@ -104,6 +104,7 @@ impl From<Texture> for TexturePiece {
 #[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
 pub enum TextureFormat {
     Rgba8Unorm,
+    Bgra8UnormSrgb,
 }
 
 /// Dimensionality of a texture.

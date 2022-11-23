@@ -62,7 +62,7 @@ impl super::Surface {
             view: msg_send![view, retain],
             render_layer: mem::transmute::<_, &metal::MetalLayerRef>(raw_layer)
                 .to_owned(),
-            format: crate::TextureFormat::Rgba8Unorm,
+            format: crate::TextureFormat::Bgra8UnormSrgb,
         }
     }
 

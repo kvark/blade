@@ -26,6 +26,7 @@ fn map_storage_format(format: super::TextureFormat) -> &'static str {
     use super::TextureFormat as Tf;
     match format {
         Tf::Rgba8Unorm => "rgba8unorm",
+        Tf::Bgra8UnormSrgb => panic!("Unsupported storage format"),
     }
 }
 
@@ -131,7 +132,7 @@ impl super::Context {
                 while let Some(pos) = remain.find('$') {
                     text.push_str(&remain[..pos]);
                     remain = &remain[pos+1..];
-                    let (name, tail) = match remain.find(|c: char| !c.is_alphanumeric()) {
+                    let (name, tail) = match remain.find(|c: char| !c.is_alphanumeric() && c!='_') {
                         Some(end) => remain.split_at(end),
                         None => (remain, ""),
                     };

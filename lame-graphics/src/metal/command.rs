@@ -70,7 +70,7 @@ impl crate::ShaderDataEncoder for ShaderDataEncoder<'_> {
     fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P) {
         let offset = self.targets[index as usize] as usize;
         unsafe {
-            std::ptr::write_unaligned(self.plain_data.as_mut_ptr().add(offset) as *mut P, data);
+            std::ptr::write(self.plain_data.as_mut_ptr().add(offset) as *mut P, data);
         }
     }
 }

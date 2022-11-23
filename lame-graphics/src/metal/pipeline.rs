@@ -17,13 +17,7 @@ fn map_blend_factor(factor: crate::BlendFactor) -> metal::MTLBlendFactor {
         Bf::OneMinusDstAlpha => OneMinusDestinationAlpha,
         Bf::Constant => BlendColor,
         Bf::OneMinusConstant => OneMinusBlendColor,
-        //Bf::ConstantAlpha => BlendAlpha,
-        //Bf::OneMinusConstantAlpha => OneMinusBlendAlpha,
         Bf::SrcAlphaSaturated => SourceAlphaSaturated,
-        //Bf::Src1 => Source1Color,
-        //Bf::OneMinusSrc1 => OneMinusSource1Color,
-        //Bf::Src1Alpha => Source1Alpha,
-        //Bf::OneMinusSrc1Alpha => OneMinusSource1Alpha,
     }
 }
 
@@ -116,6 +110,15 @@ bitflags::bitflags! {
     }
 }
 
+fn align_to(offset: u32, alignment: u32) -> u32 {
+    let remain = offset % alignment;
+    if remain != 0 {
+        offset + alignment - remain
+    } else {
+        offset
+    }
+}
+
 fn build_pipeline_layout(multi_layouts: &[(&crate::Shader, crate::ShaderVisibility)]) -> (super::PipelineLayout, msl::Options) {
     let mut naga_resources = msl::PerStageResources::default();
     let combined_visibility = multi_layouts.iter().fold(crate::ShaderVisibility::empty(), |u, &(_, visibility)| { u | visibility });
@@ -144,6 +147,7 @@ fn build_pipeline_layout(multi_layouts: &[(&crate::Shader, crate::ShaderVisibili
         // the order of binding indices has to match the logic in `create_shader`
         let mut binding_index = 1;
         let mut plain_data_size = 0;
+        let mut size_alignment = 1;
         for &(_, ref binding) in bindings.iter() {
             let resource_binding = naga::ResourceBinding {
                 group: group_index as u32,
@@ -187,12 +191,9 @@ fn build_pipeline_layout(multi_layouts: &[(&crate::Shader, crate::ShaderVisibili
                         crate::PlainContainer::Matrix(rows, crate::VectorSize::Bi) => (rows as u32 * 2, 2),
                         crate::PlainContainer::Matrix(rows, cols) => (rows as u32 * cols as u32, 4),
                     };
-                    let remain = plain_data_size % (scalar_size * alignment);
-                    if remain != 0 {
-                        plain_data_size += scalar_size * alignment - remain;
-                    }
-                    let offset = plain_data_size;
-                    plain_data_size += scalar_size * count;
+                    size_alignment = size_alignment.max(scalar_size * alignment);
+                    let offset = align_to(plain_data_size, scalar_size * alignment);
+                    plain_data_size = offset + scalar_size * count;
                     offset
                 }
             };
@@ -220,7 +221,7 @@ fn build_pipeline_layout(multi_layouts: &[(&crate::Shader, crate::ShaderVisibili
             visibility,
             targets: targets.into_boxed_slice(),
             plain_buffer_slot,
-            plain_data_size,
+            plain_data_size: align_to(plain_data_size, size_alignment),
         });
     }
 
