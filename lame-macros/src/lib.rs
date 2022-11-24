@@ -22,7 +22,7 @@ use quote::quote;
 pub fn shader_data_derive(input: TokenStream) -> TokenStream {
     let ast: syn::DeriveInput = syn::parse(input).unwrap();
 
-    let impl_layout = quote!{
+    let impl_layout = quote! {
         fn layout() -> crate::ShaderDataLayout {
             crate::ShaderDataLayout {
                 entries: vec![],
@@ -31,7 +31,7 @@ pub fn shader_data_derive(input: TokenStream) -> TokenStream {
     };
 
     let struct_name = ast.ident;
-    let output = quote!{
+    let output = quote! {
         impl crate::ShaderData for #struct_name {
             #impl_layout
         }

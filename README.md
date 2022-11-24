@@ -66,6 +66,7 @@ Lame is based on different set of assumptions from wgpu-hal:
 - *object copy*: wgpu-hal hides API objects so that they can only be `Clone`, and some of the backends use `Arc` and other heap-allocated backing for them. Lame keeps the API for resources to be are light as possible and allows them to be copied freely.
 - *bind group creation cost*: wgpu considers it expensive, needs to be prepared ahead of time. Lame considers it cheap enough to always create on the fly.
 | bind group invalidation | should be avoided by following pipeline compatibility rules | everything is re-bound on pipeline change |
+- *barriers*: wgpu attempts to always use the optimal image layouts and can set reduced access flags on resources based on use. Placing the barriers optimally is a non-trivial task to solve, no universal solutions. Lame not only ignores this fight by making the user place the barrier, these barriers are only global, and there are no image layout changes - everything is GENERAL.
 - *usage*: wgpu expects to be used as a Rust library. Lame expects to be vendored in and modified according to the needs of a user. Hopefully, some of the changes would appear upstream as PRs.
 
 In other words, this is a bit **experiment**. It may fail horribly, or it may open up new ideas and perspectives.

@@ -40,7 +40,7 @@ impl super::Context {
 
         let mut substitutions = HashMap::<&str, Substitute>::default();
         let mut header = String::new();
-        
+
         for (group_index, layout_maybe) in desc.data_layouts.iter().enumerate() {
             let layout = match layout_maybe {
                 Some(layout) => layout,
@@ -56,38 +56,66 @@ impl super::Context {
                 match binding {
                     super::ShaderBinding::Texture { dimension } => {
                         let dim_str = map_view_dimension(dimension);
-                        writeln!(header, "@group({}) @binding({}) var {}: texture_{}<f32>;",
-                            group_index, binding_index, name, dim_str).unwrap();
+                        writeln!(
+                            header,
+                            "@group({}) @binding({}) var {}: texture_{}<f32>;",
+                            group_index, binding_index, name, dim_str
+                        )
+                        .unwrap();
                         binding_index += 1;
                     }
-                    super::ShaderBinding::TextureStorage { dimension, format, access } => {
+                    super::ShaderBinding::TextureStorage {
+                        dimension,
+                        format,
+                        access,
+                    } => {
                         let dim_str = map_view_dimension(dimension);
                         let format_str = map_storage_format(format);
                         let access_str = map_storage_access(access);
-                        writeln!(header, "@group({}) @binding({}) var {}: texture_storage_{}<{},{}>;",
-                            group_index, binding_index, name, dim_str, format_str, access_str).unwrap();
+                        writeln!(
+                            header,
+                            "@group({}) @binding({}) var {}: texture_storage_{}<{},{}>;",
+                            group_index, binding_index, name, dim_str, format_str, access_str
+                        )
+                        .unwrap();
                         binding_index += 1;
                     }
                     super::ShaderBinding::Sampler { comparison } => {
                         let suffix = if comparison { "_comparison" } else { "" };
-                        writeln!(header, "@group({}) @binding({}) var {}: sampler{};",
-                            group_index, binding_index, name, suffix).unwrap();
+                        writeln!(
+                            header,
+                            "@group({}) @binding({}) var {}: sampler{};",
+                            group_index, binding_index, name, suffix
+                        )
+                        .unwrap();
                         binding_index += 1;
                     }
                     super::ShaderBinding::Buffer { type_name, access } => {
                         let access_str = map_storage_access(access);
-                        writeln!(header, "@group({}) @binding({}) var<storage, {}> {}: {};",
-                            group_index, binding_index, access_str, name, type_name).unwrap();
+                        writeln!(
+                            header,
+                            "@group({}) @binding({}) var<storage, {}> {}: {};",
+                            group_index, binding_index, access_str, name, type_name
+                        )
+                        .unwrap();
                         binding_index += 1;
                     }
-                    super::ShaderBinding::Plain { .. } => {
-                    }
+                    super::ShaderBinding::Plain { .. } => {}
                 };
 
                 let is_uniform = binding_index == old_binding_index;
                 has_uniforms |= is_uniform;
-                if let Some(old) = substitutions.insert(name.as_str(), Substitute { group_index, is_uniform }) {
-                    panic!("Duplicate binding '{}' in groups {} and {}", name, old.group_index, group_index);
+                if let Some(old) = substitutions.insert(
+                    name.as_str(),
+                    Substitute {
+                        group_index,
+                        is_uniform,
+                    },
+                ) {
+                    panic!(
+                        "Duplicate binding '{}' in groups {} and {}",
+                        name, old.group_index, group_index
+                    );
                 }
             }
 
@@ -95,10 +123,10 @@ impl super::Context {
                 writeln!(header, "struct _Uniforms{} {{", group_index).unwrap();
                 for &(ref name, binding) in layout.bindings.iter() {
                     match binding {
-                        super::ShaderBinding::Texture { .. } |
-                        super::ShaderBinding::TextureStorage { .. } |
-                        super::ShaderBinding::Sampler { .. } |
-                        super::ShaderBinding::Buffer { .. } => continue,
+                        super::ShaderBinding::Texture { .. }
+                        | super::ShaderBinding::TextureStorage { .. }
+                        | super::ShaderBinding::Sampler { .. }
+                        | super::ShaderBinding::Buffer { .. } => continue,
                         super::ShaderBinding::Plain { ty, container } => {
                             let scalar_name = match ty {
                                 super::PlainType::U32 => "u32",
@@ -107,15 +135,24 @@ impl super::Context {
                             };
                             let ty_name = match container {
                                 super::PlainContainer::Scalar => scalar_name.to_string(),
-                                super::PlainContainer::Vector(size) => format!("vec{}<{}>", size as u32, scalar_name),
-                                super::PlainContainer::Matrix(rows, cols) => format!("mat{}x{}<{}>", rows as u32, cols as u32, scalar_name),
+                                super::PlainContainer::Vector(size) => {
+                                    format!("vec{}<{}>", size as u32, scalar_name)
+                                }
+                                super::PlainContainer::Matrix(rows, cols) => {
+                                    format!("mat{}x{}<{}>", rows as u32, cols as u32, scalar_name)
+                                }
                             };
                             writeln!(header, "\t{}: {},", name, ty_name).unwrap();
                         }
                     }
                 }
                 writeln!(header, "}}").unwrap();
-                writeln!(header, "@group({}) @binding(0) var<uniform> {}{}: _Uniforms{};", group_index, UNIFORM_NAME, group_index, group_index).unwrap();
+                writeln!(
+                    header,
+                    "@group({}) @binding(0) var<uniform> {}{}: _Uniforms{};",
+                    group_index, UNIFORM_NAME, group_index, group_index
+                )
+                .unwrap();
             }
         }
         log::debug!("Generated header:\n{}", header);
@@ -131,8 +168,9 @@ impl super::Context {
                 let mut remain = line;
                 while let Some(pos) = remain.find('$') {
                     text.push_str(&remain[..pos]);
-                    remain = &remain[pos+1..];
-                    let (name, tail) = match remain.find(|c: char| !c.is_alphanumeric() && c!='_') {
+                    remain = &remain[pos + 1..];
+                    let (name, tail) = match remain.find(|c: char| !c.is_alphanumeric() && c != '_')
+                    {
                         Some(end) => remain.split_at(end),
                         None => (remain, ""),
                     };

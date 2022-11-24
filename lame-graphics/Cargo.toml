@@ -18,8 +18,8 @@ core-graphics-types = "0.1"
 foreign-types = "0.3"
 metal = "0.24"
 objc = "0.2.5"
-naga = { features = ["msl-out"] }
+naga = { version = "0.10", features = ["msl-out"] }
 
 [target.'cfg(not(any(target_os = "ios", target_os = "macos")))'.dependencies]
 ash = "0.37"
-naga = { features = ["spv-out"] }
+naga = { version = "0.10", features = ["spv-out"] }

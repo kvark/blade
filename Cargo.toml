@@ -1,7 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "lame-graphics",
+    "lame-macros",
+]
+exclude = []
+
+[lib]
+
 [package]
 name = "lame"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.65"
+keywords = ["graphics"]
+license = "MIT"
 
 [dependencies]
 lame-macros = { version = "0.1", path = "lame-macros" }

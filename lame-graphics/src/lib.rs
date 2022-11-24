@@ -65,10 +65,7 @@ pub struct BufferPiece {
 
 impl From<Buffer> for BufferPiece {
     fn from(buffer: Buffer) -> Self {
-        Self {
-            buffer,
-            offset: 0,
-        }
+        Self { buffer, offset: 0 }
     }
 }
 
@@ -137,7 +134,11 @@ pub struct Extent {
 
 impl Extent {
     pub fn max_mip_levels(&self) -> u32 {
-        self.width.max(self.height).max(self.depth).next_power_of_two().trailing_zeros()
+        self.width
+            .max(self.height)
+            .max(self.depth)
+            .next_power_of_two()
+            .trailing_zeros()
     }
     pub fn at_mip_level(&self, level: u32) -> Self {
         Self {
@@ -327,7 +328,7 @@ pub struct ShaderDataLayout {
 
 pub struct ShaderDesc<'a> {
     pub source: &'a str,
-    pub data_layouts: &'a[Option<&'a ShaderDataLayout>],
+    pub data_layouts: &'a [Option<&'a ShaderDataLayout>],
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
