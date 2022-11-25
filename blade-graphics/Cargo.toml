@@ -20,6 +20,7 @@ metal = "0.24"
 objc = "0.2.5"
 naga = { version = "0.10", features = ["msl-out"] }
 
-[target.'cfg(not(any(target_os = "ios", target_os = "macos")))'.dependencies]
+[target.'cfg(any(portability, not(any(target_os = "ios", target_os = "macos"))))'.dependencies]
 ash = "0.37"
+ash-window = "0.12"
 naga = { version = "0.10", features = ["spv-out"] }

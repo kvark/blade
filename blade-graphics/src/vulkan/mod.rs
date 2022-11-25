@@ -122,28 +122,37 @@ impl Context {
             layers.push(ffi::CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0").unwrap());
         }
 
-        let supported_extensions = match entry.enumerate_instance_extension_properties(None) {
-            Ok(extensions) => extensions
-                .into_iter()
-                .map(|ext_prop| ffi::CStr::from_ptr(ext_prop.extension_name.as_ptr()))
-                .collect::<Vec<_>>(),
+        let supported_instance_extension_properties = match entry.enumerate_instance_extension_properties(None) {
+            Ok(extensions) => extensions,
             Err(err) => {
                 log::error!("enumerate_instance_extension_properties: {:?}", err);
                 return Err(super::NotSupportedError);
             }
         };
-
-        let mut instance_extensions: Vec<&'static ffi::CStr> = Vec::new();
-        instance_extensions.push(ext::DebugUtils::name());
-        instance_extensions.push(vk::KhrGetPhysicalDeviceProperties2Fn::name());
-        for inst_ext in instance_extensions.iter() {
-            if !supported_extensions.contains(inst_ext) {
-                log::error!("Extension {:?} is not supported", inst_ext);
-                return Err(super::NotSupportedError);
-            }
-        }
+        let supported_instance_extensions = supported_instance_extension_properties.iter()
+            .map(|ext_prop| ffi::CStr::from_ptr(ext_prop.extension_name.as_ptr()))
+            .collect::<Vec<_>>();
+        let is_vulkan_portability = supported_instance_extensions.contains(&vk::KhrPortabilityEnumerationFn::name());
 
         let instance = {
+            let mut create_flags = vk::InstanceCreateFlags::empty();
+
+            let mut instance_extensions: Vec<&'static ffi::CStr> = Vec::new();
+            instance_extensions.push(ext::DebugUtils::name());
+            instance_extensions.push(vk::KhrGetPhysicalDeviceProperties2Fn::name());
+
+            for inst_ext in instance_extensions.iter() {
+                if !supported_instance_extensions.contains(inst_ext) {
+                    log::error!("Extension {:?} is not supported", inst_ext);
+                    return Err(super::NotSupportedError);
+                }
+            }
+            if is_vulkan_portability {
+                log::info!("Enabling Vulkan Portability");
+                instance_extensions.push(vk::KhrPortabilityEnumerationFn::name());
+                create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
+            }
+
             let app_info = vk::ApplicationInfo::builder()
                 .engine_name(ffi::CStr::from_bytes_with_nul(b"blade\0").unwrap())
                 .engine_version(1)
@@ -156,6 +165,7 @@ impl Context {
             let (layer_strings, extension_strings) = str_pointers.split_at(layers.len());
             let create_info = vk::InstanceCreateInfo::builder()
                 .application_info(&app_info)
+                .flags(create_flags)
                 .enabled_layer_names(layer_strings)
                 .enabled_extension_names(extension_strings);
             entry.create_instance(&create_info, None).unwrap()
@@ -173,7 +183,6 @@ impl Context {
             .find(|&phd| inspect_adapter(phd, &instance, driver_api_version))
             .ok_or(super::NotSupportedError)?;
 
-        let device_extensions: Vec<&'static ffi::CStr> = Vec::new();
         let family_index = 0; //TODO
 
         let device = {
@@ -182,6 +191,11 @@ impl Context {
                 .queue_priorities(&[1.0])
                 .build();
             let family_infos = [family_info];
+
+            let mut device_extensions: Vec<&'static ffi::CStr> = Vec::new();
+            if is_vulkan_portability {
+                device_extensions.push(vk::KhrPortabilitySubsetFn::name());
+            }
 
             let str_pointers = device_extensions
                 .iter()

@@ -25,8 +25,8 @@
 
 pub use naga::{StorageAccess, VectorSize};
 
-#[cfg_attr(any(target_os = "ios", target_os = "macos"), path = "metal/mod.rs")]
-#[cfg_attr(not(any(target_os = "ios", target_os = "macos")), path = "vulkan/mod.rs")]
+#[cfg_attr(all(not(portability), any(target_os = "ios", target_os = "macos")), path = "metal/mod.rs")]
+#[cfg_attr(any(portability, not(any(target_os = "ios", target_os = "macos"))), path = "vulkan/mod.rs")]
 mod hal;
 mod shader;
 
