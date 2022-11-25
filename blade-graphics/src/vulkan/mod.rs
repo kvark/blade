@@ -2,6 +2,7 @@ use ash::{
     extensions::{ext, khr},
     vk,
 };
+use naga::back::spv;
 use std::{ffi, marker::PhantomData, sync::Mutex};
 
 mod command;
@@ -18,6 +19,7 @@ pub struct Context {
     device: ash::Device,
     queue: Mutex<vk::Queue>,
     physical_device: vk::PhysicalDevice,
+    naga_flags: spv::WriterFlags,
     extensions: Extensions,
     instance: ash::Instance,
     entry: ash::Entry,
@@ -49,13 +51,28 @@ pub struct Sampler {
     raw: vk::Sampler,
 }
 
+#[derive(Debug)]
+struct DescriptorSetLayout {
+    raw: vk::DescriptorSetLayout,
+    update_template: vk::DescriptorUpdateTemplate,
+}
+
+#[derive(Debug)]
+struct PipelineLayout {
+    raw: vk::PipelineLayout,
+    descriptor_set_layouts: Vec<Option<DescriptorSetLayout>>,
+}
+
+#[derive(Debug)]
 pub struct ComputePipeline {
     raw: vk::Pipeline,
+    layout: PipelineLayout,
+    wg_size: [u32; 3],
 }
 
 impl ComputePipeline {
     pub fn get_workgroup_size(&self) -> [u32; 3] {
-        unimplemented!()
+        self.wg_size
     }
 }
 
@@ -122,17 +139,20 @@ impl Context {
             layers.push(ffi::CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0").unwrap());
         }
 
-        let supported_instance_extension_properties = match entry.enumerate_instance_extension_properties(None) {
-            Ok(extensions) => extensions,
-            Err(err) => {
-                log::error!("enumerate_instance_extension_properties: {:?}", err);
-                return Err(super::NotSupportedError);
-            }
-        };
-        let supported_instance_extensions = supported_instance_extension_properties.iter()
+        let supported_instance_extension_properties =
+            match entry.enumerate_instance_extension_properties(None) {
+                Ok(extensions) => extensions,
+                Err(err) => {
+                    log::error!("enumerate_instance_extension_properties: {:?}", err);
+                    return Err(super::NotSupportedError);
+                }
+            };
+        let supported_instance_extensions = supported_instance_extension_properties
+            .iter()
             .map(|ext_prop| ffi::CStr::from_ptr(ext_prop.extension_name.as_ptr()))
             .collect::<Vec<_>>();
-        let is_vulkan_portability = supported_instance_extensions.contains(&vk::KhrPortabilityEnumerationFn::name());
+        let is_vulkan_portability =
+            supported_instance_extensions.contains(&vk::KhrPortabilityEnumerationFn::name());
 
         let instance = {
             let mut create_flags = vk::InstanceCreateFlags::empty();
@@ -212,10 +232,16 @@ impl Context {
 
         let queue = device.get_device_queue(family_index, 0);
 
+        let mut naga_flags = spv::WriterFlags::ADJUST_COORDINATE_SPACE;
+        if desc.validation {
+            naga_flags |= spv::WriterFlags::DEBUG;
+        }
+
         Ok(Context {
             device,
             queue: Mutex::new(queue),
             physical_device,
+            naga_flags,
             extensions,
             instance,
             entry,
@@ -232,5 +258,18 @@ impl Context {
 
     pub fn wait_for(&self, _sp: SyncPoint, _timeout_ms: u32) -> bool {
         unimplemented!()
+    }
+
+    fn set_object_name(&self, object_type: vk::ObjectType, object: impl vk::Handle, name: &str) {
+        let name_cstr = ffi::CString::new(name).unwrap();
+        let name_info = vk::DebugUtilsObjectNameInfoEXT::builder()
+            .object_type(object_type)
+            .object_handle(object.as_raw())
+            .object_name(&name_cstr);
+        let _ = unsafe {
+            self.extensions
+                .debug_utils
+                .set_debug_utils_object_name(self.device.handle(), &name_info)
+        };
     }
 }

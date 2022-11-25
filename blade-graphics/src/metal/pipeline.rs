@@ -49,8 +49,8 @@ fn map_blend_component(
 }
 
 fn map_stencil_op(op: crate::StencilOperation) -> metal::MTLStencilOperation {
-    use metal::MTLStencilOperation::*;
     use crate::StencilOperation as So;
+    use metal::MTLStencilOperation::*;
 
     match op {
         So::Keep => Keep,
@@ -119,29 +119,18 @@ fn align_to(offset: u32, alignment: u32) -> u32 {
     }
 }
 
-fn build_pipeline_layout(multi_layouts: &[(&crate::Shader, crate::ShaderVisibility)]) -> (super::PipelineLayout, msl::Options) {
+fn build_pipeline_layout(
+    combined: &[(Option<&crate::ShaderDataLayout>, crate::ShaderVisibility)],
+) -> (super::PipelineLayout, msl::Options) {
     let mut naga_resources = msl::PerStageResources::default();
-    let combined_visibility = multi_layouts.iter().fold(crate::ShaderVisibility::empty(), |u, &(_, visibility)| { u | visibility });
-    let group_count = multi_layouts.iter().map(|(shader, _)| shader.bind_groups.len()).max().unwrap_or_default();
-    let mut bind_group_infos = Vec::with_capacity(group_count);
+    let mut combined_visibility = crate::ShaderVisibility::empty();
+    let mut bind_group_infos = Vec::with_capacity(combined.len());
     let mut unsized_buffer_count = 0;
     let mut num_textures = 0u32;
     let mut num_samplers = 0u32;
     let mut num_buffers = 0u32;
-    for group_index in 0 .. group_count {
-        let mut layout_maybe = None;
-        let mut visibility = crate::ShaderVisibility::empty();
-        for &(shader, shader_visibility) in multi_layouts {
-            if let Some(data_layout) = shader.bind_groups.get(group_index).map_or(None, |opt| opt.as_ref()) {
-                visibility |= shader_visibility;
-                if let Some(layout) = layout_maybe {
-                    assert_eq!(data_layout, layout);
-                } else {
-                    layout_maybe = Some(data_layout);
-                }
-            }
-        }
-
+    for (group_index, &(layout_maybe, visibility)) in combined.iter().enumerate() {
+        combined_visibility |= visibility;
         let bindings = layout_maybe.map_or(&[][..], |l| &l.bindings);
         let mut targets = Vec::with_capacity(bindings.len());
         // the order of binding indices has to match the logic in `create_shader`
@@ -155,8 +144,8 @@ fn build_pipeline_layout(multi_layouts: &[(&crate::Shader, crate::ShaderVisibili
             };
             let mut naga_target = msl::BindTarget::default();
             let target = match *binding {
-                crate::ShaderBinding::Texture { .. } |
-                crate::ShaderBinding::TextureStorage { .. } => {
+                crate::ShaderBinding::Texture { .. }
+                | crate::ShaderBinding::TextureStorage { .. } => {
                     naga_target.texture = Some(num_textures as _);
                     binding_index += 1;
                     num_textures += 1;
@@ -175,20 +164,19 @@ fn build_pipeline_layout(multi_layouts: &[(&crate::Shader, crate::ShaderVisibili
                     num_buffers += 1;
                     num_buffers - 1
                 }
-                crate::ShaderBinding::Plain {
-                    ty,
-                    container,
-                } => {
+                crate::ShaderBinding::Plain { ty, container } => {
                     let scalar_size = match ty {
-                        crate::PlainType::U32 |
-                        crate::PlainType::I32 |
-                        crate::PlainType::F32 => 4u32,
+                        crate::PlainType::U32 | crate::PlainType::I32 | crate::PlainType::F32 => {
+                            4u32
+                        }
                     };
                     let (count, alignment) = match container {
                         crate::PlainContainer::Scalar => (1u32, 1u32),
                         crate::PlainContainer::Vector(crate::VectorSize::Bi) => (2, 2),
                         crate::PlainContainer::Vector(size) => (size as u32, 4),
-                        crate::PlainContainer::Matrix(rows, crate::VectorSize::Bi) => (rows as u32 * 2, 2),
+                        crate::PlainContainer::Matrix(rows, crate::VectorSize::Bi) => {
+                            (rows as u32 * 2, 2)
+                        }
                         crate::PlainContainer::Matrix(rows, cols) => (rows as u32 * cols as u32, 4),
                     };
                     size_alignment = size_alignment.max(scalar_size * alignment);
@@ -200,18 +188,23 @@ fn build_pipeline_layout(multi_layouts: &[(&crate::Shader, crate::ShaderVisibili
 
             targets.push(target);
             if resource_binding.binding != binding_index {
-                naga_resources.resources.insert(resource_binding, naga_target);
+                naga_resources
+                    .resources
+                    .insert(resource_binding, naga_target);
             }
         }
 
         let plain_buffer_slot = if plain_data_size != 0 {
-            naga_resources.resources.insert(naga::ResourceBinding {
-                group: group_index as u32,
-                binding: 0,
-            }, msl::BindTarget {
-                buffer: Some(num_buffers as _),
-                .. Default::default()
-            });
+            naga_resources.resources.insert(
+                naga::ResourceBinding {
+                    group: group_index as u32,
+                    binding: 0,
+                },
+                msl::BindTarget {
+                    buffer: Some(num_buffers as _),
+                    ..Default::default()
+                },
+            );
             num_buffers += 1;
             Some(num_buffers - 1)
         } else {
@@ -277,12 +270,8 @@ impl super::Context {
         let msl_version = metal::MTLLanguageVersion::V2_2;
 
         let module = &sf.shader.module;
-        let (source, info) = msl::write_string(
-            module,
-            &sf.shader.info,
-            naga_options,
-            &pipeline_options,
-        ).unwrap();
+        let (source, info) =
+            msl::write_string(module, &sf.shader.info, naga_options, &pipeline_options).unwrap();
 
         log::debug!(
             "Naga generated shader for entry point '{}' and stage {:?}\n{}",
@@ -311,9 +300,7 @@ impl super::Context {
             .position(|ep| ep.stage == naga_stage && ep.name == sf.entry_point)
             .expect("Entry point not found in the shader");
         let ep = &module.entry_points[ep_index];
-        let name = info.entry_point_names[ep_index]
-            .as_ref()
-            .unwrap();
+        let name = info.entry_point_names[ep_index].as_ref().unwrap();
         let wg_size = metal::MTLSize {
             width: ep.workgroup_size[0] as _,
             height: ep.workgroup_size[1] as _,
@@ -329,10 +316,13 @@ impl super::Context {
         }
     }
 
-    pub fn create_compute_pipeline(&self, desc: crate::ComputePipelineDesc) -> super::ComputePipeline {
-        let (layout, options) = build_pipeline_layout(&[
-            (desc.compute.shader, crate::ShaderVisibility::COMPUTE),
-        ]);
+    pub fn create_compute_pipeline(
+        &self,
+        desc: crate::ComputePipelineDesc,
+    ) -> super::ComputePipeline {
+        let combined =
+            crate::merge_shader_layouts(&[(desc.compute.shader, crate::ShaderVisibility::COMPUTE)]);
+        let (layout, options) = build_pipeline_layout(&combined);
 
         objc::rc::autoreleasepool(|| {
             let descriptor = metal::ComputePipelineDescriptor::new();
@@ -366,10 +356,11 @@ impl super::Context {
     }
 
     pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
-        let (layout, options) = build_pipeline_layout(&[
+        let combined = crate::merge_shader_layouts(&[
             (desc.vertex.shader, crate::ShaderVisibility::VERTEX),
             (desc.fragment.shader, crate::ShaderVisibility::FRAGMENT),
         ]);
+        let (layout, options) = build_pipeline_layout(&combined);
 
         let triangle_fill_mode = match desc.primitive.wireframe {
             false => metal::MTLTriangleFillMode::Fill,

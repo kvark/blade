@@ -89,7 +89,11 @@ impl super::CommandEncoder {
 
     pub fn with_transfers(&mut self) -> super::TransferCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
-            self.raw.as_mut().unwrap().new_blit_command_encoder().to_owned()
+            self.raw
+                .as_mut()
+                .unwrap()
+                .new_blit_command_encoder()
+                .to_owned()
         });
         super::TransferCommandEncoder {
             raw,
@@ -97,18 +101,35 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn with_pipeline<'p>(&'p mut self, pipeline: &'p super::ComputePipeline) -> super::ComputePipelineContext<'p> {
-        let max_data_size = pipeline.layout.bind_groups.iter().map(|bg| bg.plain_data_size as usize).max().unwrap_or_default();
+    pub fn with_pipeline<'p>(
+        &'p mut self,
+        pipeline: &'p super::ComputePipeline,
+    ) -> super::ComputePipelineContext<'p> {
+        let max_data_size = pipeline
+            .layout
+            .bind_groups
+            .iter()
+            .map(|bg| bg.plain_data_size as usize)
+            .max()
+            .unwrap_or_default();
         self.plain_data.resize(max_data_size, 0);
 
         let encoder = objc::rc::autoreleasepool(|| {
-            self.raw.as_mut().unwrap().new_compute_command_encoder().to_owned()
+            self.raw
+                .as_mut()
+                .unwrap()
+                .new_compute_command_encoder()
+                .to_owned()
         });
         encoder.set_compute_pipeline_state(&pipeline.raw);
         if let Some(index) = pipeline.layout.sizes_buffer_slot {
             //TODO: get real sizes
             let runtime_sizes = [0u8; 8];
-            encoder.set_bytes(index as _, runtime_sizes.len() as _, runtime_sizes.as_ptr() as *const _);
+            encoder.set_bytes(
+                index as _,
+                runtime_sizes.len() as _,
+                runtime_sizes.as_ptr() as *const _,
+            );
         }
 
         super::ComputePipelineContext {
@@ -119,7 +140,10 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn with_render_targets(&mut self, targets: crate::RenderTargetSet) -> super::RenderCommandEncoder {
+    pub fn with_render_targets(
+        &mut self,
+        targets: crate::RenderTargetSet,
+    ) -> super::RenderCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
             let descriptor = metal::RenderPassDescriptor::new();
 
@@ -152,7 +176,7 @@ impl super::CommandEncoder {
                         };
                         at_descriptor.set_clear_color(clear_color);
                         metal::MTLLoadAction::Clear
-                    },
+                    }
                 };
                 at_descriptor.set_load_action(load_action);
 
@@ -162,7 +186,7 @@ impl super::CommandEncoder {
                     crate::FinishOp::ResolveTo(ref view) => {
                         at_descriptor.set_resolve_texture(Some(view.as_ref()));
                         metal::MTLStoreAction::MultisampleResolve
-                    },
+                    }
                 };
                 at_descriptor.set_store_action(store_action);
             }
@@ -174,13 +198,13 @@ impl super::CommandEncoder {
                     crate::InitOp::Load => metal::MTLLoadAction::Load,
                     crate::InitOp::Clear(color) => {
                         let clear_depth = match color {
-                            crate::TextureColor::TransparentBlack |
-                            crate::TextureColor::OpaqueBlack => 0.0,
+                            crate::TextureColor::TransparentBlack
+                            | crate::TextureColor::OpaqueBlack => 0.0,
                             crate::TextureColor::White => 1.0,
                         };
                         at_descriptor.set_clear_depth(clear_depth);
                         metal::MTLLoadAction::Clear
-                    },
+                    }
                 };
                 let store_action = match rt.finish_op {
                     crate::FinishOp::Store => metal::MTLStoreAction::Store,
@@ -191,7 +215,11 @@ impl super::CommandEncoder {
                 at_descriptor.set_store_action(store_action);
             }
 
-            self.raw.as_mut().unwrap().new_render_command_encoder(descriptor).to_owned()
+            self.raw
+                .as_mut()
+                .unwrap()
+                .new_render_command_encoder(descriptor)
+                .to_owned()
         });
 
         super::RenderCommandEncoder {
@@ -202,7 +230,12 @@ impl super::CommandEncoder {
 }
 
 impl super::TransferCommandEncoder<'_> {
-    pub fn copy_buffer_to_buffer(&mut self, src: crate::BufferPiece, dst: crate::BufferPiece, size: u64) {
+    pub fn copy_buffer_to_buffer(
+        &mut self,
+        src: crate::BufferPiece,
+        dst: crate::BufferPiece,
+        size: u64,
+    ) {
         self.raw.copy_from_buffer(
             src.buffer.as_ref(),
             src.offset,
@@ -211,7 +244,12 @@ impl super::TransferCommandEncoder<'_> {
             size,
         );
     }
-    pub fn copy_texture_to_texture(&mut self, src: crate::TexturePiece, dst: crate::TexturePiece, size: crate::Extent) {
+    pub fn copy_texture_to_texture(
+        &mut self,
+        src: crate::TexturePiece,
+        dst: crate::TexturePiece,
+        size: crate::Extent,
+    ) {
         self.raw.copy_from_texture(
             src.texture.as_ref(),
             src.array_layer as u64,
@@ -224,7 +262,13 @@ impl super::TransferCommandEncoder<'_> {
             map_origin(&dst.origin),
         );
     }
-    pub fn copy_buffer_to_texture(&mut self, src: crate::BufferPiece, bytes_per_row: u32, dst: crate::TexturePiece, size: crate::Extent) {
+    pub fn copy_buffer_to_texture(
+        &mut self,
+        src: crate::BufferPiece,
+        bytes_per_row: u32,
+        dst: crate::TexturePiece,
+        size: crate::Extent,
+    ) {
         self.raw.copy_from_buffer_to_texture(
             src.buffer.as_ref(),
             src.offset,
@@ -238,19 +282,25 @@ impl super::TransferCommandEncoder<'_> {
             metal::MTLBlitOption::empty(),
         );
     }
-    pub fn copy_texture_to_buffer(&mut self, src: crate::TexturePiece, dst: crate::BufferPiece, bytes_per_row: u32, size: crate::Extent) {
+    pub fn copy_texture_to_buffer(
+        &mut self,
+        src: crate::TexturePiece,
+        dst: crate::BufferPiece,
+        bytes_per_row: u32,
+        size: crate::Extent,
+    ) {
         self.raw.copy_from_texture_to_buffer(
-                src.texture.as_ref(),
-                src.array_layer as u64,
-                src.mip_level as u64,
-                map_origin(&src.origin),
-                map_extent(&size),
-                dst.buffer.as_ref(),
-                dst.offset,
-                bytes_per_row as u64,
-                0,
-                metal::MTLBlitOption::empty(),
-            );
+            src.texture.as_ref(),
+            src.array_layer as u64,
+            src.mip_level as u64,
+            map_origin(&src.origin),
+            map_extent(&size),
+            dst.buffer.as_ref(),
+            dst.offset,
+            bytes_per_row as u64,
+            0,
+            metal::MTLBlitOption::empty(),
+        );
     }
 }
 
@@ -261,13 +311,24 @@ impl Drop for super::TransferCommandEncoder<'_> {
 }
 
 impl super::RenderCommandEncoder<'_> {
-    pub fn with_pipeline<'p>(&'p mut self, pipeline: &'p super::RenderPipeline) -> super::RenderPipelineContext<'p> {
+    pub fn with_pipeline<'p>(
+        &'p mut self,
+        pipeline: &'p super::RenderPipeline,
+    ) -> super::RenderPipelineContext<'p> {
         self.raw.set_render_pipeline_state(&pipeline.raw);
         if let Some(index) = pipeline.layout.sizes_buffer_slot {
             //TODO: get real sizes
             let runtime_sizes = [0u8; 8];
-            self.raw.set_vertex_bytes(index as _, runtime_sizes.len() as _, runtime_sizes.as_ptr() as *const _);
-            self.raw.set_fragment_bytes(index as _, runtime_sizes.len() as _, runtime_sizes.as_ptr() as *const _);
+            self.raw.set_vertex_bytes(
+                index as _,
+                runtime_sizes.len() as _,
+                runtime_sizes.as_ptr() as *const _,
+            );
+            self.raw.set_fragment_bytes(
+                index as _,
+                runtime_sizes.len() as _,
+                runtime_sizes.as_ptr() as *const _,
+            );
         }
 
         self.raw.set_front_facing_winding(pipeline.front_winding);
@@ -276,10 +337,17 @@ impl super::RenderCommandEncoder<'_> {
         self.raw.set_depth_clip_mode(pipeline.depth_clip_mode);
         if let Some((ref state, bias)) = pipeline.depth_stencil {
             self.raw.set_depth_stencil_state(state);
-            self.raw.set_depth_bias(bias.constant as f32, bias.slope_scale, bias.clamp);
+            self.raw
+                .set_depth_bias(bias.constant as f32, bias.slope_scale, bias.clamp);
         }
 
-        let max_data_size = pipeline.layout.bind_groups.iter().map(|bg| bg.plain_data_size as usize).max().unwrap_or_default();
+        let max_data_size = pipeline
+            .layout
+            .bind_groups
+            .iter()
+            .map(|bg| bg.plain_data_size as usize)
+            .max()
+            .unwrap_or_default();
         self.plain_data.resize(max_data_size, 0);
 
         super::RenderPipelineContext {
@@ -316,7 +384,8 @@ impl super::ComputePipelineContext<'_> {
         if let Some(slot) = info.plain_buffer_slot {
             let data = self.plain_data.as_ptr() as *const _;
             if info.visibility.contains(crate::ShaderVisibility::COMPUTE) {
-                self.encoder.set_bytes(slot as _, info.plain_data_size as _, data);
+                self.encoder
+                    .set_bytes(slot as _, info.plain_data_size as _, data);
             }
         }
     }
@@ -348,7 +417,7 @@ impl super::RenderPipelineContext<'_> {
             } else {
                 None
             },
-            fs_encoder:  if info.visibility.contains(crate::ShaderVisibility::FRAGMENT) {
+            fs_encoder: if info.visibility.contains(crate::ShaderVisibility::FRAGMENT) {
                 Some(self.encoder.as_ref())
             } else {
                 None
@@ -360,15 +429,23 @@ impl super::RenderPipelineContext<'_> {
         if let Some(slot) = info.plain_buffer_slot {
             let data = self.plain_data.as_ptr() as *const _;
             if info.visibility.contains(crate::ShaderVisibility::VERTEX) {
-                self.encoder.set_vertex_bytes(slot as _, info.plain_data_size as _, data);
+                self.encoder
+                    .set_vertex_bytes(slot as _, info.plain_data_size as _, data);
             }
             if info.visibility.contains(crate::ShaderVisibility::FRAGMENT) {
-                self.encoder.set_fragment_bytes(slot as _, info.plain_data_size as _, data);
+                self.encoder
+                    .set_fragment_bytes(slot as _, info.plain_data_size as _, data);
             }
         }
     }
 
-    pub fn draw(&mut self, first_vertex: u32, vertex_count: u32, first_instance: u32, instance_count: u32) {
+    pub fn draw(
+        &mut self,
+        first_vertex: u32,
+        vertex_count: u32,
+        first_instance: u32,
+        instance_count: u32,
+    ) {
         if first_instance != 0 {
             self.encoder.draw_primitives_instanced_base_instance(
                 self.primitive_type,
@@ -385,11 +462,8 @@ impl super::RenderPipelineContext<'_> {
                 instance_count as _,
             );
         } else {
-            self.encoder.draw_primitives(
-                self.primitive_type,
-                first_vertex as _,
-                vertex_count as _,
-            );
+            self.encoder
+                .draw_primitives(self.primitive_type, first_vertex as _, vertex_count as _);
         }
     }
 }

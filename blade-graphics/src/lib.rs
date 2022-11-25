@@ -25,8 +25,14 @@
 
 pub use naga::{StorageAccess, VectorSize};
 
-#[cfg_attr(all(not(portability), any(target_os = "ios", target_os = "macos")), path = "metal/mod.rs")]
-#[cfg_attr(any(portability, not(any(target_os = "ios", target_os = "macos"))), path = "vulkan/mod.rs")]
+#[cfg_attr(
+    all(not(portability), any(target_os = "ios", target_os = "macos")),
+    path = "metal/mod.rs"
+)]
+#[cfg_attr(
+    any(portability, not(any(target_os = "ios", target_os = "macos"))),
+    path = "vulkan/mod.rs"
+)]
 mod hal;
 mod shader;
 
@@ -282,6 +288,33 @@ impl Shader {
             entry_point,
         }
     }
+}
+
+fn merge_shader_layouts<'a>(
+    multi_layouts: &[(&'a Shader, ShaderVisibility)],
+) -> Vec<(Option<&'a ShaderDataLayout>, ShaderVisibility)> {
+    let group_count = multi_layouts
+        .iter()
+        .map(|(shader, _)| shader.bind_groups.len())
+        .max()
+        .unwrap_or_default();
+    (0..group_count)
+        .map(|group_index| {
+            let mut layout_maybe = None;
+            let mut visibility = ShaderVisibility::empty();
+            for &(shader, shader_visibility) in multi_layouts {
+                if let Some(Some(ref data_layout)) = shader.bind_groups.get(group_index) {
+                    visibility |= shader_visibility;
+                    if let Some(layout) = layout_maybe {
+                        assert_eq!(data_layout, layout);
+                    } else {
+                        layout_maybe = Some(data_layout);
+                    }
+                }
+            }
+            (layout_maybe, visibility)
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

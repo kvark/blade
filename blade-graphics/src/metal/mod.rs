@@ -2,11 +2,10 @@ use std::{
     marker::PhantomData,
     ptr,
     sync::{Arc, Mutex},
-    thread,
-    time,
+    thread, time,
 };
 
-use foreign_types::{ForeignTypeRef as _};
+use foreign_types::ForeignTypeRef as _;
 
 mod command;
 mod pipeline;
@@ -26,11 +25,15 @@ pub struct Frame {
 
 impl Frame {
     pub fn texture(&self) -> Texture {
-        Texture { raw: self.texture.as_ptr() }
+        Texture {
+            raw: self.texture.as_ptr(),
+        }
     }
 
     pub fn texture_view(&self) -> TextureView {
-        TextureView { raw: self.texture.as_ptr() }
+        TextureView {
+            raw: self.texture.as_ptr(),
+        }
     }
 }
 
@@ -159,7 +162,11 @@ pub struct ComputePipeline {
 
 impl ComputePipeline {
     pub fn get_workgroup_size(&self) -> [u32; 3] {
-        [self.wg_size.width as u32, self.wg_size.height as u32, self.wg_size.depth as u32]
+        [
+            self.wg_size.width as u32,
+            self.wg_size.height as u32,
+            self.wg_size.depth as u32,
+        ]
     }
 }
 
@@ -217,8 +224,8 @@ fn map_texture_format(format: crate::TextureFormat) -> metal::MTLPixelFormat {
 }
 
 fn map_compare_function(fun: crate::CompareFunction) -> metal::MTLCompareFunction {
-    use metal::MTLCompareFunction::*;
     use crate::CompareFunction as Cf;
+    use metal::MTLCompareFunction::*;
     match fun {
         Cf::Never => Never,
         Cf::Less => Less,
@@ -236,8 +243,7 @@ impl Context {
         if desc.validation {
             std::env::set_var("METAL_DEVICE_WRAPPER_TYPE", "1");
         }
-        let device = metal::Device::system_default()
-            .ok_or(super::NotSupportedError)?;
+        let device = metal::Device::system_default().ok_or(super::NotSupportedError)?;
         let queue = device.new_command_queue();
 
         let capture = if desc.capture {
@@ -261,15 +267,21 @@ impl Context {
         })
     }
 
-    pub unsafe fn init_windowed(window: &impl raw_window_handle::HasRawWindowHandle, desc: super::ContextDesc) -> Result<Self, super::NotSupportedError> {
+    pub unsafe fn init_windowed(
+        window: &impl raw_window_handle::HasRawWindowHandle,
+        desc: super::ContextDesc,
+    ) -> Result<Self, super::NotSupportedError> {
         let mut context = Self::init(desc)?;
 
         let surface = match window.raw_window_handle() {
             #[cfg(target_os = "ios")]
-            raw_window_handle::RawWindowHandle::UiKit(handle) =>
-                Surface::from_view(handle.ui_view as *mut _),
+            raw_window_handle::RawWindowHandle::UiKit(handle) => {
+                Surface::from_view(handle.ui_view as *mut _)
+            }
             #[cfg(target_os = "macos")]
-            raw_window_handle::RawWindowHandle::AppKit(handle) => Surface::from_view(handle.ns_view as *mut _),
+            raw_window_handle::RawWindowHandle::AppKit(handle) => {
+                Surface::from_view(handle.ns_view as *mut _)
+            }
             _ => return Err(crate::NotSupportedError),
         };
 
@@ -289,9 +301,7 @@ impl Context {
     pub fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         let cmd_buf = encoder.raw.take().unwrap();
         cmd_buf.commit();
-        SyncPoint {
-            cmd_buf,
-        }
+        SyncPoint { cmd_buf }
     }
 
     pub fn wait_for(&self, sp: SyncPoint, timeout_ms: u32) -> bool {

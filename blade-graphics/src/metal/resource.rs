@@ -11,26 +11,27 @@ fn map_texture_usage(usage: crate::TextureUsage) -> metal::MTLTextureUsage {
     );
     mtl_usage.set(
         metal::MTLTextureUsage::ShaderRead,
-        usage.intersects(
-            Tu::RESOURCE,
-        ),
+        usage.intersects(Tu::RESOURCE),
     );
-    mtl_usage.set(metal::MTLTextureUsage::ShaderWrite, usage.intersects(Tu::STORAGE));
+    mtl_usage.set(
+        metal::MTLTextureUsage::ShaderWrite,
+        usage.intersects(Tu::STORAGE),
+    );
 
     mtl_usage
 }
 
 fn map_texture_view_dimension(dimension: crate::TextureViewDimension) -> metal::MTLTextureType {
-    use metal::MTLTextureType::*;
     use crate::TextureViewDimension as Tvd;
-     match dimension {
-            Tvd::D1 => D1,
-            Tvd::D2 => D2,
-            Tvd::D2Array => D2Array,
-            Tvd::D3 => D3,
-            Tvd::Cube => Cube,
-            Tvd::CubeArray => CubeArray,
-        }
+    use metal::MTLTextureType::*;
+    match dimension {
+        Tvd::D1 => D1,
+        Tvd::D2 => D2,
+        Tvd::D2Array => D2Array,
+        Tvd::D3 => D3,
+        Tvd::Cube => Cube,
+        Tvd::CubeArray => CubeArray,
+    }
 }
 
 fn map_filter_mode(filter: crate::FilterMode) -> metal::MTLSamplerMinMagFilter {
@@ -42,8 +43,8 @@ fn map_filter_mode(filter: crate::FilterMode) -> metal::MTLSamplerMinMagFilter {
 }
 
 fn map_address_mode(address: crate::AddressMode) -> metal::MTLSamplerAddressMode {
-    use metal::MTLSamplerAddressMode::*;
     use crate::AddressMode as Am;
+    use metal::MTLSamplerAddressMode::*;
     match address {
         Am::Repeat => Repeat,
         Am::MirrorRepeat => MirrorRepeat,
@@ -53,8 +54,8 @@ fn map_address_mode(address: crate::AddressMode) -> metal::MTLSamplerAddressMode
 }
 
 fn map_border_color(color: crate::TextureColor) -> metal::MTLSamplerBorderColor {
-    use metal::MTLSamplerBorderColor::*;
     use crate::TextureColor as Tc;
+    use metal::MTLSamplerBorderColor::*;
     match color {
         Tc::TransparentBlack => TransparentBlack,
         Tc::OpaqueBlack => OpaqueBlack,
@@ -65,24 +66,21 @@ fn map_border_color(color: crate::TextureColor) -> metal::MTLSamplerBorderColor 
 impl super::Context {
     pub fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         let options = match desc.memory {
-            crate::Memory::Device =>
-                metal::MTLResourceOptions::StorageModePrivate,
-            crate::Memory::Shared =>
-                metal::MTLResourceOptions::StorageModeShared,
-            crate::Memory::Upload => metal::MTLResourceOptions::StorageModeShared | metal::MTLResourceOptions::CPUCacheModeWriteCombined,
+            crate::Memory::Device => metal::MTLResourceOptions::StorageModePrivate,
+            crate::Memory::Shared => metal::MTLResourceOptions::StorageModeShared,
+            crate::Memory::Upload => {
+                metal::MTLResourceOptions::StorageModeShared
+                    | metal::MTLResourceOptions::CPUCacheModeWriteCombined
+            }
         };
         let raw = objc::rc::autoreleasepool(|| {
             let raw = self.device.lock().unwrap().new_buffer(desc.size, options);
             if !desc.name.is_empty() {
                 raw.set_label(&desc.name);
             }
-            unsafe {
-                msg_send![raw.as_ref(), retain]
-            }
+            unsafe { msg_send![raw.as_ref(), retain] }
         });
-        super::Buffer {
-            raw,
-        }
+        super::Buffer { raw }
     }
 
     pub fn destroy_buffer(&self, buffer: super::Buffer) {
@@ -109,9 +107,7 @@ impl super::Context {
                     metal::MTLTextureType::D2
                 }
             }
-            crate::TextureDimension::D3 => {
-                metal::MTLTextureType::D3
-            }
+            crate::TextureDimension::D3 => metal::MTLTextureType::D3,
         };
         let mtl_usage = map_texture_usage(desc.usage);
 
@@ -133,14 +129,10 @@ impl super::Context {
                 raw.set_label(desc.name);
             }
 
-            unsafe {
-                msg_send![raw.as_ref(), retain]
-            }
+            unsafe { msg_send![raw.as_ref(), retain] }
         });
 
-        super::Texture {
-            raw,
-        }
+        super::Texture { raw }
     }
 
     pub fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
@@ -172,13 +164,9 @@ impl super::Context {
             if !desc.name.is_empty() {
                 raw.set_label(desc.name);
             }
-            unsafe {
-                msg_send![raw.as_ref(), retain]
-            }
+            unsafe { msg_send![raw.as_ref(), retain] }
         });
-        super::TextureView {
-            raw
-        }
+        super::TextureView { raw }
     }
 
     pub fn destroy_texture_view(&self, view: super::TextureView) {
@@ -226,9 +214,7 @@ impl super::Context {
                 descriptor.set_label(desc.name);
             }
             let raw = self.device.lock().unwrap().new_sampler(&descriptor);
-            unsafe {
-                msg_send![raw.as_ref(), retain]
-            }
+            unsafe { msg_send![raw.as_ref(), retain] }
         });
 
         super::Sampler { raw }
