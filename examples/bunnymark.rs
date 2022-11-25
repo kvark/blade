@@ -9,8 +9,8 @@ const MAX_VELOCITY: f32 = 750.0;
 struct Globals {
     mvp_transform: [[f32; 4]; 4],
     sprite_size: [f32; 2],
-    sprite_texture: lame::TextureView,
-    sprite_sampler: lame::Sampler,
+    sprite_texture: blade::TextureView,
+    sprite_sampler: blade::Sampler,
 }
 
 struct Locals {
@@ -20,41 +20,41 @@ struct Locals {
 }
 
 //TEMP
-impl lame::ShaderData for Globals {
-    fn layout() -> lame::ShaderDataLayout {
-        lame::ShaderDataLayout {
+impl blade::ShaderData for Globals {
+    fn layout() -> blade::ShaderDataLayout {
+        blade::ShaderDataLayout {
             bindings: vec![
                 (
                     "mvp_transform".to_string(),
-                    lame::ShaderBinding::Plain {
-                        ty: lame::PlainType::F32,
-                        container: lame::PlainContainer::Matrix(
-                            lame::VectorSize::Quad,
-                            lame::VectorSize::Quad,
+                    blade::ShaderBinding::Plain {
+                        ty: blade::PlainType::F32,
+                        container: blade::PlainContainer::Matrix(
+                            blade::VectorSize::Quad,
+                            blade::VectorSize::Quad,
                         ),
                     },
                 ),
                 (
                     "sprite_size".to_string(),
-                    lame::ShaderBinding::Plain {
-                        ty: lame::PlainType::F32,
-                        container: lame::PlainContainer::Vector(lame::VectorSize::Bi),
+                    blade::ShaderBinding::Plain {
+                        ty: blade::PlainType::F32,
+                        container: blade::PlainContainer::Vector(blade::VectorSize::Bi),
                     },
                 ),
                 (
                     "sprite_texture".to_string(),
-                    lame::ShaderBinding::Texture {
-                        dimension: lame::TextureViewDimension::D2,
+                    blade::ShaderBinding::Texture {
+                        dimension: blade::TextureViewDimension::D2,
                     },
                 ),
                 (
                     "sprite_sampler".to_string(),
-                    lame::ShaderBinding::Sampler { comparison: false },
+                    blade::ShaderBinding::Sampler { comparison: false },
                 ),
             ],
         }
     }
-    fn fill<E: lame::ShaderDataEncoder>(&self, mut encoder: E) {
+    fn fill<E: blade::ShaderDataEncoder>(&self, mut encoder: E) {
         encoder.set_plain(0, self.mvp_transform);
         encoder.set_plain(1, self.sprite_size);
         encoder.set_texture(2, self.sprite_texture);
@@ -62,35 +62,35 @@ impl lame::ShaderData for Globals {
     }
 }
 
-impl lame::ShaderData for Locals {
-    fn layout() -> lame::ShaderDataLayout {
-        lame::ShaderDataLayout {
+impl blade::ShaderData for Locals {
+    fn layout() -> blade::ShaderDataLayout {
+        blade::ShaderDataLayout {
             bindings: vec![
                 (
                     "position".to_string(),
-                    lame::ShaderBinding::Plain {
-                        ty: lame::PlainType::F32,
-                        container: lame::PlainContainer::Vector(lame::VectorSize::Bi),
+                    blade::ShaderBinding::Plain {
+                        ty: blade::PlainType::F32,
+                        container: blade::PlainContainer::Vector(blade::VectorSize::Bi),
                     },
                 ),
                 (
                     "velocity".to_string(),
-                    lame::ShaderBinding::Plain {
-                        ty: lame::PlainType::F32,
-                        container: lame::PlainContainer::Vector(lame::VectorSize::Bi),
+                    blade::ShaderBinding::Plain {
+                        ty: blade::PlainType::F32,
+                        container: blade::PlainContainer::Vector(blade::VectorSize::Bi),
                     },
                 ),
                 (
                     "color".to_string(),
-                    lame::ShaderBinding::Plain {
-                        ty: lame::PlainType::U32,
-                        container: lame::PlainContainer::Scalar,
+                    blade::ShaderBinding::Plain {
+                        ty: blade::PlainType::U32,
+                        container: blade::PlainContainer::Scalar,
                     },
                 ),
             ],
         }
     }
-    fn fill<E: lame::ShaderDataEncoder>(&self, mut encoder: E) {
+    fn fill<E: blade::ShaderDataEncoder>(&self, mut encoder: E) {
         encoder.set_plain(0, self.position);
         encoder.set_plain(1, self.velocity);
         encoder.set_plain(2, self.color);
@@ -98,25 +98,25 @@ impl lame::ShaderData for Locals {
 }
 
 struct Example {
-    pipeline: lame::RenderPipeline,
-    command_encoder: lame::CommandEncoder,
-    prev_sync_point: Option<lame::SyncPoint>,
-    _texture: lame::Texture,
-    view: lame::TextureView,
-    sampler: lame::Sampler,
+    pipeline: blade::RenderPipeline,
+    command_encoder: blade::CommandEncoder,
+    prev_sync_point: Option<blade::SyncPoint>,
+    _texture: blade::Texture,
+    view: blade::TextureView,
+    sampler: blade::Sampler,
     window_size: winit::dpi::PhysicalSize<u32>,
     bunnies: Vec<Locals>,
     rng: rand::rngs::ThreadRng,
-    context: lame::Context,
+    context: blade::Context,
 }
 
 impl Example {
     fn new(window: &winit::window::Window) -> Self {
         let window_size = window.inner_size();
         let context = unsafe {
-            lame::Context::init_windowed(
+            blade::Context::init_windowed(
                 window,
-                lame::ContextDesc {
+                blade::ContextDesc {
                     validation: true,
                     capture: false,
                 },
@@ -124,66 +124,66 @@ impl Example {
             .unwrap()
         };
 
-        let surface_format = context.resize(lame::SurfaceConfig {
-            size: lame::Extent {
+        let surface_format = context.resize(blade::SurfaceConfig {
+            size: blade::Extent {
                 width: window_size.width,
                 height: window_size.height,
                 depth: 1,
             },
-            usage: lame::TextureUsage::TARGET,
+            usage: blade::TextureUsage::TARGET,
             frame_count: 2,
         });
 
-        let global_layout = <Globals as lame::ShaderData>::layout();
-        let local_layout = <Locals as lame::ShaderData>::layout();
+        let global_layout = <Globals as blade::ShaderData>::layout();
+        let local_layout = <Locals as blade::ShaderData>::layout();
         let shader_source = std::fs::read_to_string("examples/bunnymark.wgsl").unwrap();
-        let shader = context.create_shader(lame::ShaderDesc {
+        let shader = context.create_shader(blade::ShaderDesc {
             source: &shader_source,
             data_layouts: &[Some(&global_layout), Some(&local_layout)],
         });
 
-        let pipeline = context.create_render_pipeline(lame::RenderPipelineDesc {
+        let pipeline = context.create_render_pipeline(blade::RenderPipelineDesc {
             name: "main",
             vertex: shader.at("vs_main"),
-            primitive: lame::PrimitiveState {
-                topology: lame::PrimitiveTopology::TriangleStrip,
+            primitive: blade::PrimitiveState {
+                topology: blade::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
             },
             depth_stencil: None,
             fragment: shader.at("fs_main"),
-            color_targets: &[lame::ColorTargetState {
+            color_targets: &[blade::ColorTargetState {
                 format: surface_format,
-                blend: Some(lame::BlendState::ALPHA_BLENDING),
-                write_mask: lame::ColorWrites::default(),
+                blend: Some(blade::BlendState::ALPHA_BLENDING),
+                write_mask: blade::ColorWrites::default(),
             }],
         });
 
-        let extent = lame::Extent {
+        let extent = blade::Extent {
             width: 1,
             height: 1,
             depth: 1,
         };
-        let texture = context.create_texture(lame::TextureDesc {
+        let texture = context.create_texture(blade::TextureDesc {
             name: "texutre",
-            format: lame::TextureFormat::Rgba8Unorm,
+            format: blade::TextureFormat::Rgba8Unorm,
             size: extent,
-            dimension: lame::TextureDimension::D2,
+            dimension: blade::TextureDimension::D2,
             array_layers: 1,
             mip_level_count: 1,
-            usage: lame::TextureUsage::RESOURCE | lame::TextureUsage::COPY,
+            usage: blade::TextureUsage::RESOURCE | blade::TextureUsage::COPY,
         });
-        let view = context.create_texture_view(lame::TextureViewDesc {
+        let view = context.create_texture_view(blade::TextureViewDesc {
             name: "view",
             texture,
-            format: lame::TextureFormat::Rgba8Unorm,
-            dimension: lame::TextureViewDimension::D2,
+            format: blade::TextureFormat::Rgba8Unorm,
+            dimension: blade::TextureViewDimension::D2,
             subresources: &Default::default(),
         });
 
-        let upload_buffer = context.create_buffer(lame::BufferDesc {
+        let upload_buffer = context.create_buffer(blade::BufferDesc {
             name: "staging",
             size: (extent.width * extent.height) as u64 * 4,
-            memory: lame::Memory::Upload,
+            memory: blade::Memory::Upload,
         });
         let texture_data = vec![0xFFu8; 4];
         unsafe {
@@ -194,7 +194,7 @@ impl Example {
             );
         }
 
-        let sampler = context.create_sampler(lame::SamplerDesc {
+        let sampler = context.create_sampler(blade::SamplerDesc {
             name: "main",
             ..Default::default()
         });
@@ -207,7 +207,7 @@ impl Example {
         });
 
         let mut command_encoder =
-            context.create_command_encoder(lame::CommandEncoderDesc { name: "main" });
+            context.create_command_encoder(blade::CommandEncoderDesc { name: "main" });
         command_encoder.start();
         if let mut encoder = command_encoder.with_transfers() {
             encoder.copy_buffer_to_texture(upload_buffer.into(), 4, texture.into(), extent);
@@ -265,11 +265,11 @@ impl Example {
         self.command_encoder.start();
         if let mut pass = self
             .command_encoder
-            .with_render_targets(lame::RenderTargetSet {
-                colors: &[lame::RenderTarget {
+            .with_render_targets(blade::RenderTargetSet {
+                colors: &[blade::RenderTarget {
                     view: frame.texture_view(),
-                    init_op: lame::InitOp::Clear(lame::TextureColor::TransparentBlack),
-                    finish_op: lame::FinishOp::Store,
+                    init_op: blade::InitOp::Clear(blade::TextureColor::TransparentBlack),
+                    finish_op: blade::FinishOp::Store,
                 }],
                 depth_stencil: None,
             })

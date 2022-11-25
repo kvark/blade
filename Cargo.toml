@@ -1,24 +1,26 @@
 [workspace]
 resolver = "2"
 members = [
-    "lame-graphics",
-    "lame-macros",
+    "blade-graphics",
+    "blade-macros",
 ]
 exclude = []
 
 [lib]
 
 [package]
-name = "lame"
-version = "0.1.0"
+name = "blade"
+description = "Sharp and simple graphics library"
+version = "0.0.1"
 edition = "2021"
 rust-version = "1.65"
 keywords = ["graphics"]
 license = "MIT"
+repository = "https://github.com/kvark/blade"
 
 [dependencies]
-lame-macros = { version = "0.1", path = "lame-macros" }
-lame-graphics = { version = "0.1", path = "lame-graphics" }
+#blade-macros = { version = "0.0.1", path = "blade-macros" }
+blade-graphics = { version = "0.0.1", path = "blade-graphics" }
 
 [dev-dependencies]
 env_logger = "0.9"

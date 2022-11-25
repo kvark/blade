@@ -1,6 +1,6 @@
 [package]
-name = "lame-macros"
-version = "0.1.0"
+name = "blade-macros"
+version = "0.0.1"
 edition = "2021"
 
 [lib]

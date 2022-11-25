@@ -1,2 +1,1 @@
-pub use lame_graphics::*;
-pub use lame_macros::ShaderData;
+pub use blade_graphics::*;

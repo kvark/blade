@@ -145,7 +145,7 @@ impl Context {
 
         let instance = {
             let app_info = vk::ApplicationInfo::builder()
-                .engine_name(ffi::CStr::from_bytes_with_nul(b"lame\0").unwrap())
+                .engine_name(ffi::CStr::from_bytes_with_nul(b"blade\0").unwrap())
                 .engine_version(1)
                 .api_version(vk::HEADER_VERSION_COMPLETE);
             let str_pointers = layers
