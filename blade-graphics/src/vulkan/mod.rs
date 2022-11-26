@@ -9,18 +9,24 @@ mod command;
 mod pipeline;
 mod resource;
 
-struct Extensions {
+struct InstanceExt {
     debug_utils: ext::DebugUtils,
+    get_physical_device_properties2: khr::GetPhysicalDeviceProperties2,
+}
+
+struct DeviceExt {
+    push_descriptor: khr::PushDescriptor,
     draw_indirect_count: Option<khr::DrawIndirectCount>,
     timeline_semaphore: Option<khr::TimelineSemaphore>,
 }
 
 pub struct Context {
+    device_ext: DeviceExt,
     device: ash::Device,
     queue: Mutex<vk::Queue>,
     physical_device: vk::PhysicalDevice,
     naga_flags: spv::WriterFlags,
-    extensions: Extensions,
+    instance_ext: InstanceExt,
     instance: ash::Instance,
     entry: ash::Entry,
 }
@@ -98,12 +104,42 @@ pub struct RenderPipelineContext<'a> {
 
 pub struct SyncPoint {}
 
-fn inspect_adapter(
-    _phd: vk::PhysicalDevice,
+unsafe fn inspect_adapter(
+    phd: vk::PhysicalDevice,
     _instance: &ash::Instance,
+    extensions: &InstanceExt,
     _driver_api_version: u32,
 ) -> bool {
-    //TODO
+    let mut inline_uniform_block_properties =
+        vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
+    let mut push_descriptor_properties = vk::PhysicalDevicePushDescriptorPropertiesKHR::default();
+    let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::builder()
+        .push_next(&mut inline_uniform_block_properties)
+        .push_next(&mut push_descriptor_properties);
+    extensions
+        .get_physical_device_properties2
+        .get_physical_device_properties2(phd, &mut properties2_khr);
+
+    let name = ffi::CStr::from_ptr(properties2_khr.properties.device_name.as_ptr());
+    log::info!("Adapter {:?}", name);
+    if inline_uniform_block_properties.max_inline_uniform_block_size
+        < crate::limits::PLAIN_DATA_SIZE
+        || inline_uniform_block_properties.max_descriptor_set_inline_uniform_blocks == 0
+    {
+        log::info!(
+            "\tRejected for inline uniform blocks: {:?}",
+            inline_uniform_block_properties
+        );
+        return false;
+    }
+    if push_descriptor_properties.max_push_descriptors < crate::limits::RESOURCES_IN_GROUP {
+        log::info!(
+            "\tRejected for push descriptors: {:?}",
+            push_descriptor_properties
+        );
+        return false;
+    }
+
     true
 }
 
@@ -157,9 +193,10 @@ impl Context {
         let instance = {
             let mut create_flags = vk::InstanceCreateFlags::empty();
 
-            let mut instance_extensions: Vec<&'static ffi::CStr> = Vec::new();
-            instance_extensions.push(ext::DebugUtils::name());
-            instance_extensions.push(vk::KhrGetPhysicalDeviceProperties2Fn::name());
+            let mut instance_extensions = vec![
+                ext::DebugUtils::name(),
+                vk::KhrGetPhysicalDeviceProperties2Fn::name(),
+            ];
 
             for inst_ext in instance_extensions.iter() {
                 if !supported_instance_extensions.contains(inst_ext) {
@@ -191,16 +228,17 @@ impl Context {
             entry.create_instance(&create_info, None).unwrap()
         };
 
-        let extensions = Extensions {
+        let instance_ext = InstanceExt {
             debug_utils: ext::DebugUtils::new(&entry, &instance),
-            draw_indirect_count: None,
-            timeline_semaphore: None,
+            get_physical_device_properties2: khr::GetPhysicalDeviceProperties2::new(
+                &entry, &instance,
+            ),
         };
 
         let physical_devices = instance.enumerate_physical_devices().unwrap();
         let physical_device = physical_devices
             .into_iter()
-            .find(|&phd| inspect_adapter(phd, &instance, driver_api_version))
+            .find(|&phd| inspect_adapter(phd, &instance, &instance_ext, driver_api_version))
             .ok_or(super::NotSupportedError)?;
 
         let family_index = 0; //TODO
@@ -212,7 +250,11 @@ impl Context {
                 .build();
             let family_infos = [family_info];
 
-            let mut device_extensions: Vec<&'static ffi::CStr> = Vec::new();
+            let mut device_extensions = vec![
+                vk::ExtInlineUniformBlockFn::name(),
+                vk::KhrPushDescriptorFn::name(),
+                vk::KhrDescriptorUpdateTemplateFn::name(),
+            ];
             if is_vulkan_portability {
                 device_extensions.push(vk::KhrPortabilitySubsetFn::name());
             }
@@ -222,12 +264,22 @@ impl Context {
                 .map(|&s| s.as_ptr())
                 .collect::<Vec<_>>();
 
+            let mut ext_inline_uniform_block =
+                vk::PhysicalDeviceInlineUniformBlockFeaturesEXT::builder()
+                    .inline_uniform_block(true);
             let device_create_info = vk::DeviceCreateInfo::builder()
                 .queue_create_infos(&family_infos)
-                .enabled_extension_names(&str_pointers);
+                .enabled_extension_names(&str_pointers)
+                .push_next(&mut ext_inline_uniform_block);
             instance
                 .create_device(physical_device, &device_create_info, None)
                 .unwrap()
+        };
+
+        let device_ext = DeviceExt {
+            push_descriptor: khr::PushDescriptor::new(&instance, &device),
+            draw_indirect_count: None,
+            timeline_semaphore: None,
         };
 
         let queue = device.get_device_queue(family_index, 0);
@@ -238,11 +290,12 @@ impl Context {
         }
 
         Ok(Context {
+            device_ext,
             device,
             queue: Mutex::new(queue),
             physical_device,
             naga_flags,
-            extensions,
+            instance_ext,
             instance,
             entry,
         })
@@ -267,7 +320,7 @@ impl Context {
             .object_handle(object.as_raw())
             .object_name(&name_cstr);
         let _ = unsafe {
-            self.extensions
+            self.instance_ext
                 .debug_utils
                 .set_debug_utils_object_name(self.device.handle(), &name_info)
         };

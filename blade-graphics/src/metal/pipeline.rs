@@ -120,7 +120,7 @@ fn align_to(offset: u32, alignment: u32) -> u32 {
 }
 
 fn build_pipeline_layout(
-    combined: &[(Option<&crate::ShaderDataLayout>, crate::ShaderVisibility)],
+    combined: &[(&crate::ShaderDataLayout, crate::ShaderVisibility)],
 ) -> (super::PipelineLayout, msl::Options) {
     let mut naga_resources = msl::PerStageResources::default();
     let mut combined_visibility = crate::ShaderVisibility::empty();
@@ -129,15 +129,14 @@ fn build_pipeline_layout(
     let mut num_textures = 0u32;
     let mut num_samplers = 0u32;
     let mut num_buffers = 0u32;
-    for (group_index, &(layout_maybe, visibility)) in combined.iter().enumerate() {
+    for (group_index, &(layout, visibility)) in combined.iter().enumerate() {
         combined_visibility |= visibility;
-        let bindings = layout_maybe.map_or(&[][..], |l| &l.bindings);
-        let mut targets = Vec::with_capacity(bindings.len());
+        let mut targets = Vec::with_capacity(layout.bindings.len());
         // the order of binding indices has to match the logic in `create_shader`
         let mut binding_index = 1;
         let mut plain_data_size = 0;
         let mut size_alignment = 1;
-        for &(_, ref binding) in bindings.iter() {
+        for &(_, ref binding) in layout.bindings.iter() {
             let resource_binding = naga::ResourceBinding {
                 group: group_index as u32,
                 binding: binding_index,

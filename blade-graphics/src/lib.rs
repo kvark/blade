@@ -35,6 +35,10 @@ pub use naga::{StorageAccess, VectorSize};
 )]
 mod hal;
 mod shader;
+pub mod limits {
+    pub const PLAIN_DATA_SIZE: u32 = 256;
+    pub const RESOURCES_IN_GROUP: u32 = 8;
+}
 
 pub use hal::*;
 
@@ -292,7 +296,7 @@ impl Shader {
 
 fn merge_shader_layouts<'a>(
     multi_layouts: &[(&'a Shader, ShaderVisibility)],
-) -> Vec<(Option<&'a ShaderDataLayout>, ShaderVisibility)> {
+) -> Vec<(&'a ShaderDataLayout, ShaderVisibility)> {
     let group_count = multi_layouts
         .iter()
         .map(|(shader, _)| shader.bind_groups.len())
@@ -312,7 +316,10 @@ fn merge_shader_layouts<'a>(
                     }
                 }
             }
-            (layout_maybe, visibility)
+            match layout_maybe {
+                Some(layout) => (layout, visibility),
+                None => (ShaderDataLayout::EMPTY, ShaderVisibility::empty()),
+            }
         })
         .collect()
 }
@@ -357,6 +364,12 @@ pub enum ShaderBinding {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShaderDataLayout {
     pub bindings: Vec<(String, ShaderBinding)>,
+}
+
+impl ShaderDataLayout {
+    const EMPTY: &Self = &Self {
+        bindings: Vec::new(),
+    };
 }
 
 pub struct ShaderDesc<'a> {
