@@ -201,7 +201,11 @@ impl super::Context {
         let caps = naga::valid::Capabilities::empty();
         let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), caps)
             .validate(&module)
-            .unwrap();
+            .unwrap_or_else(|e| {
+                crate::util::emit_annotated_error(&e, "", &text);
+                crate::util::print_err(&e);
+                panic!("Shader validation failed");
+            });
 
         super::Shader {
             module,

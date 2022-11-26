@@ -35,6 +35,7 @@ pub use naga::{StorageAccess, VectorSize};
 )]
 mod hal;
 mod shader;
+mod util;
 pub mod limits {
     pub const PLAIN_DATA_SIZE: u32 = 256;
     pub const RESOURCES_IN_GROUP: u32 = 8;

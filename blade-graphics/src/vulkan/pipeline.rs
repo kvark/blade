@@ -1,19 +1,12 @@
 use ash::vk;
 use naga::back::spv;
-use std::{ffi, mem, ops::Range, ptr};
+use std::{ffi, mem, ptr};
 
 struct CompiledShader {
     vk_module: vk::ShaderModule,
     _entry_point: ffi::CString,
     create_info: vk::PipelineShaderStageCreateInfo,
     wg_size: [u32; 3],
-}
-
-#[derive(Default)]
-struct DescriptorSetLayoutInfo {
-    raw: vk::DescriptorSetLayout,
-    template_entries: Vec<vk::DescriptorUpdateTemplateEntry>,
-    plain_data_range: Range<usize>,
 }
 
 fn map_shader_visibility(visibility: crate::ShaderVisibility) -> vk::ShaderStageFlags {
@@ -91,9 +84,9 @@ impl super::Context {
         &self,
         layout: &crate::ShaderDataLayout,
         visibility: crate::ShaderVisibility,
-    ) -> DescriptorSetLayoutInfo {
+    ) -> super::DescriptorSetLayout {
         if visibility.is_empty() {
-            return DescriptorSetLayoutInfo::default();
+            return super::DescriptorSetLayout::default();
         }
         let stage_flags = map_shader_visibility(visibility);
         let mut vk_bindings = Vec::new();
@@ -170,61 +163,44 @@ impl super::Context {
             });
         }
 
-        let set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder()
-            .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR)
-            .bindings(&vk_bindings);
+        let set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&vk_bindings);
         let raw = unsafe {
             self.device
                 .create_descriptor_set_layout(&set_layout_info, None)
                 .unwrap()
         };
 
-        DescriptorSetLayoutInfo {
+        let template_create_info = vk::DescriptorUpdateTemplateCreateInfo::builder()
+            .descriptor_update_entries(&template_entries)
+            .template_type(vk::DescriptorUpdateTemplateTypeKHR::DESCRIPTOR_SET)
+            .descriptor_set_layout(raw);
+        let update_template = unsafe {
+            self.device
+                .create_descriptor_update_template(&template_create_info, None)
+                .unwrap()
+        };
+
+        super::DescriptorSetLayout {
             raw,
-            template_entries,
-            plain_data_range: update_offset..update_offset + plain_data_size as usize,
+            update_template,
+            //plain_data_range: update_offset as u32..update_offset as u32 + plain_data_size,
         }
     }
 
     fn create_pipeline_layout(
         &self,
         combined: &[(&crate::ShaderDataLayout, crate::ShaderVisibility)],
-        bind_point: vk::PipelineBindPoint,
     ) -> super::PipelineLayout {
-        let mut descriptor_set_layout_infos = Vec::with_capacity(combined.len());
+        let mut descriptor_set_layouts = Vec::with_capacity(combined.len());
         let mut vk_set_layouts = Vec::with_capacity(combined.len());
         for &(layout, visibility) in combined {
-            let dsl_info = self.create_descriptor_set_layout(layout, visibility);
-            vk_set_layouts.push(dsl_info.raw);
-            descriptor_set_layout_infos.push(dsl_info);
+            let dsl = self.create_descriptor_set_layout(layout, visibility);
+            vk_set_layouts.push(dsl.raw);
+            descriptor_set_layouts.push(dsl);
         }
 
         let vk_info = vk::PipelineLayoutCreateInfo::builder().set_layouts(&vk_set_layouts);
         let raw = unsafe { self.device.create_pipeline_layout(&vk_info, None).unwrap() };
-
-        let mut descriptor_set_layouts = Vec::with_capacity(combined.len());
-        for (set_index, dsl_info) in descriptor_set_layout_infos.into_iter().enumerate() {
-            let template_create_info = vk::DescriptorUpdateTemplateCreateInfo::builder()
-                .descriptor_update_entries(&dsl_info.template_entries)
-                .template_type(vk::DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR)
-                .descriptor_set_layout(dsl_info.raw)
-                .pipeline_bind_point(bind_point)
-                .pipeline_layout(raw)
-                .set(set_index as u32);
-            descriptor_set_layouts.push(if dsl_info.raw == vk::DescriptorSetLayout::null() {
-                None
-            } else {
-                let update_template = unsafe {
-                    self.device
-                        .create_descriptor_update_template(&template_create_info, None)
-                        .unwrap()
-                };
-                Some(super::DescriptorSetLayout {
-                    raw: dsl_info.raw,
-                    update_template,
-                })
-            });
-        }
 
         super::PipelineLayout {
             raw,
@@ -238,10 +214,10 @@ impl super::Context {
     ) -> super::ComputePipeline {
         let combined =
             crate::merge_shader_layouts(&[(desc.compute.shader, crate::ShaderVisibility::COMPUTE)]);
-        let layout = self.create_pipeline_layout(&combined, vk::PipelineBindPoint::COMPUTE);
+        let layout = self.create_pipeline_layout(&combined);
 
         let options = spv::Options {
-            lang_version: (1, 4),
+            lang_version: (1, 3),
             flags: self.naga_flags,
             binding_map: spv::BindingMap::default(),
             capabilities: None,

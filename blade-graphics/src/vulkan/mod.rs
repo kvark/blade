@@ -15,7 +15,6 @@ struct InstanceExt {
 }
 
 struct DeviceExt {
-    push_descriptor: khr::PushDescriptor,
     draw_indirect_count: Option<khr::DrawIndirectCount>,
     timeline_semaphore: Option<khr::TimelineSemaphore>,
 }
@@ -57,7 +56,7 @@ pub struct Sampler {
     raw: vk::Sampler,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct DescriptorSetLayout {
     raw: vk::DescriptorSetLayout,
     update_template: vk::DescriptorUpdateTemplate,
@@ -66,7 +65,7 @@ struct DescriptorSetLayout {
 #[derive(Debug)]
 struct PipelineLayout {
     raw: vk::PipelineLayout,
-    descriptor_set_layouts: Vec<Option<DescriptorSetLayout>>,
+    descriptor_set_layouts: Vec<DescriptorSetLayout>,
 }
 
 #[derive(Debug)]
@@ -112,10 +111,8 @@ unsafe fn inspect_adapter(
 ) -> bool {
     let mut inline_uniform_block_properties =
         vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
-    let mut push_descriptor_properties = vk::PhysicalDevicePushDescriptorPropertiesKHR::default();
-    let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::builder()
-        .push_next(&mut inline_uniform_block_properties)
-        .push_next(&mut push_descriptor_properties);
+    let mut properties2_khr =
+        vk::PhysicalDeviceProperties2KHR::builder().push_next(&mut inline_uniform_block_properties);
     extensions
         .get_physical_device_properties2
         .get_physical_device_properties2(phd, &mut properties2_khr);
@@ -129,13 +126,6 @@ unsafe fn inspect_adapter(
         log::info!(
             "\tRejected for inline uniform blocks: {:?}",
             inline_uniform_block_properties
-        );
-        return false;
-    }
-    if push_descriptor_properties.max_push_descriptors < crate::limits::RESOURCES_IN_GROUP {
-        log::info!(
-            "\tRejected for push descriptors: {:?}",
-            push_descriptor_properties
         );
         return false;
     }
@@ -277,7 +267,6 @@ impl Context {
         };
 
         let device_ext = DeviceExt {
-            push_descriptor: khr::PushDescriptor::new(&instance, &device),
             draw_indirect_count: None,
             timeline_semaphore: None,
         };

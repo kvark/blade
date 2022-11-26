@@ -8,8 +8,9 @@ edition = "2021"
 [dependencies]
 bitflags = "1"
 bytemuck = "1"
+codespan-reporting = "0.11"
 log = "0.4"
-naga = { version = "0.10", features = ["wgsl-in"] }
+naga = { version = "0.10", features = ["wgsl-in", "span", "validate"] }
 raw-window-handle = "0.5"
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
