@@ -1,4 +1,6 @@
-# Lean and Mean Engine
+# Blade
+
+Blade is an attempt to make graphics programming fun. It doesn't try to be comprehensive or safe. It assumes to be custom-modified.
 
 ## Motivation
 
@@ -58,26 +60,26 @@ On Vulkan we'll require certain features to make the translation simple:
 
 ### Assumptions
 
-Lame is based on different set of assumptions from wgpu-hal:
-- *safety*: wgpu places safety first and foremost. Self-sufficient, guarantees no UB. Lame is on the opposite - considers safety to be secondary. Expects users to rely on native API's validation and tooling.
-- *API reach*: wgpu attempts to be everywhere, having backends for all the APIs it can reach. Lame targets only the essential backends: Vulkan and Metal.
-- *abstraction*: wgpu is completely opaque, with only a few unsafe APIs for interacting with external objects. Lame needs to be transparent, since it assumes modifcation by the user, and doens't provide safety.
-- *errors*: wgpu considers all external errors recoverable. Lame doesn't expect any recovery after the initialization is done.
-- *object copy*: wgpu-hal hides API objects so that they can only be `Clone`, and some of the backends use `Arc` and other heap-allocated backing for them. Lame keeps the API for resources to be are light as possible and allows them to be copied freely.
-- *bind group creation cost*: wgpu considers it expensive, needs to be prepared ahead of time. Lame considers it cheap enough to always create on the fly.
+Blade is based on different set of assumptions from wgpu-hal:
+- *safety*: wgpu places safety first and foremost. Self-sufficient, guarantees no UB. Blade is on the opposite - considers safety to be secondary. Expects users to rely on native API's validation and tooling.
+- *API reach*: wgpu attempts to be everywhere, having backends for all the APIs it can reach. Blade targets only the essential backends: Vulkan and Metal.
+- *abstraction*: wgpu is completely opaque, with only a few unsafe APIs for interacting with external objects. Blade needs to be transparent, since it assumes modifcation by the user, and doens't provide safety.
+- *errors*: wgpu considers all external errors recoverable. Blade doesn't expect any recovery after the initialization is done.
+- *object copy*: wgpu-hal hides API objects so that they can only be `Clone`, and some of the backends use `Arc` and other heap-allocated backing for them. Blade keeps the API for resources to be are light as possible and allows them to be copied freely.
+- *bind group creation cost*: wgpu considers it expensive, needs to be prepared ahead of time. Blade considers it cheap enough to always create on the fly.
 | bind group invalidation | should be avoided by following pipeline compatibility rules | everything is re-bound on pipeline change |
-- *barriers*: wgpu attempts to always use the optimal image layouts and can set reduced access flags on resources based on use. Placing the barriers optimally is a non-trivial task to solve, no universal solutions. Lame not only ignores this fight by making the user place the barrier, these barriers are only global, and there are no image layout changes - everything is GENERAL.
-- *usage*: wgpu expects to be used as a Rust library. Lame expects to be vendored in and modified according to the needs of a user. Hopefully, some of the changes would appear upstream as PRs.
+- *barriers*: wgpu attempts to always use the optimal image layouts and can set reduced access flags on resources based on use. Placing the barriers optimally is a non-trivial task to solve, no universal solutions. Blade not only ignores this fight by making the user place the barrier, these barriers are only global, and there are no image layout changes - everything is GENERAL.
+- *usage*: wgpu expects to be used as a Rust library. Blade expects to be vendored in and modified according to the needs of a user. Hopefully, some of the changes would appear upstream as PRs.
 
 In other words, this is a bit **experiment**. It may fail horribly, or it may open up new ideas and perspectives.
 
 ## Performance
 
-Lame doesn't expect to be faster than wgpu-hal, but it's important to understand how much the difference is.
+Blade doesn't expect to be faster than wgpu-hal, but it's important to understand how much the difference is.
 
 On the bunnymark example, ran on MBP 2016 with "Intel Iris Graphics 550", we have:
 
-  - Lame starting to slow down after about 5K bunnies
+  - Blade starting to slow down after about 5K bunnies
   - wgpu-hal starts at 10K bunnies
   - wgpu starts at 5K bunnies
 

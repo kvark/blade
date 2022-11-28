@@ -131,38 +131,40 @@ fn main() {
         context.create_command_encoder(blade::CommandEncoderDesc { name: "main" });
     command_encoder.start();
 
-    if let mut encoder = command_encoder.with_transfers() {
-        encoder.copy_buffer_to_texture(
+    if let mut transfer = command_encoder.transfer() {
+        transfer.copy_buffer_to_texture(
             upload_buffer.into(),
             extent.width * 4,
             texture.into(),
             extent,
         );
     }
-    if let mut pc = command_encoder.with_pipeline(&pipeline) {
+    if let mut compute = command_encoder.compute() {
         for i in 1..mip_level_count {
-            let dst_size = extent.at_mip_level(i);
-            pc.bind_data(
-                0,
-                &Globals {
-                    modulator: if i == 1 {
-                        [0.2, 0.4, 0.3, 0.0]
-                    } else {
-                        [1.0; 4]
+            if let mut pc = compute.with(&pipeline) {
+                let dst_size = extent.at_mip_level(i);
+                pc.bind(
+                    0,
+                    &Globals {
+                        modulator: if i == 1 {
+                            [0.2, 0.4, 0.3, 0.0]
+                        } else {
+                            [1.0; 4]
+                        },
+                        input: views[i as usize - 1],
+                        output: views[i as usize],
                     },
-                    input: views[i as usize - 1],
-                    output: views[i as usize],
-                },
-            );
-            pc.dispatch([
-                dst_size.width / wg_size[0] + 1,
-                dst_size.height / wg_size[1] + 1,
-                1,
-            ]);
+                );
+                pc.dispatch([
+                    dst_size.width / wg_size[0] + 1,
+                    dst_size.height / wg_size[1] + 1,
+                    1,
+                ]);
+            }
         }
     }
-    if let mut encoder = command_encoder.with_transfers() {
-        encoder.copy_texture_to_buffer(
+    if let mut tranfer = command_encoder.transfer() {
+        tranfer.copy_texture_to_buffer(
             blade::TexturePiece {
                 texture,
                 mip_level: mip_level_count - 1,

@@ -3,7 +3,7 @@ use ash::{
     vk,
 };
 use naga::back::spv;
-use std::{ffi, marker::PhantomData, num::NonZeroU32, sync::Mutex};
+use std::{ffi, num::NonZeroU32, sync::Mutex};
 
 mod command;
 mod pipeline;
@@ -96,19 +96,28 @@ pub struct RenderPipeline {
 }
 
 pub struct CommandEncoder {
-    data: Vec<u8>,
+    raw: vk::CommandBuffer,
+    device: ash::Device,
+    plain_data: Vec<u8>,
 }
 pub struct TransferCommandEncoder<'a> {
-    phantom: PhantomData<&'a CommandEncoder>,
+    raw: vk::CommandBuffer,
+    device: &'a ash::Device,
 }
-pub struct ComputePipelineContext<'a> {
-    phantom: PhantomData<&'a CommandEncoder>,
+pub struct ComputeCommandEncoder<'a> {
+    raw: vk::CommandBuffer,
+    device: &'a ash::Device,
+    plain_data: &'a mut Vec<u8>,
 }
 pub struct RenderCommandEncoder<'a> {
-    phantom: PhantomData<&'a CommandEncoder>,
+    raw: vk::CommandBuffer,
+    device: &'a ash::Device,
+    plain_data: &'a mut Vec<u8>,
 }
-pub struct RenderPipelineContext<'a> {
-    phantom: PhantomData<&'a CommandEncoder>,
+pub struct PipelineEncoder<'a> {
+    raw: vk::CommandBuffer,
+    device: &'a ash::Device,
+    plain_data: &'a mut Vec<u8>,
 }
 
 pub struct SyncPoint {}
@@ -358,8 +367,12 @@ impl Context {
         })
     }
 
-    pub fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
-        CommandEncoder { data: Vec::new() }
+    pub fn create_command_encoder(&self, _desc: super::CommandEncoderDesc) -> CommandEncoder {
+        CommandEncoder {
+            raw: vk::CommandBuffer::null(),
+            device: self.device.clone(),
+            plain_data: Vec::new(),
+        }
     }
 
     pub fn submit(&self, _encoder: &mut CommandEncoder) -> SyncPoint {

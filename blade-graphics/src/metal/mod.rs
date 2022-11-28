@@ -193,6 +193,12 @@ pub struct TransferCommandEncoder<'a> {
 }
 
 #[derive(Debug)]
+pub struct ComputeCommandEncoder<'a> {
+    raw: metal::ComputeCommandEncoder,
+    plain_data: &'a mut Vec<u8>,
+}
+
+#[derive(Debug)]
 pub struct RenderCommandEncoder<'a> {
     raw: metal::RenderCommandEncoder,
     plain_data: &'a mut Vec<u8>,
@@ -200,7 +206,7 @@ pub struct RenderCommandEncoder<'a> {
 
 #[derive(Debug)]
 pub struct ComputePipelineContext<'a> {
-    encoder: metal::ComputeCommandEncoder,
+    encoder: &'a mut metal::ComputeCommandEncoder,
     wg_size: metal::MTLSize,
     bind_groups: &'a [BindGroupInfo],
     plain_data: &'a mut [u8],

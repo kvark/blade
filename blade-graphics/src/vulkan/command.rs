@@ -1,20 +1,20 @@
-use std::marker::PhantomData;
+use ash::vk;
 
 impl super::CommandEncoder {
     pub fn start(&mut self) {}
 
-    pub fn with_transfers(&mut self) -> super::TransferCommandEncoder {
+    pub fn transfer(&mut self) -> super::TransferCommandEncoder {
         super::TransferCommandEncoder {
-            phantom: PhantomData,
+            raw: self.raw,
+            device: &self.device,
         }
     }
 
-    pub fn with_pipeline(
-        &mut self,
-        _pipeline: &super::ComputePipeline,
-    ) -> super::ComputePipelineContext {
-        super::ComputePipelineContext {
-            phantom: PhantomData,
+    pub fn compute(&mut self) -> super::ComputeCommandEncoder {
+        super::ComputeCommandEncoder {
+            raw: self.raw,
+            device: &self.device,
+            plain_data: &mut self.plain_data,
         }
     }
 }
@@ -56,8 +56,22 @@ impl super::TransferCommandEncoder<'_> {
     }
 }
 
-impl super::ComputePipelineContext<'_> {
-    pub fn bind_data<D: crate::ShaderData>(&mut self, _group: u32, _data: &D) {
+impl<'a> super::ComputeCommandEncoder<'a> {
+    pub fn with<'b>(&'b mut self, pipeline: &super::ComputePipeline) -> super::PipelineEncoder<'b> {
+        unsafe {
+            self.device
+                .cmd_bind_pipeline(self.raw, vk::PipelineBindPoint::COMPUTE, pipeline.raw)
+        };
+        super::PipelineEncoder {
+            raw: self.raw,
+            device: self.device,
+            plain_data: self.plain_data,
+        }
+    }
+}
+
+impl super::PipelineEncoder<'_> {
+    pub fn bind<D: crate::ShaderData>(&mut self, _group: u32, _data: &D) {
         unimplemented!()
     }
 

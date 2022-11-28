@@ -209,8 +209,8 @@ impl Example {
         let mut command_encoder =
             context.create_command_encoder(blade::CommandEncoderDesc { name: "main" });
         command_encoder.start();
-        if let mut encoder = command_encoder.with_transfers() {
-            encoder.copy_buffer_to_texture(upload_buffer.into(), 4, texture.into(), extent);
+        if let mut transfer = command_encoder.transfer() {
+            transfer.copy_buffer_to_texture(upload_buffer.into(), 4, texture.into(), extent);
         }
         context.submit(&mut command_encoder);
 
@@ -263,19 +263,16 @@ impl Example {
         let frame = self.context.acquire_frame();
 
         self.command_encoder.start();
-        if let mut pass = self
-            .command_encoder
-            .with_render_targets(blade::RenderTargetSet {
-                colors: &[blade::RenderTarget {
-                    view: frame.texture_view(),
-                    init_op: blade::InitOp::Clear(blade::TextureColor::TransparentBlack),
-                    finish_op: blade::FinishOp::Store,
-                }],
-                depth_stencil: None,
-            })
-        {
-            let mut rc = pass.with_pipeline(&self.pipeline);
-            rc.bind_data(
+        if let mut pass = self.command_encoder.render(blade::RenderTargetSet {
+            colors: &[blade::RenderTarget {
+                view: frame.texture_view(),
+                init_op: blade::InitOp::Clear(blade::TextureColor::TransparentBlack),
+                finish_op: blade::FinishOp::Store,
+            }],
+            depth_stencil: None,
+        }) {
+            let mut rc = pass.with(&self.pipeline);
+            rc.bind(
                 0,
                 &Globals {
                     mvp_transform: [
@@ -291,7 +288,7 @@ impl Example {
             );
 
             for local in self.bunnies.iter() {
-                rc.bind_data(1, local);
+                rc.bind(1, local);
                 rc.draw(0, 4, 0, 1);
             }
         }

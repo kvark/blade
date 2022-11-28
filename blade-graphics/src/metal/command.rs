@@ -87,7 +87,7 @@ impl super::CommandEncoder {
         }));
     }
 
-    pub fn with_transfers(&mut self) -> super::TransferCommandEncoder {
+    pub fn transfer(&mut self) -> super::TransferCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
             self.raw
                 .as_mut()
@@ -101,49 +101,21 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn with_pipeline<'p>(
-        &'p mut self,
-        pipeline: &'p super::ComputePipeline,
-    ) -> super::ComputePipelineContext<'p> {
-        let max_data_size = pipeline
-            .layout
-            .bind_groups
-            .iter()
-            .map(|bg| bg.plain_data_size as usize)
-            .max()
-            .unwrap_or_default();
-        self.plain_data.resize(max_data_size, 0);
-
-        let encoder = objc::rc::autoreleasepool(|| {
+    pub fn compute(&mut self) -> super::ComputeCommandEncoder {
+        let raw = objc::rc::autoreleasepool(|| {
             self.raw
                 .as_mut()
                 .unwrap()
                 .new_compute_command_encoder()
                 .to_owned()
         });
-        encoder.set_compute_pipeline_state(&pipeline.raw);
-        if let Some(index) = pipeline.layout.sizes_buffer_slot {
-            //TODO: get real sizes
-            let runtime_sizes = [0u8; 8];
-            encoder.set_bytes(
-                index as _,
-                runtime_sizes.len() as _,
-                runtime_sizes.as_ptr() as *const _,
-            );
-        }
-
-        super::ComputePipelineContext {
-            encoder,
-            bind_groups: &pipeline.layout.bind_groups,
-            plain_data: self.plain_data.as_mut(),
-            wg_size: pipeline.wg_size,
+        super::ComputeCommandEncoder {
+            raw,
+            plain_data: &mut self.plain_data,
         }
     }
 
-    pub fn with_render_targets(
-        &mut self,
-        targets: crate::RenderTargetSet,
-    ) -> super::RenderCommandEncoder {
+    pub fn render(&mut self, targets: crate::RenderTargetSet) -> super::RenderCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
             let descriptor = metal::RenderPassDescriptor::new();
 
@@ -310,8 +282,48 @@ impl Drop for super::TransferCommandEncoder<'_> {
     }
 }
 
+impl super::ComputeCommandEncoder<'_> {
+    pub fn with<'p>(
+        &'p mut self,
+        pipeline: &'p super::ComputePipeline,
+    ) -> super::ComputePipelineContext<'p> {
+        let max_data_size = pipeline
+            .layout
+            .bind_groups
+            .iter()
+            .map(|bg| bg.plain_data_size as usize)
+            .max()
+            .unwrap_or_default();
+        self.plain_data.resize(max_data_size, 0);
+
+        self.raw.set_compute_pipeline_state(&pipeline.raw);
+        if let Some(index) = pipeline.layout.sizes_buffer_slot {
+            //TODO: get real sizes
+            let runtime_sizes = [0u8; 8];
+            self.raw.set_bytes(
+                index as _,
+                runtime_sizes.len() as _,
+                runtime_sizes.as_ptr() as *const _,
+            );
+        }
+
+        super::ComputePipelineContext {
+            encoder: &mut self.raw,
+            bind_groups: &pipeline.layout.bind_groups,
+            plain_data: self.plain_data.as_mut(),
+            wg_size: pipeline.wg_size,
+        }
+    }
+}
+
+impl Drop for super::ComputeCommandEncoder<'_> {
+    fn drop(&mut self) {
+        self.raw.end_encoding();
+    }
+}
+
 impl super::RenderCommandEncoder<'_> {
-    pub fn with_pipeline<'p>(
+    pub fn with<'p>(
         &'p mut self,
         pipeline: &'p super::RenderPipeline,
     ) -> super::RenderPipelineContext<'p> {
@@ -366,7 +378,7 @@ impl Drop for super::RenderCommandEncoder<'_> {
 }
 
 impl super::ComputePipelineContext<'_> {
-    pub fn bind_data<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
+    pub fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         let info = &self.bind_groups[group as usize];
 
         data.fill(ShaderDataEncoder {
@@ -407,7 +419,7 @@ impl Drop for super::ComputePipelineContext<'_> {
 }
 
 impl super::RenderPipelineContext<'_> {
-    pub fn bind_data<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
+    pub fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         let info = &self.bind_groups[group as usize];
 
         data.fill(ShaderDataEncoder {
