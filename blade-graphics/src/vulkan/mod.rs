@@ -19,7 +19,14 @@ struct DeviceExt {
     timeline_semaphore: Option<khr::TimelineSemaphore>,
 }
 
+struct MemoryManager {
+    allocator: gpu_alloc::GpuAllocator<vk::DeviceMemory>,
+    slab: slab::Slab<gpu_alloc::MemoryBlock<vk::DeviceMemory>>,
+    valid_ash_memory_types: u32,
+}
+
 pub struct Context {
+    memory: Mutex<MemoryManager>,
     device_ext: DeviceExt,
     device: ash::Device,
     queue: Mutex<vk::Queue>,
@@ -33,6 +40,7 @@ pub struct Context {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Buffer {
     raw: vk::Buffer,
+    memory_handle: usize,
 }
 
 impl Buffer {
@@ -44,6 +52,7 @@ impl Buffer {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Texture {
     raw: vk::Image,
+    memory_handle: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -103,12 +112,16 @@ pub struct RenderPipelineContext<'a> {
 
 pub struct SyncPoint {}
 
+struct AdapterCapabilities {
+    properties: vk::PhysicalDeviceProperties,
+}
+
 unsafe fn inspect_adapter(
     phd: vk::PhysicalDevice,
     _instance: &ash::Instance,
     extensions: &InstanceExt,
     _driver_api_version: u32,
-) -> bool {
+) -> Option<AdapterCapabilities> {
     let mut inline_uniform_block_properties =
         vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
     let mut properties2_khr =
@@ -117,7 +130,8 @@ unsafe fn inspect_adapter(
         .get_physical_device_properties2
         .get_physical_device_properties2(phd, &mut properties2_khr);
 
-    let name = ffi::CStr::from_ptr(properties2_khr.properties.device_name.as_ptr());
+    let properties = properties2_khr.properties;
+    let name = ffi::CStr::from_ptr(properties.device_name.as_ptr());
     log::info!("Adapter {:?}", name);
     if inline_uniform_block_properties.max_inline_uniform_block_size
         < crate::limits::PLAIN_DATA_SIZE
@@ -127,10 +141,10 @@ unsafe fn inspect_adapter(
             "\tRejected for inline uniform blocks: {:?}",
             inline_uniform_block_properties
         );
-        return false;
+        return None;
     }
 
-    true
+    Some(AdapterCapabilities { properties })
 }
 
 impl Context {
@@ -226,9 +240,12 @@ impl Context {
         };
 
         let physical_devices = instance.enumerate_physical_devices().unwrap();
-        let physical_device = physical_devices
+        let (physical_device, capabilities) = physical_devices
             .into_iter()
-            .find(|&phd| inspect_adapter(phd, &instance, &instance_ext, driver_api_version))
+            .find_map(|phd| {
+                inspect_adapter(phd, &instance, &instance_ext, driver_api_version)
+                    .map(|caps| (phd, caps))
+            })
             .ok_or(super::NotSupportedError)?;
 
         let family_index = 0; //TODO
@@ -271,6 +288,55 @@ impl Context {
             timeline_semaphore: None,
         };
 
+        let memory_manager = {
+            let mem_properties = instance.get_physical_device_memory_properties(physical_device);
+            let memory_types =
+                &mem_properties.memory_types[..mem_properties.memory_type_count as usize];
+            let limits = &capabilities.properties.limits;
+            let config = gpu_alloc::Config::i_am_prototyping(); //TODO?
+
+            let properties = gpu_alloc::DeviceProperties {
+                max_memory_allocation_count: limits.max_memory_allocation_count,
+                max_memory_allocation_size: u64::max_value(), // TODO
+                non_coherent_atom_size: limits.non_coherent_atom_size,
+                memory_types: memory_types
+                    .iter()
+                    .map(|memory_type| gpu_alloc::MemoryType {
+                        props: gpu_alloc::MemoryPropertyFlags::from_bits_truncate(
+                            memory_type.property_flags.as_raw() as u8,
+                        ),
+                        heap: memory_type.heap_index,
+                    })
+                    .collect(),
+                memory_heaps: mem_properties.memory_heaps
+                    [..mem_properties.memory_heap_count as usize]
+                    .iter()
+                    .map(|&memory_heap| gpu_alloc::MemoryHeap {
+                        size: memory_heap.size,
+                    })
+                    .collect(),
+                buffer_device_address: false,
+            };
+
+            let known_memory_flags = vk::MemoryPropertyFlags::DEVICE_LOCAL
+                | vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT
+                | vk::MemoryPropertyFlags::HOST_CACHED
+                | vk::MemoryPropertyFlags::LAZILY_ALLOCATED;
+            let valid_ash_memory_types = memory_types.iter().enumerate().fold(0, |u, (i, mem)| {
+                if known_memory_flags.contains(mem.property_flags) {
+                    u | (1 << i)
+                } else {
+                    u
+                }
+            });
+            MemoryManager {
+                allocator: gpu_alloc::GpuAllocator::new(config, properties),
+                slab: slab::Slab::new(),
+                valid_ash_memory_types,
+            }
+        };
+
         let queue = device.get_device_queue(family_index, 0);
 
         let mut naga_flags = spv::WriterFlags::ADJUST_COORDINATE_SPACE;
@@ -279,6 +345,7 @@ impl Context {
         }
 
         Ok(Context {
+            memory: Mutex::new(memory_manager),
             device_ext,
             device,
             queue: Mutex::new(queue),

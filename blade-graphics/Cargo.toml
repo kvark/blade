@@ -24,4 +24,7 @@ naga = { version = "0.10", features = ["msl-out"] }
 [target.'cfg(any(portability, not(any(target_os = "ios", target_os = "macos"))))'.dependencies]
 ash = "0.37"
 ash-window = "0.12"
+gpu-alloc = "0.5"
+gpu-alloc-ash = "0.5"
 naga = { version = "0.10", features = ["spv-out"] }
+slab = "0.4"
