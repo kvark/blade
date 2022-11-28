@@ -174,7 +174,7 @@ pub struct TextureDesc<'a> {
     pub name: &'a str,
     pub format: TextureFormat,
     pub size: Extent,
-    pub array_layers: u32,
+    pub array_layer_count: u32,
     pub mip_level_count: u32,
     pub dimension: TextureDimension,
     pub usage: TextureUsage,

@@ -94,14 +94,14 @@ impl super::Context {
 
         let mtl_type = match desc.dimension {
             crate::TextureDimension::D1 => {
-                if desc.array_layers > 1 {
+                if desc.array_layer_count > 1 {
                     metal::MTLTextureType::D1Array
                 } else {
                     metal::MTLTextureType::D1
                 }
             }
             crate::TextureDimension::D2 => {
-                if desc.array_layers > 1 {
+                if desc.array_layer_count > 1 {
                     metal::MTLTextureType::D2Array
                 } else {
                     metal::MTLTextureType::D2
@@ -118,7 +118,7 @@ impl super::Context {
             descriptor.set_width(desc.size.width as u64);
             descriptor.set_height(desc.size.height as u64);
             descriptor.set_depth(desc.size.depth as u64);
-            descriptor.set_array_length(desc.array_layers as u64);
+            descriptor.set_array_length(desc.array_layer_count as u64);
             descriptor.set_mipmap_level_count(desc.mip_level_count as u64);
             descriptor.set_pixel_format(mtl_format);
             descriptor.set_usage(mtl_usage);

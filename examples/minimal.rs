@@ -79,7 +79,7 @@ fn main() {
         format: blade::TextureFormat::Rgba8Unorm,
         size: extent,
         dimension: blade::TextureDimension::D2,
-        array_layers: 1,
+        array_layer_count: 1,
         mip_level_count,
         usage: blade::TextureUsage::RESOURCE
             | blade::TextureUsage::STORAGE

@@ -3,7 +3,7 @@ use ash::{
     vk,
 };
 use naga::back::spv;
-use std::{ffi, marker::PhantomData, sync::Mutex};
+use std::{ffi, marker::PhantomData, num::NonZeroU32, sync::Mutex};
 
 mod command;
 mod pipeline;
@@ -41,11 +41,12 @@ pub struct Context {
 pub struct Buffer {
     raw: vk::Buffer,
     memory_handle: usize,
+    mapped_data: *mut u8,
 }
 
 impl Buffer {
     pub fn data(&self) -> *mut u8 {
-        unimplemented!()
+        self.mapped_data
     }
 }
 
@@ -380,5 +381,80 @@ impl Context {
                 .debug_utils
                 .set_debug_utils_object_name(self.device.handle(), &name_info)
         };
+    }
+}
+
+bitflags::bitflags! {
+    struct FormatAspects: u32 {
+        const COLOR = 0 << 1;
+        const DEPTH = 1 << 1;
+        const STENCIL = 1 << 2;
+    }
+}
+
+struct FormatInfo {
+    raw: vk::Format,
+    aspects: FormatAspects,
+}
+
+fn describe_format(format: crate::TextureFormat) -> FormatInfo {
+    use crate::TextureFormat as Tf;
+    let (raw, aspects) = match format {
+        Tf::Rgba8Unorm => (vk::Format::R8G8B8A8_UNORM, FormatAspects::COLOR),
+        Tf::Bgra8UnormSrgb => (vk::Format::B8G8R8A8_SRGB, FormatAspects::COLOR),
+    };
+    FormatInfo { raw, aspects }
+}
+
+fn map_aspects(aspects: FormatAspects) -> vk::ImageAspectFlags {
+    let mut flags = vk::ImageAspectFlags::empty();
+    if aspects.contains(FormatAspects::COLOR) {
+        flags |= vk::ImageAspectFlags::COLOR;
+    }
+    if aspects.contains(FormatAspects::DEPTH) {
+        flags |= vk::ImageAspectFlags::DEPTH;
+    }
+    if aspects.contains(FormatAspects::STENCIL) {
+        flags |= vk::ImageAspectFlags::STENCIL;
+    }
+    flags
+}
+
+fn map_extent_3d(extent: crate::Extent) -> vk::Extent3D {
+    vk::Extent3D {
+        width: extent.width,
+        height: extent.height,
+        depth: extent.depth,
+    }
+}
+
+fn map_subresource_range(
+    subresources: &crate::TextureSubresources,
+    aspects: FormatAspects,
+) -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange {
+        aspect_mask: map_aspects(aspects),
+        base_mip_level: subresources.base_mip_level,
+        level_count: subresources
+            .mip_level_count
+            .map_or(vk::REMAINING_MIP_LEVELS, NonZeroU32::get),
+        base_array_layer: subresources.base_array_layer,
+        layer_count: subresources
+            .array_layer_count
+            .map_or(vk::REMAINING_ARRAY_LAYERS, NonZeroU32::get),
+    }
+}
+
+fn map_comparison(fun: crate::CompareFunction) -> vk::CompareOp {
+    use crate::CompareFunction as Cf;
+    match fun {
+        Cf::Never => vk::CompareOp::NEVER,
+        Cf::Less => vk::CompareOp::LESS,
+        Cf::LessEqual => vk::CompareOp::LESS_OR_EQUAL,
+        Cf::Equal => vk::CompareOp::EQUAL,
+        Cf::GreaterEqual => vk::CompareOp::GREATER_OR_EQUAL,
+        Cf::Greater => vk::CompareOp::GREATER,
+        Cf::NotEqual => vk::CompareOp::NOT_EQUAL,
+        Cf::Always => vk::CompareOp::ALWAYS,
     }
 }
