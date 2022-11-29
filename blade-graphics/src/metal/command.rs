@@ -1,10 +1,10 @@
 use std::marker::PhantomData;
 
-fn map_origin(extent: &crate::Extent) -> metal::MTLOrigin {
+fn map_origin(origin: &[u32; 3]) -> metal::MTLOrigin {
     metal::MTLOrigin {
-        x: extent.width as u64,
-        y: extent.height as u64,
-        z: extent.depth as u64,
+        x: origin[0] as u64,
+        y: origin[1] as u64,
+        z: origin[2] as u64,
     }
 }
 

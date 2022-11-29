@@ -51,9 +51,17 @@ impl Buffer {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+struct BlockInfo {
+    bytes: u8,
+    width: u8,
+    height: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Texture {
     raw: vk::Image,
     memory_handle: usize,
+    format: crate::TextureFormat,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -95,8 +103,13 @@ pub struct RenderPipeline {
     raw: vk::Pipeline,
 }
 
-pub struct CommandEncoder {
+struct CommandBuffer {
     raw: vk::CommandBuffer,
+}
+
+pub struct CommandEncoder {
+    pool: vk::CommandPool,
+    buffers: Box<[CommandBuffer]>,
     device: ash::Device,
     plain_data: Vec<u8>,
 }
@@ -367,9 +380,26 @@ impl Context {
         })
     }
 
-    pub fn create_command_encoder(&self, _desc: super::CommandEncoderDesc) -> CommandEncoder {
+    pub fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
+        let pool_info = vk::CommandPoolCreateInfo::builder()
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+        let pool = unsafe { self.device.create_command_pool(&pool_info, None).unwrap() };
+        let cmd_buf_info = vk::CommandBufferAllocateInfo::builder()
+            .command_pool(pool)
+            .command_buffer_count(desc.buffer_count);
+        let cmd_buffers = unsafe { self.device.allocate_command_buffers(&cmd_buf_info).unwrap() };
+        let buffers = cmd_buffers
+            .into_iter()
+            .map(|raw| {
+                if !desc.name.is_empty() {
+                    self.set_object_name(vk::ObjectType::COMMAND_BUFFER, raw, desc.name);
+                };
+                CommandBuffer { raw }
+            })
+            .collect();
         CommandEncoder {
-            raw: vk::CommandBuffer::null(),
+            pool,
+            buffers,
             device: self.device.clone(),
             plain_data: Vec::new(),
         }
@@ -408,15 +438,24 @@ bitflags::bitflags! {
 struct FormatInfo {
     raw: vk::Format,
     aspects: FormatAspects,
+    block: BlockInfo,
 }
 
 fn describe_format(format: crate::TextureFormat) -> FormatInfo {
     use crate::TextureFormat as Tf;
-    let (raw, aspects) = match format {
-        Tf::Rgba8Unorm => (vk::Format::R8G8B8A8_UNORM, FormatAspects::COLOR),
-        Tf::Bgra8UnormSrgb => (vk::Format::B8G8R8A8_SRGB, FormatAspects::COLOR),
+    let (raw, aspects, bytes) = match format {
+        Tf::Rgba8Unorm => (vk::Format::R8G8B8A8_UNORM, FormatAspects::COLOR, 4),
+        Tf::Bgra8UnormSrgb => (vk::Format::B8G8R8A8_SRGB, FormatAspects::COLOR, 4),
     };
-    FormatInfo { raw, aspects }
+    FormatInfo {
+        raw,
+        aspects,
+        block: BlockInfo {
+            bytes,
+            width: 1,
+            height: 1,
+        },
+    }
 }
 
 fn map_aspects(aspects: FormatAspects) -> vk::ImageAspectFlags {
@@ -433,7 +472,7 @@ fn map_aspects(aspects: FormatAspects) -> vk::ImageAspectFlags {
     flags
 }
 
-fn map_extent_3d(extent: crate::Extent) -> vk::Extent3D {
+fn map_extent_3d(extent: &crate::Extent) -> vk::Extent3D {
     vk::Extent3D {
         width: extent.width,
         height: extent.height,

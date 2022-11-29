@@ -127,8 +127,10 @@ fn main() {
         }
     }
 
-    let mut command_encoder =
-        context.create_command_encoder(blade::CommandEncoderDesc { name: "main" });
+    let mut command_encoder = context.create_command_encoder(blade::CommandEncoderDesc {
+        name: "main",
+        buffer_count: 1,
+    });
     command_encoder.start();
 
     if let mut transfer = command_encoder.transfer() {

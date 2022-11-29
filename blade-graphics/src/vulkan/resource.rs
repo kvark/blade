@@ -129,7 +129,7 @@ impl super::Context {
             .flags(create_flags)
             .image_type(map_texture_dimension(desc.dimension))
             .format(format_info.raw)
-            .extent(super::map_extent_3d(desc.size))
+            .extent(super::map_extent_3d(&desc.size))
             .mip_levels(desc.mip_level_count)
             .array_layers(desc.array_layer_count)
             .samples(vk::SampleCountFlags::from_raw(1)) // desc.sample_count
@@ -153,6 +153,7 @@ impl super::Context {
         super::Texture {
             raw,
             memory_handle: allocation.handle,
+            format: desc.format,
         }
     }
 

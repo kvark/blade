@@ -206,8 +206,10 @@ impl Example {
             color: 0xFFFFFFFF,
         });
 
-        let mut command_encoder =
-            context.create_command_encoder(blade::CommandEncoderDesc { name: "main" });
+        let mut command_encoder = context.create_command_encoder(blade::CommandEncoderDesc {
+            name: "main",
+            buffer_count: 2,
+        });
         command_encoder.start();
         if let mut transfer = command_encoder.transfer() {
             transfer.copy_buffer_to_texture(upload_buffer.into(), 4, texture.into(), extent);

@@ -94,7 +94,7 @@ pub struct TexturePiece {
     pub texture: Texture,
     pub mip_level: u32,
     pub array_layer: u32,
-    pub origin: Extent,
+    pub origin: [u32; 3],
 }
 
 impl From<Texture> for TexturePiece {
@@ -103,7 +103,7 @@ impl From<Texture> for TexturePiece {
             texture,
             mip_level: 0,
             array_layer: 0,
-            origin: Extent::default(),
+            origin: [0; 3],
         }
     }
 }
@@ -136,7 +136,7 @@ pub enum TextureViewDimension {
     D3,
 }
 
-#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub struct Extent {
     pub width: u32,
     pub height: u32,
@@ -388,6 +388,10 @@ pub enum CommandType {
 
 pub struct CommandEncoderDesc<'a> {
     pub name: &'a str,
+    /// Number of buffers that this encoder needs to keep alive.
+    /// For example, one buffer is being run on GPU while the
+    /// other is being actively encoded, which makes 2.
+    pub buffer_count: u32,
 }
 
 pub struct ComputePipelineDesc<'a> {
