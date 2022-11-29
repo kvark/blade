@@ -78,6 +78,8 @@ pub struct Sampler {
 struct DescriptorSetLayout {
     raw: vk::DescriptorSetLayout,
     update_template: vk::DescriptorUpdateTemplate,
+    template_size: u32,
+    template_offsets: Box<[u32]>,
 }
 
 #[derive(Debug)]
@@ -103,34 +105,37 @@ pub struct RenderPipeline {
     raw: vk::Pipeline,
 }
 
+#[derive(Clone, Copy, Debug)]
 struct CommandBuffer {
     raw: vk::CommandBuffer,
+    descriptor_pool: vk::DescriptorPool,
 }
 
 pub struct CommandEncoder {
     pool: vk::CommandPool,
     buffers: Box<[CommandBuffer]>,
     device: ash::Device,
-    plain_data: Vec<u8>,
+    update_data: Vec<u8>,
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
     device: &'a ash::Device,
 }
 pub struct ComputeCommandEncoder<'a> {
-    raw: vk::CommandBuffer,
+    cmd_buf: CommandBuffer,
     device: &'a ash::Device,
-    plain_data: &'a mut Vec<u8>,
+    update_data: &'a mut Vec<u8>,
 }
 pub struct RenderCommandEncoder<'a> {
-    raw: vk::CommandBuffer,
+    cmd_buf: CommandBuffer,
     device: &'a ash::Device,
-    plain_data: &'a mut Vec<u8>,
+    update_data: &'a mut Vec<u8>,
 }
-pub struct PipelineEncoder<'a> {
-    raw: vk::CommandBuffer,
+pub struct PipelineEncoder<'a, 'p> {
+    cmd_buf: CommandBuffer,
+    layout: &'p PipelineLayout,
     device: &'a ash::Device,
-    plain_data: &'a mut Vec<u8>,
+    update_data: &'a mut Vec<u8>,
 }
 
 pub struct SyncPoint {}
@@ -381,6 +386,32 @@ impl Context {
     }
 
     pub fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
+        //TODO: these numbers are arbitrary, needs to be replaced by
+        // an abstraction from gpu-alloc, if possible.
+        const ROUGH_SET_COUNT: u32 = 100;
+        const DESCRIPTOR_SIZES: &[vk::DescriptorPoolSize] = &[
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
+                descriptor_count: ROUGH_SET_COUNT * crate::limits::PLAIN_DATA_SIZE,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: ROUGH_SET_COUNT,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::SAMPLED_IMAGE,
+                descriptor_count: 2 * ROUGH_SET_COUNT,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::SAMPLER,
+                descriptor_count: ROUGH_SET_COUNT,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: ROUGH_SET_COUNT,
+            },
+        ];
+
         let pool_info = vk::CommandPoolCreateInfo::builder()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
         let pool = unsafe { self.device.create_command_pool(&pool_info, None).unwrap() };
@@ -394,19 +425,57 @@ impl Context {
                 if !desc.name.is_empty() {
                     self.set_object_name(vk::ObjectType::COMMAND_BUFFER, raw, desc.name);
                 };
-                CommandBuffer { raw }
+                let mut inline_uniform_block_info =
+                    vk::DescriptorPoolInlineUniformBlockCreateInfoEXT::builder()
+                        .max_inline_uniform_block_bindings(ROUGH_SET_COUNT);
+                let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
+                    .max_sets(ROUGH_SET_COUNT)
+                    .pool_sizes(DESCRIPTOR_SIZES)
+                    .push_next(&mut inline_uniform_block_info);
+                let descriptor_pool = unsafe {
+                    self.device
+                        .create_descriptor_pool(&descriptor_pool_info, None)
+                        .unwrap()
+                };
+                CommandBuffer {
+                    raw,
+                    descriptor_pool,
+                }
             })
             .collect();
         CommandEncoder {
             pool,
             buffers,
             device: self.device.clone(),
-            plain_data: Vec::new(),
+            update_data: Vec::new(),
         }
     }
 
-    pub fn submit(&self, _encoder: &mut CommandEncoder) -> SyncPoint {
-        unimplemented!()
+    pub fn destroy_command_encoder(&self, command_encoder: CommandEncoder) {
+        for cmd_buf in command_encoder.buffers.into_iter() {
+            let raw_cmd_buffers = [cmd_buf.raw];
+            unsafe {
+                self.device
+                    .free_command_buffers(command_encoder.pool, &raw_cmd_buffers);
+                self.device
+                    .destroy_descriptor_pool(cmd_buf.descriptor_pool, None);
+            }
+        }
+        unsafe { self.device.destroy_command_pool(command_encoder.pool, None) };
+    }
+
+    pub fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+        let raw = encoder.buffers[0].raw;
+        let raw_array = [raw];
+        let vk_info = vk::SubmitInfo::builder().command_buffers(&raw_array);
+        let queue = *self.queue.lock().unwrap();
+        unsafe {
+            self.device.end_command_buffer(raw).unwrap();
+            self.device
+                .queue_submit(queue, &[vk_info.build()], vk::Fence::null())
+                .unwrap();
+        }
+        SyncPoint {}
     }
 
     pub fn wait_for(&self, _sp: SyncPoint, _timeout_ms: u32) -> bool {

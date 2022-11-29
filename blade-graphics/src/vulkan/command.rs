@@ -1,5 +1,57 @@
 use ash::vk;
 
+struct ShaderDataEncoder<'a> {
+    update_data: &'a mut [u8],
+    template_offsets: &'a [u32],
+}
+impl ShaderDataEncoder<'_> {
+    #[inline]
+    fn write<T>(&mut self, index: u32, value: T) {
+        let offset = self.template_offsets[index as usize];
+        unsafe {
+            std::ptr::write(
+                self.update_data.as_mut_ptr().offset(offset as isize) as *mut T,
+                value,
+            )
+        };
+    }
+}
+impl crate::ShaderDataEncoder for ShaderDataEncoder<'_> {
+    fn set_buffer(&mut self, index: u32, piece: crate::BufferPiece) {
+        self.write(
+            index,
+            vk::DescriptorBufferInfo {
+                buffer: piece.buffer.raw,
+                offset: piece.offset,
+                range: vk::WHOLE_SIZE,
+            },
+        );
+    }
+    fn set_texture(&mut self, index: u32, view: super::TextureView) {
+        self.write(
+            index,
+            vk::DescriptorImageInfo {
+                sampler: vk::Sampler::null(),
+                image_view: view.raw,
+                image_layout: vk::ImageLayout::GENERAL,
+            },
+        );
+    }
+    fn set_sampler(&mut self, index: u32, sampler: super::Sampler) {
+        self.write(
+            index,
+            vk::DescriptorImageInfo {
+                sampler: sampler.raw,
+                image_view: vk::ImageView::null(),
+                image_layout: vk::ImageLayout::UNDEFINED,
+            },
+        );
+    }
+    fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P) {
+        self.write(index, data);
+    }
+}
+
 impl crate::TexturePiece {
     fn subresource_layers(&self, aspects: super::FormatAspects) -> vk::ImageSubresourceLayers {
         vk::ImageSubresourceLayers {
@@ -45,9 +97,15 @@ impl super::CommandEncoder {
             .build();
         unsafe {
             self.device
+                .reset_descriptor_pool(
+                    self.buffers[0].descriptor_pool,
+                    vk::DescriptorPoolResetFlags::empty(),
+                )
+                .unwrap();
+            self.device
                 .begin_command_buffer(self.buffers[0].raw, &vk_info)
-                .unwrap()
-        };
+                .unwrap();
+        }
     }
 
     pub fn transfer(&mut self) -> super::TransferCommandEncoder {
@@ -59,9 +117,9 @@ impl super::CommandEncoder {
 
     pub fn compute(&mut self) -> super::ComputeCommandEncoder {
         super::ComputeCommandEncoder {
-            raw: self.buffers[0].raw,
+            cmd_buf: self.buffers[0],
             device: &self.device,
-            plain_data: &mut self.plain_data,
+            update_data: &mut self.update_data,
         }
     }
 }
@@ -149,25 +207,65 @@ impl super::TransferCommandEncoder<'_> {
 }
 
 impl<'a> super::ComputeCommandEncoder<'a> {
-    pub fn with<'b>(&'b mut self, pipeline: &super::ComputePipeline) -> super::PipelineEncoder<'b> {
+    pub fn with<'b, 'p>(
+        &'b mut self,
+        pipeline: &'p super::ComputePipeline,
+    ) -> super::PipelineEncoder<'b, 'p> {
         unsafe {
-            self.device
-                .cmd_bind_pipeline(self.raw, vk::PipelineBindPoint::COMPUTE, pipeline.raw)
+            self.device.cmd_bind_pipeline(
+                self.cmd_buf.raw,
+                vk::PipelineBindPoint::COMPUTE,
+                pipeline.raw,
+            )
         };
         super::PipelineEncoder {
-            raw: self.raw,
+            cmd_buf: self.cmd_buf,
+            layout: &pipeline.layout,
             device: self.device,
-            plain_data: self.plain_data,
+            update_data: self.update_data,
         }
     }
 }
 
-impl super::PipelineEncoder<'_> {
-    pub fn bind<D: crate::ShaderData>(&mut self, _group: u32, _data: &D) {
-        unimplemented!()
+impl super::PipelineEncoder<'_, '_> {
+    pub fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
+        let dsl = &self.layout.descriptor_set_layouts[group as usize];
+        self.update_data.clear();
+        self.update_data.resize(dsl.template_size as usize, 0);
+        data.fill(ShaderDataEncoder {
+            update_data: self.update_data.as_mut_slice(),
+            template_offsets: &dsl.template_offsets,
+        });
+
+        let descriptor_set_layouts = [dsl.raw];
+        let descriptor_set_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(self.cmd_buf.descriptor_pool)
+            .set_layouts(&descriptor_set_layouts);
+        unsafe {
+            let sets = self
+                .device
+                .allocate_descriptor_sets(&descriptor_set_info)
+                .unwrap();
+            self.device.update_descriptor_set_with_template(
+                sets[0],
+                dsl.update_template,
+                self.update_data.as_ptr() as *const _,
+            );
+            self.device.cmd_bind_descriptor_sets(
+                self.cmd_buf.raw,
+                vk::PipelineBindPoint::COMPUTE,
+                self.layout.raw,
+                group,
+                &sets,
+                &[],
+            );
+        }
     }
 
-    pub fn dispatch(&mut self, _groups: [u32; 3]) {
-        unimplemented!()
+    pub fn dispatch(&mut self, groups: [u32; 3]) {
+        unsafe {
+            self.device
+                .cmd_dispatch(self.cmd_buf.raw, groups[0], groups[1], groups[2])
+        };
     }
 }

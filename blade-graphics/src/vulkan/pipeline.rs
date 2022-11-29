@@ -93,6 +93,7 @@ impl super::Context {
         let mut binding_index = 1;
         let mut plain_data_size = 0u32;
         let mut template_entries = Vec::new();
+        let mut template_offsets = Vec::with_capacity(layout.bindings.len());
         let mut update_offset = 0;
         for &(_, binding) in layout.bindings.iter() {
             let (descriptor_type, descriptor_size) = match binding {
@@ -122,6 +123,7 @@ impl super::Context {
                         crate::PlainContainer::Vector(size) => size as u32,
                         crate::PlainContainer::Matrix(rows, cols) => rows as u32 * cols as u32,
                     };
+                    template_offsets.push(plain_data_size);
                     plain_data_size += elem_size * count;
                     continue;
                 }
@@ -142,9 +144,11 @@ impl super::Context {
                 stride: 0,
             });
             binding_index += 1;
+            template_offsets.push(update_offset as u32);
             update_offset += descriptor_size;
         }
 
+        let handle_section_size = update_offset as u32;
         if plain_data_size != 0 {
             vk_bindings.push(vk::DescriptorSetLayoutBinding {
                 binding: 0,
@@ -161,6 +165,13 @@ impl super::Context {
                 offset: update_offset,
                 stride: 0,
             });
+            for (template_offset, &(_, binding)) in
+                template_offsets.iter_mut().zip(layout.bindings.iter())
+            {
+                if let crate::ShaderBinding::Plain { .. } = binding {
+                    *template_offset += handle_section_size;
+                }
+            }
         }
 
         let set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&vk_bindings);
@@ -183,7 +194,8 @@ impl super::Context {
         super::DescriptorSetLayout {
             raw,
             update_template,
-            //plain_data_range: update_offset as u32..update_offset as u32 + plain_data_size,
+            template_size: handle_section_size + plain_data_size,
+            template_offsets: template_offsets.into_boxed_slice(),
         }
     }
 
