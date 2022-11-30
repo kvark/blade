@@ -16,7 +16,7 @@ struct InstanceExt {
 
 struct DeviceExt {
     draw_indirect_count: Option<khr::DrawIndirectCount>,
-    timeline_semaphore: Option<khr::TimelineSemaphore>,
+    timeline_semaphore: khr::TimelineSemaphore,
 }
 
 struct MemoryManager {
@@ -25,11 +25,21 @@ struct MemoryManager {
     valid_ash_memory_types: u32,
 }
 
+struct Queue {
+    raw: vk::Queue,
+    timeline_semaphore: vk::Semaphore,
+    last_progress: u64,
+}
+
+fn map_timeout(millis: u32) -> u64 {
+    millis as u64 * 1_000_000
+}
+
 pub struct Context {
     memory: Mutex<MemoryManager>,
     device_ext: DeviceExt,
     device: ash::Device,
-    queue: Mutex<vk::Queue>,
+    queue: Mutex<Queue>,
     physical_device: vk::PhysicalDevice,
     naga_flags: spv::WriterFlags,
     instance_ext: InstanceExt,
@@ -138,7 +148,9 @@ pub struct PipelineEncoder<'a, 'p> {
     update_data: &'a mut Vec<u8>,
 }
 
-pub struct SyncPoint {}
+pub struct SyncPoint {
+    progress: u64,
+}
 
 struct AdapterCapabilities {
     properties: vk::PhysicalDeviceProperties,
@@ -152,22 +164,47 @@ unsafe fn inspect_adapter(
 ) -> Option<AdapterCapabilities> {
     let mut inline_uniform_block_properties =
         vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
-    let mut properties2_khr =
-        vk::PhysicalDeviceProperties2KHR::builder().push_next(&mut inline_uniform_block_properties);
+    let mut timeline_semaphore_properties =
+        vk::PhysicalDeviceTimelineSemaphorePropertiesKHR::default();
+    let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::builder()
+        .push_next(&mut inline_uniform_block_properties)
+        .push_next(&mut timeline_semaphore_properties);
     extensions
         .get_physical_device_properties2
         .get_physical_device_properties2(phd, &mut properties2_khr);
 
+    let mut inline_uniform_block_features =
+        vk::PhysicalDeviceInlineUniformBlockFeaturesEXT::default();
+    let mut timeline_semaphore_features = vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR::default();
+    let mut features2_khr = vk::PhysicalDeviceFeatures2::builder()
+        .push_next(&mut inline_uniform_block_features)
+        .push_next(&mut timeline_semaphore_features);
+    extensions
+        .get_physical_device_properties2
+        .get_physical_device_features2(phd, &mut features2_khr);
+
     let properties = properties2_khr.properties;
     let name = ffi::CStr::from_ptr(properties.device_name.as_ptr());
     log::info!("Adapter {:?}", name);
+
     if inline_uniform_block_properties.max_inline_uniform_block_size
         < crate::limits::PLAIN_DATA_SIZE
         || inline_uniform_block_properties.max_descriptor_set_inline_uniform_blocks == 0
+        || inline_uniform_block_features.inline_uniform_block == 0
     {
         log::info!(
-            "\tRejected for inline uniform blocks: {:?}",
-            inline_uniform_block_properties
+            "\tRejected for inline uniform blocks. Properties = {:?}, Features = {:?}",
+            inline_uniform_block_properties,
+            inline_uniform_block_features,
+        );
+        return None;
+    }
+
+    if timeline_semaphore_features.timeline_semaphore == 0 {
+        log::info!(
+            "\tRejected for timeline semaphore. Properties = {:?}, Features = {:?}",
+            timeline_semaphore_properties,
+            timeline_semaphore_features,
         );
         return None;
     }
@@ -287,7 +324,7 @@ impl Context {
 
             let mut device_extensions = vec![
                 vk::ExtInlineUniformBlockFn::name(),
-                vk::KhrPushDescriptorFn::name(),
+                vk::KhrTimelineSemaphoreFn::name(),
                 vk::KhrDescriptorUpdateTemplateFn::name(),
             ];
             if is_vulkan_portability {
@@ -302,10 +339,13 @@ impl Context {
             let mut ext_inline_uniform_block =
                 vk::PhysicalDeviceInlineUniformBlockFeaturesEXT::builder()
                     .inline_uniform_block(true);
+            let mut khr_timeline_semaphore =
+                vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR::builder().timeline_semaphore(true);
             let device_create_info = vk::DeviceCreateInfo::builder()
                 .queue_create_infos(&family_infos)
                 .enabled_extension_names(&str_pointers)
-                .push_next(&mut ext_inline_uniform_block);
+                .push_next(&mut ext_inline_uniform_block)
+                .push_next(&mut khr_timeline_semaphore);
             instance
                 .create_device(physical_device, &device_create_info, None)
                 .unwrap()
@@ -313,7 +353,7 @@ impl Context {
 
         let device_ext = DeviceExt {
             draw_indirect_count: None,
-            timeline_semaphore: None,
+            timeline_semaphore: khr::TimelineSemaphore::new(&instance, &device),
         };
 
         let memory_manager = {
@@ -366,6 +406,17 @@ impl Context {
         };
 
         let queue = device.get_device_queue(family_index, 0);
+        let last_progress = 0;
+        let mut timeline_info = vk::SemaphoreTypeCreateInfo::builder()
+            .semaphore_type(vk::SemaphoreType::TIMELINE)
+            .initial_value(last_progress);
+        let semaphore_create_info =
+            vk::SemaphoreCreateInfo::builder().push_next(&mut timeline_info);
+        let timeline_semaphore = unsafe {
+            device
+                .create_semaphore(&semaphore_create_info, None)
+                .unwrap()
+        };
 
         let mut naga_flags = spv::WriterFlags::ADJUST_COORDINATE_SPACE;
         if desc.validation {
@@ -376,7 +427,11 @@ impl Context {
             memory: Mutex::new(memory_manager),
             device_ext,
             device,
-            queue: Mutex::new(queue),
+            queue: Mutex::new(Queue {
+                raw: queue,
+                timeline_semaphore,
+                last_progress,
+            }),
             physical_device,
             naga_flags,
             instance_ext,
@@ -465,21 +520,44 @@ impl Context {
     }
 
     pub fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
-        let raw = encoder.buffers[0].raw;
-        let raw_array = [raw];
-        let vk_info = vk::SubmitInfo::builder().command_buffers(&raw_array);
-        let queue = *self.queue.lock().unwrap();
+        let mut queue = self.queue.lock().unwrap();
+        queue.last_progress += 1;
+        let progress = queue.last_progress;
+        let raw_cmd_buf = encoder.buffers[0].raw;
+        let command_buffers = [raw_cmd_buf];
+        let semaphores = [queue.timeline_semaphore];
+        let signal_values = [progress];
+        let mut timeline_info =
+            vk::TimelineSemaphoreSubmitInfo::builder().signal_semaphore_values(&signal_values);
+        let vk_info = vk::SubmitInfo::builder()
+            .command_buffers(&command_buffers)
+            .signal_semaphores(&semaphores)
+            .push_next(&mut timeline_info);
         unsafe {
-            self.device.end_command_buffer(raw).unwrap();
+            self.device.end_command_buffer(raw_cmd_buf).unwrap();
             self.device
-                .queue_submit(queue, &[vk_info.build()], vk::Fence::null())
+                .queue_submit(queue.raw, &[vk_info.build()], vk::Fence::null())
                 .unwrap();
         }
-        SyncPoint {}
+        SyncPoint { progress }
     }
 
-    pub fn wait_for(&self, _sp: SyncPoint, _timeout_ms: u32) -> bool {
-        unimplemented!()
+    pub fn wait_for(&self, sp: SyncPoint, timeout_ms: u32) -> bool {
+        //Note: technically we could get away without locking the queue,
+        // but also this isn't time-sensitive, so it's fine.
+        let timeline_semaphore = self.queue.lock().unwrap().timeline_semaphore;
+        let semaphores = [timeline_semaphore];
+        let semaphore_values = [sp.progress];
+        let wait_info = vk::SemaphoreWaitInfoKHR::builder()
+            .semaphores(&semaphores)
+            .values(&semaphore_values);
+        let timeout_ns = map_timeout(timeout_ms);
+        unsafe {
+            self.device_ext
+                .timeline_semaphore
+                .wait_semaphores(&wait_info, timeout_ns)
+                .is_ok()
+        }
     }
 
     fn set_object_name(&self, object_type: vk::ObjectType, object: impl vk::Handle, name: &str) {

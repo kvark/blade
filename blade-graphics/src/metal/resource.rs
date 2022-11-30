@@ -135,6 +135,12 @@ impl super::Context {
         super::Texture { raw }
     }
 
+    pub fn destroy_texture(&self, texture: super::Texture) {
+        unsafe {
+            let () = msg_send![texture.raw, release];
+        }
+    }
+
     pub fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
         let texture = desc.texture.as_ref();
         let mtl_format = super::map_texture_format(desc.format);

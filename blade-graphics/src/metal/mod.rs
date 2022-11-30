@@ -304,6 +304,8 @@ impl Context {
         }
     }
 
+    pub fn destroy_command_encoder(&self, _command_encoder: CommandEncoder) {}
+
     pub fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         let cmd_buf = encoder.raw.take().unwrap();
         cmd_buf.commit();

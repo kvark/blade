@@ -413,9 +413,7 @@ impl super::ComputePipelineContext<'_> {
 }
 
 impl Drop for super::ComputePipelineContext<'_> {
-    fn drop(&mut self) {
-        self.encoder.end_encoding();
-    }
+    fn drop(&mut self) {}
 }
 
 impl super::RenderPipelineContext<'_> {
