@@ -132,6 +132,7 @@ fn main() {
         buffer_count: 1,
     });
     command_encoder.start();
+    command_encoder.init_texture(texture);
 
     if let mut transfer = command_encoder.transfer() {
         transfer.copy_buffer_to_texture(

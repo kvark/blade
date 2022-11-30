@@ -108,6 +108,33 @@ impl super::CommandEncoder {
         }
     }
 
+    pub fn init_texture(&mut self, texture: super::Texture) {
+        let format_info = super::describe_format(texture.format);
+        let barrier = vk::ImageMemoryBarrier::builder()
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .image(texture.raw)
+            .subresource_range(
+                vk::ImageSubresourceRange::builder()
+                    .aspect_mask(super::map_aspects(format_info.aspects))
+                    .level_count(vk::REMAINING_MIP_LEVELS)
+                    .layer_count(vk::REMAINING_ARRAY_LAYERS)
+                    .build(),
+            )
+            .build();
+        unsafe {
+            self.device.cmd_pipeline_barrier(
+                self.buffers[0].raw,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier],
+            );
+        }
+    }
+
     pub fn transfer(&mut self) -> super::TransferCommandEncoder {
         super::TransferCommandEncoder {
             raw: self.buffers[0].raw,

@@ -8,6 +8,8 @@ See [MOTIVATION](MOTIVATION.md) and [FAQ](FAQ.md) for more info.
 
 ## Platforms
 
+The backend is selected automatically based on the host platform.
+
 Vulkan:
 - Desktop Linux/Windows
 - Android

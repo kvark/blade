@@ -87,6 +87,8 @@ impl super::CommandEncoder {
         }));
     }
 
+    pub fn init_texture(&mut self, _texture: super::Texture) {}
+
     pub fn transfer(&mut self) -> super::TransferCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
             self.raw
