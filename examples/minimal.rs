@@ -142,8 +142,8 @@ fn main() {
             extent,
         );
     }
-    if let mut compute = command_encoder.compute() {
-        for i in 1..mip_level_count {
+    for i in 1..mip_level_count {
+        if let mut compute = command_encoder.compute() {
             if let mut pc = compute.with(&pipeline) {
                 let dst_size = extent.at_mip_level(i);
                 pc.bind(

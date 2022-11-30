@@ -520,10 +520,10 @@ impl Context {
     }
 
     pub fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+        let raw_cmd_buf = encoder.finish();
         let mut queue = self.queue.lock().unwrap();
         queue.last_progress += 1;
         let progress = queue.last_progress;
-        let raw_cmd_buf = encoder.buffers[0].raw;
         let command_buffers = [raw_cmd_buf];
         let semaphores = [queue.timeline_semaphore];
         let signal_values = [progress];
@@ -534,7 +534,6 @@ impl Context {
             .signal_semaphores(&semaphores)
             .push_next(&mut timeline_info);
         unsafe {
-            self.device.end_command_buffer(raw_cmd_buf).unwrap();
             self.device
                 .queue_submit(queue.raw, &[vk_info.build()], vk::Fence::null())
                 .unwrap();

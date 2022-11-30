@@ -108,6 +108,36 @@ impl super::CommandEncoder {
         }
     }
 
+    pub(super) fn finish(&mut self) -> vk::CommandBuffer {
+        self.barrier();
+        let raw = self.buffers[0].raw;
+        unsafe { self.device.end_command_buffer(raw).unwrap() }
+        raw
+    }
+
+    fn barrier(&mut self) {
+        //TODO: figure out why TRANSFER_WRITE is not covered by MEMORY_WRITE
+        let barrier = vk::MemoryBarrier::builder()
+            .src_access_mask(vk::AccessFlags::MEMORY_WRITE | vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(
+                vk::AccessFlags::MEMORY_READ
+                    | vk::AccessFlags::MEMORY_WRITE
+                    | vk::AccessFlags::TRANSFER_READ,
+            )
+            .build();
+        unsafe {
+            self.device.cmd_pipeline_barrier(
+                self.buffers[0].raw,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[barrier],
+                &[],
+                &[],
+            );
+        }
+    }
+
     pub fn init_texture(&mut self, texture: super::Texture) {
         let format_info = super::describe_format(texture.format);
         let barrier = vk::ImageMemoryBarrier::builder()
@@ -136,6 +166,7 @@ impl super::CommandEncoder {
     }
 
     pub fn transfer(&mut self) -> super::TransferCommandEncoder {
+        self.barrier();
         super::TransferCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
@@ -143,6 +174,7 @@ impl super::CommandEncoder {
     }
 
     pub fn compute(&mut self) -> super::ComputeCommandEncoder {
+        self.barrier();
         super::ComputeCommandEncoder {
             cmd_buf: self.buffers[0],
             device: &self.device,
