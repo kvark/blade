@@ -1,10 +1,6 @@
-# Blade
+# Motivation
 
-Blade is an attempt to make graphics programming fun. It doesn't try to be comprehensive or safe. It assumes to be custom-modified.
-
-## Motivation
-
-### Goal
+## Goal
 
 Have a layer for graphics programming for those who know what they are doing, and who wants to get the stuff working fast. It's highly opinionated and ergonomic, but also designed specifically for mid to high range hardware and modern APIs. Today, the alternatives are either too high level (engines), too verbose (APIs directly), or just overly general.
 
@@ -12,7 +8,7 @@ Opinionated means the programming model is very limited. But if something is wri
 
 This is basically a near-perfect graphics layer for myself, which I'd be happy to use on my projects. I hope it can be useful to others, too.
 
-### Alternatives
+## Alternatives
 
 *wgpu* provides the most thorough graphics abstraction in Rust ecosystem. The main API is portable over pretty much all the (open) platforms, including the Web. However, it is very restricted (by being a least common denominator of the platforms), fairly verbose (possible to write against it directly, but not quite convenient), and has overhead (for safety and portability).
 
@@ -24,11 +20,11 @@ This is basically a near-perfect graphics layer for myself, which I'd be happy t
 
 Finally, we don't consider GL-based abstractions, such as *luminance*, since the API is largely outdated.
 
-## Design
+# Design
 
 The API is supposed to be minimal, targeting the capabilities of mid to high range machines on popular platforms. It's also totally unsafe, assuming the developer knows what they are doing. We realy on native API validation to assist developers.
 
-### Compromises
+## Compromises
 
 *Object lifetime* is explicit, no automatic tracking is done. This is similar to most of the alternatives.
 
@@ -45,7 +41,7 @@ In addition, several features may be added late or not added at all for the sake
   - vertex buffers (use storage buffers instead)
   - multisampling (too expensive)
 
-### Backends
+## Backends
 
 At first, the API should run on Vulkan and Metal. There is no DX12 support planned.
 
@@ -58,7 +54,7 @@ On Vulkan we'll require certain features to make the translation simple:
   - [VK_EXT_inline_uniform_block](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VK_EXT_inline_uniform_block.html)
   - [VK_KHR_dynamic_rendering](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VK_KHR_dynamic_rendering.html)
 
-### Assumptions
+## Assumptions
 
 Blade is based on different set of assumptions from wgpu-hal:
 - *safety*: wgpu places safety first and foremost. Self-sufficient, guarantees no UB. Blade is on the opposite - considers safety to be secondary. Expects users to rely on native API's validation and tooling.
@@ -73,7 +69,7 @@ Blade is based on different set of assumptions from wgpu-hal:
 
 In other words, this is a bit **experiment**. It may fail horribly, or it may open up new ideas and perspectives.
 
-## Performance
+# Performance
 
 Blade doesn't expect to be faster than wgpu-hal, but it's important to understand how much the difference is.
 
