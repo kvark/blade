@@ -1,5 +1,69 @@
 use std::{collections::HashMap, fmt::Write as _};
 
+mod plain {
+    use crate::{PlainContainer as Pc, PlainType as Pt, VectorSize as Vs};
+
+    trait AsScalar {
+        const TYPE: Pt;
+    }
+    impl AsScalar for f32 {
+        const TYPE: Pt = Pt::F32;
+    }
+    impl AsScalar for u32 {
+        const TYPE: Pt = Pt::U32;
+    }
+    impl AsScalar for i32 {
+        const TYPE: Pt = Pt::I32;
+    }
+
+    impl<S: AsScalar> crate::AsPlain for S {
+        const TYPE: Pt = S::TYPE;
+        const CONTAINER: Pc = Pc::Scalar;
+    }
+    impl<S: AsScalar> crate::AsPlain for [S; 2] {
+        const TYPE: Pt = S::TYPE;
+        const CONTAINER: Pc = Pc::Vector(Vs::Bi);
+    }
+    impl<S: AsScalar> crate::AsPlain for [S; 3] {
+        const TYPE: Pt = S::TYPE;
+        const CONTAINER: Pc = Pc::Vector(Vs::Tri);
+    }
+    impl<S: AsScalar> crate::AsPlain for [S; 4] {
+        const TYPE: Pt = S::TYPE;
+        const CONTAINER: Pc = Pc::Vector(Vs::Quad);
+    }
+
+    impl crate::AsPlain for [[f32; 2]; 2] {
+        const TYPE: Pt = Pt::F32;
+        const CONTAINER: Pc = Pc::Matrix(Vs::Bi, Vs::Bi);
+    }
+    impl crate::AsPlain for [[f32; 4]; 4] {
+        const TYPE: Pt = Pt::F32;
+        const CONTAINER: Pc = Pc::Matrix(Vs::Quad, Vs::Quad);
+    }
+
+    #[cfg(feature = "mint")]
+    impl<S: AsScalar> crate::AsPlain for mint::Vector2<S> {
+        const TYPE: Pt = S::TYPE;
+        const CONTAINER: Pc = Pc::Vector(Vs::Bi);
+    }
+    #[cfg(feature = "mint")]
+    impl<S: AsScalar> crate::AsPlain for mint::Vector3<S> {
+        const TYPE: Pt = S::TYPE;
+        const CONTAINER: Pc = Pc::Vector(Vs::Tri);
+    }
+    #[cfg(feature = "mint")]
+    impl<S: AsScalar> crate::AsPlain for mint::Vector4<S> {
+        const TYPE: Pt = S::TYPE;
+        const CONTAINER: Pc = Pc::Vector(Vs::Quad);
+    }
+    #[cfg(feature = "mint")]
+    impl<S: AsScalar> crate::AsPlain for mint::Quaternion<S> {
+        const TYPE: Pt = S::TYPE;
+        const CONTAINER: Pc = Pc::Vector(Vs::Quad);
+    }
+}
+
 fn map_view_dimension(dimension: super::TextureViewDimension) -> &'static str {
     use super::TextureViewDimension as Tvd;
     match dimension {
@@ -106,7 +170,7 @@ impl super::Context {
                 let is_uniform = binding_index == old_binding_index;
                 has_uniforms |= is_uniform;
                 if let Some(old) = substitutions.insert(
-                    name.as_str(),
+                    name,
                     Substitute {
                         group_index,
                         is_uniform,

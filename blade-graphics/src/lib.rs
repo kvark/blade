@@ -339,6 +339,11 @@ pub enum PlainContainer {
     Matrix(VectorSize, VectorSize),
 }
 
+pub trait AsPlain {
+    const TYPE: PlainType;
+    const CONTAINER: PlainContainer;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShaderBinding {
     Texture {
@@ -364,7 +369,7 @@ pub enum ShaderBinding {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShaderDataLayout {
-    pub bindings: Vec<(String, ShaderBinding)>,
+    pub bindings: Vec<(&'static str, ShaderBinding)>,
 }
 
 impl ShaderDataLayout {

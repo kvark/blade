@@ -6,6 +6,7 @@ const BUNNY_SIZE: f32 = 0.15 * 256.0;
 const GRAVITY: f32 = -9.8 * 100.0;
 const MAX_VELOCITY: f32 = 750.0;
 
+#[derive(blade::ShaderData)]
 struct Globals {
     mvp_transform: [[f32; 4]; 4],
     sprite_size: [f32; 2],
@@ -13,88 +14,11 @@ struct Globals {
     sprite_sampler: blade::Sampler,
 }
 
+#[derive(blade::ShaderData)]
 struct Locals {
     position: [f32; 2],
     velocity: [f32; 2],
     color: u32,
-}
-
-//TEMP
-impl blade::ShaderData for Globals {
-    fn layout() -> blade::ShaderDataLayout {
-        blade::ShaderDataLayout {
-            bindings: vec![
-                (
-                    "mvp_transform".to_string(),
-                    blade::ShaderBinding::Plain {
-                        ty: blade::PlainType::F32,
-                        container: blade::PlainContainer::Matrix(
-                            blade::VectorSize::Quad,
-                            blade::VectorSize::Quad,
-                        ),
-                    },
-                ),
-                (
-                    "sprite_size".to_string(),
-                    blade::ShaderBinding::Plain {
-                        ty: blade::PlainType::F32,
-                        container: blade::PlainContainer::Vector(blade::VectorSize::Bi),
-                    },
-                ),
-                (
-                    "sprite_texture".to_string(),
-                    blade::ShaderBinding::Texture {
-                        dimension: blade::TextureViewDimension::D2,
-                    },
-                ),
-                (
-                    "sprite_sampler".to_string(),
-                    blade::ShaderBinding::Sampler { comparison: false },
-                ),
-            ],
-        }
-    }
-    fn fill<E: blade::ShaderDataEncoder>(&self, mut encoder: E) {
-        encoder.set_plain(0, self.mvp_transform);
-        encoder.set_plain(1, self.sprite_size);
-        encoder.set_texture(2, self.sprite_texture);
-        encoder.set_sampler(3, self.sprite_sampler);
-    }
-}
-
-impl blade::ShaderData for Locals {
-    fn layout() -> blade::ShaderDataLayout {
-        blade::ShaderDataLayout {
-            bindings: vec![
-                (
-                    "position".to_string(),
-                    blade::ShaderBinding::Plain {
-                        ty: blade::PlainType::F32,
-                        container: blade::PlainContainer::Vector(blade::VectorSize::Bi),
-                    },
-                ),
-                (
-                    "velocity".to_string(),
-                    blade::ShaderBinding::Plain {
-                        ty: blade::PlainType::F32,
-                        container: blade::PlainContainer::Vector(blade::VectorSize::Bi),
-                    },
-                ),
-                (
-                    "color".to_string(),
-                    blade::ShaderBinding::Plain {
-                        ty: blade::PlainType::U32,
-                        container: blade::PlainContainer::Scalar,
-                    },
-                ),
-            ],
-        }
-    }
-    fn fill<E: blade::ShaderDataEncoder>(&self, mut encoder: E) {
-        encoder.set_plain(0, self.position);
-        encoder.set_plain(1, self.velocity);
-        encoder.set_plain(2, self.color);
-    }
 }
 
 struct Example {

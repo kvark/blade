@@ -19,8 +19,11 @@ license = "MIT"
 repository = "https://github.com/kvark/blade"
 readme = "docs/README.md"
 
+[features]
+"mint" = ["blade-graphics/mint"]
+
 [dependencies]
-#blade-macros = { version = "0.0.1", path = "blade-macros" }
+blade-macros = { version = "0.0.1", path = "blade-macros" }
 blade-graphics = { version = "0.0.1", path = "blade-graphics" }
 
 [dev-dependencies]

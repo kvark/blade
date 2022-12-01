@@ -15,20 +15,20 @@ impl blade::ShaderData for Globals {
         blade::ShaderDataLayout {
             bindings: vec![
                 (
-                    "modulator".to_string(),
+                    "modulator",
                     blade::ShaderBinding::Plain {
                         ty: blade::PlainType::F32,
                         container: blade::PlainContainer::Vector(blade::VectorSize::Quad),
                     },
                 ),
                 (
-                    "input".to_string(),
+                    "input",
                     blade::ShaderBinding::Texture {
                         dimension: blade::TextureViewDimension::D2,
                     },
                 ),
                 (
-                    "output".to_string(),
+                    "output",
                     blade::ShaderBinding::TextureStorage {
                         format: blade::TextureFormat::Rgba8Unorm,
                         dimension: blade::TextureViewDimension::D2,
