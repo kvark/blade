@@ -1,0 +1,46 @@
+name: check
+
+on: [pull_request, push]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        platform: [ubuntu-latest, windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+    - uses: actions/checkout@v1
+    - uses: actions-rs/cargo@v1
+
+    - name: Select Rust channel
+      uses: actions-rs/toolchain@v1
+      with:
+          profile: minimal
+          toolchain: stable
+
+    - name: Check Basics
+      run: cargo check --workspace --no-default-features
+
+    - name: Test All
+      run: cargo test --workspace --all-features
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v3
+
+      - name: install rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          components: rustfmt
+
+      - name: run rustfmt
+        run: |
+          cargo fmt -- --check
