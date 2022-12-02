@@ -31,6 +31,11 @@ cargo run --example minimal
 
 ### Vulkan Portability
 
+First, ensure to load the environment from the Vulkan SDK:
+```bash
+cd /opt/VulkanSDK && source setup-env.sh
+```
+
 Vulkan backend can be forced on using "portability" config flag. Example invocation that produces a portability build into another target folder:
 ```bash
 RUSTFLAGS="--cfg portability" CARGO_TARGET_DIR=./target-vk cargo test

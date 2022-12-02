@@ -739,6 +739,7 @@ pub enum FinishOp {
     Store,
     Discard,
     ResolveTo(TextureView),
+    Ignore,
 }
 
 #[derive(Debug)]

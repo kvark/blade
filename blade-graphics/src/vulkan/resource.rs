@@ -33,7 +33,7 @@ impl super::Context {
             manager
                 .allocator
                 .alloc(
-                    AshMemoryDevice::wrap(&self.device),
+                    AshMemoryDevice::wrap(&self.device.core),
                     gpu_alloc::Request {
                         size: requirements.size,
                         align_mask: requirements.alignment - 1,
@@ -49,7 +49,7 @@ impl super::Context {
             crate::Memory::Shared | crate::Memory::Upload => unsafe {
                 block
                     .map(
-                        AshMemoryDevice::wrap(&self.device),
+                        AshMemoryDevice::wrap(&self.device.core),
                         0,
                         requirements.size as usize,
                     )
@@ -71,7 +71,7 @@ impl super::Context {
         unsafe {
             manager
                 .allocator
-                .dealloc(AshMemoryDevice::wrap(&self.device), block);
+                .dealloc(AshMemoryDevice::wrap(&self.device.core), block);
         }
     }
 
@@ -89,12 +89,13 @@ impl super::Context {
             )
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-        let raw = unsafe { self.device.create_buffer(&vk_info, None).unwrap() };
-        let requirements = unsafe { self.device.get_buffer_memory_requirements(raw) };
+        let raw = unsafe { self.device.core.create_buffer(&vk_info, None).unwrap() };
+        let requirements = unsafe { self.device.core.get_buffer_memory_requirements(raw) };
         let allocation = self.allocate_memory(requirements, desc.memory);
 
         unsafe {
             self.device
+                .core
                 .bind_buffer_memory(raw, allocation.memory, allocation.offset)
                 .unwrap()
         };
@@ -110,7 +111,7 @@ impl super::Context {
     }
 
     pub fn destroy_buffer(&self, buffer: super::Buffer) {
-        unsafe { self.device.destroy_buffer(buffer.raw, None) };
+        unsafe { self.device.core.destroy_buffer(buffer.raw, None) };
         self.free_memory(buffer.memory_handle);
     }
 
@@ -137,12 +138,13 @@ impl super::Context {
             .usage(map_texture_usage(desc.usage, format_info.aspects))
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-        let raw = unsafe { self.device.create_image(&vk_info, None).unwrap() };
-        let requirements = unsafe { self.device.get_image_memory_requirements(raw) };
+        let raw = unsafe { self.device.core.create_image(&vk_info, None).unwrap() };
+        let requirements = unsafe { self.device.core.get_image_memory_requirements(raw) };
         let allocation = self.allocate_memory(requirements, crate::Memory::Device);
 
         unsafe {
             self.device
+                .core
                 .bind_image_memory(raw, allocation.memory, allocation.offset)
                 .unwrap()
         };
@@ -153,12 +155,13 @@ impl super::Context {
         super::Texture {
             raw,
             memory_handle: allocation.handle,
+            target_size: [desc.size.width as u16, desc.size.height as u16],
             format: desc.format,
         }
     }
 
     pub fn destroy_texture(&self, texture: super::Texture) {
-        unsafe { self.device.destroy_image(texture.raw, None) };
+        unsafe { self.device.core.destroy_image(texture.raw, None) };
         self.free_memory(texture.memory_handle);
     }
 
@@ -172,16 +175,23 @@ impl super::Context {
             .format(format_info.raw)
             .subresource_range(subresource_range);
 
-        let raw = unsafe { self.device.create_image_view(&vk_info, None).unwrap() };
+        let raw = unsafe { self.device.core.create_image_view(&vk_info, None).unwrap() };
         if !desc.name.is_empty() {
             self.set_object_name(vk::ObjectType::IMAGE_VIEW, raw, desc.name);
         }
 
-        super::TextureView { raw }
+        super::TextureView {
+            raw,
+            target_size: [
+                (desc.texture.target_size[0] >> desc.subresources.base_mip_level).max(1),
+                (desc.texture.target_size[1] >> desc.subresources.base_mip_level).max(1),
+            ],
+            aspects: format_info.aspects,
+        }
     }
 
     pub fn destroy_texture_view(&self, view: super::TextureView) {
-        unsafe { self.device.destroy_image_view(view.raw, None) };
+        unsafe { self.device.core.destroy_image_view(view.raw, None) };
     }
 
     pub fn create_sampler(&self, desc: crate::SamplerDesc) -> super::Sampler {
@@ -211,7 +221,7 @@ impl super::Context {
             vk_info = vk_info.border_color(map_border_color(color));
         }
 
-        let raw = unsafe { self.device.create_sampler(&vk_info, None).unwrap() };
+        let raw = unsafe { self.device.core.create_sampler(&vk_info, None).unwrap() };
         if !desc.name.is_empty() {
             self.set_object_name(vk::ObjectType::SAMPLER, raw, desc.name);
         }
@@ -220,7 +230,7 @@ impl super::Context {
     }
 
     pub fn destroy_sampler(&self, sampler: super::Sampler) {
-        unsafe { self.device.destroy_sampler(sampler.raw, None) };
+        unsafe { self.device.core.destroy_sampler(sampler.raw, None) };
     }
 }
 

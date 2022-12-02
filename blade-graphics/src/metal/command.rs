@@ -159,7 +159,9 @@ impl super::CommandEncoder {
                 at_descriptor.set_load_action(load_action);
 
                 let store_action = match rt.finish_op {
-                    crate::FinishOp::Store => metal::MTLStoreAction::Store,
+                    crate::FinishOp::Store | crate::FinishOp::Ignore => {
+                        metal::MTLStoreAction::Store
+                    }
                     crate::FinishOp::Discard => metal::MTLStoreAction::DontCare,
                     crate::FinishOp::ResolveTo(ref view) => {
                         at_descriptor.set_resolve_texture(Some(view.as_ref()));
@@ -185,7 +187,9 @@ impl super::CommandEncoder {
                     }
                 };
                 let store_action = match rt.finish_op {
-                    crate::FinishOp::Store => metal::MTLStoreAction::Store,
+                    crate::FinishOp::Store | crate::FinishOp::Ignore => {
+                        metal::MTLStoreAction::Store
+                    }
                     crate::FinishOp::Discard => metal::MTLStoreAction::DontCare,
                     crate::FinishOp::ResolveTo(_) => panic!("Can't resolve depth texture"),
                 };

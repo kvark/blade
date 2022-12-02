@@ -89,6 +89,44 @@ fn make_buffer_image_copy(
     }
 }
 
+fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo {
+    let mut builder = vk::RenderingAttachmentInfo::builder()
+        .image_view(rt.view.raw)
+        .image_layout(vk::ImageLayout::GENERAL)
+        .load_op(vk::AttachmentLoadOp::LOAD);
+
+    if let crate::InitOp::Clear(color) = rt.init_op {
+        let cv = if rt.view.aspects.contains(super::FormatAspects::COLOR) {
+            vk::ClearValue {
+                color: match color {
+                    crate::TextureColor::TransparentBlack => vk::ClearColorValue::default(),
+                    crate::TextureColor::OpaqueBlack => vk::ClearColorValue {
+                        float32: [0.0, 0.0, 0.0, 1.0],
+                    },
+                    crate::TextureColor::White => vk::ClearColorValue { float32: [1.0; 4] },
+                },
+            }
+        } else {
+            vk::ClearValue {
+                depth_stencil: match color {
+                    crate::TextureColor::TransparentBlack => vk::ClearDepthStencilValue::default(),
+                    crate::TextureColor::OpaqueBlack => vk::ClearDepthStencilValue {
+                        depth: 1.0,
+                        stencil: 0,
+                    },
+                    crate::TextureColor::White => vk::ClearDepthStencilValue {
+                        depth: 1.0,
+                        stencil: !0,
+                    },
+                },
+            }
+        };
+        builder = builder.load_op(vk::AttachmentLoadOp::CLEAR).clear_value(cv);
+    }
+
+    builder.build()
+}
+
 impl super::CommandEncoder {
     pub fn start(&mut self) {
         self.buffers.rotate_left(1);
@@ -98,12 +136,14 @@ impl super::CommandEncoder {
             .build();
         unsafe {
             self.device
+                .core
                 .reset_descriptor_pool(
                     self.buffers[0].descriptor_pool,
                     vk::DescriptorPoolResetFlags::empty(),
                 )
                 .unwrap();
             self.device
+                .core
                 .begin_command_buffer(self.buffers[0].raw, &vk_info)
                 .unwrap();
         }
@@ -112,7 +152,7 @@ impl super::CommandEncoder {
     pub(super) fn finish(&mut self) -> vk::CommandBuffer {
         self.barrier();
         let raw = self.buffers[0].raw;
-        unsafe { self.device.end_command_buffer(raw).unwrap() }
+        unsafe { self.device.core.end_command_buffer(raw).unwrap() }
         raw
     }
 
@@ -127,7 +167,7 @@ impl super::CommandEncoder {
             )
             .build();
         unsafe {
-            self.device.cmd_pipeline_barrier(
+            self.device.core.cmd_pipeline_barrier(
                 self.buffers[0].raw,
                 vk::PipelineStageFlags::ALL_COMMANDS,
                 vk::PipelineStageFlags::ALL_COMMANDS,
@@ -154,7 +194,7 @@ impl super::CommandEncoder {
             })
             .build();
         unsafe {
-            self.device.cmd_pipeline_barrier(
+            self.device.core.cmd_pipeline_barrier(
                 self.buffers[0].raw,
                 vk::PipelineStageFlags::TOP_OF_PIPE,
                 vk::PipelineStageFlags::ALL_COMMANDS,
@@ -183,7 +223,7 @@ impl super::CommandEncoder {
             })
             .build();
         unsafe {
-            self.device.cmd_pipeline_barrier(
+            self.device.core.cmd_pipeline_barrier(
                 self.buffers[0].raw,
                 vk::PipelineStageFlags::TOP_OF_PIPE,
                 vk::PipelineStageFlags::ALL_COMMANDS,
@@ -211,6 +251,66 @@ impl super::CommandEncoder {
             update_data: &mut self.update_data,
         }
     }
+
+    pub fn render(&mut self, targets: crate::RenderTargetSet) -> super::RenderCommandEncoder {
+        let mut target_size = [0u16; 2];
+        let mut color_attachments = Vec::with_capacity(targets.colors.len());
+        let depth_stencil_attachment;
+        for rt in targets.colors {
+            target_size = rt.view.target_size;
+            color_attachments.push(map_render_target(rt));
+        }
+
+        let mut rendering_info = vk::RenderingInfoKHR::builder()
+            .layer_count(1)
+            .color_attachments(&color_attachments);
+        if let Some(rt) = targets.depth_stencil {
+            target_size = rt.view.target_size;
+            depth_stencil_attachment = map_render_target(&rt);
+            if rt.view.aspects.contains(super::FormatAspects::DEPTH) {
+                rendering_info = rendering_info.depth_attachment(&depth_stencil_attachment);
+            }
+            if rt.view.aspects.contains(super::FormatAspects::STENCIL) {
+                rendering_info = rendering_info.stencil_attachment(&depth_stencil_attachment);
+            }
+        }
+
+        let render_area = vk::Rect2D {
+            offset: Default::default(),
+            extent: vk::Extent2D {
+                width: target_size[0] as u32,
+                height: target_size[1] as u32,
+            },
+        };
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: target_size[0] as f32,
+            height: -(target_size[1] as f32),
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        rendering_info = rendering_info.render_area(render_area);
+
+        let cmd_buf = self.buffers[0];
+        unsafe {
+            self.device
+                .core
+                .cmd_set_viewport(cmd_buf.raw, 0, &[viewport]);
+            self.device
+                .core
+                .cmd_set_scissor(cmd_buf.raw, 0, &[render_area]);
+            self.device
+                .dynamic_rendering
+                .cmd_begin_rendering(cmd_buf.raw, &rendering_info);
+        };
+
+        super::RenderCommandEncoder {
+            cmd_buf,
+            device: &self.device,
+            update_data: &mut self.update_data,
+        }
+    }
 }
 
 impl super::TransferCommandEncoder<'_> {
@@ -227,6 +327,7 @@ impl super::TransferCommandEncoder<'_> {
         };
         unsafe {
             self.device
+                .core
                 .cmd_copy_buffer(self.raw, src.buffer.raw, dst.buffer.raw, &[copy])
         };
     }
@@ -245,7 +346,7 @@ impl super::TransferCommandEncoder<'_> {
             extent: super::map_extent_3d(&size),
         };
         unsafe {
-            self.device.cmd_copy_image(
+            self.device.core.cmd_copy_image(
                 self.raw,
                 src.texture.raw,
                 vk::ImageLayout::GENERAL,
@@ -265,7 +366,7 @@ impl super::TransferCommandEncoder<'_> {
     ) {
         let copy = make_buffer_image_copy(&src, bytes_per_row, &dst, &size);
         unsafe {
-            self.device.cmd_copy_buffer_to_image(
+            self.device.core.cmd_copy_buffer_to_image(
                 self.raw,
                 src.buffer.raw,
                 dst.texture.raw,
@@ -284,7 +385,7 @@ impl super::TransferCommandEncoder<'_> {
     ) {
         let copy = make_buffer_image_copy(&dst, bytes_per_row, &src, &size);
         unsafe {
-            self.device.cmd_copy_image_to_buffer(
+            self.device.core.cmd_copy_image_to_buffer(
                 self.raw,
                 src.texture.raw,
                 vk::ImageLayout::GENERAL,
@@ -301,7 +402,7 @@ impl<'a> super::ComputeCommandEncoder<'a> {
         pipeline: &'p super::ComputePipeline,
     ) -> super::PipelineEncoder<'b, 'p> {
         unsafe {
-            self.device.cmd_bind_pipeline(
+            self.device.core.cmd_bind_pipeline(
                 self.cmd_buf.raw,
                 vk::PipelineBindPoint::COMPUTE,
                 pipeline.raw,
@@ -313,6 +414,37 @@ impl<'a> super::ComputeCommandEncoder<'a> {
             device: self.device,
             update_data: self.update_data,
         }
+    }
+}
+
+impl<'a> super::RenderCommandEncoder<'a> {
+    pub fn with<'b, 'p>(
+        &'b mut self,
+        pipeline: &'p super::RenderPipeline,
+    ) -> super::PipelineEncoder<'b, 'p> {
+        unsafe {
+            self.device.core.cmd_bind_pipeline(
+                self.cmd_buf.raw,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.raw,
+            )
+        };
+        super::PipelineEncoder {
+            cmd_buf: self.cmd_buf,
+            layout: &pipeline.layout,
+            device: self.device,
+            update_data: self.update_data,
+        }
+    }
+}
+
+impl Drop for super::RenderCommandEncoder<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.device
+                .dynamic_rendering
+                .cmd_end_rendering(self.cmd_buf.raw)
+        };
     }
 }
 
@@ -333,14 +465,15 @@ impl super::PipelineEncoder<'_, '_> {
         unsafe {
             let sets = self
                 .device
+                .core
                 .allocate_descriptor_sets(&descriptor_set_info)
                 .unwrap();
-            self.device.update_descriptor_set_with_template(
+            self.device.core.update_descriptor_set_with_template(
                 sets[0],
                 dsl.update_template,
                 self.update_data.as_ptr() as *const _,
             );
-            self.device.cmd_bind_descriptor_sets(
+            self.device.core.cmd_bind_descriptor_sets(
                 self.cmd_buf.raw,
                 vk::PipelineBindPoint::COMPUTE,
                 self.layout.raw,
@@ -354,7 +487,26 @@ impl super::PipelineEncoder<'_, '_> {
     pub fn dispatch(&mut self, groups: [u32; 3]) {
         unsafe {
             self.device
+                .core
                 .cmd_dispatch(self.cmd_buf.raw, groups[0], groups[1], groups[2])
+        };
+    }
+
+    pub fn draw(
+        &mut self,
+        start_vertex: u32,
+        vertex_count: u32,
+        start_instance: u32,
+        instance_count: u32,
+    ) {
+        unsafe {
+            self.device.core.cmd_draw(
+                self.cmd_buf.raw,
+                vertex_count,
+                instance_count,
+                start_vertex,
+                start_instance,
+            )
         };
     }
 }

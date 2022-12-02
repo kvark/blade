@@ -57,7 +57,12 @@ impl super::Context {
 
         let vk_info = vk::ShaderModuleCreateInfo::builder().code(&spv);
 
-        let vk_module = unsafe { self.device.create_shader_module(&vk_info, None).unwrap() };
+        let vk_module = unsafe {
+            self.device
+                .core
+                .create_shader_module(&vk_info, None)
+                .unwrap()
+        };
 
         let vk_stage = match naga_stage {
             naga::ShaderStage::Compute => vk::ShaderStageFlags::COMPUTE,
@@ -177,6 +182,7 @@ impl super::Context {
         let set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&vk_bindings);
         let raw = unsafe {
             self.device
+                .core
                 .create_descriptor_set_layout(&set_layout_info, None)
                 .unwrap()
         };
@@ -187,6 +193,7 @@ impl super::Context {
             .descriptor_set_layout(raw);
         let update_template = unsafe {
             self.device
+                .core
                 .create_descriptor_update_template(&template_create_info, None)
                 .unwrap()
         };
@@ -212,7 +219,12 @@ impl super::Context {
         }
 
         let vk_info = vk::PipelineLayoutCreateInfo::builder().set_layouts(&vk_set_layouts);
-        let raw = unsafe { self.device.create_pipeline_layout(&vk_info, None).unwrap() };
+        let raw = unsafe {
+            self.device
+                .core
+                .create_pipeline_layout(&vk_info, None)
+                .unwrap()
+        };
 
         super::PipelineLayout {
             raw,
@@ -247,12 +259,13 @@ impl super::Context {
 
         let mut raw_vec = unsafe {
             self.device
+                .core
                 .create_compute_pipelines(vk::PipelineCache::null(), &vk_infos, None)
                 .unwrap()
         };
         let raw = raw_vec.pop().unwrap();
 
-        unsafe { self.device.destroy_shader_module(cs.vk_module, None) };
+        unsafe { self.device.core.destroy_shader_module(cs.vk_module, None) };
 
         if !desc.name.is_empty() {
             self.set_object_name(vk::ObjectType::PIPELINE, raw, desc.name);

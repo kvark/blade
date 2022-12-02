@@ -9,13 +9,17 @@ mod command;
 mod pipeline;
 mod resource;
 
-struct InstanceExt {
+struct Instance {
+    core: ash::Instance,
     debug_utils: ext::DebugUtils,
     get_physical_device_properties2: khr::GetPhysicalDeviceProperties2,
 }
 
-struct DeviceExt {
+#[derive(Clone)]
+struct Device {
+    core: ash::Device,
     timeline_semaphore: khr::TimelineSemaphore,
+    dynamic_rendering: khr::DynamicRendering,
 }
 
 struct MemoryManager {
@@ -38,6 +42,7 @@ pub struct Frame {
     view: vk::ImageView,
     format: crate::TextureFormat,
     acquire_semaphore: vk::Semaphore,
+    target_size: [u16; 2],
 }
 
 impl Frame {
@@ -45,12 +50,17 @@ impl Frame {
         Texture {
             raw: self.image,
             memory_handle: !0,
+            target_size: self.target_size,
             format: self.format,
         }
     }
 
     pub fn texture_view(&self) -> TextureView {
-        TextureView { raw: self.view }
+        TextureView {
+            raw: self.view,
+            target_size: self.target_size,
+            aspects: FormatAspects::COLOR,
+        }
     }
 }
 
@@ -68,15 +78,13 @@ fn map_timeout(millis: u32) -> u64 {
 
 pub struct Context {
     memory: Mutex<MemoryManager>,
-    device_ext: DeviceExt,
-    device: ash::Device,
+    device: Device,
     queue_family_index: u32,
     queue: Mutex<Queue>,
     surface: Option<Mutex<Surface>>,
     physical_device: vk::PhysicalDevice,
     naga_flags: spv::WriterFlags,
-    instance_ext: InstanceExt,
-    _instance: ash::Instance,
+    instance: Instance,
     _entry: ash::Entry,
 }
 
@@ -104,12 +112,15 @@ struct BlockInfo {
 pub struct Texture {
     raw: vk::Image,
     memory_handle: usize,
+    target_size: [u16; 2],
     format: crate::TextureFormat,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextureView {
     raw: vk::ImageView,
+    target_size: [u16; 2],
+    aspects: FormatAspects,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -146,6 +157,7 @@ impl ComputePipeline {
 
 pub struct RenderPipeline {
     raw: vk::Pipeline,
+    layout: PipelineLayout,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -157,28 +169,28 @@ struct CommandBuffer {
 pub struct CommandEncoder {
     pool: vk::CommandPool,
     buffers: Box<[CommandBuffer]>,
-    device: ash::Device,
+    device: Device,
     update_data: Vec<u8>,
     present_index: Option<u32>,
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
-    device: &'a ash::Device,
+    device: &'a Device,
 }
 pub struct ComputeCommandEncoder<'a> {
     cmd_buf: CommandBuffer,
-    device: &'a ash::Device,
+    device: &'a Device,
     update_data: &'a mut Vec<u8>,
 }
 pub struct RenderCommandEncoder<'a> {
     cmd_buf: CommandBuffer,
-    device: &'a ash::Device,
+    device: &'a Device,
     update_data: &'a mut Vec<u8>,
 }
 pub struct PipelineEncoder<'a, 'p> {
     cmd_buf: CommandBuffer,
     layout: &'p PipelineLayout,
-    device: &'a ash::Device,
+    device: &'a Device,
     update_data: &'a mut Vec<u8>,
 }
 
@@ -192,9 +204,8 @@ struct AdapterCapabilities {
 
 unsafe fn inspect_adapter(
     phd: vk::PhysicalDevice,
-    _instance: &ash::Instance,
-    extensions: &InstanceExt,
-    _driver_api_version: u32,
+    instance: &Instance,
+    driver_api_version: u32,
 ) -> Option<AdapterCapabilities> {
     let mut inline_uniform_block_properties =
         vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
@@ -203,17 +214,28 @@ unsafe fn inspect_adapter(
     let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::builder()
         .push_next(&mut inline_uniform_block_properties)
         .push_next(&mut timeline_semaphore_properties);
-    extensions
+    instance
         .get_physical_device_properties2
         .get_physical_device_properties2(phd, &mut properties2_khr);
+
+    let api_version = properties2_khr
+        .properties
+        .api_version
+        .min(driver_api_version);
+    if api_version < vk::API_VERSION_1_1 {
+        log::info!("\tRejected for API version {}", api_version);
+        return None;
+    }
 
     let mut inline_uniform_block_features =
         vk::PhysicalDeviceInlineUniformBlockFeaturesEXT::default();
     let mut timeline_semaphore_features = vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR::default();
+    let mut dynamic_rendering_features = vk::PhysicalDeviceDynamicRenderingFeaturesKHR::default();
     let mut features2_khr = vk::PhysicalDeviceFeatures2::builder()
         .push_next(&mut inline_uniform_block_features)
-        .push_next(&mut timeline_semaphore_features);
-    extensions
+        .push_next(&mut timeline_semaphore_features)
+        .push_next(&mut dynamic_rendering_features);
+    instance
         .get_physical_device_properties2
         .get_physical_device_features2(phd, &mut features2_khr);
 
@@ -239,6 +261,14 @@ unsafe fn inspect_adapter(
             "\tRejected for timeline semaphore. Properties = {:?}, Features = {:?}",
             timeline_semaphore_properties,
             timeline_semaphore_features,
+        );
+        return None;
+    }
+
+    if dynamic_rendering_features.dynamic_rendering == 0 {
+        log::info!(
+            "\tRejected for dynamic rendering. Features = {:?}",
+            dynamic_rendering_features,
         );
         return None;
     }
@@ -299,7 +329,7 @@ impl Context {
         let is_vulkan_portability =
             supported_instance_extensions.contains(&vk::KhrPortabilityEnumerationFn::name());
 
-        let instance = {
+        let core_instance = {
             let mut create_flags = vk::InstanceCreateFlags::empty();
 
             let mut instance_extensions = vec![
@@ -345,25 +375,26 @@ impl Context {
             entry.create_instance(&create_info, None).unwrap()
         };
 
-        let instance_ext = InstanceExt {
-            debug_utils: ext::DebugUtils::new(&entry, &instance),
+        let instance = Instance {
+            debug_utils: ext::DebugUtils::new(&entry, &core_instance),
             get_physical_device_properties2: khr::GetPhysicalDeviceProperties2::new(
-                &entry, &instance,
+                &entry,
+                &core_instance,
             ),
+            core: core_instance,
         };
 
-        let physical_devices = instance.enumerate_physical_devices().unwrap();
+        let physical_devices = instance.core.enumerate_physical_devices().unwrap();
         let (physical_device, capabilities) = physical_devices
             .into_iter()
             .find_map(|phd| {
-                inspect_adapter(phd, &instance, &instance_ext, driver_api_version)
-                    .map(|caps| (phd, caps))
+                inspect_adapter(phd, &instance, driver_api_version).map(|caps| (phd, caps))
             })
             .ok_or(super::NotSupportedError)?;
 
         let queue_family_index = 0; //TODO
 
-        let device = {
+        let device_core = {
             let family_info = vk::DeviceQueueCreateInfo::builder()
                 .queue_family_index(queue_family_index)
                 .queue_priorities(&[1.0])
@@ -374,7 +405,11 @@ impl Context {
                 vk::ExtInlineUniformBlockFn::name(),
                 vk::KhrTimelineSemaphoreFn::name(),
                 vk::KhrDescriptorUpdateTemplateFn::name(),
+                vk::KhrDynamicRenderingFn::name(),
             ];
+            if surface_handles.is_some() {
+                device_extensions.push(vk::KhrSwapchainFn::name());
+            }
             if is_vulkan_portability {
                 device_extensions.push(vk::KhrPortabilitySubsetFn::name());
             }
@@ -389,22 +424,30 @@ impl Context {
                     .inline_uniform_block(true);
             let mut khr_timeline_semaphore =
                 vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR::builder().timeline_semaphore(true);
+            let mut khr_dynamic_rendering =
+                vk::PhysicalDeviceDynamicRenderingFeaturesKHR::builder().dynamic_rendering(true);
             let device_create_info = vk::DeviceCreateInfo::builder()
                 .queue_create_infos(&family_infos)
                 .enabled_extension_names(&str_pointers)
                 .push_next(&mut ext_inline_uniform_block)
-                .push_next(&mut khr_timeline_semaphore);
+                .push_next(&mut khr_timeline_semaphore)
+                .push_next(&mut khr_dynamic_rendering);
             instance
+                .core
                 .create_device(physical_device, &device_create_info, None)
                 .unwrap()
         };
 
-        let device_ext = DeviceExt {
-            timeline_semaphore: khr::TimelineSemaphore::new(&instance, &device),
+        let device = Device {
+            timeline_semaphore: khr::TimelineSemaphore::new(&instance.core, &device_core),
+            dynamic_rendering: khr::DynamicRendering::new(&instance.core, &device_core),
+            core: device_core,
         };
 
         let memory_manager = {
-            let mem_properties = instance.get_physical_device_memory_properties(physical_device);
+            let mem_properties = instance
+                .core
+                .get_physical_device_memory_properties(physical_device);
             let memory_types =
                 &mem_properties.memory_types[..mem_properties.memory_type_count as usize];
             let limits = &capabilities.properties.limits;
@@ -452,7 +495,7 @@ impl Context {
             }
         };
 
-        let queue = device.get_device_queue(queue_family_index, 0);
+        let queue = device.core.get_device_queue(queue_family_index, 0);
         let last_progress = 0;
         let mut timeline_info = vk::SemaphoreTypeCreateInfo::builder()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
@@ -461,22 +504,25 @@ impl Context {
             vk::SemaphoreCreateInfo::builder().push_next(&mut timeline_info);
         let timeline_semaphore = unsafe {
             device
+                .core
                 .create_semaphore(&timeline_semaphore_create_info, None)
                 .unwrap()
         };
         let present_semaphore_create_info = vk::SemaphoreCreateInfo::builder();
         let present_semaphore = unsafe {
             device
+                .core
                 .create_semaphore(&present_semaphore_create_info, None)
                 .unwrap()
         };
 
         let surface = surface_handles.map(|(rwh, rdh)| {
-            let extension = khr::Swapchain::new(&instance, &device);
-            let raw = ash_window::create_surface(&entry, &instance, rdh, rwh, None).unwrap();
+            let extension = khr::Swapchain::new(&instance.core, &device.core);
+            let raw = ash_window::create_surface(&entry, &instance.core, rdh, rwh, None).unwrap();
             let semaphore_create_info = vk::SemaphoreCreateInfo::builder();
             let next_semaphore = unsafe {
                 device
+                    .core
                     .create_semaphore(&semaphore_create_info, None)
                     .unwrap()
             };
@@ -496,7 +542,6 @@ impl Context {
 
         Ok(Context {
             memory: Mutex::new(memory_manager),
-            device_ext,
             device,
             queue_family_index,
             queue: Mutex::new(Queue {
@@ -508,8 +553,7 @@ impl Context {
             surface,
             physical_device,
             naga_flags,
-            instance_ext,
-            _instance: instance,
+            instance,
             _entry: entry,
         })
     }
@@ -557,11 +601,21 @@ impl Context {
 
         let pool_info = vk::CommandPoolCreateInfo::builder()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
-        let pool = unsafe { self.device.create_command_pool(&pool_info, None).unwrap() };
+        let pool = unsafe {
+            self.device
+                .core
+                .create_command_pool(&pool_info, None)
+                .unwrap()
+        };
         let cmd_buf_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(pool)
             .command_buffer_count(desc.buffer_count);
-        let cmd_buffers = unsafe { self.device.allocate_command_buffers(&cmd_buf_info).unwrap() };
+        let cmd_buffers = unsafe {
+            self.device
+                .core
+                .allocate_command_buffers(&cmd_buf_info)
+                .unwrap()
+        };
         let buffers = cmd_buffers
             .into_iter()
             .map(|raw| {
@@ -577,6 +631,7 @@ impl Context {
                     .push_next(&mut inline_uniform_block_info);
                 let descriptor_pool = unsafe {
                     self.device
+                        .core
                         .create_descriptor_pool(&descriptor_pool_info, None)
                         .unwrap()
                 };
@@ -600,12 +655,18 @@ impl Context {
             let raw_cmd_buffers = [cmd_buf.raw];
             unsafe {
                 self.device
+                    .core
                     .free_command_buffers(command_encoder.pool, &raw_cmd_buffers);
                 self.device
+                    .core
                     .destroy_descriptor_pool(cmd_buf.descriptor_pool, None);
             }
         }
-        unsafe { self.device.destroy_command_pool(command_encoder.pool, None) };
+        unsafe {
+            self.device
+                .core
+                .destroy_command_pool(command_encoder.pool, None)
+        };
     }
 
     pub fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
@@ -629,6 +690,7 @@ impl Context {
             .push_next(&mut timeline_info);
         unsafe {
             self.device
+                .core
                 .queue_submit(queue.raw, &[vk_info.build()], vk::Fence::null())
                 .unwrap();
         }
@@ -664,7 +726,7 @@ impl Context {
             .values(&semaphore_values);
         let timeout_ns = map_timeout(timeout_ms);
         unsafe {
-            self.device_ext
+            self.device
                 .timeline_semaphore
                 .wait_semaphores(&wait_info, timeout_ns)
                 .is_ok()
@@ -678,9 +740,9 @@ impl Context {
             .object_handle(object.as_raw())
             .object_name(&name_cstr);
         let _ = unsafe {
-            self.instance_ext
+            self.instance
                 .debug_utils
-                .set_debug_utils_object_name(self.device.handle(), &name_info)
+                .set_debug_utils_object_name(self.device.core.handle(), &name_info)
         };
     }
 }
@@ -699,11 +761,14 @@ impl Context {
                 width: config.size.width,
                 height: config.size.height,
             })
+            .image_array_layers(1)
             .image_usage(resource::map_texture_usage(
                 config.usage,
                 FormatAspects::COLOR,
             ))
             .queue_family_indices(&queue_families)
+            .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
+            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .old_swapchain(surface.swapchain);
         surface.swapchain = unsafe {
             surface
@@ -714,8 +779,10 @@ impl Context {
 
         for frame in surface.frames.drain(..) {
             unsafe {
-                self.device.destroy_image_view(frame.view, None);
-                self.device.destroy_semaphore(frame.acquire_semaphore, None);
+                self.device.core.destroy_image_view(frame.view, None);
+                self.device
+                    .core
+                    .destroy_semaphore(frame.acquire_semaphore, None);
             }
         }
         let images = unsafe {
@@ -724,6 +791,7 @@ impl Context {
                 .get_swapchain_images(surface.swapchain)
                 .unwrap()
         };
+        let target_size = [config.size.width as u16, config.size.height as u16];
         let subresource_range = vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             base_mip_level: 0,
@@ -739,12 +807,14 @@ impl Context {
                 .subresource_range(subresource_range);
             let view = unsafe {
                 self.device
+                    .core
                     .create_image_view(&view_create_info, None)
                     .unwrap()
             };
             let semaphore_create_info = vk::SemaphoreCreateInfo::builder();
             let acquire_semaphore = unsafe {
                 self.device
+                    .core
                     .create_semaphore(&semaphore_create_info, None)
                     .unwrap()
             };
@@ -754,6 +824,7 @@ impl Context {
                 view,
                 format,
                 acquire_semaphore,
+                target_size,
             });
         }
         format
@@ -777,7 +848,7 @@ impl Context {
 }
 
 bitflags::bitflags! {
-    struct FormatAspects: u32 {
+    struct FormatAspects: u8 {
         const COLOR = 0 << 1;
         const DEPTH = 1 << 1;
         const STENCIL = 1 << 2;
