@@ -189,6 +189,8 @@ impl Example {
         let frame = self.context.acquire_frame();
 
         self.command_encoder.start();
+        self.command_encoder.init_texture(frame.texture());
+
         if let mut pass = self.command_encoder.render(blade::RenderTargetSet {
             colors: &[blade::RenderTarget {
                 view: frame.texture_view(),
@@ -218,12 +220,11 @@ impl Example {
                 rc.draw(0, 4, 0, 1);
             }
         }
-
+        self.command_encoder.present(frame);
         let sync_point = self.context.submit(&mut self.command_encoder);
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(sp, !0);
         }
-        self.context.present(frame);
         self.prev_sync_point = Some(sync_point);
     }
 

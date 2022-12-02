@@ -101,14 +101,4 @@ impl super::Context {
         });
         super::Frame { drawable, texture }
     }
-
-    pub fn present(&self, frame: super::Frame) {
-        let queue = self.queue.lock().unwrap();
-        objc::rc::autoreleasepool(|| {
-            let command_buffer = queue.new_command_buffer();
-            command_buffer.set_label("_present");
-            command_buffer.present_drawable(&frame.drawable);
-            command_buffer.commit();
-        });
-    }
 }

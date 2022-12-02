@@ -92,6 +92,7 @@ fn make_buffer_image_copy(
 impl super::CommandEncoder {
     pub fn start(&mut self) {
         self.buffers.rotate_left(1);
+
         let vk_info = vk::CommandBufferBeginInfo::builder()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
             .build();
@@ -144,13 +145,42 @@ impl super::CommandEncoder {
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::GENERAL)
             .image(texture.raw)
-            .subresource_range(
-                vk::ImageSubresourceRange::builder()
-                    .aspect_mask(super::map_aspects(format_info.aspects))
-                    .level_count(vk::REMAINING_MIP_LEVELS)
-                    .layer_count(vk::REMAINING_ARRAY_LAYERS)
-                    .build(),
-            )
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: super::map_aspects(format_info.aspects),
+                base_mip_level: 0,
+                level_count: vk::REMAINING_MIP_LEVELS,
+                base_array_layer: 0,
+                layer_count: vk::REMAINING_ARRAY_LAYERS,
+            })
+            .build();
+        unsafe {
+            self.device.cmd_pipeline_barrier(
+                self.buffers[0].raw,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier],
+            );
+        }
+    }
+
+    pub fn present(&mut self, frame: super::Frame) {
+        assert_eq!(self.present_index, None);
+        self.present_index = Some(frame.image_index);
+
+        let barrier = vk::ImageMemoryBarrier::builder()
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .image(frame.image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
             .build();
         unsafe {
             self.device.cmd_pipeline_barrier(

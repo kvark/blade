@@ -3,7 +3,7 @@ use ash::{
     vk,
 };
 use naga::back::spv;
-use std::{ffi, num::NonZeroU32, sync::Mutex};
+use std::{ffi, mem, num::NonZeroU32, sync::Mutex};
 
 mod command;
 mod pipeline;
@@ -15,7 +15,6 @@ struct InstanceExt {
 }
 
 struct DeviceExt {
-    draw_indirect_count: Option<khr::DrawIndirectCount>,
     timeline_semaphore: khr::TimelineSemaphore,
 }
 
@@ -28,7 +27,39 @@ struct MemoryManager {
 struct Queue {
     raw: vk::Queue,
     timeline_semaphore: vk::Semaphore,
+    present_semaphore: vk::Semaphore,
     last_progress: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frame {
+    image_index: u32,
+    image: vk::Image,
+    view: vk::ImageView,
+    format: crate::TextureFormat,
+    acquire_semaphore: vk::Semaphore,
+}
+
+impl Frame {
+    pub fn texture(&self) -> Texture {
+        Texture {
+            raw: self.image,
+            memory_handle: !0,
+            format: self.format,
+        }
+    }
+
+    pub fn texture_view(&self) -> TextureView {
+        TextureView { raw: self.view }
+    }
+}
+
+struct Surface {
+    raw: vk::SurfaceKHR,
+    frames: Vec<Frame>,
+    next_semaphore: vk::Semaphore,
+    swapchain: vk::SwapchainKHR,
+    extension: khr::Swapchain,
 }
 
 fn map_timeout(millis: u32) -> u64 {
@@ -39,12 +70,14 @@ pub struct Context {
     memory: Mutex<MemoryManager>,
     device_ext: DeviceExt,
     device: ash::Device,
+    queue_family_index: u32,
     queue: Mutex<Queue>,
+    surface: Option<Mutex<Surface>>,
     physical_device: vk::PhysicalDevice,
     naga_flags: spv::WriterFlags,
     instance_ext: InstanceExt,
-    instance: ash::Instance,
-    entry: ash::Entry,
+    _instance: ash::Instance,
+    _entry: ash::Entry,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -126,6 +159,7 @@ pub struct CommandEncoder {
     buffers: Box<[CommandBuffer]>,
     device: ash::Device,
     update_data: Vec<u8>,
+    present_index: Option<u32>,
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
@@ -213,7 +247,13 @@ unsafe fn inspect_adapter(
 }
 
 impl Context {
-    pub unsafe fn init(desc: super::ContextDesc) -> Result<Self, super::NotSupportedError> {
+    unsafe fn init_impl(
+        desc: super::ContextDesc,
+        surface_handles: Option<(
+            raw_window_handle::RawWindowHandle,
+            raw_window_handle::RawDisplayHandle,
+        )>,
+    ) -> Result<Self, super::NotSupportedError> {
         let entry = match ash::Entry::load() {
             Ok(entry) => entry,
             Err(err) => {
@@ -266,6 +306,14 @@ impl Context {
                 ext::DebugUtils::name(),
                 vk::KhrGetPhysicalDeviceProperties2Fn::name(),
             ];
+            if let Some((_, rdh)) = surface_handles {
+                instance_extensions.extend(
+                    ash_window::enumerate_required_extensions(rdh)
+                        .unwrap()
+                        .iter()
+                        .map(|&ptr| ffi::CStr::from_ptr(ptr)),
+                );
+            }
 
             for inst_ext in instance_extensions.iter() {
                 if !supported_instance_extensions.contains(inst_ext) {
@@ -313,11 +361,11 @@ impl Context {
             })
             .ok_or(super::NotSupportedError)?;
 
-        let family_index = 0; //TODO
+        let queue_family_index = 0; //TODO
 
         let device = {
             let family_info = vk::DeviceQueueCreateInfo::builder()
-                .queue_family_index(family_index)
+                .queue_family_index(queue_family_index)
                 .queue_priorities(&[1.0])
                 .build();
             let family_infos = [family_info];
@@ -352,7 +400,6 @@ impl Context {
         };
 
         let device_ext = DeviceExt {
-            draw_indirect_count: None,
             timeline_semaphore: khr::TimelineSemaphore::new(&instance, &device),
         };
 
@@ -405,18 +452,42 @@ impl Context {
             }
         };
 
-        let queue = device.get_device_queue(family_index, 0);
+        let queue = device.get_device_queue(queue_family_index, 0);
         let last_progress = 0;
         let mut timeline_info = vk::SemaphoreTypeCreateInfo::builder()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
             .initial_value(last_progress);
-        let semaphore_create_info =
+        let timeline_semaphore_create_info =
             vk::SemaphoreCreateInfo::builder().push_next(&mut timeline_info);
         let timeline_semaphore = unsafe {
             device
-                .create_semaphore(&semaphore_create_info, None)
+                .create_semaphore(&timeline_semaphore_create_info, None)
                 .unwrap()
         };
+        let present_semaphore_create_info = vk::SemaphoreCreateInfo::builder();
+        let present_semaphore = unsafe {
+            device
+                .create_semaphore(&present_semaphore_create_info, None)
+                .unwrap()
+        };
+
+        let surface = surface_handles.map(|(rwh, rdh)| {
+            let extension = khr::Swapchain::new(&instance, &device);
+            let raw = ash_window::create_surface(&entry, &instance, rdh, rwh, None).unwrap();
+            let semaphore_create_info = vk::SemaphoreCreateInfo::builder();
+            let next_semaphore = unsafe {
+                device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .unwrap()
+            };
+            Mutex::new(Surface {
+                raw,
+                frames: Vec::new(),
+                next_semaphore,
+                swapchain: vk::SwapchainKHR::null(),
+                extension,
+            })
+        });
 
         let mut naga_flags = spv::WriterFlags::ADJUST_COORDINATE_SPACE;
         if desc.validation {
@@ -427,17 +498,34 @@ impl Context {
             memory: Mutex::new(memory_manager),
             device_ext,
             device,
+            queue_family_index,
             queue: Mutex::new(Queue {
                 raw: queue,
                 timeline_semaphore,
+                present_semaphore,
                 last_progress,
             }),
+            surface,
             physical_device,
             naga_flags,
             instance_ext,
-            instance,
-            entry,
+            _instance: instance,
+            _entry: entry,
         })
+    }
+
+    pub unsafe fn init(desc: super::ContextDesc) -> Result<Self, super::NotSupportedError> {
+        Self::init_impl(desc, None)
+    }
+
+    pub unsafe fn init_windowed<
+        I: raw_window_handle::HasRawWindowHandle + raw_window_handle::HasRawDisplayHandle,
+    >(
+        window: &I,
+        desc: super::ContextDesc,
+    ) -> Result<Self, super::NotSupportedError> {
+        let handles = (window.raw_window_handle(), window.raw_display_handle());
+        Self::init_impl(desc, Some(handles))
     }
 
     pub fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
@@ -503,6 +591,7 @@ impl Context {
             buffers,
             device: self.device.clone(),
             update_data: Vec::new(),
+            present_index: None,
         }
     }
 
@@ -525,19 +614,42 @@ impl Context {
         queue.last_progress += 1;
         let progress = queue.last_progress;
         let command_buffers = [raw_cmd_buf];
-        let semaphores = [queue.timeline_semaphore];
-        let signal_values = [progress];
-        let mut timeline_info =
-            vk::TimelineSemaphoreSubmitInfo::builder().signal_semaphore_values(&signal_values);
+        let semaphores_all = [queue.timeline_semaphore, queue.present_semaphore];
+        let signal_values_all = [progress, 0];
+        let num_sepahores = if encoder.present_index.is_some() {
+            2
+        } else {
+            1
+        };
+        let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::builder()
+            .signal_semaphore_values(&signal_values_all[..num_sepahores]);
         let vk_info = vk::SubmitInfo::builder()
             .command_buffers(&command_buffers)
-            .signal_semaphores(&semaphores)
+            .signal_semaphores(&semaphores_all[..num_sepahores])
             .push_next(&mut timeline_info);
         unsafe {
             self.device
                 .queue_submit(queue.raw, &[vk_info.build()], vk::Fence::null())
                 .unwrap();
         }
+
+        if let Some(image_index) = encoder.present_index.take() {
+            let surface = self.surface.as_ref().unwrap().lock().unwrap();
+            let swapchains = [surface.swapchain];
+            let image_indices = [image_index];
+            let wait_semaphores = [queue.present_semaphore];
+            let present_info = vk::PresentInfoKHR::builder()
+                .swapchains(&swapchains)
+                .image_indices(&image_indices)
+                .wait_semaphores(&wait_semaphores);
+            unsafe {
+                surface
+                    .extension
+                    .queue_present(queue.raw, &present_info)
+                    .unwrap()
+            };
+        }
+
         SyncPoint { progress }
     }
 
@@ -570,6 +682,97 @@ impl Context {
                 .debug_utils
                 .set_debug_utils_object_name(self.device.handle(), &name_info)
         };
+    }
+}
+
+impl Context {
+    pub fn resize(&self, config: crate::SurfaceConfig) -> crate::TextureFormat {
+        let mut surface = self.surface.as_ref().unwrap().lock().unwrap();
+        let queue_families = [self.queue_family_index];
+        let format = crate::TextureFormat::Bgra8UnormSrgb;
+        let format_info = describe_format(format);
+        let create_info = vk::SwapchainCreateInfoKHR::builder()
+            .surface(surface.raw)
+            .min_image_count(config.frame_count)
+            .image_format(format_info.raw)
+            .image_extent(vk::Extent2D {
+                width: config.size.width,
+                height: config.size.height,
+            })
+            .image_usage(resource::map_texture_usage(
+                config.usage,
+                FormatAspects::COLOR,
+            ))
+            .queue_family_indices(&queue_families)
+            .old_swapchain(surface.swapchain);
+        surface.swapchain = unsafe {
+            surface
+                .extension
+                .create_swapchain(&create_info, None)
+                .unwrap()
+        };
+
+        for frame in surface.frames.drain(..) {
+            unsafe {
+                self.device.destroy_image_view(frame.view, None);
+                self.device.destroy_semaphore(frame.acquire_semaphore, None);
+            }
+        }
+        let images = unsafe {
+            surface
+                .extension
+                .get_swapchain_images(surface.swapchain)
+                .unwrap()
+        };
+        let subresource_range = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        for (index, image) in images.into_iter().enumerate() {
+            let view_create_info = vk::ImageViewCreateInfo::builder()
+                .image(image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(format_info.raw)
+                .subresource_range(subresource_range);
+            let view = unsafe {
+                self.device
+                    .create_image_view(&view_create_info, None)
+                    .unwrap()
+            };
+            let semaphore_create_info = vk::SemaphoreCreateInfo::builder();
+            let acquire_semaphore = unsafe {
+                self.device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .unwrap()
+            };
+            surface.frames.push(Frame {
+                image_index: index as u32,
+                image,
+                view,
+                format,
+                acquire_semaphore,
+            });
+        }
+        format
+    }
+
+    pub fn acquire_frame(&self) -> Frame {
+        let mut surface = self.surface.as_ref().unwrap().lock().unwrap();
+        let acquire_semaphore = surface.next_semaphore;
+        let (index, _suboptimal) = unsafe {
+            surface
+                .extension
+                .acquire_next_image(surface.swapchain, !0, acquire_semaphore, vk::Fence::null())
+                .unwrap()
+        };
+        surface.next_semaphore = mem::replace(
+            &mut surface.frames[index as usize].acquire_semaphore,
+            acquire_semaphore,
+        );
+        surface.frames[index as usize]
     }
 }
 

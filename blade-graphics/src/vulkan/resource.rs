@@ -244,7 +244,7 @@ fn map_view_dimension(dimension: crate::TextureViewDimension) -> vk::ImageViewTy
     }
 }
 
-fn map_texture_usage(
+pub(super) fn map_texture_usage(
     usage: crate::TextureUsage,
     aspects: super::FormatAspects,
 ) -> vk::ImageUsageFlags {

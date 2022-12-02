@@ -273,8 +273,10 @@ impl Context {
         })
     }
 
-    pub unsafe fn init_windowed(
-        window: &impl raw_window_handle::HasRawWindowHandle,
+    pub unsafe fn init_windowed<
+        I: raw_window_handle::HasRawWindowHandle + raw_window_handle::HasRawDisplayHandle,
+    >(
+        window: &I,
         desc: super::ContextDesc,
     ) -> Result<Self, super::NotSupportedError> {
         let mut context = Self::init(desc)?;
