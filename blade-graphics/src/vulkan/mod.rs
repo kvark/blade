@@ -230,7 +230,7 @@ unsafe fn inspect_adapter(
         .api_version
         .min(driver_api_version);
     if api_version < vk::API_VERSION_1_1 {
-        log::info!("\tRejected for API version {}", api_version);
+        log::warn!("\tRejected for API version {}", api_version);
         return None;
     }
 
@@ -255,7 +255,7 @@ unsafe fn inspect_adapter(
         || inline_uniform_block_properties.max_descriptor_set_inline_uniform_blocks == 0
         || inline_uniform_block_features.inline_uniform_block == 0
     {
-        log::info!(
+        log::warn!(
             "\tRejected for inline uniform blocks. Properties = {:?}, Features = {:?}",
             inline_uniform_block_properties,
             inline_uniform_block_features,
@@ -264,7 +264,7 @@ unsafe fn inspect_adapter(
     }
 
     if timeline_semaphore_features.timeline_semaphore == 0 {
-        log::info!(
+        log::warn!(
             "\tRejected for timeline semaphore. Properties = {:?}, Features = {:?}",
             timeline_semaphore_properties,
             timeline_semaphore_features,
@@ -273,7 +273,7 @@ unsafe fn inspect_adapter(
     }
 
     if dynamic_rendering_features.dynamic_rendering == 0 {
-        log::info!(
+        log::warn!(
             "\tRejected for dynamic rendering. Features = {:?}",
             dynamic_rendering_features,
         );
@@ -582,7 +582,7 @@ impl Context {
     pub fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
         //TODO: these numbers are arbitrary, needs to be replaced by
         // an abstraction from gpu-alloc, if possible.
-        const ROUGH_SET_COUNT: u32 = 1000;
+        const ROUGH_SET_COUNT: u32 = 2000;
         const DESCRIPTOR_SIZES: &[vk::DescriptorPoolSize] = &[
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
