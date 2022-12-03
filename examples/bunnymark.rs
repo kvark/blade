@@ -41,7 +41,7 @@ impl Example {
             blade::Context::init_windowed(
                 window,
                 blade::ContextDesc {
-                    validation: true,
+                    validation: cfg!(debug_assertions),
                     capture: false,
                 },
             )

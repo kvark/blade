@@ -582,7 +582,7 @@ impl Context {
     pub fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
         //TODO: these numbers are arbitrary, needs to be replaced by
         // an abstraction from gpu-alloc, if possible.
-        const ROUGH_SET_COUNT: u32 = 2000;
+        const ROUGH_SET_COUNT: u32 = 50000;
         const DESCRIPTOR_SIZES: &[vk::DescriptorPoolSize] = &[
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
