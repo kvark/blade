@@ -25,7 +25,7 @@ struct Example {
     pipeline: blade::RenderPipeline,
     command_encoder: blade::CommandEncoder,
     prev_sync_point: Option<blade::SyncPoint>,
-    _texture: blade::Texture,
+    texture: blade::Texture,
     view: blade::TextureView,
     sampler: blade::Sampler,
     window_size: winit::dpi::PhysicalSize<u32>,
@@ -140,12 +140,15 @@ impl Example {
             transfer.copy_buffer_to_texture(upload_buffer.into(), 4, texture.into(), extent);
         }
         let sync_point = context.submit(&mut command_encoder);
+        context.wait_for(sync_point, !0);
+
+        context.destroy_buffer(upload_buffer);
 
         Self {
             pipeline,
             command_encoder,
-            prev_sync_point: Some(sync_point),
-            _texture: texture,
+            prev_sync_point: None,
+            texture,
             view,
             sampler,
             window_size,
@@ -230,7 +233,10 @@ impl Example {
     }
 
     fn deinit(&mut self) {
-        //TODO
+        if let Some(sp) = self.prev_sync_point.take() {
+            self.context.wait_for(sp, !0);
+        }
+        self.context.destroy_texture(self.texture);
     }
 }
 

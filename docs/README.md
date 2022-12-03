@@ -4,7 +4,7 @@ Blade is a low-level GPU library in Rust, exposed with the focus on ergonomics.
 In other words, Blade is an attempt to make graphics programming fun with Rust.
 It doesn't try to be comprehensive or safe, it trusts you.
 
-See [MOTIVATION](MOTIVATION.md) and [FAQ](FAQ.md) for more info.
+See [motivation](motivation.md), [FAQ](FAQ.md), and [performance](performance.md) for more info.
 
 ## Platforms
 

@@ -68,15 +68,3 @@ Blade is based on different set of assumptions from wgpu-hal:
 - *usage*: wgpu expects to be used as a Rust library. Blade expects to be vendored in and modified according to the needs of a user. Hopefully, some of the changes would appear upstream as PRs.
 
 In other words, this is a bit **experiment**. It may fail horribly, or it may open up new ideas and perspectives.
-
-# Performance
-
-Blade doesn't expect to be faster than wgpu-hal, but it's important to understand how much the difference is.
-
-On the bunnymark example, ran on MBP 2016 with "Intel Iris Graphics 550", we have:
-
-  - Blade starts to slow down after about 10K bunnies
-  - wgpu-hal starts at 10K bunnies
-  - wgpu starts at 5K bunnies
-
-So this is quite incredible. We aren't preserving the buffer with bunny data across frames, everything is dynamic, and yet the performance is within a factor of 2 for this worst case. Ergonomically, our example is 370 LOC versus 830 LOC of wgpu-hal.
