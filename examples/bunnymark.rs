@@ -55,7 +55,7 @@ impl Example {
                 depth: 1,
             },
             usage: blade::TextureUsage::TARGET,
-            frame_count: 2,
+            frame_count: 3,
         });
 
         let global_layout = <Globals as blade::ShaderData>::layout();
@@ -135,15 +135,16 @@ impl Example {
             buffer_count: 2,
         });
         command_encoder.start();
+        command_encoder.init_texture(texture);
         if let mut transfer = command_encoder.transfer() {
             transfer.copy_buffer_to_texture(upload_buffer.into(), 4, texture.into(), extent);
         }
-        context.submit(&mut command_encoder);
+        let sync_point = context.submit(&mut command_encoder);
 
         Self {
             pipeline,
             command_encoder,
-            prev_sync_point: None,
+            prev_sync_point: Some(sync_point),
             _texture: texture,
             view,
             sampler,

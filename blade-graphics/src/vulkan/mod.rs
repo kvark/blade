@@ -166,12 +166,18 @@ struct CommandBuffer {
     descriptor_pool: vk::DescriptorPool,
 }
 
+#[derive(Debug, PartialEq)]
+struct Presentation {
+    image_index: u32,
+    acquire_semaphore: vk::Semaphore,
+}
+
 pub struct CommandEncoder {
     pool: vk::CommandPool,
     buffers: Box<[CommandBuffer]>,
     device: Device,
     update_data: Vec<u8>,
-    present_index: Option<u32>,
+    present: Option<Presentation>,
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
@@ -190,6 +196,7 @@ pub struct RenderCommandEncoder<'a> {
 pub struct PipelineEncoder<'a, 'p> {
     cmd_buf: CommandBuffer,
     layout: &'p PipelineLayout,
+    bind_point: vk::PipelineBindPoint,
     device: &'a Device,
     update_data: &'a mut Vec<u8>,
 }
@@ -535,7 +542,7 @@ impl Context {
             })
         });
 
-        let mut naga_flags = spv::WriterFlags::ADJUST_COORDINATE_SPACE;
+        let mut naga_flags = spv::WriterFlags::FORCE_POINT_SIZE;
         if desc.validation {
             naga_flags |= spv::WriterFlags::DEBUG;
         }
@@ -646,7 +653,7 @@ impl Context {
             buffers,
             device: self.device.clone(),
             update_data: Vec::new(),
-            present_index: None,
+            present: None,
         }
     }
 
@@ -675,18 +682,26 @@ impl Context {
         queue.last_progress += 1;
         let progress = queue.last_progress;
         let command_buffers = [raw_cmd_buf];
-        let semaphores_all = [queue.timeline_semaphore, queue.present_semaphore];
+        let wait_values_all = [0];
+        let mut wait_semaphores_all = [vk::Semaphore::null()];
+        let wait_stages = [vk::PipelineStageFlags::ALL_COMMANDS];
+        let signal_semaphores_all = [queue.timeline_semaphore, queue.present_semaphore];
         let signal_values_all = [progress, 0];
-        let num_sepahores = if encoder.present_index.is_some() {
-            2
-        } else {
-            1
+        let (num_wait_semaphores, num_signal_sepahores) = match encoder.present {
+            Some(ref presentation) => {
+                wait_semaphores_all[0] = presentation.acquire_semaphore;
+                (1, 2)
+            }
+            None => (0, 1),
         };
         let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::builder()
-            .signal_semaphore_values(&signal_values_all[..num_sepahores]);
+            .wait_semaphore_values(&wait_values_all[..num_wait_semaphores])
+            .signal_semaphore_values(&signal_values_all[..num_signal_sepahores]);
         let vk_info = vk::SubmitInfo::builder()
             .command_buffers(&command_buffers)
-            .signal_semaphores(&semaphores_all[..num_sepahores])
+            .wait_semaphores(&wait_semaphores_all[..num_wait_semaphores])
+            .wait_dst_stage_mask(&wait_stages[..num_wait_semaphores])
+            .signal_semaphores(&signal_semaphores_all[..num_signal_sepahores])
             .push_next(&mut timeline_info);
         unsafe {
             self.device
@@ -695,10 +710,10 @@ impl Context {
                 .unwrap();
         }
 
-        if let Some(image_index) = encoder.present_index.take() {
+        if let Some(presentation) = encoder.present.take() {
             let surface = self.surface.as_ref().unwrap().lock().unwrap();
             let swapchains = [surface.swapchain];
-            let image_indices = [image_index];
+            let image_indices = [presentation.image_index];
             let wait_semaphores = [queue.present_semaphore];
             let present_info = vk::PresentInfoKHR::builder()
                 .swapchains(&swapchains)
@@ -769,6 +784,7 @@ impl Context {
             .queue_family_indices(&queue_families)
             .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+            .present_mode(vk::PresentModeKHR::FIFO)
             .old_swapchain(surface.swapchain);
         surface.swapchain = unsafe {
             surface

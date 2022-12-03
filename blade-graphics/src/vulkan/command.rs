@@ -207,8 +207,11 @@ impl super::CommandEncoder {
     }
 
     pub fn present(&mut self, frame: super::Frame) {
-        assert_eq!(self.present_index, None);
-        self.present_index = Some(frame.image_index);
+        assert_eq!(self.present, None);
+        self.present = Some(super::Presentation {
+            image_index: frame.image_index,
+            acquire_semaphore: frame.acquire_semaphore,
+        });
 
         let barrier = vk::ImageMemoryBarrier::builder()
             .old_layout(vk::ImageLayout::UNDEFINED)
@@ -284,7 +287,7 @@ impl super::CommandEncoder {
         };
         let viewport = vk::Viewport {
             x: 0.0,
-            y: 0.0,
+            y: target_size[1] as f32,
             width: target_size[0] as f32,
             height: -(target_size[1] as f32),
             min_depth: 0.0,
@@ -401,19 +404,14 @@ impl<'a> super::ComputeCommandEncoder<'a> {
         &'b mut self,
         pipeline: &'p super::ComputePipeline,
     ) -> super::PipelineEncoder<'b, 'p> {
-        unsafe {
-            self.device.core.cmd_bind_pipeline(
-                self.cmd_buf.raw,
-                vk::PipelineBindPoint::COMPUTE,
-                pipeline.raw,
-            )
-        };
         super::PipelineEncoder {
             cmd_buf: self.cmd_buf,
             layout: &pipeline.layout,
+            bind_point: vk::PipelineBindPoint::COMPUTE,
             device: self.device,
             update_data: self.update_data,
         }
+        .init(pipeline.raw)
     }
 }
 
@@ -422,19 +420,14 @@ impl<'a> super::RenderCommandEncoder<'a> {
         &'b mut self,
         pipeline: &'p super::RenderPipeline,
     ) -> super::PipelineEncoder<'b, 'p> {
-        unsafe {
-            self.device.core.cmd_bind_pipeline(
-                self.cmd_buf.raw,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline.raw,
-            )
-        };
         super::PipelineEncoder {
             cmd_buf: self.cmd_buf,
             layout: &pipeline.layout,
+            bind_point: vk::PipelineBindPoint::GRAPHICS,
             device: self.device,
             update_data: self.update_data,
         }
+        .init(pipeline.raw)
     }
 }
 
@@ -449,6 +442,15 @@ impl Drop for super::RenderCommandEncoder<'_> {
 }
 
 impl super::PipelineEncoder<'_, '_> {
+    fn init(self, raw_pipeline: vk::Pipeline) -> Self {
+        unsafe {
+            self.device
+                .core
+                .cmd_bind_pipeline(self.cmd_buf.raw, self.bind_point, raw_pipeline)
+        };
+        self
+    }
+
     pub fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         let dsl = &self.layout.descriptor_set_layouts[group as usize];
         self.update_data.clear();
@@ -475,7 +477,7 @@ impl super::PipelineEncoder<'_, '_> {
             );
             self.device.core.cmd_bind_descriptor_sets(
                 self.cmd_buf.raw,
-                vk::PipelineBindPoint::COMPUTE,
+                self.bind_point,
                 self.layout.raw,
                 group,
                 &sets,

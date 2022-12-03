@@ -230,7 +230,7 @@ pub enum FilterMode {
 }
 
 /// Comparison function used for depth and stencil operations.
-#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
 pub enum CompareFunction {
     /// Function never passes
     Never,
@@ -251,6 +251,7 @@ pub enum CompareFunction {
     /// Function passes if new value is greater than or equal to existing value
     GreaterEqual,
     /// Function always passes
+    #[default]
     Always,
 }
 
@@ -533,7 +534,7 @@ pub struct StencilState {
     pub write_mask: u32,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DepthBiasState {
     /// Constant depth biasing factor, in basic units of the depth format.
     pub constant: i32,

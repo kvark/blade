@@ -75,7 +75,7 @@ Blade doesn't expect to be faster than wgpu-hal, but it's important to understan
 
 On the bunnymark example, ran on MBP 2016 with "Intel Iris Graphics 550", we have:
 
-  - Blade starting to slow down after about 5K bunnies
+  - Blade starts to slow down after about 10K bunnies
   - wgpu-hal starts at 10K bunnies
   - wgpu starts at 5K bunnies
 
