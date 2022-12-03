@@ -29,13 +29,7 @@ impl super::Context {
         )
         .unwrap();
 
-        let ep = sf
-            .shader
-            .module
-            .entry_points
-            .iter()
-            .find(|ep| ep.stage == naga_stage && ep.name == sf.entry_point)
-            .expect("Entry point not found in the shader");
+        let ep = &sf.shader.module.entry_points[sf.entry_point_index()];
 
         let vk_info = vk::ShaderModuleCreateInfo::builder().code(&spv);
 
@@ -219,7 +213,7 @@ impl super::Context {
         desc: crate::ComputePipelineDesc,
     ) -> super::ComputePipeline {
         let combined =
-            crate::merge_shader_layouts(&[(desc.compute.shader, crate::ShaderVisibility::COMPUTE)]);
+            crate::shader::merge_layouts(&[(desc.compute, crate::ShaderVisibility::COMPUTE)]);
         let layout = self.create_pipeline_layout(&combined);
 
         let options = spv::Options {
@@ -258,9 +252,9 @@ impl super::Context {
     }
 
     pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
-        let combined = crate::merge_shader_layouts(&[
-            (desc.vertex.shader, crate::ShaderVisibility::VERTEX),
-            (desc.fragment.shader, crate::ShaderVisibility::FRAGMENT),
+        let combined = crate::shader::merge_layouts(&[
+            (desc.vertex, crate::ShaderVisibility::VERTEX),
+            (desc.fragment, crate::ShaderVisibility::FRAGMENT),
         ]);
         let layout = self.create_pipeline_layout(&combined);
 

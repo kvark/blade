@@ -293,11 +293,7 @@ impl super::Context {
                 panic!("MSL compilation error:\n{}", string);
             });
 
-        let ep_index = module
-            .entry_points
-            .iter()
-            .position(|ep| ep.stage == naga_stage && ep.name == sf.entry_point)
-            .expect("Entry point not found in the shader");
+        let ep_index = sf.entry_point_index();
         let ep = &module.entry_points[ep_index];
         let name = info.entry_point_names[ep_index].as_ref().unwrap();
         let wg_size = metal::MTLSize {
@@ -320,7 +316,7 @@ impl super::Context {
         desc: crate::ComputePipelineDesc,
     ) -> super::ComputePipeline {
         let combined =
-            crate::merge_shader_layouts(&[(desc.compute.shader, crate::ShaderVisibility::COMPUTE)]);
+            crate::shader::merge_layouts(&[(desc.compute, crate::ShaderVisibility::COMPUTE)]);
         let (layout, options) = build_pipeline_layout(&combined);
 
         objc::rc::autoreleasepool(|| {
@@ -355,9 +351,9 @@ impl super::Context {
     }
 
     pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
-        let combined = crate::merge_shader_layouts(&[
-            (desc.vertex.shader, crate::ShaderVisibility::VERTEX),
-            (desc.fragment.shader, crate::ShaderVisibility::FRAGMENT),
+        let combined = crate::shader::merge_layouts(&[
+            (desc.vertex, crate::ShaderVisibility::VERTEX),
+            (desc.fragment, crate::ShaderVisibility::FRAGMENT),
         ]);
         let (layout, options) = build_pipeline_layout(&combined);
 

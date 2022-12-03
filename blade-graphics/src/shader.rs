@@ -1,4 +1,7 @@
-use std::{collections::HashMap, fmt::Write as _};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Write as _,
+};
 
 mod plain {
     use crate::{PlainContainer as Pc, PlainType as Pt, VectorSize as Vs};
@@ -94,6 +97,49 @@ fn map_storage_format(format: super::TextureFormat) -> &'static str {
     }
 }
 
+pub(crate) fn merge_layouts<'a>(
+    multi_layouts: &[(super::ShaderFunction<'a>, super::ShaderVisibility)],
+) -> Vec<(&'a super::ShaderDataLayout, super::ShaderVisibility)> {
+    let group_count = multi_layouts
+        .iter()
+        .map(|(sf, _)| sf.shader.bind_groups.len())
+        .max()
+        .unwrap_or_default();
+    (0..group_count)
+        .map(|group_index| {
+            let mut layout_maybe = None;
+            let mut visibility = super::ShaderVisibility::empty();
+            for &(sf, shader_visibility) in multi_layouts {
+                let ep_index = sf.entry_point_index();
+                let ep_info = sf.shader.info.get_entry_point(ep_index);
+                if let Some(ref bind_group) = sf.shader.bind_groups.get(group_index) {
+                    // Check if any of the bindings are actually used by the entry point
+                    if bind_group
+                        .used_globals
+                        .iter()
+                        .all(|&var| ep_info[var].is_empty())
+                    {
+                        continue;
+                    }
+                    visibility |= shader_visibility;
+                    if let Some(layout) = layout_maybe {
+                        assert_eq!(&bind_group.layout, layout);
+                    } else {
+                        layout_maybe = Some(&bind_group.layout);
+                    }
+                }
+            }
+            match layout_maybe {
+                Some(layout) => (layout, visibility),
+                None => (
+                    super::ShaderDataLayout::EMPTY,
+                    super::ShaderVisibility::empty(),
+                ),
+            }
+        })
+        .collect()
+}
+
 impl super::Context {
     pub fn create_shader(&self, desc: super::ShaderDesc) -> super::Shader {
         const UNIFORM_NAME: &str = "_uniforms";
@@ -105,12 +151,7 @@ impl super::Context {
         let mut substitutions = HashMap::<&str, Substitute>::default();
         let mut header = String::new();
 
-        for (group_index, layout_maybe) in desc.data_layouts.iter().enumerate() {
-            let layout = match layout_maybe {
-                Some(layout) => layout,
-                None => continue,
-            };
-
+        for (group_index, layout) in desc.data_layouts.iter().enumerate() {
             //Note: the binding scheme is implicit:
             // Uniform buffer is at 0, and the rest are resources.
             let mut binding_index = 1;
@@ -271,10 +312,41 @@ impl super::Context {
                 panic!("Shader validation failed");
             });
 
+        let mut bind_groups = Vec::with_capacity(desc.data_layouts.len());
+        for (group_index, &data_layout) in desc.data_layouts.iter().enumerate() {
+            let mut used_globals = HashSet::default();
+            // cross-reference the bindings with globals to see which
+            // ones are used by the shader.
+            for (handle, var) in module.global_variables.iter() {
+                // filter out the globals from other bind groups
+                match var.binding {
+                    Some(naga::ResourceBinding { group, binding: _ })
+                        if group as usize == group_index => {}
+                    _ => continue,
+                };
+                for &(name, binding) in data_layout.bindings.iter() {
+                    let match_name = match binding {
+                        // there can only be one uniform buffer per group in Blade
+                        crate::ShaderBinding::Plain { .. } => {
+                            var.space == naga::AddressSpace::Uniform
+                        }
+                        _ => var.name.as_ref().map(|s| s.as_str()) == Some(name),
+                    };
+                    if match_name {
+                        used_globals.insert(handle);
+                    }
+                }
+            }
+            bind_groups.push(crate::ShaderBindGroup {
+                layout: data_layout.clone(),
+                used_globals,
+            });
+        }
+
         super::Shader {
             module,
             info,
-            bind_groups: desc.data_layouts.iter().map(|opt| opt.cloned()).collect(),
+            bind_groups: bind_groups.into_boxed_slice(),
         }
     }
 }

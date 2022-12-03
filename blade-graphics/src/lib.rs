@@ -43,7 +43,7 @@ pub mod limits {
 
 pub use hal::*;
 
-use std::num::NonZeroU32;
+use std::{collections::HashSet, num::NonZeroU32};
 
 #[derive(Debug)]
 pub struct ContextDesc {
@@ -276,15 +276,33 @@ pub struct SamplerDesc<'a> {
     pub border_color: Option<TextureColor>,
 }
 
+#[derive(Debug, Default)]
+struct ShaderBindGroup {
+    layout: ShaderDataLayout,
+    used_globals: HashSet<naga::Handle<naga::GlobalVariable>>,
+}
+
 pub struct Shader {
     module: naga::Module,
     info: naga::valid::ModuleInfo,
-    bind_groups: Box<[Option<ShaderDataLayout>]>,
+    bind_groups: Box<[ShaderBindGroup]>,
 }
 
+#[derive(Clone, Copy)]
 pub struct ShaderFunction<'a> {
     pub shader: &'a Shader,
     pub entry_point: &'a str,
+}
+
+impl ShaderFunction<'_> {
+    fn entry_point_index(&self) -> usize {
+        self.shader
+            .module
+            .entry_points
+            .iter()
+            .position(|ep| ep.name == self.entry_point)
+            .expect("Entry point not found in the shader")
+    }
 }
 
 impl Shader {
@@ -294,36 +312,6 @@ impl Shader {
             entry_point,
         }
     }
-}
-
-fn merge_shader_layouts<'a>(
-    multi_layouts: &[(&'a Shader, ShaderVisibility)],
-) -> Vec<(&'a ShaderDataLayout, ShaderVisibility)> {
-    let group_count = multi_layouts
-        .iter()
-        .map(|(shader, _)| shader.bind_groups.len())
-        .max()
-        .unwrap_or_default();
-    (0..group_count)
-        .map(|group_index| {
-            let mut layout_maybe = None;
-            let mut visibility = ShaderVisibility::empty();
-            for &(shader, shader_visibility) in multi_layouts {
-                if let Some(Some(ref data_layout)) = shader.bind_groups.get(group_index) {
-                    visibility |= shader_visibility;
-                    if let Some(layout) = layout_maybe {
-                        assert_eq!(data_layout, layout);
-                    } else {
-                        layout_maybe = Some(data_layout);
-                    }
-                }
-            }
-            match layout_maybe {
-                Some(layout) => (layout, visibility),
-                None => (ShaderDataLayout::EMPTY, ShaderVisibility::empty()),
-            }
-        })
-        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -374,14 +362,14 @@ pub struct ShaderDataLayout {
 }
 
 impl ShaderDataLayout {
-    const EMPTY: &Self = &Self {
+    pub const EMPTY: &Self = &Self {
         bindings: Vec::new(),
     };
 }
 
 pub struct ShaderDesc<'a> {
     pub source: &'a str,
-    pub data_layouts: &'a [Option<&'a ShaderDataLayout>],
+    pub data_layouts: &'a [&'a ShaderDataLayout],
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

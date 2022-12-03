@@ -59,7 +59,7 @@ fn main() {
     let shader_source = std::fs::read_to_string("examples/minimal.wgsl").unwrap();
     let shader = context.create_shader(blade::ShaderDesc {
         source: &shader_source,
-        data_layouts: &[Some(&global_layout)],
+        data_layouts: &[&global_layout],
     });
 
     let pipeline = context.create_compute_pipeline(blade::ComputePipelineDesc {

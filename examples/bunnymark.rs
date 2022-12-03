@@ -63,7 +63,7 @@ impl Example {
         let shader_source = std::fs::read_to_string("examples/bunnymark.wgsl").unwrap();
         let shader = context.create_shader(blade::ShaderDesc {
             source: &shader_source,
-            data_layouts: &[Some(&global_layout), Some(&local_layout)],
+            data_layouts: &[&global_layout, &local_layout],
         });
 
         let pipeline = context.create_render_pipeline(blade::RenderPipelineDesc {
