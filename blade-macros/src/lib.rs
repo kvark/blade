@@ -7,6 +7,30 @@ enum ResourceType {
     Buffer,
 }
 
+#[derive(Default, Debug, PartialEq)]
+struct EntryAttributes {
+    struct_name: Option<String>,
+}
+
+fn parse_attributes(entry_attributes: &[syn::Attribute]) -> EntryAttributes {
+    let mut attributes = EntryAttributes::default();
+    for attr in entry_attributes.iter() {
+        let path_segments = attr
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        if path_segments.len() == 1 && path_segments[0] == "struct_name" {
+            let literal = attr
+                .parse_args::<syn::LitStr>()
+                .expect("Unable to parse 'struct_name' value");
+            attributes.struct_name = Some(literal.value());
+        }
+    }
+    attributes
+}
+
 fn impl_shader_data(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStream> {
     let item_struct = syn::parse::<syn::ItemStruct>(input_stream)?;
     let fields = match item_struct.fields {
@@ -22,16 +46,18 @@ fn impl_shader_data(input_stream: TokenStream) -> syn::Result<proc_macro2::Token
     let mut bindings = Vec::new();
     let mut assignments = Vec::new();
     for (index_usize, field) in fields.named.iter().enumerate() {
+        let mut attributes = parse_attributes(&field.attrs);
+
         let res_type = match field.ty {
             syn::Type::Path(ref typ) => {
-                let idents = typ
+                let type_segments = typ
                     .path
                     .segments
                     .iter()
                     .map(|segment| segment.ident.to_string())
                     .collect::<Vec<_>>();
-                if idents.len() == 2 && idents[0] == "blade" {
-                    Some(match idents[1].as_str() {
+                if type_segments.len() == 2 && type_segments[0] == "blade" {
+                    Some(match type_segments[1].as_str() {
                         "BufferPiece" => ResourceType::Buffer,
                         "TextureView" => ResourceType::TextureView,
                         "Sampler" => ResourceType::Sampler,
@@ -54,13 +80,19 @@ fn impl_shader_data(input_stream: TokenStream) -> syn::Result<proc_macro2::Token
 
         let ty = &field.ty;
         let (setter, value) = match res_type {
-            Some(ResourceType::Buffer) => (
-                "set_buffer",
-                quote!(blade::ShaderBinding::Buffer {
-                    type_name: "", //TODO
-                    access: blade::StorageAccess::all(),
-                }),
-            ),
+            Some(ResourceType::Buffer) => {
+                let struct_name = attributes
+                    .struct_name
+                    .take()
+                    .expect("Missing 'struct_name' attribute");
+                (
+                    "set_buffer",
+                    quote!(blade::ShaderBinding::Buffer {
+                        type_name: #struct_name,
+                        access: blade::StorageAccess::all(),
+                    }),
+                )
+            }
             Some(ResourceType::TextureView) => (
                 "set_texture",
                 quote!(blade::ShaderBinding::Texture {
@@ -91,6 +123,8 @@ fn impl_shader_data(input_stream: TokenStream) -> syn::Result<proc_macro2::Token
         assignments.push(quote! {
             encoder.#setter_ident(#index, self.#name);
         });
+
+        assert_eq!(attributes, EntryAttributes::default());
     }
 
     let impl_layout = quote! {
@@ -114,7 +148,7 @@ fn impl_shader_data(input_stream: TokenStream) -> syn::Result<proc_macro2::Token
     Ok(output)
 }
 
-#[proc_macro_derive(ShaderData)]
+#[proc_macro_derive(ShaderData, attributes(struct_name))]
 pub fn shader_data_derive(input: TokenStream) -> TokenStream {
     let stream = match impl_shader_data(input) {
         Ok(tokens) => tokens,

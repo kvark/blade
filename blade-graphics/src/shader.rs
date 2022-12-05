@@ -71,6 +71,7 @@ fn map_view_dimension(dimension: super::TextureViewDimension) -> &'static str {
     use super::TextureViewDimension as Tvd;
     match dimension {
         Tvd::D1 => "1d",
+        Tvd::D1Array => "1d_array",
         Tvd::D2 => "2d",
         Tvd::D2Array => "2d_array",
         Tvd::Cube => "cube",
@@ -93,7 +94,7 @@ fn map_storage_format(format: super::TextureFormat) -> &'static str {
     use super::TextureFormat as Tf;
     match format {
         Tf::Rgba8Unorm => "rgba8unorm",
-        Tf::Bgra8UnormSrgb => panic!("Unsupported storage format"),
+        Tf::Depth32Float | Tf::Bgra8UnormSrgb => panic!("Unsupported storage format"),
     }
 }
 

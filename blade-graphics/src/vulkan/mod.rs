@@ -882,6 +882,7 @@ fn describe_format(format: crate::TextureFormat) -> FormatInfo {
     let (raw, aspects, bytes) = match format {
         Tf::Rgba8Unorm => (vk::Format::R8G8B8A8_UNORM, FormatAspects::COLOR, 4),
         Tf::Bgra8UnormSrgb => (vk::Format::B8G8R8A8_SRGB, FormatAspects::COLOR, 4),
+        Tf::Depth32Float => (vk::Format::D32_SFLOAT, FormatAspects::DEPTH, 4),
     };
     FormatInfo {
         raw,

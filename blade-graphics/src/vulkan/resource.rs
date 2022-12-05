@@ -246,6 +246,7 @@ fn map_view_dimension(dimension: crate::TextureViewDimension) -> vk::ImageViewTy
     use crate::TextureViewDimension as Tvd;
     match dimension {
         Tvd::D1 => vk::ImageViewType::TYPE_1D,
+        Tvd::D1Array => vk::ImageViewType::TYPE_1D_ARRAY,
         Tvd::D2 => vk::ImageViewType::TYPE_2D,
         Tvd::D2Array => vk::ImageViewType::TYPE_2D_ARRAY,
         Tvd::Cube => vk::ImageViewType::CUBE,

@@ -26,6 +26,7 @@ fn map_texture_view_dimension(dimension: crate::TextureViewDimension) -> metal::
     use metal::MTLTextureType::*;
     match dimension {
         Tvd::D1 => D1,
+        Tvd::D1Array => D1Array,
         Tvd::D2 => D2,
         Tvd::D2Array => D2Array,
         Tvd::D3 => D3,

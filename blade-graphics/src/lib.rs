@@ -113,6 +113,7 @@ impl From<Texture> for TexturePiece {
 pub enum TextureFormat {
     Rgba8Unorm,
     Bgra8UnormSrgb,
+    Depth32Float,
 }
 
 /// Dimensionality of a texture.
@@ -129,6 +130,7 @@ pub enum TextureDimension {
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum TextureViewDimension {
     D1,
+    D1Array,
     D2,
     D2Array,
     Cube,
