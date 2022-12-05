@@ -25,6 +25,7 @@ impl blade::ShaderData for Globals {
                     "input",
                     blade::ShaderBinding::Texture {
                         dimension: blade::TextureViewDimension::D2,
+                        ty: blade::PlainType::F32.into(),
                     },
                 ),
                 (

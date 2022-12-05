@@ -98,6 +98,14 @@ fn map_storage_format(format: super::TextureFormat) -> &'static str {
     }
 }
 
+fn map_plain_type(ty: super::PlainType) -> &'static str {
+    match ty {
+        super::PlainType::U32 => "u32",
+        super::PlainType::I32 => "i32",
+        super::PlainType::F32 => "f32",
+    }
+}
+
 pub(crate) fn merge_layouts<'a>(
     multi_layouts: &[(super::ShaderFunction<'a>, super::ShaderVisibility)],
 ) -> Vec<(&'a super::ShaderDataLayout, super::ShaderVisibility)> {
@@ -160,14 +168,26 @@ impl super::Context {
             for &(ref name, binding) in layout.bindings.iter() {
                 let old_binding_index = binding_index;
                 match binding {
-                    super::ShaderBinding::Texture { dimension } => {
+                    super::ShaderBinding::Texture { dimension, ty } => {
                         let dim_str = map_view_dimension(dimension);
-                        writeln!(
+                        write!(
                             header,
-                            "@group({}) @binding({}) var {}: texture_{}<f32>;",
-                            group_index, binding_index, name, dim_str
+                            "@group({}) @binding({}) var {}: ",
+                            group_index, binding_index, name,
                         )
                         .unwrap();
+                        match ty {
+                            super::TextureBindingType::Plain(pty) => {
+                                let scalar_name = map_plain_type(pty);
+                                write!(header, "texture_{}<{}>", dim_str, scalar_name)
+                                .unwrap();
+                            }
+                            super::TextureBindingType::Depth => {
+                                write!(header, "texture_depth_{}", dim_str)
+                                .unwrap();
+                            }
+                        }
+                        write!(header, ";").unwrap();
                         binding_index += 1;
                     }
                     super::ShaderBinding::TextureStorage {
@@ -234,11 +254,7 @@ impl super::Context {
                         | super::ShaderBinding::Sampler { .. }
                         | super::ShaderBinding::Buffer { .. } => continue,
                         super::ShaderBinding::Plain { ty, container } => {
-                            let scalar_name = match ty {
-                                super::PlainType::U32 => "u32",
-                                super::PlainType::I32 => "i32",
-                                super::PlainType::F32 => "f32",
-                            };
+                            let scalar_name = map_plain_type(ty);
                             let ty_name = match container {
                                 super::PlainContainer::Scalar => scalar_name.to_string(),
                                 super::PlainContainer::Vector(size) => {

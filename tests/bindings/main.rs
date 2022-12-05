@@ -18,8 +18,10 @@ struct ShaderData {
     tex_cube: blade::TextureView,
     tex_cube_array: blade::TextureView,
     tex_3d: blade::TextureView,
+    #[depth]
     tex_depth: blade::TextureView,
     sam: blade::Sampler,
+    #[depth]
     sam_comparison: blade::Sampler,
 }
 

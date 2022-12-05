@@ -324,6 +324,18 @@ pub enum PlainType {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TextureBindingType {
+    Plain(PlainType),
+    Depth,
+}
+
+impl From<PlainType> for TextureBindingType {
+    fn from(ty: PlainType) -> Self {
+        Self::Plain(ty)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PlainContainer {
     Scalar,
     Vector(VectorSize),
@@ -339,6 +351,7 @@ pub trait AsPlain {
 pub enum ShaderBinding {
     Texture {
         dimension: TextureViewDimension,
+        ty: TextureBindingType,
     },
     TextureStorage {
         dimension: TextureViewDimension,

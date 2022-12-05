@@ -1,5 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
+use std::mem;
 
 enum ResourceType {
     TextureView,
@@ -10,6 +11,7 @@ enum ResourceType {
 #[derive(Default, Debug, PartialEq)]
 struct EntryAttributes {
     struct_name: Option<String>,
+    is_depth: bool,
 }
 
 fn parse_attributes(entry_attributes: &[syn::Attribute]) -> EntryAttributes {
@@ -26,6 +28,9 @@ fn parse_attributes(entry_attributes: &[syn::Attribute]) -> EntryAttributes {
                 .parse_args::<syn::LitStr>()
                 .expect("Unable to parse 'struct_name' value");
             attributes.struct_name = Some(literal.value());
+        }
+        if path_segments.len() == 1 && path_segments[0] == "depth" {
+            attributes.is_depth = true;
         }
     }
     attributes
@@ -93,16 +98,27 @@ fn impl_shader_data(input_stream: TokenStream) -> syn::Result<proc_macro2::Token
                     }),
                 )
             }
-            Some(ResourceType::TextureView) => (
-                "set_texture",
-                quote!(blade::ShaderBinding::Texture {
-                    dimension: blade::TextureViewDimension::D2,
-                }),
-            ),
-            Some(ResourceType::Sampler) => (
-                "set_sampler",
-                quote!(blade::ShaderBinding::Sampler { comparison: false }),
-            ),
+            Some(ResourceType::TextureView) => {
+                let sub_ty = if mem::replace(&mut attributes.is_depth, false) {
+                    quote!(blade::TextureBindingType::Depth)
+                } else {
+                    quote!(blade::PlainType::F32.into())
+                };
+                (
+                    "set_texture",
+                    quote!(blade::ShaderBinding::Texture {
+                        dimension: blade::TextureViewDimension::D2,
+                        ty: #sub_ty,
+                    }),
+                )
+            },
+            Some(ResourceType::Sampler) => {
+                let is_depth = mem::replace(&mut attributes.is_depth, false);
+                (
+                    "set_sampler",
+                    quote!(blade::ShaderBinding::Sampler { comparison: #is_depth }),
+                )
+            },
             None => (
                 "set_plain",
                 quote!(
@@ -124,7 +140,7 @@ fn impl_shader_data(input_stream: TokenStream) -> syn::Result<proc_macro2::Token
             encoder.#setter_ident(#index, self.#name);
         });
 
-        assert_eq!(attributes, EntryAttributes::default());
+        assert!(attributes == EntryAttributes::default(), "Some of the attributes are not used: {:?}", attributes);
     }
 
     let impl_layout = quote! {
@@ -148,7 +164,7 @@ fn impl_shader_data(input_stream: TokenStream) -> syn::Result<proc_macro2::Token
     Ok(output)
 }
 
-#[proc_macro_derive(ShaderData, attributes(struct_name))]
+#[proc_macro_derive(ShaderData, attributes(struct_name, depth))]
 pub fn shader_data_derive(input: TokenStream) -> TokenStream {
     let stream = match impl_shader_data(input) {
         Ok(tokens) => tokens,

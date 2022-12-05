@@ -11,4 +11,8 @@ fn test_buffer(buf: StorageBuffer) {}
 fn main() {
     test_plain($i1, $i4, $u2, $f1, $f4);
     test_buffer($buffer);
+    let tc = vec3<f32>(0.5);
+    //textureSample($tex_1d, $sam, 0.0);
+    textureSampleLevel($tex_depth, $sam, tc.xy, 0.0);
+    textureSampleCompareLevel($tex_depth, $sam_comparison, tc.xy, 0.5);
 }
