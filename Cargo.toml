@@ -27,6 +27,8 @@ blade-macros = { version = "0.0.1", path = "blade-macros" }
 blade-graphics = { version = "0.0.1", path = "blade-graphics" }
 
 [dev-dependencies]
+egui = "0.19"
+egui-winit = "0.19"
 env_logger = "0.9"
 rand = "0.8"
 winit = "0.27"

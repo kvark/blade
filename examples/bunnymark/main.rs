@@ -60,7 +60,7 @@ impl Example {
 
         let global_layout = <Globals as blade::ShaderData>::layout();
         let local_layout = <Locals as blade::ShaderData>::layout();
-        let shader_source = std::fs::read_to_string("examples/bunnymark.wgsl").unwrap();
+        let shader_source = std::fs::read_to_string("examples/bunnymark/main.wgsl").unwrap();
         let shader = context.create_shader(blade::ShaderDesc {
             source: &shader_source,
             data_layouts: &[&global_layout, &local_layout],

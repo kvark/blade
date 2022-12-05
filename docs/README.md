@@ -26,7 +26,7 @@ cargo check
 ```
 Run the minimal example:
 ```
-cargo run --example minimal
+cargo run --example mini
 ```
 
 ### Vulkan Portability

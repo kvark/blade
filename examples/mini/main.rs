@@ -56,7 +56,7 @@ fn main() {
     };
 
     let global_layout = <Globals as blade::ShaderData>::layout();
-    let shader_source = std::fs::read_to_string("examples/minimal.wgsl").unwrap();
+    let shader_source = std::fs::read_to_string("examples/mini/shader.wgsl").unwrap();
     let shader = context.create_shader(blade::ShaderDesc {
         source: &shader_source,
         data_layouts: &[&global_layout],

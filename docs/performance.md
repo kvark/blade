@@ -25,7 +25,7 @@ Windows/Vulkan:
 
 ## Conclusions
 
-Amazingly, Blade performance in the worst case scenario is on par with wgpu, or even higher (but still far from wgpu-hal). This is the best outcome we could hope for.
+Amazingly, Blade performance in the worst case scenario is on par with wgpu (but still far from wgpu-hal). This is the best outcome we could hope for.
 
 As expected, Vulkan path on macOS via MoltenVK is slower than the native Metal backend.
 
