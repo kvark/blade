@@ -107,18 +107,18 @@ fn impl_shader_data(input_stream: TokenStream) -> syn::Result<proc_macro2::Token
                 (
                     "set_texture",
                     quote!(blade::ShaderBinding::Texture {
-                        dimension: blade::TextureViewDimension::D2,
+                        dimension: blade::ViewDimension::D2,
                         ty: #sub_ty,
                     }),
                 )
-            },
+            }
             Some(ResourceType::Sampler) => {
                 let is_depth = mem::replace(&mut attributes.is_depth, false);
                 (
                     "set_sampler",
                     quote!(blade::ShaderBinding::Sampler { comparison: #is_depth }),
                 )
-            },
+            }
             None => (
                 "set_plain",
                 quote!(
@@ -140,7 +140,11 @@ fn impl_shader_data(input_stream: TokenStream) -> syn::Result<proc_macro2::Token
             encoder.#setter_ident(#index, self.#name);
         });
 
-        assert!(attributes == EntryAttributes::default(), "Some of the attributes are not used: {:?}", attributes);
+        assert!(
+            attributes == EntryAttributes::default(),
+            "Some of the attributes are not used: {:?}",
+            attributes
+        );
     }
 
     let impl_layout = quote! {

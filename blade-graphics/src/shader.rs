@@ -67,16 +67,16 @@ mod plain {
     }
 }
 
-fn map_view_dimension(dimension: super::TextureViewDimension) -> &'static str {
-    use super::TextureViewDimension as Tvd;
+fn map_view_dimension(dimension: super::ViewDimension) -> &'static str {
+    use super::ViewDimension as Vd;
     match dimension {
-        Tvd::D1 => "1d",
-        Tvd::D1Array => "1d_array",
-        Tvd::D2 => "2d",
-        Tvd::D2Array => "2d_array",
-        Tvd::Cube => "cube",
-        Tvd::CubeArray => "cube_array",
-        Tvd::D3 => "3d",
+        Vd::D1 => "1d",
+        Vd::D1Array => "1d_array",
+        Vd::D2 => "2d",
+        Vd::D2Array => "2d_array",
+        Vd::Cube => "cube",
+        Vd::CubeArray => "cube_array",
+        Vd::D3 => "3d",
     }
 }
 
@@ -179,12 +179,10 @@ impl super::Context {
                         match ty {
                             super::TextureBindingType::Plain(pty) => {
                                 let scalar_name = map_plain_type(pty);
-                                write!(header, "texture_{}<{}>", dim_str, scalar_name)
-                                .unwrap();
+                                write!(header, "texture_{}<{}>", dim_str, scalar_name).unwrap();
                             }
                             super::TextureBindingType::Depth => {
-                                write!(header, "texture_depth_{}", dim_str)
-                                .unwrap();
+                                write!(header, "texture_depth_{}", dim_str).unwrap();
                             }
                         }
                         write!(header, ";").unwrap();

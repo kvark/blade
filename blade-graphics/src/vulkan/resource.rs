@@ -242,16 +242,16 @@ fn map_texture_dimension(dimension: crate::TextureDimension) -> vk::ImageType {
     }
 }
 
-fn map_view_dimension(dimension: crate::TextureViewDimension) -> vk::ImageViewType {
-    use crate::TextureViewDimension as Tvd;
+fn map_view_dimension(dimension: crate::ViewDimension) -> vk::ImageViewType {
+    use crate::ViewDimension as Vd;
     match dimension {
-        Tvd::D1 => vk::ImageViewType::TYPE_1D,
-        Tvd::D1Array => vk::ImageViewType::TYPE_1D_ARRAY,
-        Tvd::D2 => vk::ImageViewType::TYPE_2D,
-        Tvd::D2Array => vk::ImageViewType::TYPE_2D_ARRAY,
-        Tvd::Cube => vk::ImageViewType::CUBE,
-        Tvd::CubeArray => vk::ImageViewType::CUBE_ARRAY,
-        Tvd::D3 => vk::ImageViewType::TYPE_3D,
+        Vd::D1 => vk::ImageViewType::TYPE_1D,
+        Vd::D1Array => vk::ImageViewType::TYPE_1D_ARRAY,
+        Vd::D2 => vk::ImageViewType::TYPE_2D,
+        Vd::D2Array => vk::ImageViewType::TYPE_2D_ARRAY,
+        Vd::Cube => vk::ImageViewType::CUBE,
+        Vd::CubeArray => vk::ImageViewType::CUBE_ARRAY,
+        Vd::D3 => vk::ImageViewType::TYPE_3D,
     }
 }
 

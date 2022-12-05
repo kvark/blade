@@ -100,7 +100,7 @@ impl Example {
             name: "view",
             texture,
             format: blade::TextureFormat::Rgba8Unorm,
-            dimension: blade::TextureViewDimension::D2,
+            dimension: blade::ViewDimension::D2,
             subresources: &Default::default(),
         });
 

@@ -21,17 +21,17 @@ fn map_texture_usage(usage: crate::TextureUsage) -> metal::MTLTextureUsage {
     mtl_usage
 }
 
-fn map_texture_view_dimension(dimension: crate::TextureViewDimension) -> metal::MTLTextureType {
-    use crate::TextureViewDimension as Tvd;
+fn map_view_dimension(dimension: crate::ViewDimension) -> metal::MTLTextureType {
+    use crate::ViewDimension as Vd;
     use metal::MTLTextureType::*;
     match dimension {
-        Tvd::D1 => D1,
-        Tvd::D1Array => D1Array,
-        Tvd::D2 => D2,
-        Tvd::D2Array => D2Array,
-        Tvd::D3 => D3,
-        Tvd::Cube => Cube,
-        Tvd::CubeArray => CubeArray,
+        Vd::D1 => D1,
+        Vd::D1Array => D1Array,
+        Vd::D2 => D2,
+        Vd::D2Array => D2Array,
+        Vd::D3 => D3,
+        Vd::Cube => Cube,
+        Vd::CubeArray => CubeArray,
     }
 }
 
@@ -145,7 +145,7 @@ impl super::Context {
     pub fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
         let texture = desc.texture.as_ref();
         let mtl_format = super::map_texture_format(desc.format);
-        let mtl_type = map_texture_view_dimension(desc.dimension);
+        let mtl_type = map_view_dimension(desc.dimension);
         let mip_level_count = match desc.subresources.mip_level_count {
             Some(count) => count.get() as u64,
             None => texture.mipmap_level_count() - desc.subresources.base_mip_level as u64,

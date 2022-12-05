@@ -29,7 +29,7 @@ const DIMENSIONS: &[(
     blade::TextureDimension,
     blade::Extent,
     u32,
-    &[(blade::TextureViewDimension, u32)],
+    &[(blade::ViewDimension, u32)],
 )] = &[
     (
         blade::TextureDimension::D1,
@@ -40,8 +40,8 @@ const DIMENSIONS: &[(
         },
         3,
         &[
-            (blade::TextureViewDimension::D1, 1),
-            (blade::TextureViewDimension::D1Array, 1),
+            (blade::ViewDimension::D1, 1),
+            (blade::ViewDimension::D1Array, 1),
         ],
     ),
     (
@@ -53,10 +53,10 @@ const DIMENSIONS: &[(
         },
         12,
         &[
-            (blade::TextureViewDimension::D2, 1),
-            (blade::TextureViewDimension::D2Array, 1),
-            (blade::TextureViewDimension::Cube, 6),
-            (blade::TextureViewDimension::CubeArray, 6),
+            (blade::ViewDimension::D2, 1),
+            (blade::ViewDimension::D2Array, 1),
+            (blade::ViewDimension::Cube, 6),
+            (blade::ViewDimension::CubeArray, 6),
         ],
     ),
     (
@@ -67,7 +67,7 @@ const DIMENSIONS: &[(
             depth: 4,
         },
         1,
-        &[(blade::TextureViewDimension::D3, 1)],
+        &[(blade::ViewDimension::D3, 1)],
     ),
 ];
 
@@ -156,7 +156,7 @@ fn main() {
         name: "depth view",
         texture: depth_texture,
         format: depth_format,
-        dimension: blade::TextureViewDimension::D2,
+        dimension: blade::ViewDimension::D2,
         subresources: &blade::TextureSubresources::default(),
     });
 

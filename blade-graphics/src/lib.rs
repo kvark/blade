@@ -128,7 +128,7 @@ pub enum TextureDimension {
 }
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-pub enum TextureViewDimension {
+pub enum ViewDimension {
     D1,
     D1Array,
     D2,
@@ -195,7 +195,7 @@ pub struct TextureViewDesc<'a> {
     pub name: &'a str,
     pub texture: Texture,
     pub format: TextureFormat,
-    pub dimension: TextureViewDimension,
+    pub dimension: ViewDimension,
     pub subresources: &'a TextureSubresources,
 }
 
@@ -350,11 +350,11 @@ pub trait AsPlain {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShaderBinding {
     Texture {
-        dimension: TextureViewDimension,
+        dimension: ViewDimension,
         ty: TextureBindingType,
     },
     TextureStorage {
-        dimension: TextureViewDimension,
+        dimension: ViewDimension,
         format: TextureFormat,
         access: StorageAccess,
     },

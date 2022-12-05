@@ -24,7 +24,7 @@ impl blade::ShaderData for Globals {
                 (
                     "input",
                     blade::ShaderBinding::Texture {
-                        dimension: blade::TextureViewDimension::D2,
+                        dimension: blade::ViewDimension::D2,
                         ty: blade::PlainType::F32.into(),
                     },
                 ),
@@ -32,7 +32,7 @@ impl blade::ShaderData for Globals {
                     "output",
                     blade::ShaderBinding::TextureStorage {
                         format: blade::TextureFormat::Rgba8Unorm,
-                        dimension: blade::TextureViewDimension::D2,
+                        dimension: blade::ViewDimension::D2,
                         access: blade::StorageAccess::STORE,
                     },
                 ),
@@ -92,7 +92,7 @@ fn main() {
                 name: &format!("mip-{}", i),
                 texture,
                 format: blade::TextureFormat::Rgba8Unorm,
-                dimension: blade::TextureViewDimension::D2,
+                dimension: blade::ViewDimension::D2,
                 subresources: &blade::TextureSubresources {
                     base_mip_level: i,
                     mip_level_count: NonZeroU32::new(1),
