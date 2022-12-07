@@ -181,12 +181,13 @@ impl super::Context {
         }
 
         let ep_index = sf.entry_point_index();
+        let ep_info = sf.shader.info.get_entry_point(ep_index);
         let naga_stage = sf.shader.module.entry_points[ep_index].stage;
         let mut module = sf.shader.module.clone();
         let mut layouter = naga::proc::Layouter::default();
         layouter.update(&module.types, &module.constants).unwrap();
 
-        for (_, var) in module.global_variables.iter_mut() {
+        for (handle, var) in module.global_variables.iter_mut() {
             let access = match var.space {
                 naga::AddressSpace::Storage { access } => access,
                 naga::AddressSpace::Uniform | naga::AddressSpace::Handle => {
@@ -194,6 +195,7 @@ impl super::Context {
                 }
                 _ => continue,
             };
+
             assert_eq!(var.binding, None);
             let var_name = var.name.as_ref().unwrap();
             for (group_index, (bgl, bgi)) in bind_group_layouts
@@ -254,8 +256,10 @@ impl super::Context {
                     );
                     assert_eq!(var.binding, None);
                     var.binding = Some(res_binding.clone());
-                    naga_resources.resources.insert(res_binding, bind_target);
-                    bgi.visibility |= naga_stage.into();
+                    if !ep_info[handle].is_empty() {
+                        naga_resources.resources.insert(res_binding, bind_target);
+                        bgi.visibility |= naga_stage.into();
+                    }
                     break;
                 }
             }
