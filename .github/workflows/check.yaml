@@ -1,6 +1,10 @@
 name: check
 
-on: [pull_request, push]
+on:
+  push:
+    branches: ["main"]
+    tags: [v0.*]
+  pull_request:
 
 jobs:
   build:

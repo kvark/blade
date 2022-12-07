@@ -29,6 +29,6 @@ Amazingly, Blade performance in the worst case scenario is on par with wgpu (but
 
 As expected, Vulkan path on macOS via MoltenVK is slower than the native Metal backend.
 
-Ergonomically, our example is 300 LOC versus 830 LOC of wgpu-hal and 370-750 LOC in wgpu (depending on how we count the example framework).
+Ergonomically, our example is 335 LOC versus 830 LOC of wgpu-hal and 370-750 LOC in wgpu (depending on how we count the example framework).
 
 It's also closer to the hardware (than even wgpu-hal) and easier to debug.
