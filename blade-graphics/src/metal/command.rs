@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, mem};
 
 fn map_origin(origin: &[u32; 3]) -> metal::MTLOrigin {
     metal::MTLOrigin {
@@ -16,61 +16,65 @@ fn map_extent(extent: &crate::Extent) -> metal::MTLSize {
     }
 }
 
-struct ShaderDataEncoder<'a> {
-    //raw: metal::ArgumentEncoderRef,
-    cs_encoder: Option<&'a metal::ComputeCommandEncoderRef>,
-    vs_encoder: Option<&'a metal::RenderCommandEncoderRef>,
-    fs_encoder: Option<&'a metal::RenderCommandEncoderRef>,
-    targets: &'a [u32],
-    plain_data: &'a mut [u8],
-}
-
-impl crate::ShaderDataEncoder for ShaderDataEncoder<'_> {
-    fn set_buffer(&mut self, index: u32, piece: crate::BufferPiece) {
-        let slot = self.targets[index as usize] as _;
-        let value = Some(piece.buffer.as_ref());
-        if let Some(encoder) = self.vs_encoder {
-            encoder.set_vertex_buffer(slot, value, piece.offset);
+impl<T: bytemuck::Pod> crate::ShaderBindable for T {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        let slot = ctx.targets[index as usize] as _;
+        let ptr: *const T = self;
+        let size = mem::size_of::<T>() as u64;
+        if let Some(encoder) = ctx.vs_encoder {
+            encoder.set_vertex_bytes(slot, size, ptr as *const _);
         }
-        if let Some(encoder) = self.fs_encoder {
-            encoder.set_fragment_buffer(slot, value, piece.offset);
+        if let Some(encoder) = ctx.fs_encoder {
+            encoder.set_fragment_bytes(slot, size, ptr as *const _);
         }
-        if let Some(encoder) = self.cs_encoder {
-            encoder.set_buffer(slot, value, piece.offset);
+        if let Some(encoder) = ctx.cs_encoder {
+            encoder.set_bytes(slot, size, ptr as *const _);
         }
     }
-    fn set_texture(&mut self, index: u32, view: super::TextureView) {
-        //self.raw.set_texture(index as _, view.as_ref());
-        let slot = self.targets[index as usize] as _;
-        let value = Some(view.as_ref());
-        if let Some(encoder) = self.vs_encoder {
+}
+impl crate::ShaderBindable for super::TextureView {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        let slot = ctx.targets[index as usize] as _;
+        let value = Some(self.as_ref());
+        if let Some(encoder) = ctx.vs_encoder {
             encoder.set_vertex_texture(slot, value);
         }
-        if let Some(encoder) = self.fs_encoder {
+        if let Some(encoder) = ctx.fs_encoder {
             encoder.set_fragment_texture(slot, value);
         }
-        if let Some(encoder) = self.cs_encoder {
+        if let Some(encoder) = ctx.cs_encoder {
             encoder.set_texture(slot, value);
         }
     }
-    fn set_sampler(&mut self, index: u32, sampler: super::Sampler) {
+}
+impl crate::ShaderBindable for super::Sampler {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         //self.raw.set_sampler_state(index as _, sampler.as_ref());
-        let slot = self.targets[index as usize] as _;
-        let value = Some(sampler.as_ref());
-        if let Some(encoder) = self.vs_encoder {
+        let slot = ctx.targets[index as usize] as _;
+        let value = Some(self.as_ref());
+        if let Some(encoder) = ctx.vs_encoder {
             encoder.set_vertex_sampler_state(slot, value);
         }
-        if let Some(encoder) = self.fs_encoder {
+        if let Some(encoder) = ctx.fs_encoder {
             encoder.set_fragment_sampler_state(slot, value);
         }
-        if let Some(encoder) = self.cs_encoder {
+        if let Some(encoder) = ctx.cs_encoder {
             encoder.set_sampler_state(slot, value);
         }
     }
-    fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P) {
-        let offset = self.targets[index as usize] as usize;
-        unsafe {
-            std::ptr::write(self.plain_data.as_mut_ptr().add(offset) as *mut P, data);
+}
+impl crate::ShaderBindable for crate::BufferPiece {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        let slot = ctx.targets[index as usize] as _;
+        let value = Some(self.buffer.as_ref());
+        if let Some(encoder) = ctx.vs_encoder {
+            encoder.set_vertex_buffer(slot, value, self.offset);
+        }
+        if let Some(encoder) = ctx.fs_encoder {
+            encoder.set_fragment_buffer(slot, value, self.offset);
+        }
+        if let Some(encoder) = ctx.cs_encoder {
+            encoder.set_buffer(slot, value, self.offset);
         }
     }
 }
@@ -117,7 +121,7 @@ impl super::CommandEncoder {
         });
         super::ComputeCommandEncoder {
             raw,
-            plain_data: &mut self.plain_data,
+            phantom: PhantomData,
         }
     }
 
@@ -206,7 +210,7 @@ impl super::CommandEncoder {
 
         super::RenderCommandEncoder {
             raw,
-            plain_data: &mut self.plain_data,
+            phantom: PhantomData,
         }
     }
 }
@@ -297,15 +301,6 @@ impl super::ComputeCommandEncoder<'_> {
         &'p mut self,
         pipeline: &'p super::ComputePipeline,
     ) -> super::ComputePipelineContext<'p> {
-        let max_data_size = pipeline
-            .layout
-            .bind_groups
-            .iter()
-            .map(|bg| bg.plain_data_size as usize)
-            .max()
-            .unwrap_or_default();
-        self.plain_data.resize(max_data_size, 0);
-
         self.raw.set_compute_pipeline_state(&pipeline.raw);
         if let Some(index) = pipeline.layout.sizes_buffer_slot {
             //TODO: get real sizes
@@ -320,7 +315,6 @@ impl super::ComputeCommandEncoder<'_> {
         super::ComputePipelineContext {
             encoder: &mut self.raw,
             bind_groups: &pipeline.layout.bind_groups,
-            plain_data: self.plain_data.as_mut(),
             wg_size: pipeline.wg_size,
         }
     }
@@ -363,20 +357,10 @@ impl super::RenderCommandEncoder<'_> {
                 .set_depth_bias(bias.constant as f32, bias.slope_scale, bias.clamp);
         }
 
-        let max_data_size = pipeline
-            .layout
-            .bind_groups
-            .iter()
-            .map(|bg| bg.plain_data_size as usize)
-            .max()
-            .unwrap_or_default();
-        self.plain_data.resize(max_data_size, 0);
-
         super::RenderPipelineContext {
             encoder: &mut self.raw,
             primitive_type: pipeline.primitive_type,
             bind_groups: &pipeline.layout.bind_groups,
-            plain_data: self.plain_data.as_mut(),
         }
     }
 }
@@ -391,7 +375,7 @@ impl super::ComputePipelineContext<'_> {
     pub fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         let info = &self.bind_groups[group as usize];
 
-        data.fill(ShaderDataEncoder {
+        data.fill(super::PipelineContext {
             cs_encoder: if info.visibility.contains(crate::ShaderVisibility::COMPUTE) {
                 Some(self.encoder.as_ref())
             } else {
@@ -400,16 +384,7 @@ impl super::ComputePipelineContext<'_> {
             vs_encoder: None,
             fs_encoder: None,
             targets: &info.targets,
-            plain_data: self.plain_data,
         });
-
-        if let Some(slot) = info.plain_buffer_slot {
-            let data = self.plain_data.as_ptr() as *const _;
-            if info.visibility.contains(crate::ShaderVisibility::COMPUTE) {
-                self.encoder
-                    .set_bytes(slot as _, info.plain_data_size as _, data);
-            }
-        }
     }
 
     pub fn dispatch(&mut self, groups: [u32; 3]) {
@@ -430,7 +405,7 @@ impl super::RenderPipelineContext<'_> {
     pub fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         let info = &self.bind_groups[group as usize];
 
-        data.fill(ShaderDataEncoder {
+        data.fill(super::PipelineContext {
             cs_encoder: None,
             vs_encoder: if info.visibility.contains(crate::ShaderVisibility::VERTEX) {
                 Some(self.encoder.as_ref())
@@ -443,20 +418,7 @@ impl super::RenderPipelineContext<'_> {
                 None
             },
             targets: &info.targets,
-            plain_data: self.plain_data,
         });
-
-        if let Some(slot) = info.plain_buffer_slot {
-            let data = self.plain_data.as_ptr() as *const _;
-            if info.visibility.contains(crate::ShaderVisibility::VERTEX) {
-                self.encoder
-                    .set_vertex_bytes(slot as _, info.plain_data_size as _, data);
-            }
-            if info.visibility.contains(crate::ShaderVisibility::FRAGMENT) {
-                self.encoder
-                    .set_fragment_bytes(slot as _, info.plain_data_size as _, data);
-            }
-        }
     }
 
     pub fn draw(

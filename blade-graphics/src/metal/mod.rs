@@ -134,15 +134,12 @@ pub struct CommandEncoder {
     raw: Option<metal::CommandBuffer>,
     name: String,
     queue: Arc<Mutex<metal::CommandQueue>>,
-    plain_data: Vec<u8>,
 }
 
 #[derive(Debug)]
 struct BindGroupInfo {
     visibility: crate::ShaderVisibility,
     targets: Box<[u32]>,
-    plain_buffer_slot: Option<u32>,
-    plain_data_size: u32,
 }
 
 #[derive(Debug)]
@@ -195,13 +192,21 @@ pub struct TransferCommandEncoder<'a> {
 #[derive(Debug)]
 pub struct ComputeCommandEncoder<'a> {
     raw: metal::ComputeCommandEncoder,
-    plain_data: &'a mut Vec<u8>,
+    phantom: PhantomData<&'a CommandEncoder>,
 }
 
 #[derive(Debug)]
 pub struct RenderCommandEncoder<'a> {
     raw: metal::RenderCommandEncoder,
-    plain_data: &'a mut Vec<u8>,
+    phantom: PhantomData<&'a CommandEncoder>,
+}
+
+pub struct PipelineContext<'a> {
+    //raw: metal::ArgumentEncoderRef,
+    cs_encoder: Option<&'a metal::ComputeCommandEncoderRef>,
+    vs_encoder: Option<&'a metal::RenderCommandEncoderRef>,
+    fs_encoder: Option<&'a metal::RenderCommandEncoderRef>,
+    targets: &'a [u32],
 }
 
 #[derive(Debug)]
@@ -209,7 +214,6 @@ pub struct ComputePipelineContext<'a> {
     encoder: &'a mut metal::ComputeCommandEncoder,
     wg_size: metal::MTLSize,
     bind_groups: &'a [BindGroupInfo],
-    plain_data: &'a mut [u8],
 }
 
 #[derive(Debug)]
@@ -217,7 +221,6 @@ pub struct RenderPipelineContext<'a> {
     encoder: &'a mut metal::RenderCommandEncoder,
     primitive_type: metal::MTLPrimitiveType,
     bind_groups: &'a [BindGroupInfo],
-    plain_data: &'a mut [u8],
 }
 
 fn map_texture_format(format: crate::TextureFormat) -> metal::MTLPixelFormat {
@@ -303,7 +306,6 @@ impl Context {
             raw: None,
             name: desc.name.to_string(),
             queue: Arc::clone(&self.queue),
-            plain_data: Vec::new(),
         }
     }
 

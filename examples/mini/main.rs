@@ -14,35 +14,17 @@ impl blade::ShaderData for Globals {
     fn layout() -> blade::ShaderDataLayout {
         blade::ShaderDataLayout {
             bindings: vec![
-                (
-                    "modulator",
-                    blade::ShaderBinding::Plain {
-                        ty: blade::PlainType::F32,
-                        container: blade::PlainContainer::Vector(blade::VectorSize::Quad),
-                    },
-                ),
-                (
-                    "input",
-                    blade::ShaderBinding::Texture {
-                        dimension: blade::ViewDimension::D2,
-                        ty: blade::PlainType::F32.into(),
-                    },
-                ),
-                (
-                    "output",
-                    blade::ShaderBinding::TextureStorage {
-                        format: blade::TextureFormat::Rgba8Unorm,
-                        dimension: blade::ViewDimension::D2,
-                        access: blade::StorageAccess::STORE,
-                    },
-                ),
+                ("modulator", blade::ShaderBinding::Plain { size: 16 }),
+                ("input", blade::ShaderBinding::Texture),
+                ("output", blade::ShaderBinding::Texture),
             ],
         }
     }
-    fn fill<E: blade::ShaderDataEncoder>(&self, mut encoder: E) {
-        encoder.set_plain(0, self.modulator);
-        encoder.set_texture(1, self.input);
-        encoder.set_texture(2, self.output);
+    fn fill(&self, mut ctx: blade::PipelineContext) {
+        use blade::ShaderBindable as _;
+        self.modulator.bind_to(&mut ctx, 0);
+        self.input.bind_to(&mut ctx, 1);
+        self.output.bind_to(&mut ctx, 2);
     }
 }
 
@@ -60,11 +42,11 @@ fn main() {
     let shader_source = std::fs::read_to_string("examples/mini/shader.wgsl").unwrap();
     let shader = context.create_shader(blade::ShaderDesc {
         source: &shader_source,
-        data_layouts: &[&global_layout],
     });
 
     let pipeline = context.create_compute_pipeline(blade::ComputePipelineDesc {
         name: "main",
+        data_layouts: &[&global_layout],
         compute: shader.at("main"),
     });
     let wg_size = pipeline.get_workgroup_size();
