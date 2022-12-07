@@ -110,7 +110,7 @@ bitflags::bitflags! {
     }
 }
 
-fn align_to(offset: u32, alignment: u32) -> u32 {
+fn _align_to(offset: u32, alignment: u32) -> u32 {
     let remain = offset % alignment;
     if remain != 0 {
         offset + alignment - remain
@@ -119,158 +119,182 @@ fn align_to(offset: u32, alignment: u32) -> u32 {
     }
 }
 
-fn build_pipeline_layout(
-    combined: &[(&crate::ShaderDataLayout, crate::ShaderVisibility)],
-) -> (super::PipelineLayout, msl::Options) {
-    let mut naga_resources = msl::PerStageResources::default();
-    let mut combined_visibility = crate::ShaderVisibility::empty();
-    let mut bind_group_infos = Vec::with_capacity(combined.len());
-    let mut unsized_buffer_count = 0;
-    let mut num_textures = 0u32;
-    let mut num_samplers = 0u32;
-    let mut num_buffers = 0u32;
-    for (group_index, &(layout, visibility)) in combined.iter().enumerate() {
-        combined_visibility |= visibility;
-        let mut targets = Vec::with_capacity(layout.bindings.len());
-        // the order of binding indices has to match the logic in `create_shader`
-        let mut binding_index = 1;
-        let mut plain_data_size = 0;
-        let mut size_alignment = 1;
-        for &(_, ref binding) in layout.bindings.iter() {
-            let resource_binding = naga::ResourceBinding {
-                group: group_index as u32,
-                binding: binding_index,
-            };
-            let mut naga_target = msl::BindTarget::default();
-            let target = match *binding {
-                crate::ShaderBinding::Texture { .. }
-                | crate::ShaderBinding::TextureStorage { .. } => {
-                    naga_target.texture = Some(num_textures as _);
-                    binding_index += 1;
-                    num_textures += 1;
-                    num_textures - 1
-                }
-                crate::ShaderBinding::Sampler { .. } => {
-                    naga_target.sampler = Some(msl::BindSamplerTarget::Resource(num_samplers as _));
-                    binding_index += 1;
-                    num_samplers += 1;
-                    num_samplers - 1
-                }
-                crate::ShaderBinding::Buffer { .. } => {
-                    naga_target.buffer = Some(num_buffers as _);
-                    binding_index += 1;
-                    unsized_buffer_count += 1;
-                    num_buffers += 1;
-                    num_buffers - 1
-                }
-                crate::ShaderBinding::Plain { ty, container } => {
-                    let scalar_size = match ty {
-                        crate::PlainType::U32 | crate::PlainType::I32 | crate::PlainType::F32 => {
-                            4u32
-                        }
-                    };
-                    let (count, alignment) = match container {
-                        crate::PlainContainer::Scalar => (1u32, 1u32),
-                        crate::PlainContainer::Vector(crate::VectorSize::Bi) => (2, 2),
-                        crate::PlainContainer::Vector(size) => (size as u32, 4),
-                        crate::PlainContainer::Matrix(rows, crate::VectorSize::Bi) => {
-                            (rows as u32 * 2, 2)
-                        }
-                        crate::PlainContainer::Matrix(rows, cols) => (rows as u32 * cols as u32, 4),
-                    };
-                    size_alignment = size_alignment.max(scalar_size * alignment);
-                    let offset = align_to(plain_data_size, scalar_size * alignment);
-                    plain_data_size = offset + scalar_size * count;
-                    offset
-                }
-            };
-
-            targets.push(target);
-            if resource_binding.binding != binding_index {
-                naga_resources
-                    .resources
-                    .insert(resource_binding, naga_target);
+impl super::PipelineLayout {
+    fn new(bind_group_layouts: &[&crate::ShaderDataLayout]) -> Self {
+        let mut bind_group_infos = Vec::with_capacity(bind_group_layouts.len());
+        let mut unsized_buffer_count = 0;
+        let mut num_textures = 0u32;
+        let mut num_samplers = 0u32;
+        let mut num_buffers = 0u32;
+        for layout in bind_group_layouts.iter() {
+            let mut targets = Vec::with_capacity(layout.bindings.len());
+            for &(_, ref binding) in layout.bindings.iter() {
+                targets.push(match *binding {
+                    crate::ShaderBinding::Texture => {
+                        num_textures += 1;
+                        num_textures - 1
+                    }
+                    crate::ShaderBinding::Sampler => {
+                        num_samplers += 1;
+                        num_samplers - 1
+                    }
+                    crate::ShaderBinding::Buffer => {
+                        unsized_buffer_count += 1;
+                        num_buffers += 1;
+                        num_buffers - 1
+                    }
+                    crate::ShaderBinding::Plain { .. } => {
+                        num_buffers += 1;
+                        num_buffers - 1
+                    }
+                });
             }
+
+            bind_group_infos.push(super::BindGroupInfo {
+                visibility: crate::ShaderVisibility::empty(),
+                targets: targets.into_boxed_slice(),
+            });
         }
 
-        let plain_buffer_slot = if plain_data_size != 0 {
-            naga_resources.resources.insert(
-                naga::ResourceBinding {
-                    group: group_index as u32,
-                    binding: 0,
-                },
-                msl::BindTarget {
-                    buffer: Some(num_buffers as _),
-                    ..Default::default()
-                },
-            );
-            num_buffers += 1;
-            Some(num_buffers - 1)
-        } else {
-            None
-        };
-        bind_group_infos.push(super::BindGroupInfo {
-            visibility,
-            targets: targets.into_boxed_slice(),
-            plain_buffer_slot,
-            plain_data_size: align_to(plain_data_size, size_alignment),
-        });
+        super::PipelineLayout {
+            bind_groups: bind_group_infos.into_boxed_slice(),
+            sizes_buffer_slot: if unsized_buffer_count != 0 {
+                Some(num_buffers)
+            } else {
+                None
+            },
+        }
     }
-
-    let layout = super::PipelineLayout {
-        bind_groups: bind_group_infos.into_boxed_slice(),
-        sizes_buffer_slot: if unsized_buffer_count != 0 {
-            Some(num_buffers)
-        } else {
-            None
-        },
-    };
-    naga_resources.sizes_buffer = layout.sizes_buffer_slot.map(|slot| slot as msl::Slot);
-
-    let naga_options = msl::Options {
-        lang_version: (2, 2),
-        inline_samplers: Default::default(),
-        spirv_cross_compatibility: false,
-        fake_missing_bindings: false,
-        per_stage_map: msl::PerStageMap {
-            //Note: we could technically save one of the copies
-            cs: if combined_visibility.contains(crate::ShaderVisibility::COMPUTE) {
-                naga_resources.clone()
-            } else {
-                Default::default()
-            },
-            vs: if combined_visibility.contains(crate::ShaderVisibility::VERTEX) {
-                naga_resources.clone()
-            } else {
-                Default::default()
-            },
-            fs: if combined_visibility.contains(crate::ShaderVisibility::FRAGMENT) {
-                naga_resources.clone()
-            } else {
-                Default::default()
-            },
-        },
-        bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
-    };
-    (layout, naga_options)
 }
 
 impl super::Context {
     fn load_shader(
         &self,
         sf: crate::ShaderFunction,
+        bind_group_layouts: &[&crate::ShaderDataLayout],
+        layout: &mut super::PipelineLayout,
         flags: ShaderFlags,
-        naga_stage: naga::ShaderStage,
-        naga_options: &msl::Options,
     ) -> CompiledShader {
+        let mut naga_resources = msl::PerStageResources::default();
+        if let Some(slot) = layout.sizes_buffer_slot {
+            naga_resources.sizes_buffer = Some(slot as _);
+        }
+
+        let ep_index = sf.entry_point_index();
+        let naga_stage = sf.shader.module.entry_points[ep_index].stage;
+        let mut module = sf.shader.module.clone();
+        let mut layouter = naga::proc::Layouter::default();
+        layouter.update(&module.types, &module.constants).unwrap();
+
+        for (_, var) in module.global_variables.iter_mut() {
+            let access = match var.space {
+                naga::AddressSpace::Storage { access } => access,
+                naga::AddressSpace::Uniform | naga::AddressSpace::Handle => {
+                    naga::StorageAccess::empty()
+                }
+                _ => continue,
+            };
+            assert_eq!(var.binding, None);
+            let var_name = var.name.as_ref().unwrap();
+            for (group_index, (bgl, bgi)) in bind_group_layouts
+                .iter()
+                .zip(layout.bind_groups.iter_mut())
+                .enumerate()
+            {
+                if let Some((binding_index, (&(_, proto_binding), &resource_index))) = bgl
+                    .bindings
+                    .iter()
+                    .zip(bgi.targets.iter())
+                    .enumerate()
+                    .find(|(_, (&(name, _), _))| name == var_name)
+                {
+                    let res_binding = naga::ResourceBinding {
+                        group: group_index as u32,
+                        binding: binding_index as u32,
+                    };
+                    let (expected_proto, bind_target) = match module.types[var.ty].inner {
+                        naga::TypeInner::Image { .. } => (
+                            crate::ShaderBinding::Texture,
+                            msl::BindTarget {
+                                texture: Some(resource_index as _),
+                                ..Default::default()
+                            },
+                        ),
+                        naga::TypeInner::Sampler { .. } => (
+                            crate::ShaderBinding::Sampler,
+                            msl::BindTarget {
+                                sampler: Some(msl::BindSamplerTarget::Resource(
+                                    resource_index as _,
+                                )),
+                                ..Default::default()
+                            },
+                        ),
+                        _ => {
+                            let type_layout = &layouter[var.ty];
+                            let expected_proto = if access.is_empty() {
+                                crate::ShaderBinding::Plain {
+                                    size: type_layout.size,
+                                }
+                            } else {
+                                crate::ShaderBinding::Buffer
+                            };
+                            (
+                                expected_proto,
+                                msl::BindTarget {
+                                    buffer: Some(resource_index as _),
+                                    ..Default::default()
+                                },
+                            )
+                        }
+                    };
+                    assert_eq!(
+                        proto_binding, expected_proto,
+                        "Mismatched type for binding '{}'",
+                        var_name
+                    );
+                    assert_eq!(var.binding, None);
+                    var.binding = Some(res_binding.clone());
+                    naga_resources.resources.insert(res_binding, bind_target);
+                    bgi.visibility |= naga_stage.into();
+                    break;
+                }
+            }
+
+            assert!(
+                var.binding.is_some(),
+                "Unable to resolve binding for '{}'",
+                var_name
+            );
+        }
+
+        let msl_version = metal::MTLLanguageVersion::V2_2;
+        let naga_options = msl::Options {
+            lang_version: ((msl_version as u32 >> 16) as u8, msl_version as u8),
+            inline_samplers: Default::default(),
+            spirv_cross_compatibility: false,
+            fake_missing_bindings: false,
+            per_stage_map: match naga_stage {
+                naga::ShaderStage::Compute => msl::PerStageMap {
+                    cs: naga_resources,
+                    ..Default::default()
+                },
+                naga::ShaderStage::Vertex => msl::PerStageMap {
+                    vs: naga_resources,
+                    ..Default::default()
+                },
+                naga::ShaderStage::Fragment => msl::PerStageMap {
+                    fs: naga_resources,
+                    ..Default::default()
+                },
+            },
+            bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
+        };
+
         let pipeline_options = msl::PipelineOptions {
             allow_point_size: flags.contains(ShaderFlags::ALLOW_POINT_SIZE),
         };
-        let msl_version = metal::MTLLanguageVersion::V2_2;
-
-        let module = &sf.shader.module;
         let (source, info) =
-            msl::write_string(module, &sf.shader.info, naga_options, &pipeline_options).unwrap();
+            msl::write_string(&module, &sf.shader.info, &naga_options, &pipeline_options).unwrap();
 
         log::debug!(
             "Naga generated shader for entry point '{}' and stage {:?}\n{}",
@@ -293,7 +317,6 @@ impl super::Context {
                 panic!("MSL compilation error:\n{}", string);
             });
 
-        let ep_index = sf.entry_point_index();
         let ep = &module.entry_points[ep_index];
         let name = info.entry_point_names[ep_index].as_ref().unwrap();
         let wg_size = metal::MTLSize {
@@ -315,18 +338,16 @@ impl super::Context {
         &self,
         desc: crate::ComputePipelineDesc,
     ) -> super::ComputePipeline {
-        let combined =
-            crate::shader::merge_layouts(&[(desc.compute, crate::ShaderVisibility::COMPUTE)]);
-        let (layout, options) = build_pipeline_layout(&combined);
+        let mut layout = super::PipelineLayout::new(desc.data_layouts);
 
         objc::rc::autoreleasepool(|| {
             let descriptor = metal::ComputePipelineDescriptor::new();
 
             let cs = self.load_shader(
                 desc.compute,
+                desc.data_layouts,
+                &mut layout,
                 ShaderFlags::empty(),
-                naga::ShaderStage::Compute,
-                &options,
             );
             descriptor.set_compute_function(Some(&cs.function));
 
@@ -351,11 +372,7 @@ impl super::Context {
     }
 
     pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
-        let combined = crate::shader::merge_layouts(&[
-            (desc.vertex, crate::ShaderVisibility::VERTEX),
-            (desc.fragment, crate::ShaderVisibility::FRAGMENT),
-        ]);
-        let (layout, options) = build_pipeline_layout(&combined);
+        let mut layout = super::PipelineLayout::new(desc.data_layouts);
 
         let triangle_fill_mode = match desc.primitive.wireframe {
             false => metal::MTLTriangleFillMode::Fill,
@@ -390,21 +407,21 @@ impl super::Context {
 
             let vs = self.load_shader(
                 desc.vertex,
+                desc.data_layouts,
+                &mut layout,
                 match primitive_class {
                     metal::MTLPrimitiveTopologyClass::Point => ShaderFlags::ALLOW_POINT_SIZE,
                     _ => ShaderFlags::empty(),
                 },
-                naga::ShaderStage::Vertex,
-                &options,
             );
             descriptor.set_vertex_function(Some(&vs.function));
 
             // Fragment shader
             let fs = self.load_shader(
                 desc.fragment,
+                desc.data_layouts,
+                &mut layout,
                 ShaderFlags::empty(),
-                naga::ShaderStage::Fragment,
-                &options,
             );
             descriptor.set_fragment_function(Some(&fs.function));
 

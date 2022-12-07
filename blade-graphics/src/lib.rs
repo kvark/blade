@@ -43,7 +43,7 @@ pub mod limits {
 
 pub use hal::*;
 
-use std::{collections::HashSet, num::NonZeroU32};
+use std::num::NonZeroU32;
 
 #[derive(Debug)]
 pub struct ContextDesc {
@@ -278,16 +278,9 @@ pub struct SamplerDesc<'a> {
     pub border_color: Option<TextureColor>,
 }
 
-#[derive(Debug, Default)]
-struct ShaderBindGroup {
-    layout: ShaderDataLayout,
-    used_globals: HashSet<naga::Handle<naga::GlobalVariable>>,
-}
-
 pub struct Shader {
     module: naga::Module,
     info: naga::valid::ModuleInfo,
-    bind_groups: Box<[ShaderBindGroup]>,
 }
 
 #[derive(Clone, Copy)]
@@ -317,58 +310,33 @@ impl Shader {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum PlainType {
-    U32,
-    I32,
-    F32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum TextureBindingType {
-    Plain(PlainType),
-    Depth,
-}
-
-impl From<PlainType> for TextureBindingType {
-    fn from(ty: PlainType) -> Self {
-        Self::Plain(ty)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum PlainContainer {
-    Scalar,
-    Vector(VectorSize),
-    Matrix(VectorSize, VectorSize),
-}
-
-pub trait AsPlain {
-    const TYPE: PlainType;
-    const CONTAINER: PlainContainer;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShaderBinding {
-    Texture {
-        dimension: ViewDimension,
-        ty: TextureBindingType,
-    },
-    TextureStorage {
-        dimension: ViewDimension,
-        format: TextureFormat,
-        access: StorageAccess,
-    },
-    Sampler {
-        comparison: bool,
-    },
-    Buffer {
-        type_name: &'static str,
-        access: StorageAccess,
-    },
-    Plain {
-        ty: PlainType,
-        container: PlainContainer,
-    },
+    Texture,
+    Sampler,
+    Buffer,
+    Plain { size: u32 },
+}
+
+pub trait ShaderBindable: Clone + Copy {
+    fn bind_to(&self, context: &mut PipelineContext, index: u32);
+}
+
+pub trait HasShaderBinding: ShaderBindable {
+    const TYPE: ShaderBinding;
+}
+impl<T: bytemuck::Pod> HasShaderBinding for T {
+    const TYPE: ShaderBinding = ShaderBinding::Plain {
+        size: std::mem::size_of::<T>() as u32,
+    };
+}
+impl HasShaderBinding for TextureView {
+    const TYPE: ShaderBinding = ShaderBinding::Texture;
+}
+impl HasShaderBinding for Sampler {
+    const TYPE: ShaderBinding = ShaderBinding::Sampler;
+}
+impl HasShaderBinding for BufferPiece {
+    const TYPE: ShaderBinding = ShaderBinding::Buffer;
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -384,7 +352,6 @@ impl ShaderDataLayout {
 
 pub struct ShaderDesc<'a> {
     pub source: &'a str,
-    pub data_layouts: &'a [&'a ShaderDataLayout],
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -405,6 +372,7 @@ pub struct CommandEncoderDesc<'a> {
 
 pub struct ComputePipelineDesc<'a> {
     pub name: &'a str,
+    pub data_layouts: &'a [&'a ShaderDataLayout],
     pub compute: ShaderFunction<'a>,
 }
 
@@ -725,6 +693,7 @@ impl From<TextureFormat> for ColorTargetState {
 
 pub struct RenderPipelineDesc<'a> {
     pub name: &'a str,
+    pub data_layouts: &'a [&'a ShaderDataLayout],
     pub vertex: ShaderFunction<'a>,
     pub primitive: PrimitiveState,
     pub depth_stencil: Option<DepthStencilState>,
@@ -766,14 +735,7 @@ pub struct SurfaceConfig {
     pub frame_count: u32,
 }
 
-pub trait ShaderDataEncoder {
-    fn set_buffer(&mut self, index: u32, piece: BufferPiece);
-    fn set_texture(&mut self, index: u32, view: TextureView);
-    fn set_sampler(&mut self, index: u32, sampler: Sampler);
-    fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P);
-}
-
 pub trait ShaderData {
     fn layout() -> ShaderDataLayout;
-    fn fill<E: ShaderDataEncoder>(&self, encoder: E);
+    fn fill(&self, context: PipelineContext);
 }

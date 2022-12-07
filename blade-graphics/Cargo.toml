@@ -10,8 +10,7 @@ bitflags = "1"
 bytemuck = "1"
 codespan-reporting = "0.11"
 log = "0.4"
-mint = { version = "0.5", optional = true }
-naga = { version = "0.10", features = ["wgsl-in", "span", "validate"] }
+naga = { version = "0.10", features = ["wgsl-in", "span", "validate", "clone"] }
 raw-window-handle = "0.5"
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]

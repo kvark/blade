@@ -1,24 +1,39 @@
 #![allow(irrefutable_let_patterns)]
 
+use bytemuck::{Pod, Zeroable};
 use std::{ptr, time};
 
 const BUNNY_SIZE: f32 = 0.15 * 256.0;
 const GRAVITY: f32 = -9.8 * 100.0;
 const MAX_VELOCITY: f32 = 750.0;
 
-#[derive(blade::ShaderData)]
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct Globals {
     mvp_transform: [[f32; 4]; 4],
     sprite_size: [f32; 2],
+    pad: [f32; 2],
+}
+
+#[derive(blade::ShaderData)]
+struct Params {
+    globals: Globals,
     sprite_texture: blade::TextureView,
     sprite_sampler: blade::Sampler,
 }
 
-#[derive(blade::ShaderData)]
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct Locals {
     position: [f32; 2],
     velocity: [f32; 2],
     color: u32,
+    pad: u32,
+}
+
+#[derive(blade::ShaderData)]
+struct Sprite {
+    locals: Locals,
 }
 
 struct Example {
@@ -29,7 +44,7 @@ struct Example {
     view: blade::TextureView,
     sampler: blade::Sampler,
     window_size: winit::dpi::PhysicalSize<u32>,
-    bunnies: Vec<Locals>,
+    bunnies: Vec<Sprite>,
     rng: rand::rngs::ThreadRng,
     context: blade::Context,
 }
@@ -58,16 +73,16 @@ impl Example {
             frame_count: 3,
         });
 
-        let global_layout = <Globals as blade::ShaderData>::layout();
-        let local_layout = <Locals as blade::ShaderData>::layout();
-        let shader_source = std::fs::read_to_string("examples/bunnymark/main.wgsl").unwrap();
+        let global_layout = <Params as blade::ShaderData>::layout();
+        let local_layout = <Sprite as blade::ShaderData>::layout();
+        let shader_source = std::fs::read_to_string("examples/bunnymark/shader.wgsl").unwrap();
         let shader = context.create_shader(blade::ShaderDesc {
             source: &shader_source,
-            data_layouts: &[&global_layout, &local_layout],
         });
 
         let pipeline = context.create_render_pipeline(blade::RenderPipelineDesc {
             name: "main",
+            data_layouts: &[&global_layout, &local_layout],
             vertex: shader.at("vs_main"),
             primitive: blade::PrimitiveState {
                 topology: blade::PrimitiveTopology::TriangleStrip,
@@ -124,10 +139,13 @@ impl Example {
         });
 
         let mut bunnies = Vec::new();
-        bunnies.push(Locals {
-            position: [-100.0, 100.0],
-            velocity: [10.0, 0.0],
-            color: 0xFFFFFFFF,
+        bunnies.push(Sprite {
+            locals: Locals {
+                position: [-100.0, 100.0],
+                velocity: [10.0, 0.0],
+                color: 0xFFFFFFFF,
+                pad: 0,
+            },
         });
 
         let mut command_encoder = context.create_command_encoder(blade::CommandEncoderDesc {
@@ -163,10 +181,13 @@ impl Example {
         let spawn_count = 64 + self.bunnies.len() / 2;
         for _ in 0..spawn_count {
             let speed = self.rng.gen_range(-1.0..=1.0) * MAX_VELOCITY;
-            self.bunnies.push(Locals {
-                position: [0.0, 0.5 * (self.window_size.height as f32)],
-                velocity: [speed, 0.0],
-                color: self.rng.next_u32(),
+            self.bunnies.push(Sprite {
+                locals: Locals {
+                    position: [0.0, 0.5 * (self.window_size.height as f32)],
+                    velocity: [speed, 0.0],
+                    color: self.rng.next_u32(),
+                    pad: 0,
+                },
             });
         }
         println!("Population: {} bunnies", self.bunnies.len());
@@ -174,17 +195,22 @@ impl Example {
 
     fn step(&mut self, delta: f32) {
         for bunny in self.bunnies.iter_mut() {
-            bunny.position[0] += bunny.velocity[0] * delta;
-            bunny.position[1] += bunny.velocity[1] * delta;
-            bunny.velocity[1] += GRAVITY * delta;
-            if (bunny.velocity[0] > 0.0
-                && bunny.position[0] + 0.5 * BUNNY_SIZE > self.window_size.width as f32)
-                || (bunny.velocity[0] < 0.0 && bunny.position[0] - 0.5 * BUNNY_SIZE < 0.0)
+            let Locals {
+                position: ref mut pos,
+                velocity: ref mut vel,
+                ..
+            } = bunny.locals;
+
+            pos[0] += vel[0] * delta;
+            pos[1] += vel[1] * delta;
+            vel[1] += GRAVITY * delta;
+            if (vel[0] > 0.0 && pos[0] + 0.5 * BUNNY_SIZE > self.window_size.width as f32)
+                || (vel[0] < 0.0 && pos[0] - 0.5 * BUNNY_SIZE < 0.0)
             {
-                bunny.velocity[0] *= -1.0;
+                vel[0] *= -1.0;
             }
-            if bunny.velocity[1] < 0.0 && bunny.position[1] < 0.5 * BUNNY_SIZE {
-                bunny.velocity[1] *= -1.0;
+            if vel[1] < 0.0 && pos[1] < 0.5 * BUNNY_SIZE {
+                vel[1] *= -1.0;
             }
         }
     }
@@ -206,21 +232,24 @@ impl Example {
             let mut rc = pass.with(&self.pipeline);
             rc.bind(
                 0,
-                &Globals {
-                    mvp_transform: [
-                        [2.0 / self.window_size.width as f32, 0.0, 0.0, 0.0],
-                        [0.0, 2.0 / self.window_size.height as f32, 0.0, 0.0],
-                        [0.0, 0.0, 1.0, 0.0],
-                        [-1.0, -1.0, 0.0, 1.0],
-                    ],
-                    sprite_size: [BUNNY_SIZE; 2],
+                &Params {
+                    globals: Globals {
+                        mvp_transform: [
+                            [2.0 / self.window_size.width as f32, 0.0, 0.0, 0.0],
+                            [0.0, 2.0 / self.window_size.height as f32, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0],
+                            [-1.0, -1.0, 0.0, 1.0],
+                        ],
+                        sprite_size: [BUNNY_SIZE; 2],
+                        pad: [0.0; 2],
+                    },
                     sprite_texture: self.view,
                     sprite_sampler: self.sampler,
                 },
             );
 
-            for local in self.bunnies.iter() {
-                rc.bind(1, local);
+            for sprite in self.bunnies.iter() {
+                rc.bind(1, sprite);
                 rc.draw(0, 4, 0, 1);
             }
         }
