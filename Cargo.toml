@@ -30,6 +30,7 @@ bytemuck = { version = "1", features = ["derive"] }
 egui = "0.19"
 egui-winit = "0.19"
 env_logger = "0.9"
+naga = { version = "0.10", features = ["wgsl-in", "span", "validate"] }
 rand = "0.8"
 winit = "0.27"
 

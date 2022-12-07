@@ -350,6 +350,11 @@ impl ShaderDataLayout {
     };
 }
 
+pub trait ShaderData {
+    fn layout() -> ShaderDataLayout;
+    fn fill(&self, context: PipelineContext);
+}
+
 pub struct ShaderDesc<'a> {
     pub source: &'a str,
 }
@@ -733,9 +738,4 @@ pub struct SurfaceConfig {
     pub size: Extent,
     pub usage: TextureUsage,
     pub frame_count: u32,
-}
-
-pub trait ShaderData {
-    fn layout() -> ShaderDataLayout;
-    fn fill(&self, context: PipelineContext);
 }
