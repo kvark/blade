@@ -82,7 +82,7 @@ pub struct Context {
     queue_family_index: u32,
     queue: Mutex<Queue>,
     surface: Option<Mutex<Surface>>,
-    physical_device: vk::PhysicalDevice,
+    _physical_device: vk::PhysicalDevice,
     naga_flags: spv::WriterFlags,
     instance: Instance,
     _entry: ash::Entry,
@@ -140,6 +140,11 @@ struct DescriptorSetLayout {
 struct PipelineLayout {
     raw: vk::PipelineLayout,
     descriptor_set_layouts: Vec<DescriptorSetLayout>,
+}
+
+pub struct PipelineContext<'a> {
+    update_data: &'a mut [u8],
+    template_offsets: &'a [u32],
 }
 
 #[derive(Debug)]
@@ -558,7 +563,7 @@ impl Context {
                 last_progress,
             }),
             surface,
-            physical_device,
+            _physical_device: physical_device,
             naga_flags,
             instance,
             _entry: entry,

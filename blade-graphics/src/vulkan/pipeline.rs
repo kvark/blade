@@ -9,27 +9,117 @@ struct CompiledShader {
     wg_size: [u32; 3],
 }
 
+struct BindGroupInfo {
+    visibility: crate::ShaderVisibility,
+    binding_access: Vec<naga::StorageAccess>,
+}
+
+impl BindGroupInfo {
+    fn new(layout: &crate::ShaderDataLayout) -> Self {
+        Self {
+            visibility: crate::ShaderVisibility::empty(),
+            binding_access: vec![naga::StorageAccess::empty(); layout.bindings.len()],
+        }
+    }
+}
+
 impl super::Context {
     fn load_shader(
         &self,
         sf: crate::ShaderFunction,
-        naga_stage: naga::ShaderStage,
         naga_options: &spv::Options,
+        group_layouts: &[&crate::ShaderDataLayout],
+        group_infos: &mut [BindGroupInfo],
     ) -> CompiledShader {
+        let ep_index = sf.entry_point_index();
+        let ep_info = sf.shader.info.get_entry_point(ep_index);
+        let ep = &sf.shader.module.entry_points[ep_index];
+
+        let mut module = sf.shader.module.clone();
+        let mut layouter = naga::proc::Layouter::default();
+        layouter.update(&module.types, &module.constants).unwrap();
+
+        for (handle, var) in module.global_variables.iter_mut() {
+            let var_access = match var.space {
+                naga::AddressSpace::Storage { access } => access,
+                naga::AddressSpace::Uniform | naga::AddressSpace::Handle => {
+                    naga::StorageAccess::empty()
+                }
+                _ => continue,
+            };
+
+            assert_eq!(var.binding, None);
+            let var_name = var.name.as_ref().unwrap();
+            for (group_index, (&layout, info)) in
+                group_layouts.iter().zip(group_infos.iter_mut()).enumerate()
+            {
+                if let Some((binding_index, &(_, proto_binding))) = layout
+                    .bindings
+                    .iter()
+                    .enumerate()
+                    .find(|(_, &(name, _))| name == var_name)
+                {
+                    let res_binding = naga::ResourceBinding {
+                        group: group_index as u32,
+                        binding: binding_index as u32,
+                    };
+                    let (expected_proto, access) = match module.types[var.ty].inner {
+                        naga::TypeInner::Image {
+                            class: naga::ImageClass::Storage { access, format: _ },
+                            ..
+                        } => (crate::ShaderBinding::Texture, access),
+                        naga::TypeInner::Image { .. } => {
+                            (crate::ShaderBinding::Texture, naga::StorageAccess::empty())
+                        }
+                        naga::TypeInner::Sampler { .. } => {
+                            (crate::ShaderBinding::Sampler, naga::StorageAccess::empty())
+                        }
+                        _ => {
+                            let type_layout = &layouter[var.ty];
+                            let proto = if var_access.is_empty() {
+                                crate::ShaderBinding::Plain {
+                                    size: type_layout.size,
+                                }
+                            } else {
+                                crate::ShaderBinding::Buffer
+                            };
+                            (proto, var_access)
+                        }
+                    };
+                    assert_eq!(
+                        proto_binding, expected_proto,
+                        "Mismatched type for binding '{}'",
+                        var_name
+                    );
+                    assert_eq!(var.binding, None);
+                    var.binding = Some(res_binding.clone());
+                    if !ep_info[handle].is_empty() {
+                        info.visibility |= ep.stage.into();
+                        info.binding_access[binding_index] |= access;
+                    }
+                    break;
+                }
+            }
+
+            assert!(
+                var.binding.is_some(),
+                "Unable to resolve binding for '{}'",
+                var_name
+            );
+        }
+
         let pipeline_options = spv::PipelineOptions {
-            shader_stage: naga_stage,
+            shader_stage: ep.stage,
             entry_point: sf.entry_point.to_string(),
         };
 
         let spv = spv::write_vec(
-            &sf.shader.module,
+            &module,
             &sf.shader.info,
             naga_options,
             Some(&pipeline_options),
         )
         .unwrap();
-
-        let ep = &sf.shader.module.entry_points[sf.entry_point_index()];
 
         let vk_info = vk::ShaderModuleCreateInfo::builder().code(&spv);
 
@@ -40,7 +130,7 @@ impl super::Context {
                 .unwrap()
         };
 
-        let vk_stage = match naga_stage {
+        let vk_stage = match ep.stage {
             naga::ShaderStage::Compute => vk::ShaderStageFlags::COMPUTE,
             naga::ShaderStage::Vertex => vk::ShaderStageFlags::VERTEX,
             naga::ShaderStage::Fragment => vk::ShaderStageFlags::FRAGMENT,
@@ -64,95 +154,65 @@ impl super::Context {
     fn create_descriptor_set_layout(
         &self,
         layout: &crate::ShaderDataLayout,
-        visibility: crate::ShaderVisibility,
+        info: &BindGroupInfo,
     ) -> super::DescriptorSetLayout {
-        if visibility.is_empty() {
+        if info.visibility.is_empty() {
             return super::DescriptorSetLayout::default();
         }
-        let stage_flags = map_shader_visibility(visibility);
-        let mut vk_bindings = Vec::new();
-        let mut binding_index = 1;
-        let mut plain_data_size = 0u32;
-        let mut template_entries = Vec::new();
+        let stage_flags = map_shader_visibility(info.visibility);
+        let mut vk_bindings = Vec::with_capacity(layout.bindings.len());
+        let mut template_entries = Vec::with_capacity(layout.bindings.len());
         let mut template_offsets = Vec::with_capacity(layout.bindings.len());
         let mut update_offset = 0;
-        for &(_, binding) in layout.bindings.iter() {
-            let (descriptor_type, descriptor_size) = match binding {
-                crate::ShaderBinding::Texture { .. } => (
-                    vk::DescriptorType::SAMPLED_IMAGE,
+        for (binding_index, (&(_, binding), &access)) in layout
+            .bindings
+            .iter()
+            .zip(info.binding_access.iter())
+            .enumerate()
+        {
+            let (descriptor_type, descriptor_size, descriptor_count) = match binding {
+                crate::ShaderBinding::Texture => (
+                    if access.is_empty() {
+                        vk::DescriptorType::SAMPLED_IMAGE
+                    } else {
+                        vk::DescriptorType::STORAGE_IMAGE
+                    },
                     mem::size_of::<vk::DescriptorImageInfo>(),
-                ),
-                crate::ShaderBinding::TextureStorage { .. } => (
-                    vk::DescriptorType::STORAGE_IMAGE,
-                    mem::size_of::<vk::DescriptorImageInfo>(),
+                    1u32,
                 ),
                 crate::ShaderBinding::Sampler { .. } => (
                     vk::DescriptorType::SAMPLER,
                     mem::size_of::<vk::DescriptorImageInfo>(),
+                    1u32,
                 ),
                 crate::ShaderBinding::Buffer { .. } => (
                     vk::DescriptorType::STORAGE_BUFFER,
                     mem::size_of::<vk::DescriptorBufferInfo>(),
+                    1u32,
                 ),
-                crate::ShaderBinding::Plain { ty, container } => {
-                    let elem_size = match ty {
-                        crate::PlainType::F32 | crate::PlainType::I32 | crate::PlainType::U32 => 4,
-                    };
-                    //TODO: alignment
-                    let count = match container {
-                        crate::PlainContainer::Scalar => 1,
-                        crate::PlainContainer::Vector(size) => size as u32,
-                        crate::PlainContainer::Matrix(rows, cols) => rows as u32 * cols as u32,
-                    };
-                    template_offsets.push(plain_data_size);
-                    plain_data_size += elem_size * count;
-                    continue;
-                }
+                crate::ShaderBinding::Plain { size } => (
+                    vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
+                    size as usize,
+                    size,
+                ),
             };
             vk_bindings.push(vk::DescriptorSetLayoutBinding {
-                binding: binding_index,
+                binding: binding_index as u32,
                 descriptor_type,
-                descriptor_count: 1,
+                descriptor_count,
                 stage_flags,
                 p_immutable_samplers: ptr::null(),
             });
             template_entries.push(vk::DescriptorUpdateTemplateEntryKHR {
-                dst_binding: binding_index,
+                dst_binding: binding_index as u32,
                 dst_array_element: 0,
-                descriptor_count: 1,
+                descriptor_count,
                 descriptor_type,
                 offset: update_offset,
                 stride: 0,
             });
-            binding_index += 1;
             template_offsets.push(update_offset as u32);
             update_offset += descriptor_size;
-        }
-
-        let handle_section_size = update_offset as u32;
-        if plain_data_size != 0 {
-            vk_bindings.push(vk::DescriptorSetLayoutBinding {
-                binding: 0,
-                descriptor_type: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
-                descriptor_count: plain_data_size,
-                stage_flags,
-                p_immutable_samplers: ptr::null(),
-            });
-            template_entries.push(vk::DescriptorUpdateTemplateEntryKHR {
-                dst_binding: 0,
-                dst_array_element: 0,
-                descriptor_count: plain_data_size,
-                descriptor_type: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
-                offset: update_offset,
-                stride: 0,
-            });
-            for (template_offset, &(_, binding)) in
-                template_offsets.iter_mut().zip(layout.bindings.iter())
-            {
-                if let crate::ShaderBinding::Plain { .. } = binding {
-                    *template_offset += handle_section_size;
-                }
-            }
         }
 
         let set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&vk_bindings);
@@ -177,19 +237,20 @@ impl super::Context {
         super::DescriptorSetLayout {
             raw,
             update_template,
-            template_size: handle_section_size + plain_data_size,
+            template_size: update_offset as u32,
             template_offsets: template_offsets.into_boxed_slice(),
         }
     }
 
     fn create_pipeline_layout(
         &self,
-        combined: &[(&crate::ShaderDataLayout, crate::ShaderVisibility)],
+        group_layouts: &[&crate::ShaderDataLayout],
+        group_infos: &[BindGroupInfo],
     ) -> super::PipelineLayout {
-        let mut descriptor_set_layouts = Vec::with_capacity(combined.len());
-        let mut vk_set_layouts = Vec::with_capacity(combined.len());
-        for &(layout, visibility) in combined {
-            let dsl = self.create_descriptor_set_layout(layout, visibility);
+        let mut descriptor_set_layouts = Vec::with_capacity(group_layouts.len());
+        let mut vk_set_layouts = Vec::with_capacity(group_layouts.len());
+        for (&layout, info) in group_layouts.iter().zip(group_infos) {
+            let dsl = self.create_descriptor_set_layout(layout, info);
             vk_set_layouts.push(dsl.raw);
             descriptor_set_layouts.push(dsl);
         }
@@ -212,10 +273,12 @@ impl super::Context {
         &self,
         desc: crate::ComputePipelineDesc,
     ) -> super::ComputePipeline {
-        let combined =
-            crate::shader::merge_layouts(&[(desc.compute, crate::ShaderVisibility::COMPUTE)]);
-        let layout = self.create_pipeline_layout(&combined);
-
+        let mut group_infos = desc
+            .data_layouts
+            .iter()
+            .cloned()
+            .map(BindGroupInfo::new)
+            .collect::<Vec<_>>();
         let options = spv::Options {
             lang_version: (1, 3),
             flags: self.naga_flags,
@@ -224,7 +287,9 @@ impl super::Context {
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
         };
 
-        let cs = self.load_shader(desc.compute, naga::ShaderStage::Compute, &options);
+        let cs = self.load_shader(desc.compute, &options, desc.data_layouts, &mut group_infos);
+
+        let layout = self.create_pipeline_layout(desc.data_layouts, &group_infos);
 
         let create_info = vk::ComputePipelineCreateInfo::builder()
             .layout(layout.raw)
@@ -252,12 +317,12 @@ impl super::Context {
     }
 
     pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
-        let combined = crate::shader::merge_layouts(&[
-            (desc.vertex, crate::ShaderVisibility::VERTEX),
-            (desc.fragment, crate::ShaderVisibility::FRAGMENT),
-        ]);
-        let layout = self.create_pipeline_layout(&combined);
-
+        let mut group_infos = desc
+            .data_layouts
+            .iter()
+            .cloned()
+            .map(BindGroupInfo::new)
+            .collect::<Vec<_>>();
         let options = spv::Options {
             lang_version: (1, 3),
             flags: self.naga_flags,
@@ -265,10 +330,13 @@ impl super::Context {
             capabilities: None,
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
         };
-        let vs = self.load_shader(desc.vertex, naga::ShaderStage::Vertex, &options);
-        let fs = self.load_shader(desc.fragment, naga::ShaderStage::Fragment, &options);
-        let stages = [vs.create_info, fs.create_info];
 
+        let vs = self.load_shader(desc.vertex, &options, desc.data_layouts, &mut group_infos);
+        let fs = self.load_shader(desc.fragment, &options, desc.data_layouts, &mut group_infos);
+
+        let layout = self.create_pipeline_layout(desc.data_layouts, &group_infos);
+
+        let stages = [vs.create_info, fs.create_info];
         let vk_vertex_input = vk::PipelineVertexInputStateCreateInfo::builder().build();
         let vk_input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
             .topology(map_primitive_topology(desc.primitive.topology))
