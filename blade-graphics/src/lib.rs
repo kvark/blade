@@ -200,6 +200,7 @@ pub struct TextureViewDesc<'a> {
 }
 
 bitflags::bitflags! {
+    #[derive(Default)]
     struct ShaderVisibility: u32 {
         const COMPUTE = 1 << 0;
         const VERTEX = 1 << 1;

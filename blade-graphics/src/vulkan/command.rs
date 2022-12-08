@@ -1,10 +1,6 @@
 use ash::vk;
 
-struct ShaderDataEncoder<'a> {
-    update_data: &'a mut [u8],
-    template_offsets: &'a [u32],
-}
-impl ShaderDataEncoder<'_> {
+impl super::PipelineContext<'_> {
     #[inline]
     fn write<T>(&mut self, index: u32, value: T) {
         let offset = self.template_offsets[index as usize];
@@ -16,39 +12,46 @@ impl ShaderDataEncoder<'_> {
         };
     }
 }
-impl crate::ShaderDataEncoder for ShaderDataEncoder<'_> {
-    fn set_buffer(&mut self, index: u32, piece: crate::BufferPiece) {
-        self.write(
-            index,
-            vk::DescriptorBufferInfo {
-                buffer: piece.buffer.raw,
-                offset: piece.offset,
-                range: vk::WHOLE_SIZE,
-            },
-        );
+
+impl<T: bytemuck::Pod> crate::ShaderBindable for T {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        ctx.write(index, *self);
     }
-    fn set_texture(&mut self, index: u32, view: super::TextureView) {
-        self.write(
+}
+impl crate::ShaderBindable for super::TextureView {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        ctx.write(
             index,
             vk::DescriptorImageInfo {
                 sampler: vk::Sampler::null(),
-                image_view: view.raw,
+                image_view: self.raw,
                 image_layout: vk::ImageLayout::GENERAL,
             },
         );
     }
-    fn set_sampler(&mut self, index: u32, sampler: super::Sampler) {
-        self.write(
+}
+impl crate::ShaderBindable for super::Sampler {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        ctx.write(
             index,
             vk::DescriptorImageInfo {
-                sampler: sampler.raw,
+                sampler: self.raw,
                 image_view: vk::ImageView::null(),
                 image_layout: vk::ImageLayout::UNDEFINED,
             },
         );
     }
-    fn set_plain<P: bytemuck::Pod>(&mut self, index: u32, data: P) {
-        self.write(index, data);
+}
+impl crate::ShaderBindable for crate::BufferPiece {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        ctx.write(
+            index,
+            vk::DescriptorBufferInfo {
+                buffer: self.buffer.raw,
+                offset: self.offset,
+                range: vk::WHOLE_SIZE,
+            },
+        );
     }
 }
 
@@ -455,7 +458,7 @@ impl super::PipelineEncoder<'_, '_> {
         let dsl = &self.layout.descriptor_set_layouts[group as usize];
         self.update_data.clear();
         self.update_data.resize(dsl.template_size as usize, 0);
-        data.fill(ShaderDataEncoder {
+        data.fill(super::PipelineContext {
             update_data: self.update_data.as_mut_slice(),
             template_offsets: &dsl.template_offsets,
         });
