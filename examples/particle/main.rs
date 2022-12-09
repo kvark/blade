@@ -1,5 +1,8 @@
 #![allow(irrefutable_let_patterns)]
 
+pub mod belt;
+mod gui;
+
 struct Example {
     command_encoder: blade::CommandEncoder,
     prev_sync_point: Option<blade::SyncPoint>,
@@ -59,14 +62,14 @@ impl Example {
         self.command_encoder.present(frame);
         let sync_point = self.context.submit(&mut self.command_encoder);
         if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(sp, !0);
+            self.context.wait_for(&sp, !0);
         }
         self.prev_sync_point = Some(sync_point);
     }
 
     fn deinit(&mut self) {
         if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(sp, !0);
+            self.context.wait_for(&sp, !0);
         }
     }
 }

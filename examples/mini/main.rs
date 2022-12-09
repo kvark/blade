@@ -168,7 +168,7 @@ fn main() {
     }
     let sync_point = context.submit(&mut command_encoder);
 
-    let ok = context.wait_for(sync_point, 1000);
+    let ok = context.wait_for(&sync_point, 1000);
     assert!(ok);
     let answer = unsafe { *(result_buffer.data() as *mut u32) };
     println!("Output: 0x{:x}", answer);

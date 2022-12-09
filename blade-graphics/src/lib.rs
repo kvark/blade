@@ -54,7 +54,7 @@ pub struct ContextDesc {
 #[derive(Debug)]
 pub struct NotSupportedError;
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Memory {
     Device,
     Shared,
@@ -77,6 +77,14 @@ pub struct BufferPiece {
 impl From<Buffer> for BufferPiece {
     fn from(buffer: Buffer) -> Self {
         Self { buffer, offset: 0 }
+    }
+}
+
+impl BufferPiece {
+    pub fn data(&self) -> *mut u8 {
+        let base = self.buffer.data();
+        assert!(!base.is_null());
+        unsafe { base.offset(self.offset as isize) }
     }
 }
 

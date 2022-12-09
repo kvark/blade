@@ -158,7 +158,7 @@ impl Example {
             transfer.copy_buffer_to_texture(upload_buffer.into(), 4, texture.into(), extent);
         }
         let sync_point = context.submit(&mut command_encoder);
-        context.wait_for(sync_point, !0);
+        context.wait_for(&sync_point, !0);
 
         context.destroy_buffer(upload_buffer);
 
@@ -256,14 +256,14 @@ impl Example {
         self.command_encoder.present(frame);
         let sync_point = self.context.submit(&mut self.command_encoder);
         if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(sp, !0);
+            self.context.wait_for(&sp, !0);
         }
         self.prev_sync_point = Some(sync_point);
     }
 
     fn deinit(&mut self) {
         if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(sp, !0);
+            self.context.wait_for(&sp, !0);
         }
         self.context.destroy_texture(self.texture);
     }

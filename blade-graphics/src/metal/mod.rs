@@ -124,7 +124,7 @@ impl Sampler {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SyncPoint {
     cmd_buf: metal::CommandBuffer,
 }
@@ -317,7 +317,7 @@ impl Context {
         SyncPoint { cmd_buf }
     }
 
-    pub fn wait_for(&self, sp: SyncPoint, timeout_ms: u32) -> bool {
+    pub fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
         let start = time::Instant::now();
         loop {
             if let metal::MTLCommandBufferStatus::Completed = sp.cmd_buf.status() {
