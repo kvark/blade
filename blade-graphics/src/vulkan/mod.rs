@@ -206,6 +206,7 @@ pub struct PipelineEncoder<'a, 'p> {
     update_data: &'a mut Vec<u8>,
 }
 
+#[derive(Clone, Debug)]
 pub struct SyncPoint {
     progress: u64,
 }
@@ -735,7 +736,7 @@ impl Context {
         SyncPoint { progress }
     }
 
-    pub fn wait_for(&self, sp: SyncPoint, timeout_ms: u32) -> bool {
+    pub fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
         //Note: technically we could get away without locking the queue,
         // but also this isn't time-sensitive, so it's fine.
         let timeline_semaphore = self.queue.lock().unwrap().timeline_semaphore;
