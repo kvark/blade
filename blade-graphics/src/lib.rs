@@ -121,6 +121,7 @@ impl From<Texture> for TexturePiece {
 #[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
 pub enum TextureFormat {
     Rgba8Unorm,
+    Rgba8UnormSrgb,
     Bgra8UnormSrgb,
     Depth32Float,
 }
@@ -748,4 +749,10 @@ pub struct SurfaceConfig {
     pub size: Extent,
     pub usage: TextureUsage,
     pub frame_count: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum IndexType {
+    U16,
+    U32,
 }

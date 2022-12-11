@@ -27,7 +27,7 @@ blade-graphics = { version = "0.0.1", path = "blade-graphics" }
 
 [dev-dependencies]
 bytemuck = { version = "1", features = ["derive"] }
-egui = "0.20"
+egui = { version = "0.20", features = ["bytemuck"] }
 egui-winit = "0.20"
 env_logger = "0.9"
 naga = { version = "0.10", features = ["wgsl-in", "span", "validate"] }

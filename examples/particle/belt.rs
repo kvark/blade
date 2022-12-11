@@ -1,5 +1,3 @@
-use blade::BufferPiece;
-
 struct ReusableBuffer {
     raw: blade::Buffer,
     size: u64,
@@ -58,6 +56,18 @@ impl BufferBelt {
         };
         self.active.push((rb, size));
         chunk.into()
+    }
+
+    pub fn alloc_data<T: bytemuck::Pod>(
+        &mut self,
+        data: &[T],
+        context: &blade::Context,
+    ) -> blade::BufferPiece {
+        let bp = self.alloc((data.len() * std::mem::size_of::<T>()) as u64, context);
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), bp.data() as *mut T, data.len());
+        }
+        bp
     }
 
     pub fn flush(&mut self, sp: blade::SyncPoint) {

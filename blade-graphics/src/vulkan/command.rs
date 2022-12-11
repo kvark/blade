@@ -130,6 +130,13 @@ fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo {
     builder.build()
 }
 
+fn map_index_type(index_type: crate::IndexType) -> vk::IndexType {
+    match index_type {
+        crate::IndexType::U16 => vk::IndexType::UINT16,
+        crate::IndexType::U32 => vk::IndexType::UINT32,
+    }
+}
+
 impl super::CommandEncoder {
     pub fn start(&mut self) {
         self.buffers.rotate_left(1);
@@ -511,7 +518,35 @@ impl super::PipelineEncoder<'_, '_> {
                 instance_count,
                 start_vertex,
                 start_instance,
-            )
-        };
+            );
+        }
+    }
+
+    pub fn draw_indexed(
+        &mut self,
+        index_buf: crate::BufferPiece,
+        index_type: crate::IndexType,
+        index_count: u32,
+        base_vertex: i32,
+        start_instance: u32,
+        instance_count: u32,
+    ) {
+        let raw_index_type = map_index_type(index_type);
+        unsafe {
+            self.device.core.cmd_bind_index_buffer(
+                self.cmd_buf.raw,
+                index_buf.buffer.raw,
+                index_buf.offset,
+                raw_index_type,
+            );
+            self.device.core.cmd_draw_indexed(
+                self.cmd_buf.raw,
+                index_count,
+                instance_count,
+                0,
+                base_vertex,
+                start_instance,
+            );
+        }
     }
 }
