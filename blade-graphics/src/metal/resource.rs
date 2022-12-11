@@ -64,8 +64,14 @@ fn map_border_color(color: crate::TextureColor) -> metal::MTLSamplerBorderColor 
     }
 }
 
-impl super::Context {
-    pub fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
+#[hidden_trait::expose]
+impl crate::traits::ResourceDevice for super::Context {
+    type Buffer = super::Buffer;
+    type Texture = super::Texture;
+    type TextureView = super::TextureView;
+    type Sampler = super::Sampler;
+
+    fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         let options = match desc.memory {
             crate::Memory::Device => metal::MTLResourceOptions::StorageModePrivate,
             crate::Memory::Shared => metal::MTLResourceOptions::StorageModeShared,
@@ -84,13 +90,13 @@ impl super::Context {
         super::Buffer { raw }
     }
 
-    pub fn destroy_buffer(&self, buffer: super::Buffer) {
+    fn destroy_buffer(&self, buffer: super::Buffer) {
         unsafe {
             let () = msg_send![buffer.raw, release];
         }
     }
 
-    pub fn create_texture(&self, desc: crate::TextureDesc) -> super::Texture {
+    fn create_texture(&self, desc: crate::TextureDesc) -> super::Texture {
         let mtl_format = super::map_texture_format(desc.format);
 
         let mtl_type = match desc.dimension {
@@ -136,13 +142,13 @@ impl super::Context {
         super::Texture { raw }
     }
 
-    pub fn destroy_texture(&self, texture: super::Texture) {
+    fn destroy_texture(&self, texture: super::Texture) {
         unsafe {
             let () = msg_send![texture.raw, release];
         }
     }
 
-    pub fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
+    fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
         let texture = desc.texture.as_ref();
         let mtl_format = super::map_texture_format(desc.format);
         let mtl_type = map_view_dimension(desc.dimension);
@@ -176,13 +182,13 @@ impl super::Context {
         super::TextureView { raw }
     }
 
-    pub fn destroy_texture_view(&self, view: super::TextureView) {
+    fn destroy_texture_view(&self, view: super::TextureView) {
         unsafe {
             let () = msg_send![view.raw, release];
         }
     }
 
-    pub fn create_sampler(&self, desc: crate::SamplerDesc) -> super::Sampler {
+    fn create_sampler(&self, desc: crate::SamplerDesc) -> super::Sampler {
         let raw = objc::rc::autoreleasepool(|| {
             let descriptor = metal::SamplerDescriptor::new();
 
@@ -227,7 +233,7 @@ impl super::Context {
         super::Sampler { raw }
     }
 
-    pub fn destroy_sampler(&self, sampler: super::Sampler) {
+    fn destroy_sampler(&self, sampler: super::Sampler) {
         unsafe {
             let () = msg_send![sampler.raw, release];
         }

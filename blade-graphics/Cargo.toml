@@ -9,6 +9,7 @@ edition = "2021"
 bitflags = "1"
 bytemuck = "1"
 codespan-reporting = "0.11"
+hidden-trait = "0.1"
 log = "0.4"
 naga = { version = "0.10", features = ["wgsl-in", "span", "validate", "clone"] }
 raw-window-handle = "0.5"

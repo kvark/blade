@@ -74,8 +74,16 @@ impl super::Context {
                 .dealloc(AshMemoryDevice::wrap(&self.device.core), block);
         }
     }
+}
 
-    pub fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
+#[hidden_trait::expose]
+impl crate::traits::ResourceDevice for super::Context {
+    type Buffer = super::Buffer;
+    type Texture = super::Texture;
+    type TextureView = super::TextureView;
+    type Sampler = super::Sampler;
+
+    fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         use vk::BufferUsageFlags as Buf;
         let vk_info = vk::BufferCreateInfo::builder()
             .size(desc.size)
@@ -110,12 +118,12 @@ impl super::Context {
         }
     }
 
-    pub fn destroy_buffer(&self, buffer: super::Buffer) {
+    fn destroy_buffer(&self, buffer: super::Buffer) {
         unsafe { self.device.core.destroy_buffer(buffer.raw, None) };
         self.free_memory(buffer.memory_handle);
     }
 
-    pub fn create_texture(&self, desc: crate::TextureDesc) -> super::Texture {
+    fn create_texture(&self, desc: crate::TextureDesc) -> super::Texture {
         let mut create_flags = vk::ImageCreateFlags::empty();
         if desc.dimension == crate::TextureDimension::D2
             && desc.size.depth % 6 == 0
@@ -160,12 +168,12 @@ impl super::Context {
         }
     }
 
-    pub fn destroy_texture(&self, texture: super::Texture) {
+    fn destroy_texture(&self, texture: super::Texture) {
         unsafe { self.device.core.destroy_image(texture.raw, None) };
         self.free_memory(texture.memory_handle);
     }
 
-    pub fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
+    fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
         let format_info = super::describe_format(desc.format);
         let subresource_range =
             super::map_subresource_range(desc.subresources, format_info.aspects);
@@ -190,11 +198,11 @@ impl super::Context {
         }
     }
 
-    pub fn destroy_texture_view(&self, view: super::TextureView) {
+    fn destroy_texture_view(&self, view: super::TextureView) {
         unsafe { self.device.core.destroy_image_view(view.raw, None) };
     }
 
-    pub fn create_sampler(&self, desc: crate::SamplerDesc) -> super::Sampler {
+    fn create_sampler(&self, desc: crate::SamplerDesc) -> super::Sampler {
         let mut vk_info = vk::SamplerCreateInfo::builder()
             .mag_filter(map_filter_mode(desc.mag_filter))
             .min_filter(map_filter_mode(desc.min_filter))
@@ -229,7 +237,7 @@ impl super::Context {
         super::Sampler { raw }
     }
 
-    pub fn destroy_sampler(&self, sampler: super::Sampler) {
+    fn destroy_sampler(&self, sampler: super::Sampler) {
         unsafe { self.device.core.destroy_sampler(sampler.raw, None) };
     }
 }
