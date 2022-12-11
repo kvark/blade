@@ -4,12 +4,12 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
 };
 
-struct Locals {
+struct Uniforms {
     screen_size: vec2<f32>,
     convert_to_linear: f32,
     padding: f32,
 };
-var<uniform> r_locals: Locals;
+var<uniform> r_uniforms: Uniforms;
 
 @vertex
 fn vs_main(
@@ -21,8 +21,8 @@ fn vs_main(
     out.tex_coord = a_tex_coord;
     out.color = unpack4x8unorm(a_color);
     out.position = vec4<f32>(
-        2.0 * a_pos.x / r_locals.screen_size.x - 1.0,
-        1.0 - 2.0 * a_pos.y / r_locals.screen_size.y,
+        2.0 * a_pos.x / r_uniforms.screen_size.x - 1.0,
+        1.0 - 2.0 * a_pos.y / r_uniforms.screen_size.y,
         0.0,
         1.0,
     );

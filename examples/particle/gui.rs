@@ -1,16 +1,26 @@
 use super::belt::{BeltDescriptor, BufferBelt};
-use std::{collections::HashMap, fs};
+use std::{
+    collections::hash_map::{Entry, HashMap},
+    fs, mem, ptr,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct Uniforms {}
+struct Uniforms {
+    screen_size: [f32; 2],
+    padding: [f32; 2],
+}
 
 #[derive(blade::ShaderData)]
-struct ShaderData {
+struct Globals {
     uniforms: Uniforms,
-    vertex_attributes: blade::BufferPiece,
-    texture: blade::TextureView,
     sampler: blade::Sampler,
+}
+
+#[derive(blade::ShaderData)]
+struct Locals {
+    vertex_buf: blade::BufferPiece,
+    texture: blade::TextureView,
 }
 
 pub struct ScreenDescriptor {
@@ -19,24 +29,50 @@ pub struct ScreenDescriptor {
 }
 
 impl ScreenDescriptor {
-    fn logical_size(&self) -> (u32, u32) {
+    fn logical_size(&self) -> (f32, f32) {
         let logical_width = self.physical_size.0 as f32 / self.scale_factor;
         let logical_height = self.physical_size.1 as f32 / self.scale_factor;
-        (logical_width as u32, logical_height as u32)
+        (logical_width, logical_height)
     }
 }
 
-struct GuiPrimitive {
-    vertex_buf: blade::BufferPiece,
-    index_buf: blade::BufferPiece,
+struct GuiTexture {
+    allocation: blade::Texture,
+    view: blade::TextureView,
 }
+
+impl GuiTexture {
+    fn create(context: &blade::Context, name: &str, size: blade::Extent) -> Self {
+        let format = blade::TextureFormat::Rgba8UnormSrgb;
+        let allocation = context.create_texture(blade::TextureDesc {
+            name,
+            format,
+            size,
+            array_layer_count: 1,
+            mip_level_count: 1,
+            dimension: blade::TextureDimension::D2,
+            usage: blade::TextureUsage::COPY | blade::TextureUsage::RESOURCE,
+        });
+        let view = context.create_texture_view(blade::TextureViewDesc {
+            name,
+            texture: allocation,
+            format,
+            dimension: blade::ViewDimension::D2,
+            subresources: &blade::TextureSubresources::default(),
+        });
+        Self { allocation, view }
+    }
+}
+
+//TODO: resource deletion
+//TODO: scissor test
 
 struct GuiRender {
     pipeline: blade::RenderPipeline,
     belt: BufferBelt,
-    primitives: Vec<GuiPrimitive>,
     last_user_texture_id: u64,
-    textures: HashMap<egui::TextureId, blade::TextureView>,
+    textures: HashMap<egui::TextureId, GuiTexture>,
+    sampler: blade::Sampler,
 }
 
 impl GuiRender {
@@ -46,10 +82,11 @@ impl GuiRender {
             source: &shader_source,
         });
 
-        let data_layout = <ShaderData as blade::ShaderData>::layout();
+        let globals_layout = <Globals as blade::ShaderData>::layout();
+        let locals_layout = <Locals as blade::ShaderData>::layout();
         let pipeline = context.create_render_pipeline(blade::RenderPipelineDesc {
             name: "gui",
-            data_layouts: &[&data_layout],
+            data_layouts: &[&globals_layout, &locals_layout],
             vertex: shader.at("vs_main"),
             primitive: blade::PrimitiveState {
                 topology: blade::PrimitiveTopology::TriangleList,
@@ -68,32 +105,126 @@ impl GuiRender {
             memory: blade::Memory::Shared,
             min_chunk_size: 0x1000,
         });
+
+        let sampler = context.create_sampler(blade::SamplerDesc {
+            name: "gui",
+            address_modes: [blade::AddressMode::ClampToEdge; 3],
+            mag_filter: blade::FilterMode::Linear,
+            min_filter: blade::FilterMode::Linear,
+            ..Default::default()
+        });
+
         Self {
             pipeline,
             belt,
-            primitives: Vec::new(),
             last_user_texture_id: 0,
             textures: Default::default(),
+            sampler,
+        }
+    }
+
+    /// Updates the texture used by egui for the fonts etc.
+    /// New textures should be added before the call to `execute()`,
+    /// and old textures should be removed after.
+    pub fn update_textures(
+        &mut self,
+        command_encoder: &mut blade::CommandEncoder,
+        textures_delta: &egui::TexturesDelta,
+        context: &blade::Context,
+    ) {
+        if textures_delta.set.is_empty() && textures_delta.free.is_empty() {
+            return;
+        }
+
+        let mut transfer = command_encoder.transfer();
+        for (texture_id, image_delta) in textures_delta.set.iter() {
+            let src = match image_delta.image {
+                egui::ImageData::Color(ref c) => self.belt.alloc_data(c.pixels.as_slice(), context),
+                egui::ImageData::Font(ref a) => {
+                    let color_iter = a.srgba_pixels(None);
+                    let stage = self.belt.alloc(
+                        (color_iter.len() * mem::size_of::<egui::Color32>()) as u64,
+                        context,
+                    );
+                    let mut ptr = stage.data() as *mut egui::Color32;
+                    for color in color_iter {
+                        unsafe {
+                            ptr::write(ptr, color);
+                            ptr = ptr.offset(1);
+                        }
+                    }
+                    stage
+                }
+            };
+
+            let image_size = image_delta.image.size();
+            let extent = blade::Extent {
+                width: image_size[0] as u32,
+                height: image_size[1] as u32,
+                depth: 1,
+            };
+
+            let label = match texture_id {
+                egui::TextureId::Managed(m) => format!("egui_image_{}", m),
+                egui::TextureId::User(u) => format!("egui_user_image_{}", u),
+            };
+
+            let texture = match self.textures.entry(*texture_id) {
+                Entry::Occupied(mut o) => {
+                    if image_delta.pos.is_none() {
+                        let texture = GuiTexture::create(context, &label, extent);
+                        let _old = o.insert(texture);
+                        // context.destroy_texture(_old.allocation);
+                    }
+                    o.into_mut()
+                }
+                Entry::Vacant(v) => {
+                    let texture = GuiTexture::create(context, &label, extent);
+                    v.insert(texture)
+                }
+            };
+
+            let dst = blade::TexturePiece {
+                texture: texture.allocation,
+                mip_level: 0,
+                array_layer: 0,
+                origin: match image_delta.pos {
+                    Some([x, y]) => [x as u32, y as u32, 0],
+                    None => [0; 3],
+                },
+            };
+            transfer.copy_buffer_to_texture(src, 4 * extent.width, dst, extent);
+        }
+
+        for texture_id in textures_delta.free.iter() {
+            let _texture = self.textures.remove(&texture_id).unwrap();
+            //context.destroy_texture(texture); //TODO
         }
     }
 
     fn execute(
-        &self,
+        &mut self,
         pass: &mut blade::RenderCommandEncoder,
         paint_jobs: &[egui::epaint::ClippedPrimitive],
         sd: &ScreenDescriptor,
+        context: &blade::Context,
     ) {
+        let logical_size = sd.logical_size();
         let mut pc = pass.with(&self.pipeline);
-        assert_eq!(self.primitives.len(), paint_jobs.len());
-        for (
-            egui::ClippedPrimitive {
-                clip_rect,
-                primitive,
+        pc.bind(
+            0,
+            &Globals {
+                uniforms: Uniforms {
+                    screen_size: [logical_size.0, logical_size.1],
+                    padding: [0.0; 2],
+                },
+                sampler: self.sampler,
             },
-            prim_data,
-        ) in paint_jobs.iter().zip(self.primitives.iter())
-        {
+        );
+
+        for clipped_prim in paint_jobs {
             {
+                let clip_rect = &clipped_prim.clip_rect;
                 // Transform clip rect to physical pixels.
                 let clip_min_x = sd.scale_factor * clip_rect.min.x;
                 let clip_min_y = sd.scale_factor * clip_rect.min.y;
@@ -121,18 +252,36 @@ impl GuiRender {
                     continue;
                 }
 
+                //TODO
                 //rpass.set_scissor_rect(clip_min_x, clip_min_y, width, height);
             }
 
-            if let egui::epaint::Primitive::Mesh(mesh) = primitive {
-                //TODO:
-                //let bind_group = self.get_texture_bind_group(mesh.texture_id)?;
-                //rpass.set_bind_group(1, bind_group, &[]);
+            if let egui::epaint::Primitive::Mesh(ref mesh) = clipped_prim.primitive {
+                let texture = self.textures.get(&mesh.texture_id).unwrap();
+                let index_buf = self.belt.alloc_data(&mesh.indices, context);
+                let vertex_buf = self.belt.alloc_data(&mesh.vertices, context);
 
-                //rpass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint32);
-                //rpass.set_vertex_buffer(0, vertex_buffer.buffer.slice(..));
-                //pc.draw_indexed(0..mesh.indices.len() as u32, 0, 0..1);
+                pc.bind(
+                    1,
+                    &Locals {
+                        vertex_buf,
+                        texture: texture.view,
+                    },
+                );
+
+                pc.draw_indexed(
+                    index_buf,
+                    blade::IndexType::U32,
+                    mesh.indices.len() as u32,
+                    0,
+                    0,
+                    1,
+                );
             }
         }
+    }
+
+    pub fn after_submit(&mut self, sync_point: blade::SyncPoint) {
+        self.belt.flush(sync_point);
     }
 }

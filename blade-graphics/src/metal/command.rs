@@ -16,6 +16,13 @@ fn map_extent(extent: &crate::Extent) -> metal::MTLSize {
     }
 }
 
+fn map_index_type(ty: crate::IndexType) -> metal::MTLIndexType {
+    match ty {
+        crate::IndexType::U16 => metal::MTLIndexType::UInt16,
+        crate::IndexType::U32 => metal::MTLIndexType::UInt32,
+    }
+}
+
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let slot = ctx.targets[index as usize] as _;
@@ -446,6 +453,48 @@ impl super::RenderPipelineContext<'_> {
         } else {
             self.encoder
                 .draw_primitives(self.primitive_type, first_vertex as _, vertex_count as _);
+        }
+    }
+
+    pub fn draw_indexed(
+        &mut self,
+        index_buf: crate::BufferPiece,
+        index_type: crate::IndexType,
+        index_count: u32,
+        base_vertex: i32,
+        start_instance: u32,
+        instance_count: u32,
+    ) {
+        let raw_index_type = map_index_type(index_type);
+        if base_vertex != 0 || start_instance != 0 {
+            self.encoder
+                .draw_indexed_primitives_instanced_base_instance(
+                    self.primitive_type,
+                    index_count as _,
+                    raw_index_type,
+                    index_buf.buffer.as_ref(),
+                    index_buf.offset,
+                    instance_count as _,
+                    base_vertex as _,
+                    start_instance as _,
+                );
+        } else if instance_count != 1 {
+            self.encoder.draw_indexed_primitives_instanced(
+                self.primitive_type,
+                index_count as _,
+                raw_index_type,
+                index_buf.buffer.as_ref(),
+                index_buf.offset,
+                instance_count as _,
+            );
+        } else {
+            self.encoder.draw_indexed_primitives(
+                self.primitive_type,
+                index_count as _,
+                raw_index_type,
+                index_buf.buffer.as_ref(),
+                index_buf.offset,
+            );
         }
     }
 }
