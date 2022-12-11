@@ -88,7 +88,7 @@ pub struct Context {
     _entry: ash::Entry,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Buffer {
     raw: vk::Buffer,
     memory_handle: usize,
@@ -108,7 +108,7 @@ struct BlockInfo {
     height: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Texture {
     raw: vk::Image,
     memory_handle: usize,
@@ -116,14 +116,14 @@ pub struct Texture {
     format: crate::TextureFormat,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct TextureView {
     raw: vk::ImageView,
     target_size: [u16; 2],
     aspects: FormatAspects,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Sampler {
     raw: vk::Sampler,
 }

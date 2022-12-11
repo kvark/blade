@@ -43,7 +43,7 @@ fn impl_shader_data(input_stream: TokenStream) -> syn::Result<proc_macro2::Token
     })
 }
 
-#[proc_macro_derive(ShaderData, attributes(struct_name, depth))]
+#[proc_macro_derive(ShaderData)]
 pub fn shader_data_derive(input: TokenStream) -> TokenStream {
     let stream = match impl_shader_data(input) {
         Ok(tokens) => tokens,

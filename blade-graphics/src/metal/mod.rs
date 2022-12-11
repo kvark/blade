@@ -44,7 +44,7 @@ pub struct Context {
     capture: Option<metal::CaptureManager>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Buffer {
     raw: *mut metal::MTLBuffer,
 }
@@ -67,7 +67,7 @@ impl Buffer {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Texture {
     raw: *mut metal::MTLTexture,
 }
@@ -86,7 +86,7 @@ impl Texture {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct TextureView {
     raw: *mut metal::MTLTexture,
 }
@@ -105,7 +105,7 @@ impl TextureView {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Sampler {
     raw: *mut metal::MTLSamplerState,
 }
