@@ -585,7 +585,26 @@ impl Context {
         Self::init_impl(desc, Some(handles))
     }
 
-    pub fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
+    fn set_object_name(&self, object_type: vk::ObjectType, object: impl vk::Handle, name: &str) {
+        let name_cstr = ffi::CString::new(name).unwrap();
+        let name_info = vk::DebugUtilsObjectNameInfoEXT::builder()
+            .object_type(object_type)
+            .object_handle(object.as_raw())
+            .object_name(&name_cstr);
+        let _ = unsafe {
+            self.instance
+                .debug_utils
+                .set_debug_utils_object_name(self.device.core.handle(), &name_info)
+        };
+    }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::CommandDevice for Context {
+    type CommandEncoder = CommandEncoder;
+    type SyncPoint = SyncPoint;
+
+    fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
         //TODO: these numbers are arbitrary, needs to be replaced by
         // an abstraction from gpu-alloc, if possible.
         const ROUGH_SET_COUNT: u32 = 50000;
@@ -663,7 +682,7 @@ impl Context {
         }
     }
 
-    pub fn destroy_command_encoder(&self, command_encoder: CommandEncoder) {
+    fn destroy_command_encoder(&self, command_encoder: CommandEncoder) {
         for cmd_buf in command_encoder.buffers.into_iter() {
             let raw_cmd_buffers = [cmd_buf.raw];
             unsafe {
@@ -682,7 +701,7 @@ impl Context {
         };
     }
 
-    pub fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+    fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         let raw_cmd_buf = encoder.finish();
         let mut queue = self.queue.lock().unwrap();
         queue.last_progress += 1;
@@ -736,7 +755,7 @@ impl Context {
         SyncPoint { progress }
     }
 
-    pub fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
+    fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
         //Note: technically we could get away without locking the queue,
         // but also this isn't time-sensitive, so it's fine.
         let timeline_semaphore = self.queue.lock().unwrap().timeline_semaphore;
@@ -752,19 +771,6 @@ impl Context {
                 .wait_semaphores(&wait_info, timeout_ns)
                 .is_ok()
         }
-    }
-
-    fn set_object_name(&self, object_type: vk::ObjectType, object: impl vk::Handle, name: &str) {
-        let name_cstr = ffi::CString::new(name).unwrap();
-        let name_info = vk::DebugUtilsObjectNameInfoEXT::builder()
-            .object_type(object_type)
-            .object_handle(object.as_raw())
-            .object_name(&name_cstr);
-        let _ = unsafe {
-            self.instance
-                .debug_utils
-                .set_debug_utils_object_name(self.device.core.handle(), &name_info)
-        };
     }
 }
 

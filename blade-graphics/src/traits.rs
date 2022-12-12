@@ -14,3 +14,13 @@ pub trait ResourceDevice {
     fn create_sampler(&self, desc: super::SamplerDesc) -> Self::Sampler;
     fn destroy_sampler(&self, sampler: Self::Sampler);
 }
+
+pub trait CommandDevice {
+    type CommandEncoder;
+    type SyncPoint: Clone + Debug;
+
+    fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> Self::CommandEncoder;
+    fn destroy_command_encoder(&self, encoder: Self::CommandEncoder);
+    fn submit(&self, encoder: &mut Self::CommandEncoder) -> Self::SyncPoint;
+    fn wait_for(&self, sp: &Self::SyncPoint, timeout_ms: u32) -> bool;
+}
