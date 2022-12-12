@@ -756,3 +756,11 @@ pub enum IndexType {
     U16,
     U32,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScissorRect {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}

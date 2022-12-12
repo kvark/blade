@@ -426,6 +426,24 @@ impl<'a> super::ComputeCommandEncoder<'a> {
 }
 
 impl<'a> super::RenderCommandEncoder<'a> {
+    pub fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
+        let vk_scissor = vk::Rect2D {
+            offset: vk::Offset2D {
+                x: rect.x as i32,
+                y: rect.y as i32,
+            },
+            extent: vk::Extent2D {
+                width: rect.w,
+                height: rect.h,
+            },
+        };
+        unsafe {
+            self.device
+                .core
+                .cmd_set_scissor(self.cmd_buf.raw, 0, &[vk_scissor])
+        };
+    }
+
     pub fn with<'b, 'p>(
         &'b mut self,
         pipeline: &'p super::RenderPipeline,
@@ -501,6 +519,25 @@ impl super::PipelineEncoder<'_, '_> {
             self.device
                 .core
                 .cmd_dispatch(self.cmd_buf.raw, groups[0], groups[1], groups[2])
+        };
+    }
+
+    //TODO: reconsider exposing this
+    pub fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
+        let vk_scissor = vk::Rect2D {
+            offset: vk::Offset2D {
+                x: rect.x as i32,
+                y: rect.y as i32,
+            },
+            extent: vk::Extent2D {
+                width: rect.w,
+                height: rect.h,
+            },
+        };
+        unsafe {
+            self.device
+                .core
+                .cmd_set_scissor(self.cmd_buf.raw, 0, &[vk_scissor])
         };
     }
 

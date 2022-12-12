@@ -13,14 +13,14 @@ struct Uniforms {
 
 #[derive(blade::ShaderData)]
 struct Globals {
-    uniforms: Uniforms,
-    sampler: blade::Sampler,
+    r_uniforms: Uniforms,
+    r_sampler: blade::Sampler,
 }
 
 #[derive(blade::ShaderData)]
 struct Locals {
-    vertex_buf: blade::BufferPiece,
-    texture: blade::TextureView,
+    r_vertex_data: blade::BufferPiece,
+    r_texture: blade::TextureView,
 }
 
 pub struct ScreenDescriptor {
@@ -67,15 +67,18 @@ impl GuiTexture {
 //TODO: resource deletion
 //TODO: scissor test
 
-struct GuiRender {
+pub struct GuiPainter {
     pipeline: blade::RenderPipeline,
+    //TODO: find a better way to allocate temporary buffers.
     belt: BufferBelt,
-    last_user_texture_id: u64,
     textures: HashMap<egui::TextureId, GuiTexture>,
+    //TODO: this could also look better
+    textures_dropped: Vec<GuiTexture>,
+    textures_to_delete: Vec<(GuiTexture, blade::SyncPoint)>,
     sampler: blade::Sampler,
 }
 
-impl GuiRender {
+impl GuiPainter {
     pub fn new(context: &blade::Context, output_format: blade::TextureFormat) -> Self {
         let shader_source = fs::read_to_string("examples/particle/gui.wgsl").unwrap();
         let shader = context.create_shader(blade::ShaderDesc {
@@ -117,9 +120,22 @@ impl GuiRender {
         Self {
             pipeline,
             belt,
-            last_user_texture_id: 0,
             textures: Default::default(),
+            textures_dropped: Vec::new(),
+            textures_to_delete: Vec::new(),
             sampler,
+        }
+    }
+
+    fn triage_deletions(&mut self, context: &blade::Context) {
+        let valid_pos = self
+            .textures_to_delete
+            .iter()
+            .position(|&(_, ref sp)| !context.wait_for(sp, 0))
+            .unwrap_or_default();
+        for (texture, _) in self.textures_to_delete.drain(..valid_pos) {
+            context.destroy_texture_view(texture.view);
+            context.destroy_texture(texture.allocation);
         }
     }
 
@@ -173,8 +189,8 @@ impl GuiRender {
                 Entry::Occupied(mut o) => {
                     if image_delta.pos.is_none() {
                         let texture = GuiTexture::create(context, &label, extent);
-                        let _old = o.insert(texture);
-                        // context.destroy_texture(_old.allocation);
+                        let old = o.insert(texture);
+                        self.textures_dropped.push(old);
                     }
                     o.into_mut()
                 }
@@ -197,12 +213,14 @@ impl GuiRender {
         }
 
         for texture_id in textures_delta.free.iter() {
-            let _texture = self.textures.remove(&texture_id).unwrap();
-            //context.destroy_texture(texture); //TODO
+            let texture = self.textures.remove(&texture_id).unwrap();
+            self.textures_dropped.push(texture);
         }
+
+        self.triage_deletions(context);
     }
 
-    fn execute(
+    pub fn paint(
         &mut self,
         pass: &mut blade::RenderCommandEncoder,
         paint_jobs: &[egui::epaint::ClippedPrimitive],
@@ -214,47 +232,41 @@ impl GuiRender {
         pc.bind(
             0,
             &Globals {
-                uniforms: Uniforms {
+                r_uniforms: Uniforms {
                     screen_size: [logical_size.0, logical_size.1],
                     padding: [0.0; 2],
                 },
-                sampler: self.sampler,
+                r_sampler: self.sampler,
             },
         );
 
         for clipped_prim in paint_jobs {
-            {
-                let clip_rect = &clipped_prim.clip_rect;
-                // Transform clip rect to physical pixels.
-                let clip_min_x = sd.scale_factor * clip_rect.min.x;
-                let clip_min_y = sd.scale_factor * clip_rect.min.y;
-                let clip_max_x = sd.scale_factor * clip_rect.max.x;
-                let clip_max_y = sd.scale_factor * clip_rect.max.y;
+            let clip_rect = &clipped_prim.clip_rect;
 
-                // Make sure clip rect can fit within an `u32`.
-                let clip_min_x = clip_min_x.clamp(0.0, sd.physical_size.0 as f32);
-                let clip_min_y = clip_min_y.clamp(0.0, sd.physical_size.1 as f32);
-                let clip_max_x = clip_max_x.clamp(clip_min_x, sd.physical_size.0 as f32);
-                let clip_max_y = clip_max_y.clamp(clip_min_y, sd.physical_size.1 as f32);
+            // Make sure clip rect can fit within an `u32`.
+            let clip_min_x = (sd.scale_factor * clip_rect.min.x)
+                .clamp(0.0, sd.physical_size.0 as f32)
+                .trunc() as u32;
+            let clip_min_y = (sd.scale_factor * clip_rect.min.y)
+                .clamp(0.0, sd.physical_size.1 as f32)
+                .trunc() as u32;
+            let clip_max_x = (sd.scale_factor * clip_rect.max.x)
+                .clamp(0.0, sd.physical_size.0 as f32)
+                .ceil() as u32;
+            let clip_max_y = (sd.scale_factor * clip_rect.max.y)
+                .clamp(0.0, sd.physical_size.1 as f32)
+                .ceil() as u32;
 
-                let clip_min_x = clip_min_x.trunc() as u32;
-                let clip_min_y = clip_min_y.trunc() as u32;
-                let clip_max_x = clip_max_x.ceil() as u32;
-                let clip_max_y = clip_max_y.ceil() as u32;
-
-                let width = (clip_max_x - clip_min_x).max(1);
-                let height = (clip_max_y - clip_min_y).max(1);
-
-                let width = width.min(sd.physical_size.0 - clip_min_x);
-                let height = height.min(sd.physical_size.1 - clip_min_y);
-
-                if width == 0 || height == 0 {
-                    continue;
-                }
-
-                //TODO
-                //rpass.set_scissor_rect(clip_min_x, clip_min_y, width, height);
+            if clip_max_x <= clip_min_x || clip_max_y == clip_min_y {
+                continue;
             }
+
+            pc.set_scissor_rect(&blade::ScissorRect {
+                x: clip_min_x,
+                y: clip_min_y,
+                w: clip_max_x - clip_min_x,
+                h: clip_max_y - clip_min_y,
+            });
 
             if let egui::epaint::Primitive::Mesh(ref mesh) = clipped_prim.primitive {
                 let texture = self.textures.get(&mesh.texture_id).unwrap();
@@ -264,8 +276,8 @@ impl GuiRender {
                 pc.bind(
                     1,
                     &Locals {
-                        vertex_buf,
-                        texture: texture.view,
+                        r_vertex_data: vertex_buf,
+                        r_texture: texture.view,
                     },
                 );
 
@@ -282,6 +294,11 @@ impl GuiRender {
     }
 
     pub fn after_submit(&mut self, sync_point: blade::SyncPoint) {
+        self.textures_to_delete.extend(
+            self.textures_dropped
+                .drain(..)
+                .map(|texture| (texture, sync_point.clone())),
+        );
         self.belt.flush(sync_point);
     }
 }
