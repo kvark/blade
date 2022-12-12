@@ -301,8 +301,14 @@ impl Context {
         context.surface = Some(Mutex::new(surface));
         Ok(context)
     }
+}
 
-    pub fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
+#[hidden_trait::expose]
+impl crate::traits::CommandDevice for Context {
+    type CommandEncoder = CommandEncoder;
+    type SyncPoint = SyncPoint;
+
+    fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
         CommandEncoder {
             raw: None,
             name: desc.name.to_string(),
@@ -310,15 +316,15 @@ impl Context {
         }
     }
 
-    pub fn destroy_command_encoder(&self, _command_encoder: CommandEncoder) {}
+    fn destroy_command_encoder(&self, _command_encoder: CommandEncoder) {}
 
-    pub fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+    fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         let cmd_buf = encoder.raw.take().unwrap();
         cmd_buf.commit();
         SyncPoint { cmd_buf }
     }
 
-    pub fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
+    fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
         let start = time::Instant::now();
         loop {
             if let metal::MTLCommandBufferStatus::Completed = sp.cmd_buf.status() {
