@@ -334,6 +334,16 @@ impl Drop for super::ComputeCommandEncoder<'_> {
 }
 
 impl super::RenderCommandEncoder<'_> {
+    pub fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
+        let scissor = metal::MTLScissorRect {
+            x: rect.x as _,
+            y: rect.y as _,
+            width: rect.w as _,
+            height: rect.h as _,
+        };
+        self.raw.set_scissor_rect(scissor);
+    }
+
     pub fn with<'p>(
         &'p mut self,
         pipeline: &'p super::RenderPipeline,
@@ -409,6 +419,17 @@ impl Drop for super::ComputePipelineContext<'_> {
 }
 
 impl super::RenderPipelineContext<'_> {
+    //TODO: reconsider exposing this
+    pub fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
+        let scissor = metal::MTLScissorRect {
+            x: rect.x as _,
+            y: rect.y as _,
+            width: rect.w as _,
+            height: rect.h as _,
+        };
+        self.encoder.set_scissor_rect(scissor);
+    }
+
     pub fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         let info = &self.bind_groups[group as usize];
 
