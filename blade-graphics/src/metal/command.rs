@@ -222,8 +222,9 @@ impl super::CommandEncoder {
     }
 }
 
-impl super::TransferCommandEncoder<'_> {
-    pub fn copy_buffer_to_buffer(
+#[hidden_trait::expose]
+impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
+    fn copy_buffer_to_buffer(
         &mut self,
         src: crate::BufferPiece,
         dst: crate::BufferPiece,
@@ -237,7 +238,7 @@ impl super::TransferCommandEncoder<'_> {
             size,
         );
     }
-    pub fn copy_texture_to_texture(
+    fn copy_texture_to_texture(
         &mut self,
         src: crate::TexturePiece,
         dst: crate::TexturePiece,
@@ -255,7 +256,8 @@ impl super::TransferCommandEncoder<'_> {
             map_origin(&dst.origin),
         );
     }
-    pub fn copy_buffer_to_texture(
+
+    fn copy_buffer_to_texture(
         &mut self,
         src: crate::BufferPiece,
         bytes_per_row: u32,
@@ -275,7 +277,8 @@ impl super::TransferCommandEncoder<'_> {
             metal::MTLBlitOption::empty(),
         );
     }
-    pub fn copy_texture_to_buffer(
+
+    fn copy_texture_to_buffer(
         &mut self,
         src: crate::TexturePiece,
         dst: crate::BufferPiece,
@@ -388,8 +391,9 @@ impl Drop for super::RenderCommandEncoder<'_> {
     }
 }
 
-impl super::ComputePipelineContext<'_> {
-    pub fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
+#[hidden_trait::expose]
+impl crate::traits::PipelineEncoder for super::ComputePipelineContext<'_> {
+    fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         let info = &self.bind_groups[group as usize];
 
         data.fill(super::PipelineContext {
@@ -403,8 +407,11 @@ impl super::ComputePipelineContext<'_> {
             targets: &info.targets,
         });
     }
+}
 
-    pub fn dispatch(&mut self, groups: [u32; 3]) {
+#[hidden_trait::expose]
+impl crate::traits::ComputePipelineEncoder for super::ComputePipelineContext<'_> {
+    fn dispatch(&mut self, groups: [u32; 3]) {
         let raw_count = metal::MTLSize {
             width: groups[0] as u64,
             height: groups[1] as u64,
@@ -418,19 +425,9 @@ impl Drop for super::ComputePipelineContext<'_> {
     fn drop(&mut self) {}
 }
 
-impl super::RenderPipelineContext<'_> {
-    //TODO: reconsider exposing this
-    pub fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
-        let scissor = metal::MTLScissorRect {
-            x: rect.x as _,
-            y: rect.y as _,
-            width: rect.w as _,
-            height: rect.h as _,
-        };
-        self.encoder.set_scissor_rect(scissor);
-    }
-
-    pub fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
+#[hidden_trait::expose]
+impl crate::traits::PipelineEncoder for super::RenderPipelineContext<'_> {
+    fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         let info = &self.bind_groups[group as usize];
 
         data.fill(super::PipelineContext {
@@ -448,8 +445,21 @@ impl super::RenderPipelineContext<'_> {
             targets: &info.targets,
         });
     }
+}
 
-    pub fn draw(
+#[hidden_trait::expose]
+impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
+    fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
+        let scissor = metal::MTLScissorRect {
+            x: rect.x as _,
+            y: rect.y as _,
+            width: rect.w as _,
+            height: rect.h as _,
+        };
+        self.encoder.set_scissor_rect(scissor);
+    }
+
+    fn draw(
         &mut self,
         first_vertex: u32,
         vertex_count: u32,
@@ -477,7 +487,7 @@ impl super::RenderPipelineContext<'_> {
         }
     }
 
-    pub fn draw_indexed(
+    fn draw_indexed(
         &mut self,
         index_buf: crate::BufferPiece,
         index_type: crate::IndexType,

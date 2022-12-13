@@ -326,8 +326,9 @@ impl super::CommandEncoder {
     }
 }
 
-impl super::TransferCommandEncoder<'_> {
-    pub fn copy_buffer_to_buffer(
+#[hidden_trait::expose]
+impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
+    fn copy_buffer_to_buffer(
         &mut self,
         src: crate::BufferPiece,
         dst: crate::BufferPiece,
@@ -345,7 +346,7 @@ impl super::TransferCommandEncoder<'_> {
         };
     }
 
-    pub fn copy_texture_to_texture(
+    fn copy_texture_to_texture(
         &mut self,
         src: crate::TexturePiece,
         dst: crate::TexturePiece,
@@ -370,7 +371,7 @@ impl super::TransferCommandEncoder<'_> {
         };
     }
 
-    pub fn copy_buffer_to_texture(
+    fn copy_buffer_to_texture(
         &mut self,
         src: crate::BufferPiece,
         bytes_per_row: u32,
@@ -389,7 +390,7 @@ impl super::TransferCommandEncoder<'_> {
         };
     }
 
-    pub fn copy_texture_to_buffer(
+    fn copy_texture_to_buffer(
         &mut self,
         src: crate::TexturePiece,
         dst: crate::BufferPiece,
@@ -478,8 +479,11 @@ impl super::PipelineEncoder<'_, '_> {
         };
         self
     }
+}
 
-    pub fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
+#[hidden_trait::expose]
+impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_, '_> {
+    fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         let dsl = &self.layout.descriptor_set_layouts[group as usize];
         self.update_data.clear();
         self.update_data.resize(dsl.template_size as usize, 0);
@@ -513,17 +517,22 @@ impl super::PipelineEncoder<'_, '_> {
             );
         }
     }
+}
 
-    pub fn dispatch(&mut self, groups: [u32; 3]) {
+#[hidden_trait::expose]
+impl crate::traits::ComputePipelineEncoder for super::PipelineEncoder<'_, '_> {
+    fn dispatch(&mut self, groups: [u32; 3]) {
         unsafe {
             self.device
                 .core
                 .cmd_dispatch(self.cmd_buf.raw, groups[0], groups[1], groups[2])
         };
     }
+}
 
-    //TODO: reconsider exposing this
-    pub fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
+#[hidden_trait::expose]
+impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
+    fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
         let vk_scissor = vk::Rect2D {
             offset: vk::Offset2D {
                 x: rect.x as i32,
@@ -541,7 +550,7 @@ impl super::PipelineEncoder<'_, '_> {
         };
     }
 
-    pub fn draw(
+    fn draw(
         &mut self,
         start_vertex: u32,
         vertex_count: u32,
@@ -559,7 +568,7 @@ impl super::PipelineEncoder<'_, '_> {
         }
     }
 
-    pub fn draw_indexed(
+    fn draw_indexed(
         &mut self,
         index_buf: crate::BufferPiece,
         index_type: crate::IndexType,
