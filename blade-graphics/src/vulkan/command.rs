@@ -328,6 +328,15 @@ impl super::CommandEncoder {
 
 #[hidden_trait::expose]
 impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
+    fn fill_buffer(&mut self, dst: crate::BufferPiece, size: u64, value: u8) {
+        let value_u32 = (value as u32) * 0x1010101;
+        unsafe {
+            self.device
+                .core
+                .cmd_fill_buffer(self.raw, dst.buffer.raw, dst.offset, size, value_u32)
+        };
+    }
+
     fn copy_buffer_to_buffer(
         &mut self,
         src: crate::BufferPiece,

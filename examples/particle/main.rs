@@ -2,12 +2,14 @@
 
 pub mod belt;
 mod gui;
+mod particle;
 
 struct Example {
     command_encoder: blade::CommandEncoder,
     prev_sync_point: Option<blade::SyncPoint>,
     context: blade::Context,
     gui_painter: gui::GuiPainter,
+    particle_system: particle::System,
 }
 
 impl Example {
@@ -34,17 +36,27 @@ impl Example {
             frame_count: 3,
         });
         let gui_painter = gui::GuiPainter::new(&context, surface_format);
+        let mut particle_system = particle::System::new(
+            &context,
+            particle::SystemDesc {
+                name: "particle system",
+                capacity: 10000,
+            },
+        );
 
-        let command_encoder = context.create_command_encoder(blade::CommandEncoderDesc {
+        let mut command_encoder = context.create_command_encoder(blade::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
         });
+        particle_system.reset(&mut command_encoder.transfer());
+        let sync_point = context.submit(&mut command_encoder);
 
         Self {
             command_encoder,
-            prev_sync_point: None,
+            prev_sync_point: Some(sync_point),
             context,
             gui_painter,
+            particle_system,
         }
     }
 
@@ -61,6 +73,8 @@ impl Example {
 
         self.gui_painter
             .update_textures(&mut self.command_encoder, gui_textures, &self.context);
+
+        self.particle_system.update(&mut self.command_encoder);
 
         if let mut pass = self.command_encoder.render(blade::RenderTargetSet {
             colors: &[blade::RenderTarget {
@@ -83,10 +97,12 @@ impl Example {
         self.prev_sync_point = Some(sync_point);
     }
 
-    fn deinit(&mut self) {
-        if let Some(sp) = self.prev_sync_point.take() {
+    fn delete(self) {
+        if let Some(sp) = self.prev_sync_point {
             self.context.wait_for(&sp, !0);
         }
+        self.gui_painter.delete(&self.context);
+        self.particle_system.delete(&self.context);
     }
 }
 
@@ -102,7 +118,7 @@ fn main() {
     let egui_ctx = egui::Context::default();
     let mut egui_winit = egui_winit::State::new(&event_loop);
 
-    let mut example = Example::new(&window);
+    let mut example = Some(Example::new(&window));
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = winit::event_loop::ControlFlow::Poll;
@@ -173,10 +189,14 @@ fn main() {
                     scale_factor: egui_ctx.pixels_per_point(),
                 };
 
-                example.render(&primitives, &egui_output.textures_delta, &screen_desc);
+                example.as_mut().unwrap().render(
+                    &primitives,
+                    &egui_output.textures_delta,
+                    &screen_desc,
+                );
             }
             winit::event::Event::LoopDestroyed => {
-                example.deinit();
+                example.take().unwrap().delete();
             }
             _ => {}
         }

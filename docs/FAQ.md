@@ -8,7 +8,7 @@
 
 Blade creating a descriptor set (in Vulkan) for each draw call. It doesn't care about pipeline compatibility to preserve the bindings. How is this fast?
 
-Short answer is - yes. Long answer is - slow doesn't matter here.
+Short answer is - yes, it's unlikely going to be faster than wgpu-hal. Long answer is - slow doesn't matter here.
 
 Take a look at Vulkan [performance](performance.md) numbers. wgpu-hal can get 60K bunnies on a slow machine, which is pretty much the maximum. Both wgpu and blade can reach about 20K. Honestly, if you are relying on 20K unique draw calls being fast, you are in a strange place. Generally, developers should switch to instancing or other batching methods whenever the object count grows above 100, not to mention a 1000.
 

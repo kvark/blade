@@ -79,6 +79,10 @@ pub struct GuiPainter {
 }
 
 impl GuiPainter {
+    pub fn delete(self, context: &blade::Context) {
+        context.destroy_sampler(self.sampler);
+    }
+
     pub fn new(context: &blade::Context, output_format: blade::TextureFormat) -> Self {
         let shader_source = fs::read_to_string("examples/particle/gui.wgsl").unwrap();
         let shader = context.create_shader(blade::ShaderDesc {

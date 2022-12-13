@@ -26,6 +26,7 @@ pub trait CommandDevice {
 }
 
 pub trait TransferEncoder {
+    fn fill_buffer(&mut self, dst: super::BufferPiece, size: u64, value: u8);
     fn copy_buffer_to_buffer(
         &mut self,
         src: super::BufferPiece,

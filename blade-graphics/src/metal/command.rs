@@ -224,6 +224,14 @@ impl super::CommandEncoder {
 
 #[hidden_trait::expose]
 impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
+    fn fill_buffer(&mut self, dst: crate::BufferPiece, size: u64, value: u8) {
+        let range = metal::NSRange {
+            location: dst.offset,
+            length: size,
+        };
+        self.raw.fill_buffer(dst.buffer.as_ref(), range, value);
+    }
+
     fn copy_buffer_to_buffer(
         &mut self,
         src: crate::BufferPiece,
