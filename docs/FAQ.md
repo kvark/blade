@@ -1,10 +1,17 @@
 # Frequency Asked Questions
 
-### Why investing into this when there is `wgpu`?
+## When should I *not* use Blade?
+
+- When you *target the Web*. Blade currently has no Web backends supported. Targeting WebGPU is desired, but will not be as performant as native.
+- Similarly, when you target the *low-end GPUs* or old drivers. Blade has no OpenGL/D3D11 support, and it requires fresh drivers on Vulkan.
+- When you render with 10K or *more draw calls*. State switching has overhead with Blade, and it is lower in GPU abstractions/libraries that have barriers and explicit bind groups.
+- When you need something *off the shelf*. Blade is experimental and young, it assumes you'll be customizing it.
+
+## Why investing into this when there is `wgpu`?
 
 `wgpu` is becoming a standard solution for GPU access in Rust and beyond. It's wonderful, and by any means just use it if you have any doubts. It's a strong local maxima in a chosen space of low-level portability. It may very well be the global maxima as well, but we don't know this until we explore the *other* local maximas. Blade is an attempt to strike where `wgpu` can't reach, it makes a lot of the opposite design solutions. Try it and see.
 
-### Isn't this going to be slow?
+## Isn't this going to be slow?
 
 Blade creating a descriptor set (in Vulkan) for each draw call. It doesn't care about pipeline compatibility to preserve the bindings. How is this fast?
 
