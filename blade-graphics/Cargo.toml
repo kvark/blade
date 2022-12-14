@@ -11,7 +11,7 @@ bytemuck = "1"
 codespan-reporting = "0.11"
 hidden-trait = "0.1"
 log = "0.4"
-naga = { version = "0.10", features = ["wgsl-in", "span", "validate", "clone"] }
+naga = { workspace = true, features = ["clone"] }
 raw-window-handle = "0.5"
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
@@ -20,12 +20,12 @@ core-graphics-types = "0.1"
 foreign-types = "0.3"
 metal = "0.24"
 objc = "0.2.5"
-naga = { version = "0.10", features = ["msl-out"] }
+naga = { workspace = true, features = ["msl-out"] }
 
 [target.'cfg(any(portability, not(any(target_os = "ios", target_os = "macos"))))'.dependencies]
 ash = "0.37"
 ash-window = "0.12"
 gpu-alloc = "0.5"
 gpu-alloc-ash = "0.5"
-naga = { version = "0.10", features = ["spv-out"] }
+naga = { workspace = true, features = ["spv-out"] }
 slab = "0.4"
