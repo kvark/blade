@@ -14,7 +14,9 @@ struct Particle {
 pub struct System {
     capacity: usize,
     particle_buf: blade::Buffer,
+    emit_pipeline: blade::ComputePipeline,
     update_pipeline: blade::ComputePipeline,
+    draw_pipeline: blade::RenderPipeline,
 }
 
 pub struct SystemDesc<'a> {
@@ -31,15 +33,34 @@ impl System {
         });
         let source = std::fs::read_to_string("examples/particle/particle.wgsl").unwrap();
         let shader = context.create_shader(blade::ShaderDesc { source: &source });
+        let emit_pipeline = context.create_compute_pipeline(blade::ComputePipelineDesc {
+            name: &format!("{} - emit", desc.name),
+            data_layouts: &[],
+            compute: shader.at("emit"),
+        });
         let update_pipeline = context.create_compute_pipeline(blade::ComputePipelineDesc {
             name: &format!("{} - update", desc.name),
             data_layouts: &[],
             compute: shader.at("update"),
         });
+        let draw_pipeline = context.create_render_pipeline(blade::RenderPipelineDesc {
+            name: &format!("{} - draw", desc.name),
+            data_layouts: &[],
+            primitive: blade::PrimitiveState {
+                topology: blade::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            vertex: shader.at("draw_vs"),
+            fragment: shader.at("draw_fs"),
+            color_targets: &[],
+            depth_stencil: None,
+        });
         Self {
             capacity: desc.capacity,
             particle_buf,
+            emit_pipeline,
             update_pipeline,
+            draw_pipeline,
         }
     }
 

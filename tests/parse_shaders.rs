@@ -44,7 +44,11 @@ fn parse_wgsl() {
                 naga::valid::Capabilities::empty(),
             )
             .validate(&module)
-            .unwrap();
+            .unwrap_or_else(|e| {
+                blade::util::emit_annotated_error(&e, "", &shader);
+                blade::util::print_err(&e);
+                panic!("Shader validation failed");
+            });
         }
     }
 }
