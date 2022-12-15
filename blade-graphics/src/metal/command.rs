@@ -1,28 +1,5 @@
 use std::{marker::PhantomData, mem};
 
-fn map_origin(origin: &[u32; 3]) -> metal::MTLOrigin {
-    metal::MTLOrigin {
-        x: origin[0] as u64,
-        y: origin[1] as u64,
-        z: origin[2] as u64,
-    }
-}
-
-fn map_extent(extent: &crate::Extent) -> metal::MTLSize {
-    metal::MTLSize {
-        width: extent.width as u64,
-        height: extent.height as u64,
-        depth: extent.depth as u64,
-    }
-}
-
-fn map_index_type(ty: crate::IndexType) -> metal::MTLIndexType {
-    match ty {
-        crate::IndexType::U16 => metal::MTLIndexType::UInt16,
-        crate::IndexType::U32 => metal::MTLIndexType::UInt32,
-    }
-}
-
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let slot = ctx.targets[index as usize] as _;
@@ -143,26 +120,7 @@ impl super::CommandEncoder {
                 let load_action = match rt.init_op {
                     crate::InitOp::Load => metal::MTLLoadAction::Load,
                     crate::InitOp::Clear(color) => {
-                        let clear_color = match color {
-                            crate::TextureColor::TransparentBlack => metal::MTLClearColor {
-                                red: 0.0,
-                                green: 0.0,
-                                blue: 0.0,
-                                alpha: 0.0,
-                            },
-                            crate::TextureColor::OpaqueBlack => metal::MTLClearColor {
-                                red: 0.0,
-                                green: 0.0,
-                                blue: 0.0,
-                                alpha: 1.0,
-                            },
-                            crate::TextureColor::White => metal::MTLClearColor {
-                                red: 1.0,
-                                green: 1.0,
-                                blue: 1.0,
-                                alpha: 1.0,
-                            },
-                        };
+                        let clear_color = map_clear_color(color);
                         at_descriptor.set_clear_color(clear_color);
                         metal::MTLLoadAction::Clear
                     }
@@ -535,5 +493,51 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
                 index_buf.offset,
             );
         }
+    }
+}
+
+fn map_origin(origin: &[u32; 3]) -> metal::MTLOrigin {
+    metal::MTLOrigin {
+        x: origin[0] as u64,
+        y: origin[1] as u64,
+        z: origin[2] as u64,
+    }
+}
+
+fn map_extent(extent: &crate::Extent) -> metal::MTLSize {
+    metal::MTLSize {
+        width: extent.width as u64,
+        height: extent.height as u64,
+        depth: extent.depth as u64,
+    }
+}
+
+fn map_index_type(ty: crate::IndexType) -> metal::MTLIndexType {
+    match ty {
+        crate::IndexType::U16 => metal::MTLIndexType::UInt16,
+        crate::IndexType::U32 => metal::MTLIndexType::UInt32,
+    }
+}
+
+fn map_clear_color(color: crate::TextureColor) -> metal::MTLClearColor {
+    match color {
+        crate::TextureColor::TransparentBlack => metal::MTLClearColor {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        },
+        crate::TextureColor::OpaqueBlack => metal::MTLClearColor {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+        },
+        crate::TextureColor::White => metal::MTLClearColor {
+            red: 1.0,
+            green: 1.0,
+            blue: 1.0,
+            alpha: 1.0,
+        },
     }
 }

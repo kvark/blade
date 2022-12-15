@@ -36,11 +36,12 @@ impl Example {
             frame_count: 3,
         });
         let gui_painter = gui::GuiPainter::new(&context, surface_format);
-        let mut particle_system = particle::System::new(
+        let particle_system = particle::System::new(
             &context,
             particle::SystemDesc {
                 name: "particle system",
                 capacity: 10000,
+                draw_format: surface_format,
             },
         );
 
@@ -48,7 +49,8 @@ impl Example {
             name: "main",
             buffer_count: 2,
         });
-        particle_system.reset(&mut command_encoder.transfer());
+        command_encoder.start();
+        particle_system.reset(&mut command_encoder);
         let sync_point = context.submit(&mut command_encoder);
 
         Self {
@@ -84,6 +86,7 @@ impl Example {
             }],
             depth_stencil: None,
         }) {
+            self.particle_system.draw(&mut pass);
             self.gui_painter
                 .paint(&mut pass, gui_primitives, screen_desc, &self.context);
         }

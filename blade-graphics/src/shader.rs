@@ -32,3 +32,25 @@ impl super::Context {
         super::Shader { module, info }
     }
 }
+
+impl super::Shader {
+    pub fn at<'a>(&'a self, entry_point: &'a str) -> super::ShaderFunction<'a> {
+        super::ShaderFunction {
+            shader: self,
+            entry_point,
+        }
+    }
+
+    pub fn get_struct_size(&self, struct_name: &str) -> u32 {
+        let (_, ty) = self
+            .module
+            .types
+            .iter()
+            .find(|(_, ty)| ty.name.as_ref().map(|s| s.as_str()) == Some(struct_name))
+            .expect("Struct type not found");
+        match ty.inner {
+            naga::TypeInner::Struct { members: _, span } => span,
+            _ => panic!("Type is not a struct"),
+        }
+    }
+}

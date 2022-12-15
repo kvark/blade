@@ -311,15 +311,6 @@ impl ShaderFunction<'_> {
     }
 }
 
-impl Shader {
-    pub fn at<'a>(&'a self, entry_point: &'a str) -> ShaderFunction<'a> {
-        ShaderFunction {
-            shader: self,
-            entry_point,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShaderBinding {
     Texture,

@@ -188,6 +188,9 @@ impl super::Context {
         layouter.update(&module.types, &module.constants).unwrap();
 
         for (handle, var) in module.global_variables.iter_mut() {
+            if ep_info[handle].is_empty() {
+                continue;
+            }
             let access = match var.space {
                 naga::AddressSpace::Storage { access } => access,
                 naga::AddressSpace::Uniform | naga::AddressSpace::Handle => {
@@ -256,10 +259,8 @@ impl super::Context {
                     );
                     assert_eq!(var.binding, None);
                     var.binding = Some(res_binding.clone());
-                    if !ep_info[handle].is_empty() {
-                        naga_resources.resources.insert(res_binding, bind_target);
-                        bgi.visibility |= naga_stage.into();
-                    }
+                    naga_resources.resources.insert(res_binding, bind_target);
+                    bgi.visibility |= naga_stage.into();
                     break;
                 }
             }
