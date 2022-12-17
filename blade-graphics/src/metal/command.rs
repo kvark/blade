@@ -277,6 +277,7 @@ impl super::ComputeCommandEncoder<'_> {
         &'p mut self,
         pipeline: &'p super::ComputePipeline,
     ) -> super::ComputePipelineContext<'p> {
+        self.raw.push_debug_group(&pipeline.name);
         self.raw.set_compute_pipeline_state(&pipeline.raw);
         if let Some(index) = pipeline.layout.sizes_buffer_slot {
             //TODO: get real sizes
@@ -317,6 +318,7 @@ impl super::RenderCommandEncoder<'_> {
         &'p mut self,
         pipeline: &'p super::RenderPipeline,
     ) -> super::RenderPipelineContext<'p> {
+        self.raw.push_debug_group(&pipeline.name);
         self.raw.set_render_pipeline_state(&pipeline.raw);
         if let Some(index) = pipeline.layout.sizes_buffer_slot {
             //TODO: get real sizes
@@ -388,7 +390,9 @@ impl crate::traits::ComputePipelineEncoder for super::ComputePipelineContext<'_>
 }
 
 impl Drop for super::ComputePipelineContext<'_> {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        self.encoder.pop_debug_group();
+    }
 }
 
 #[hidden_trait::expose]
@@ -493,6 +497,12 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
                 index_buf.offset,
             );
         }
+    }
+}
+
+impl Drop for super::RenderPipelineContext<'_> {
+    fn drop(&mut self) {
+        self.encoder.pop_debug_group();
     }
 }
 

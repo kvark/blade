@@ -369,6 +369,7 @@ impl super::Context {
 
             super::ComputePipeline {
                 raw,
+                name: desc.name.to_string(),
                 lib: cs.library,
                 layout,
                 wg_size: cs.wg_size,
@@ -494,6 +495,7 @@ impl super::Context {
 
             super::RenderPipeline {
                 raw,
+                name: desc.name.to_string(),
                 vs_lib: vs.library,
                 fs_lib: fs.library,
                 layout,

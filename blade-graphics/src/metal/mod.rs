@@ -151,6 +151,7 @@ struct PipelineLayout {
 #[derive(Debug)]
 pub struct ComputePipeline {
     raw: metal::ComputePipelineState,
+    name: String,
     #[allow(dead_code)]
     lib: metal::Library,
     layout: PipelineLayout,
@@ -170,6 +171,7 @@ impl ComputePipeline {
 #[derive(Debug)]
 pub struct RenderPipeline {
     raw: metal::RenderPipelineState,
+    name: String,
     #[allow(dead_code)]
     vs_lib: metal::Library,
     #[allow(dead_code)]

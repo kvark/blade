@@ -107,7 +107,7 @@ impl System {
         });
         let free_list_buf = context.create_buffer(blade::BufferDesc {
             name: &format!("{} - free list", desc.name),
-            size: capacity as u64 * 4,
+            size: 4 + capacity as u64 * 4,
             memory: blade::Memory::Device,
         });
 
@@ -149,7 +149,7 @@ impl System {
                 &UpdateData {
                     update_params: UpdateParams {
                         time_delta: 0.01,
-                        max_age: 1000,
+                        max_age: 10000,
                     },
                 },
             );
@@ -181,6 +181,7 @@ impl System {
                 },
             },
         );
+        pc.draw(0, 4, 0, self.capacity as u32);
     }
 
     pub fn delete(self, context: &blade::Context) {

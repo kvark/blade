@@ -17,16 +17,15 @@ var<storage,read_write> free_list: FreeList;
 
 @compute @workgroup_size(64, 1, 1)
 fn reset(
-    @builtin(local_invocation_index) local_index: u32,
     @builtin(global_invocation_id) global_id: vec3<u32>,
     @builtin(num_workgroups) num_groups: vec3<u32>,
 ) {
     let total = num_groups.x * 64u;
-    let global_index = total - 1u - global_id.x * 64u - local_index;
-    free_list.data[global_index] = global_index;
+    // reversing the order because it works like a stack
+    free_list.data[global_id.x] = total - 1u - global_id.x;
     var p: Particle;
-    particles[global_index] = p;
-    if (local_index == 0u) {
+    particles[global_id.x] = p;
+    if (global_id.x == 0u) {
         atomicStore(&free_list.count, i32(total));
     }
 }
@@ -39,14 +38,18 @@ var<uniform> update_params: UpdateParams;
 
 @compute @workgroup_size(64, 1, 1)
 fn emit(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let start_offset = atomicSub(&free_list.count, 64);
-    if (start_offset < 64) {
-        atomicAdd(&free_list.count, 64 - max(0, start_offset));
+    let end_offset = atomicSub(&free_list.count, 64);
+    if (end_offset < 64) {
+        atomicAdd(&free_list.count, 64 - max(0, end_offset));
     }
     workgroupBarrier();
-    let list_index = start_offset - i32(global_id.x);
-    var p: Particle;
+    let list_index = end_offset - 1 - i32(global_id.x);
     if (list_index >= 0) {
+        var p: Particle;
+        p.scale = f32((list_index + 1123) % 10);
+        p.color = 0xFFFFFFFFu;
+        p.pos_vel = vec2<f32>((vec2<i32>(list_index) + vec2<i32>(123, 178)) % vec2<i32>(80) - vec2<i32>(40));
+        p.rot_vel = f32((list_index + 189) % 1);
         let p_index = free_list.data[list_index];
         particles[p_index] = p;
     }
