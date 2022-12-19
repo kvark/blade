@@ -29,3 +29,11 @@ gpu-alloc = "0.5"
 gpu-alloc-ash = "0.5"
 naga = { workspace = true, features = ["spv-out"] }
 slab = "0.4"
+
+[target.'cfg(gles)'.dependencies]
+glow = "0.11"
+naga = { workspace = true, features = ["glsl-out"] }
+
+[target.'cfg(all(gles, not(target_arch = "wasm32")))'.dependencies]
+egl = { package = "khronos-egl", version = "4.1", features = ["dynamic"] }
+libloading = { version = "0.7" }

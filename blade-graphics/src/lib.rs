@@ -26,13 +26,21 @@
 pub use naga::{StorageAccess, VectorSize};
 
 #[cfg_attr(
-    all(not(portability), any(target_os = "ios", target_os = "macos")),
+    all(
+        not(portability),
+        not(gles),
+        any(target_os = "ios", target_os = "macos")
+    ),
     path = "metal/mod.rs"
 )]
 #[cfg_attr(
-    any(portability, not(any(target_os = "ios", target_os = "macos"))),
+    any(
+        portability,
+        all(not(gles), not(target_os = "ios"), not(target_os = "macos"))
+    ),
     path = "vulkan/mod.rs"
 )]
+#[cfg_attr(all(gles, not(portability)), path = "gles/mod.rs")]
 mod hal;
 mod shader;
 mod traits;
@@ -57,9 +65,21 @@ pub struct NotSupportedError;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Memory {
+    /// Device-local memory. Fast for GPU operations.
     Device,
+    /// Shared CPU-GPU memory. Not so far for GPU.
     Shared,
+    /// Upload memory. Can only be transferred on GPU.
     Upload,
+}
+
+impl Memory {
+    pub fn is_host_visible(&self) -> bool {
+        match *self {
+            Self::Device => false,
+            Self::Shared | Self::Upload => true,
+        }
+    }
 }
 
 #[derive(Debug)]
