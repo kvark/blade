@@ -154,7 +154,7 @@ impl Context {
         );
 
         let wayland_library = if client_ext_str.contains("EGL_EXT_platform_wayland") {
-            unsafe { test_wayland_display() }
+            test_wayland_display()
         } else {
             None
         };

@@ -1,4 +1,5 @@
 mod command;
+mod pipeline;
 #[cfg_attr(not(target_arch = "wasm32"), path = "egl.rs")]
 #[cfg_attr(target_arch = "wasm32", path = "web.rs")]
 mod platform;
@@ -59,6 +60,21 @@ pub struct Sampler {
 }
 
 pub struct PipelineContext {}
+
+struct PipelineInner {
+    program: glow::Program,
+}
+
+pub struct ComputePipeline {
+    inner: PipelineInner,
+    wg_size: [u32; 3],
+}
+
+impl ComputePipeline {
+    pub fn get_workgroup_size(&self) -> [u32; 3] {
+        self.wg_size
+    }
+}
 
 struct FormatInfo {
     internal: u32,
