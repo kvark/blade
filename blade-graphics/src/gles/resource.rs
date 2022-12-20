@@ -9,7 +9,7 @@ impl crate::traits::ResourceDevice for super::Context {
     type Sampler = super::Sampler;
 
     fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
-        let gl = self.glow.lock().unwrap();
+        let gl = self.lock();
 
         let mut map_flags = 0;
         match desc.memory {
@@ -32,7 +32,7 @@ impl crate::traits::ResourceDevice for super::Context {
             gl.buffer_storage(glow::ARRAY_BUFFER, desc.size as _, None, map_flags);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             if !desc.name.is_empty() && gl.supports_debug() {
-                unsafe { gl.object_label(glow::BUFFER, mem::transmute(raw), Some(desc.name)) };
+                gl.object_label(glow::BUFFER, mem::transmute(raw), Some(desc.name));
             }
         }
         super::Buffer {
@@ -42,12 +42,12 @@ impl crate::traits::ResourceDevice for super::Context {
     }
 
     fn destroy_buffer(&self, buffer: super::Buffer) {
-        let gl = self.glow.lock().unwrap();
+        let gl = self.lock();
         unsafe { gl.delete_buffer(buffer.raw) };
     }
 
     fn create_texture(&self, desc: crate::TextureDesc) -> super::Texture {
-        let gl = self.glow.lock().unwrap();
+        let gl = self.lock();
         let format_desc = super::describe_texture_format(desc.format);
 
         let inner = if crate::TextureUsage::TARGET.contains(desc.usage)
@@ -65,9 +65,7 @@ impl crate::traits::ResourceDevice for super::Context {
                 );
                 gl.bind_renderbuffer(glow::RENDERBUFFER, None);
                 if !desc.name.is_empty() && gl.supports_debug() {
-                    unsafe {
-                        gl.object_label(glow::RENDERBUFFER, mem::transmute(raw), Some(desc.name))
-                    };
+                    gl.object_label(glow::RENDERBUFFER, mem::transmute(raw), Some(desc.name));
                 }
             }
             super::TextureInner::Renderbuffer { raw }
@@ -141,7 +139,7 @@ impl crate::traits::ResourceDevice for super::Context {
     }
 
     fn destroy_texture(&self, texture: super::Texture) {
-        let gl = self.glow.lock().unwrap();
+        let gl = self.lock();
         match texture.inner {
             super::TextureInner::Renderbuffer { raw, .. } => unsafe {
                 gl.delete_renderbuffer(raw);
@@ -162,7 +160,7 @@ impl crate::traits::ResourceDevice for super::Context {
     fn destroy_texture_view(&self, _view: super::TextureView) {}
 
     fn create_sampler(&self, desc: crate::SamplerDesc) -> super::Sampler {
-        let gl = self.glow.lock().unwrap();
+        let gl = self.lock();
 
         let wrap_enums = [
             glow::TEXTURE_WRAP_S,
@@ -220,7 +218,7 @@ impl crate::traits::ResourceDevice for super::Context {
     }
 
     fn destroy_sampler(&self, sampler: super::Sampler) {
-        let gl = self.glow.lock().unwrap();
+        let gl = self.lock();
         unsafe { gl.delete_sampler(sampler.raw) };
     }
 }

@@ -4,14 +4,9 @@ mod command;
 mod platform;
 mod resource;
 
-use std::sync::Mutex;
-
 type BindTarget = u32;
 
-pub struct Context {
-    instance: platform::Instance,
-    glow: Mutex<glow::Context>,
-}
+pub use platform::Context;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Buffer {
