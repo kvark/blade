@@ -142,7 +142,7 @@ struct ImageBinding {
     format: u32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum ColorType {
     Float,
     FloatSrgb,
@@ -172,6 +172,7 @@ enum Command {
     },
     DrawIndexedIndirect {
         topology: u32,
+        raw_index_buf: glow::Buffer,
         index_type: u32,
         indirect_buf: BufferPart,
     },
@@ -254,9 +255,7 @@ enum Command {
     BindBuffer {
         target: BindTarget,
         slot: u32,
-        buffer: glow::Buffer,
-        offset: i32,
-        size: i32,
+        buffer: BufferPart,
     },
     BindSampler(u32, Option<glow::Sampler>),
     BindTexture {
@@ -303,8 +302,11 @@ impl crate::traits::CommandDevice for Context {
 
     fn destroy_command_encoder(&self, _command_encoder: CommandEncoder) {}
 
-    fn submit(&self, _encoder: &mut CommandEncoder) -> SyncPoint {
-        //TODO
+    fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+        let gl = self.lock();
+        for command in encoder.commands.iter() {
+            unsafe { command.execute(&*gl) };
+        }
         SyncPoint {}
     }
 

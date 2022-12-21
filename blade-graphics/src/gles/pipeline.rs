@@ -16,7 +16,7 @@ impl super::Context {
             gl.object_label(glow::PROGRAM, mem::transmute(program), Some(name));
         }
 
-        let mut naga_options = glsl::Options::default();
+        let naga_options = glsl::Options::default();
 
         let mut shaders_to_delete = Vec::new();
 
@@ -38,6 +38,7 @@ impl super::Context {
                 Default::default(),
             )
             .unwrap();
+            writer.write().unwrap();
 
             log::debug!(
                 "Naga generated shader for entry point '{}' and stage {:?}\n{}",
