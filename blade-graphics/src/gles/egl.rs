@@ -132,7 +132,7 @@ impl<'a> Drop for ContextLock<'a> {
 }
 
 impl Context {
-    pub fn init(desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
+    pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
         let egl = unsafe {
             let egl_result = if cfg!(windows) {
                 egl::DynamicInstance::<egl::EGL1_4>::load_required_from_filename("libEGL.dll")
