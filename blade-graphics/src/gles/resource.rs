@@ -135,7 +135,10 @@ impl crate::traits::ResourceDevice for super::Context {
             super::TextureInner::Texture { raw, target }
         };
 
-        super::Texture { inner }
+        super::Texture {
+            inner,
+            format: desc.format,
+        }
     }
 
     fn destroy_texture(&self, texture: super::Texture) {
