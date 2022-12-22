@@ -143,6 +143,15 @@ impl crate::traits::ComputePipelineEncoder for super::PipelineEncoder<'_> {
     }
 }
 
+const CUBEMAP_FACES: [u32; 6] = [
+    glow::TEXTURE_CUBE_MAP_POSITIVE_X,
+    glow::TEXTURE_CUBE_MAP_NEGATIVE_X,
+    glow::TEXTURE_CUBE_MAP_POSITIVE_Y,
+    glow::TEXTURE_CUBE_MAP_NEGATIVE_Y,
+    glow::TEXTURE_CUBE_MAP_POSITIVE_Z,
+    glow::TEXTURE_CUBE_MAP_NEGATIVE_Z,
+];
+
 impl super::Command {
     pub(super) unsafe fn execute(&self, gl: &glow::Context) {
         use glow::HasContext as _;
@@ -237,18 +246,123 @@ impl super::Command {
                 ref src,
                 ref dst,
                 size,
-            } => unimplemented!(),
+            } => {
+                gl.bind_buffer(glow::COPY_READ_BUFFER, Some(src.raw));
+                gl.bind_buffer(glow::COPY_WRITE_BUFFER, Some(dst.raw));
+                gl.copy_buffer_sub_data(
+                    glow::COPY_READ_BUFFER,
+                    glow::COPY_WRITE_BUFFER,
+                    src.offset as _,
+                    dst.offset as _,
+                    size as _,
+                );
+            }
             Self::CopyTextureToTexture {
                 ref src,
                 ref dst,
                 ref size,
-            } => unimplemented!(),
+            } => {
+                let fbo = gl.create_framebuffer().unwrap();
+                gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(fbo));
+                gl.framebuffer_texture_2d(
+                    glow::READ_FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    src.target,
+                    Some(src.raw),
+                    src.mip_level as i32,
+                );
+                gl.bind_texture(dst.target, Some(dst.raw));
+                gl.copy_tex_sub_image_2d(
+                    dst.target,
+                    dst.mip_level as i32,
+                    dst.origin[0] as i32,
+                    dst.origin[1] as i32,
+                    src.origin[0] as i32,
+                    src.origin[1] as i32,
+                    size.width as i32,
+                    size.height as i32,
+                );
+                gl.delete_framebuffer(fbo);
+            }
             Self::CopyBufferToTexture {
                 ref src,
                 ref dst,
                 bytes_per_row,
                 ref size,
-            } => unimplemented!(),
+            } => {
+                let format_desc = super::describe_texture_format(dst.format);
+                let block_info = dst.format.block_info();
+                let row_texels =
+                    bytes_per_row / block_info.size as u32 * block_info.dimensions.0 as u32;
+                gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(src.raw));
+                let unpack_data = glow::PixelUnpackData::BufferOffset(src.offset as u32);
+                match dst.target {
+                    glow::TEXTURE_3D => gl.tex_sub_image_3d(
+                        dst.target,
+                        dst.mip_level as i32,
+                        dst.origin[0] as i32,
+                        dst.origin[1] as i32,
+                        dst.origin[2] as i32,
+                        size.width as i32,
+                        size.height as i32,
+                        size.depth as i32,
+                        format_desc.external,
+                        format_desc.data_type,
+                        unpack_data,
+                    ),
+                    glow::TEXTURE_2D_ARRAY => gl.tex_sub_image_3d(
+                        dst.target,
+                        dst.mip_level as i32,
+                        dst.origin[0] as i32,
+                        dst.origin[1] as i32,
+                        dst.origin[2] as i32,
+                        size.width as i32,
+                        size.height as i32,
+                        size.depth as i32,
+                        format_desc.external,
+                        format_desc.data_type,
+                        unpack_data,
+                    ),
+                    glow::TEXTURE_2D => gl.tex_sub_image_2d(
+                        dst.target,
+                        dst.mip_level as i32,
+                        dst.origin[0] as i32,
+                        dst.origin[1] as i32,
+                        size.width as i32,
+                        size.height as i32,
+                        format_desc.external,
+                        format_desc.data_type,
+                        unpack_data,
+                    ),
+                    glow::TEXTURE_CUBE_MAP => gl.tex_sub_image_2d(
+                        CUBEMAP_FACES[dst.array_layer as usize],
+                        dst.mip_level as i32,
+                        dst.origin[0] as i32,
+                        dst.origin[1] as i32,
+                        size.width as i32,
+                        size.height as i32,
+                        format_desc.external,
+                        format_desc.data_type,
+                        unpack_data,
+                    ),
+                    //Note: not sure if this is correct!
+                    glow::TEXTURE_CUBE_MAP_ARRAY => gl.tex_sub_image_3d(
+                        dst.target,
+                        dst.mip_level as i32,
+                        dst.origin[0] as i32,
+                        dst.origin[1] as i32,
+                        dst.origin[2] as i32,
+                        size.width as i32,
+                        size.height as i32,
+                        size.depth as i32,
+                        format_desc.external,
+                        format_desc.data_type,
+                        unpack_data,
+                    ),
+                    _ => unreachable!(),
+                }
+                gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
+            }
             Self::CopyTextureToBuffer {
                 ref src,
                 ref dst,
