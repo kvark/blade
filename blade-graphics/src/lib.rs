@@ -146,6 +146,12 @@ pub enum TextureFormat {
     Depth32Float,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct TexelBlockInfo {
+    pub dimensions: (u8, u8),
+    pub size: u8,
+}
+
 /// Dimensionality of a texture.
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum TextureDimension {

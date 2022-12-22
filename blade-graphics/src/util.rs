@@ -40,3 +40,20 @@ pub fn emit_annotated_error<E: Error>(ann_err: &naga::WithSpan<E>, filename: &st
 
     term::emit(&mut writer.lock(), &config, &files, &diagnostic).expect("cannot write error");
 }
+
+impl super::TextureFormat {
+    pub fn block_info(&self) -> super::TexelBlockInfo {
+        fn uncompressed(size: u8) -> super::TexelBlockInfo {
+            super::TexelBlockInfo {
+                dimensions: (1, 1),
+                size,
+            }
+        }
+        match *self {
+            Self::Rgba8Unorm => uncompressed(4),
+            Self::Rgba8UnormSrgb => uncompressed(4),
+            Self::Bgra8UnormSrgb => uncompressed(4),
+            Self::Depth32Float => uncompressed(4),
+        }
+    }
+}
