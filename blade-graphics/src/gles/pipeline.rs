@@ -16,9 +16,15 @@ impl super::Context {
             gl.object_label(glow::PROGRAM, mem::transmute(program), Some(name));
         }
 
-        let naga_options = glsl::Options::default();
+        let naga_options = glsl::Options {
+            version: glsl::Version::Embedded {
+                version: 300,
+                is_webgl: cfg!(target_arch = "wasm32"),
+            },
+            ..Default::default()
+        };
 
-        let mut shaders_to_delete = Vec::new();
+        let mut baked_shaders = Vec::with_capacity(shaders.len());
 
         for &sf in shaders {
             let ep_index = sf.entry_point_index();
@@ -38,7 +44,7 @@ impl super::Context {
                 Default::default(),
             )
             .unwrap();
-            writer.write().unwrap();
+            let reflection = writer.write().unwrap();
 
             log::debug!(
                 "Naga generated shader for entry point '{}' and stage {:?}\n{}",
@@ -60,25 +66,97 @@ impl super::Context {
             let msg = gl.get_shader_info_log(shader);
             assert!(compiled_ok, "Compile: {}", msg);
 
-            shaders_to_delete.push(shader);
+            baked_shaders.push((shader, reflection));
         }
 
-        for &shader in shaders_to_delete.iter() {
+        for &(shader, _) in baked_shaders.iter() {
             gl.attach_shader(program, shader);
         }
         gl.link_program(program);
-
-        for shader in shaders_to_delete {
-            gl.delete_shader(shader);
-        }
-
         log::info!("\tLinked program {:?}", program);
 
         let linked_ok = gl.get_program_link_status(program);
         let msg = gl.get_program_info_log(program);
         assert!(linked_ok, "Link: {}", msg);
 
-        super::PipelineInner { program }
+        //type NameList = Vec<String>;
+        //type BindingNames = Vec<NameList>;
+        let mut bind_group_infos = group_layouts
+            .iter()
+            .map(|layout| super::BindGroupInfo {
+                targets: vec![Vec::new(); layout.bindings.len()].into_boxed_slice(),
+            })
+            .collect::<Box<[_]>>();
+
+        let mut variables_to_bind = Vec::new();
+        for (sf, &(shader, ref reflection)) in shaders.iter().zip(baked_shaders.iter()) {
+            for (glsl_name, mapping) in reflection.texture_mapping.iter() {
+                variables_to_bind.push((glsl_name, mapping.texture));
+                if let Some(handle) = mapping.sampler {
+                    variables_to_bind.push((glsl_name, handle));
+                }
+            }
+            for (&handle, glsl_name) in reflection.uniforms.iter() {
+                variables_to_bind.push((glsl_name, handle));
+            }
+
+            for (glsl_name, var_handle) in variables_to_bind.drain(..) {
+                let var = &sf.shader.module.global_variables[var_handle];
+                let var_name = var.name.as_ref().unwrap().as_str();
+                let (group_index, binding_index) = group_layouts
+                    .iter()
+                    .enumerate()
+                    .find_map(|(group_index, layout)| {
+                        layout
+                            .bindings
+                            .iter()
+                            .position(|&(name, _)| name == var_name)
+                            .map(|binding_index| (group_index, binding_index))
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("Shader variable {} is not found in the bindings", var_name)
+                    });
+
+                let targets = &mut bind_group_infos[group_index].targets[binding_index];
+                match group_layouts[group_index].bindings[binding_index].1 {
+                    crate::ShaderBinding::Texture | crate::ShaderBinding::Sampler => {
+                        if let Some(ref location) = gl.get_uniform_location(program, name) {
+                            let mut slots = [0i32];
+                            gl.get_uniform_i32(program, location, &mut slots);
+                            targets.push(slots[0] as u32);
+                        }
+                    }
+                    crate::ShaderBinding::Buffer => {
+                        if let Some(index) = gl.get_shader_storage_block_index(program, glsl_name) {
+                            let params = gl.get_program_resource_i32(
+                                program,
+                                glow::SHADER_STORAGE_BLOCK,
+                                index,
+                                &[glow::BUFFER_BINDING],
+                            );
+                            targets.push(params[0] as u32);
+                        }
+                    }
+                    crate::ShaderBinding::Plain { .. } => {
+                        if let Some(index) = gl.get_uniform_block_index(program, glsl_name) {
+                            let slot = gl.get_active_uniform_block_parameter_i32(
+                                program,
+                                index,
+                                glow::UNIFORM_BLOCK_BINDING,
+                            );
+                            targets.push(slot as u32);
+                        }
+                    }
+                }
+            }
+
+            gl.delete_shader(shader);
+        }
+
+        super::PipelineInner {
+            program,
+            bind_group_infos,
+        }
     }
 
     pub fn create_compute_pipeline(
