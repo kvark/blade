@@ -7,7 +7,7 @@ members = [
 exclude = []
 
 [workspace.dependencies]
-naga = { git = "https://github.com/kvark/naga", branch = "bindings", features = ["wgsl-in", "span", "validate"] }
+naga = { git = "https://github.com/gfx-rs/naga", rev = "24316fd", features = ["wgsl-in", "span", "validate"] }
 
 [lib]
 

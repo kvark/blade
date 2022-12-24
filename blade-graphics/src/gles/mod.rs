@@ -61,8 +61,15 @@ pub struct Sampler {
     raw: glow::Sampler,
 }
 
+type SlotList = Vec<u32>;
+
+struct BindGroupInfo {
+    targets: Box<[SlotList]>,
+}
+
 struct PipelineInner {
     program: glow::Program,
+    bind_group_infos: Box<[BindGroupInfo]>,
 }
 
 pub struct ComputePipeline {
