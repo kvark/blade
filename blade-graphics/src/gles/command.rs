@@ -1,21 +1,39 @@
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
-        //TODO
+        unimplemented!()
     }
 }
 impl crate::ShaderBindable for super::TextureView {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
-        //TODO
+        let (texture, target) = self.inner.as_native();
+        for &slot in ctx.targets[index as usize].iter() {
+            ctx.commands.push(super::Command::BindTexture {
+                slot,
+                texture,
+                target,
+            });
+        }
     }
 }
 impl crate::ShaderBindable for super::Sampler {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
-        //TODO
+        for &slot in ctx.targets[index as usize].iter() {
+            ctx.commands.push(super::Command::BindSampler {
+                slot,
+                sampler: self.raw,
+            });
+        }
     }
 }
 impl crate::ShaderBindable for crate::BufferPiece {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
-        //TODO
+        for &slot in ctx.targets[index as usize].iter() {
+            ctx.commands.push(super::Command::BindBuffer {
+                target: glow::SHADER_STORAGE_BUFFER,
+                slot,
+                buffer: (*self).into(),
+            });
+        }
     }
 }
 
@@ -56,9 +74,13 @@ impl super::CommandEncoder {
 }
 
 impl super::PassEncoder<'_, super::ComputePipeline> {
-    pub fn with(&mut self, pipeline: &super::ComputePipeline) -> super::PipelineEncoder {
+    pub fn with<'b>(
+        &'b mut self,
+        pipeline: &'b super::ComputePipeline,
+    ) -> super::PipelineEncoder<'b> {
         super::PipelineEncoder {
             commands: self.commands,
+            bind_group_infos: &pipeline.inner.bind_group_infos,
         }
     }
 }
@@ -132,7 +154,10 @@ impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
 #[hidden_trait::expose]
 impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_> {
     fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
-        data.fill(super::PipelineContext {});
+        data.fill(super::PipelineContext {
+            commands: self.commands,
+            targets: &self.bind_group_infos[group as usize].targets,
+        });
     }
 }
 
@@ -414,13 +439,14 @@ impl super::Command {
                 slot,
                 ref buffer,
             } => unimplemented!(),
-            Self::BindSampler(slot, maybe_sampler) => unimplemented!(),
+            Self::BindSampler { slot, sampler } => unimplemented!(),
             Self::BindTexture {
                 slot,
                 texture,
                 target,
             } => unimplemented!(),
             Self::BindImage { slot, ref binding } => unimplemented!(),
+            Self::ResetAllSamplers => unimplemented!(),
         }
     }
 }
