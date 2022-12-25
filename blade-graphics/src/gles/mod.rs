@@ -264,7 +264,10 @@ enum Command {
         slot: u32,
         buffer: BufferPart,
     },
-    BindSampler(u32, Option<glow::Sampler>),
+    BindSampler {
+        slot: u32,
+        sampler: glow::Sampler,
+    },
     BindTexture {
         slot: u32,
         texture: glow::Texture,
@@ -274,6 +277,7 @@ enum Command {
         slot: u32,
         binding: ImageBinding,
     },
+    ResetAllSamplers,
 }
 
 pub struct CommandEncoder {
@@ -288,9 +292,13 @@ pub struct PassEncoder<'a, P> {
 
 pub struct PipelineEncoder<'a> {
     commands: &'a mut Vec<Command>,
+    bind_group_infos: &'a [BindGroupInfo],
 }
 
-pub struct PipelineContext {}
+pub struct PipelineContext<'a> {
+    commands: &'a mut Vec<Command>,
+    targets: &'a [SlotList],
+}
 
 #[derive(Clone, Debug)]
 pub struct SyncPoint {}
