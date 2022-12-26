@@ -102,17 +102,16 @@ enum WindowKind {
     Wayland,
     X11,
     AngleX11,
-    Unknown,
 }
 
 #[derive(Clone, Debug)]
 struct WindowSystemInterface {
-    library: Option<Arc<libloading::Library>>,
+    library: Arc<libloading::Library>,
     kind: WindowKind,
 }
 
 pub struct Context {
-    wsi: WindowSystemInterface,
+    wsi: Option<WindowSystemInterface>,
     inner: Mutex<(EglContext, glow::Context)>,
 }
 
@@ -131,144 +130,152 @@ impl<'a> Drop for ContextLock<'a> {
     }
 }
 
+fn init_egl(desc: &crate::ContextDesc) -> Result<(EglInstance, String), crate::NotSupportedError> {
+    let egl = unsafe {
+        let egl_result = if cfg!(windows) {
+            egl::DynamicInstance::<egl::EGL1_4>::load_required_from_filename("libEGL.dll")
+        } else if cfg!(any(target_os = "macos", target_os = "ios")) {
+            egl::DynamicInstance::<egl::EGL1_4>::load_required_from_filename("libEGL.dylib")
+        } else {
+            egl::DynamicInstance::<egl::EGL1_4>::load_required()
+        };
+        egl_result.map_err(|_| crate::NotSupportedError)?
+    };
+
+    let client_ext_str = match egl.query_string(None, egl::EXTENSIONS) {
+        Ok(ext) => ext.to_string_lossy().into_owned(),
+        Err(_) => String::new(),
+    };
+    log::debug!(
+        "Client extensions: {:#?}",
+        client_ext_str.split_whitespace().collect::<Vec<_>>()
+    );
+
+    if desc.validation && client_ext_str.contains("EGL_KHR_debug") {
+        log::info!("Enabling EGL debug output");
+        let function: EglDebugMessageControlFun = {
+            let addr = egl.get_proc_address("eglDebugMessageControlKHR").unwrap();
+            unsafe { std::mem::transmute(addr) }
+        };
+        let attributes = [
+            EGL_DEBUG_MSG_CRITICAL_KHR as egl::Attrib,
+            1,
+            EGL_DEBUG_MSG_ERROR_KHR as egl::Attrib,
+            1,
+            EGL_DEBUG_MSG_WARN_KHR as egl::Attrib,
+            1,
+            EGL_DEBUG_MSG_INFO_KHR as egl::Attrib,
+            1,
+            egl::ATTRIB_NONE,
+        ];
+        unsafe { (function)(Some(egl_debug_proc), attributes.as_ptr()) };
+    }
+
+    Ok((egl, client_ext_str))
+}
+
 impl Context {
     pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
-        let egl = unsafe {
-            let egl_result = if cfg!(windows) {
-                egl::DynamicInstance::<egl::EGL1_4>::load_required_from_filename("libEGL.dll")
-            } else if cfg!(any(target_os = "macos", target_os = "ios")) {
-                egl::DynamicInstance::<egl::EGL1_4>::load_required_from_filename("libEGL.dylib")
-            } else {
-                egl::DynamicInstance::<egl::EGL1_4>::load_required()
-            };
-            egl_result.map_err(|_| crate::NotSupportedError)?
-        };
+        let (egl, client_extensions) = init_egl(&desc)?;
 
-        let client_ext_str = match egl.query_string(None, egl::EXTENSIONS) {
-            Ok(ext) => ext.to_string_lossy().into_owned(),
-            Err(_) => String::new(),
-        };
-        log::debug!(
-            "Client extensions: {:#?}",
-            client_ext_str.split_whitespace().collect::<Vec<_>>()
-        );
-
-        let wayland_library = if client_ext_str.contains("EGL_EXT_platform_wayland") {
-            test_wayland_display()
-        } else {
-            None
-        };
-        let x11_display_library = if client_ext_str.contains("EGL_EXT_platform_x11") {
-            unsafe { open_x_display() }
-        } else {
-            None
-        };
-        let angle_x11_display_library = if client_ext_str.contains("EGL_ANGLE_platform_angle") {
-            unsafe { open_x_display() }
-        } else {
-            None
-        };
-
-        let egl1_5 = egl.upcast::<egl::EGL1_5>();
-
-        let (display, wsi_library, wsi_kind) = if let (Some(library), Some(egl)) =
-            (wayland_library, egl1_5)
-        {
-            log::info!("Using Wayland platform");
-            let display_attributes = [egl::ATTRIB_NONE];
-            let display = egl
-                .get_platform_display(
-                    EGL_PLATFORM_WAYLAND_KHR,
-                    egl::DEFAULT_DISPLAY,
-                    &display_attributes,
-                )
-                .unwrap();
-            (display, Some(Arc::new(library)), WindowKind::Wayland)
-        } else if let (Some((display, library)), Some(egl)) = (x11_display_library, egl1_5) {
-            log::info!("Using X11 platform");
-            let display_attributes = [egl::ATTRIB_NONE];
-            let display = egl
-                .get_platform_display(EGL_PLATFORM_X11_KHR, display.as_ptr(), &display_attributes)
-                .unwrap();
-            (display, Some(Arc::new(library)), WindowKind::X11)
-        } else if let (Some((display, library)), Some(egl)) = (angle_x11_display_library, egl1_5) {
-            log::info!("Using Angle platform with X11");
-            let display_attributes = [
-                EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE as egl::Attrib,
-                EGL_PLATFORM_X11_KHR as egl::Attrib,
-                EGL_PLATFORM_ANGLE_DEBUG_LAYERS_ENABLED as egl::Attrib,
-                if desc.validation { 1 } else { 0 },
-                egl::ATTRIB_NONE,
-            ];
-            let display = egl
-                .get_platform_display(
-                    EGL_PLATFORM_ANGLE_ANGLE,
-                    display.as_ptr(),
-                    &display_attributes,
-                )
-                .unwrap();
-            (display, Some(Arc::new(library)), WindowKind::AngleX11)
-        } else if client_ext_str.contains("EGL_MESA_platform_surfaceless") {
-            log::info!("No windowing system present. Using surfaceless platform");
-            let egl = egl1_5.expect("Failed to get EGL 1.5 for surfaceless");
-            let display = egl
+        let display = if client_extensions.contains("EGL_MESA_platform_surfaceless") {
+            log::info!("Using surfaceless platform");
+            let egl1_5 = egl
+                .upcast::<egl::EGL1_5>()
+                .expect("Failed to get EGL 1.5 for surfaceless");
+            egl1_5
                 .get_platform_display(
                     EGL_PLATFORM_SURFACELESS_MESA,
                     std::ptr::null_mut(),
                     &[egl::ATTRIB_NONE],
                 )
-                .unwrap();
-            (display, None, WindowKind::Unknown)
+                .unwrap()
         } else {
             log::info!("EGL_MESA_platform_surfaceless not available. Using default platform");
-            let display = egl.get_display(egl::DEFAULT_DISPLAY).unwrap();
-            (display, None, WindowKind::Unknown)
+            egl.get_display(egl::DEFAULT_DISPLAY).unwrap()
         };
-
-        if desc.validation && client_ext_str.contains("EGL_KHR_debug") {
-            log::info!("Enabling EGL debug output");
-            let function: EglDebugMessageControlFun = {
-                let addr = egl.get_proc_address("eglDebugMessageControlKHR").unwrap();
-                unsafe { std::mem::transmute(addr) }
-            };
-            let attributes = [
-                EGL_DEBUG_MSG_CRITICAL_KHR as egl::Attrib,
-                1,
-                EGL_DEBUG_MSG_ERROR_KHR as egl::Attrib,
-                1,
-                EGL_DEBUG_MSG_WARN_KHR as egl::Attrib,
-                1,
-                EGL_DEBUG_MSG_INFO_KHR as egl::Attrib,
-                1,
-                egl::ATTRIB_NONE,
-            ];
-            unsafe { (function)(Some(egl_debug_proc), attributes.as_ptr()) };
-        }
 
         let egl_context = EglContext::init(&desc, egl, display)?;
-        egl_context.make_current();
-        let gl = unsafe {
-            use glow::HasContext as _;
-            let gl = glow::Context::from_loader_function(|name| {
-                egl_context
-                    .instance
-                    .get_proc_address(name)
-                    .map_or(ptr::null(), |p| p as *const _)
-            });
-            if desc.validation && gl.supports_debug() {
-                log::info!("Enabling GLES debug output");
-                gl.enable(glow::DEBUG_OUTPUT);
-                gl.debug_message_callback(gl_debug_message_callback);
-            }
-            gl
-        };
-        egl_context.unmake_current();
+        let gl = egl_context.load_functions(&desc);
 
         Ok(Self {
-            wsi: WindowSystemInterface {
-                library: wsi_library,
+            wsi: None,
+            inner: Mutex::new((egl_context, gl)),
+        })
+    }
+
+    pub unsafe fn init_windowed<
+        I: raw_window_handle::HasRawWindowHandle + raw_window_handle::HasRawDisplayHandle,
+    >(
+        window: I,
+        desc: crate::ContextDesc,
+    ) -> Result<Self, crate::NotSupportedError> {
+        use raw_window_handle::{RawDisplayHandle as Rdh, RawWindowHandle as Rwh};
+
+        let (egl, _client_extensions) = init_egl(&desc)?;
+        let egl1_5 = egl
+            .upcast::<egl::EGL1_5>()
+            .ok_or(crate::NotSupportedError)?;
+
+        let (display, wsi_library, wsi_kind) = match window.raw_display_handle() {
+            Rdh::Xlib(display_handle) if cfg!(windows) => {
+                let display_attributes = [
+                    EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE as egl::Attrib,
+                    EGL_PLATFORM_X11_KHR as egl::Attrib,
+                    EGL_PLATFORM_ANGLE_DEBUG_LAYERS_ENABLED as egl::Attrib,
+                    if desc.validation { 1 } else { 0 },
+                    egl::ATTRIB_NONE,
+                ];
+                let display = egl1_5
+                    .get_platform_display(
+                        EGL_PLATFORM_ANGLE_ANGLE,
+                        display_handle.display,
+                        &display_attributes,
+                    )
+                    .unwrap();
+                let library = find_x_library().unwrap();
+                (display, library, WindowKind::AngleX11)
+            }
+            Rdh::Xlib(display_handle) => {
+                log::info!("Using X11 platform");
+                let display_attributes = [egl::ATTRIB_NONE];
+                let display = egl1_5
+                    .get_platform_display(
+                        EGL_PLATFORM_X11_KHR,
+                        display_handle.display,
+                        &display_attributes,
+                    )
+                    .unwrap();
+                let library = find_x_library().unwrap();
+                (display, library, WindowKind::X11)
+            }
+            Rdh::Wayland(display_handle) => {
+                log::info!("Using Wayland platform");
+                let display_attributes = [egl::ATTRIB_NONE];
+                let display = egl1_5
+                    .get_platform_display(
+                        EGL_PLATFORM_WAYLAND_KHR,
+                        display_handle.display,
+                        &display_attributes,
+                    )
+                    .unwrap();
+                let library = find_wayland_library().unwrap();
+                (display, library, WindowKind::Wayland)
+            }
+            other => {
+                log::error!("Unsupported RDH {:?}", other);
+                return Err(crate::NotSupportedError);
+            }
+        };
+
+        let egl_context = EglContext::init(&desc, egl, display)?;
+        let gl = egl_context.load_functions(&desc);
+
+        Ok(Self {
+            wsi: Some(WindowSystemInterface {
+                library: Arc::new(wsi_library),
                 kind: wsi_kind,
-            },
+            }),
             inner: Mutex::new((egl_context, gl)),
         })
     }
@@ -280,35 +287,16 @@ impl Context {
     }
 }
 
-unsafe fn open_x_display() -> Option<(ptr::NonNull<raw::c_void>, libloading::Library)> {
-    log::info!("Loading X11 library to get the current display");
-    let library = libloading::Library::new("libX11.so").ok()?;
-    let func: libloading::Symbol<XOpenDisplayFun> = library.get(b"XOpenDisplay").unwrap();
-    let result = func(ptr::null());
-    ptr::NonNull::new(result).map(|ptr| (ptr, library))
-}
-
 unsafe fn find_library(paths: &[&str]) -> Option<libloading::Library> {
     paths
         .iter()
         .find_map(|&path| libloading::Library::new(path).ok())
 }
-
-fn test_wayland_display() -> Option<libloading::Library> {
-    // We try to connect and disconnect here to simply ensure there
-    // is an active wayland display available.
-    log::info!("Loading Wayland library to get the current display");
-    let library = unsafe {
-        let client_library = find_library(&["libwayland-client.so.0", "libwayland-client.so"])?;
-        let wl_display_connect: libloading::Symbol<WlDisplayConnectFun> =
-            client_library.get(b"wl_display_connect").unwrap();
-        let wl_display_disconnect: libloading::Symbol<WlDisplayDisconnectFun> =
-            client_library.get(b"wl_display_disconnect").unwrap();
-        let display = ptr::NonNull::new(wl_display_connect(ptr::null()))?;
-        wl_display_disconnect(display.as_ptr());
-        find_library(&["libwayland-egl.so.1", "libwayland-egl.so"])?
-    };
-    Some(library)
+fn find_x_library() -> Option<libloading::Library> {
+    unsafe { libloading::Library::new("libX11.so").ok() }
+}
+fn find_wayland_library() -> Option<libloading::Library> {
+    unsafe { find_library(&["libwayland-egl.so.1", "libwayland-egl.so"]) }
 }
 
 unsafe extern "system" fn egl_debug_proc(
@@ -490,6 +478,26 @@ impl EglContext {
             pbuffer,
             srgb_kind,
         })
+    }
+
+    fn load_functions(&self, desc: &crate::ContextDesc) -> glow::Context {
+        self.make_current();
+        let gl = unsafe {
+            use glow::HasContext as _;
+            let gl = glow::Context::from_loader_function(|name| {
+                self.instance
+                    .get_proc_address(name)
+                    .map_or(ptr::null(), |p| p as *const _)
+            });
+            if desc.validation && gl.supports_debug() {
+                log::info!("Enabling GLES debug output");
+                gl.enable(glow::DEBUG_OUTPUT);
+                gl.debug_message_callback(gl_debug_message_callback);
+            }
+            gl
+        };
+        self.unmake_current();
+        gl
     }
 }
 
