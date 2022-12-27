@@ -1,3 +1,4 @@
+use glow::HasContext as _;
 use std::{
     ffi,
     os::raw,
@@ -80,6 +81,7 @@ struct EglContext {
     version: (i32, i32),
     display: egl::Display,
     raw: egl::Context,
+    config: egl::Config,
     pbuffer: Option<egl::Surface>,
     srgb_kind: SrgbFrameBufferKind,
 }
@@ -97,36 +99,43 @@ impl EglContext {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum WindowKind {
-    Wayland,
-    X11,
-    AngleX11,
-}
-
 #[derive(Clone, Debug)]
 struct WindowSystemInterface {
     library: Arc<libloading::Library>,
-    kind: WindowKind,
+    window_handle: raw_window_handle::RawWindowHandle,
+    renderbuf: glow::Renderbuffer,
+    framebuf: glow::Framebuffer,
+    surface_format: crate::TextureFormat,
+}
+
+struct Swapchain {
+    surface: egl::Surface,
+    extent: crate::Extent,
+}
+
+struct ContextInner {
+    egl: EglContext,
+    swapchain: Option<Swapchain>,
+    glow: glow::Context,
 }
 
 pub struct Context {
     wsi: Option<WindowSystemInterface>,
-    inner: Mutex<(EglContext, glow::Context)>,
+    inner: Mutex<ContextInner>,
 }
 
 pub struct ContextLock<'a> {
-    guard: MutexGuard<'a, (EglContext, glow::Context)>,
+    guard: MutexGuard<'a, ContextInner>,
 }
 impl<'a> std::ops::Deref for ContextLock<'a> {
     type Target = glow::Context;
     fn deref(&self) -> &Self::Target {
-        &self.guard.1
+        &self.guard.glow
     }
 }
 impl<'a> Drop for ContextLock<'a> {
     fn drop(&mut self) {
-        self.guard.0.unmake_current();
+        self.guard.egl.unmake_current();
     }
 }
 
@@ -196,11 +205,15 @@ impl Context {
         };
 
         let egl_context = EglContext::init(&desc, egl, display)?;
-        let gl = egl_context.load_functions(&desc);
+        let glow = egl_context.load_functions(&desc);
 
         Ok(Self {
             wsi: None,
-            inner: Mutex::new((egl_context, gl)),
+            inner: Mutex::new(ContextInner {
+                egl: egl_context,
+                swapchain: None,
+                glow,
+            }),
         })
     }
 
@@ -210,14 +223,14 @@ impl Context {
         window: I,
         desc: crate::ContextDesc,
     ) -> Result<Self, crate::NotSupportedError> {
-        use raw_window_handle::{RawDisplayHandle as Rdh, RawWindowHandle as Rwh};
+        use raw_window_handle::RawDisplayHandle as Rdh;
 
         let (egl, _client_extensions) = init_egl(&desc)?;
         let egl1_5 = egl
             .upcast::<egl::EGL1_5>()
             .ok_or(crate::NotSupportedError)?;
 
-        let (display, wsi_library, wsi_kind) = match window.raw_display_handle() {
+        let (display, wsi_library) = match window.raw_display_handle() {
             Rdh::Xlib(display_handle) if cfg!(windows) => {
                 let display_attributes = [
                     EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE as egl::Attrib,
@@ -234,7 +247,7 @@ impl Context {
                     )
                     .unwrap();
                 let library = find_x_library().unwrap();
-                (display, library, WindowKind::AngleX11)
+                (display, library)
             }
             Rdh::Xlib(display_handle) => {
                 log::info!("Using X11 platform");
@@ -247,7 +260,7 @@ impl Context {
                     )
                     .unwrap();
                 let library = find_x_library().unwrap();
-                (display, library, WindowKind::X11)
+                (display, library)
             }
             Rdh::Wayland(display_handle) => {
                 log::info!("Using Wayland platform");
@@ -260,7 +273,7 @@ impl Context {
                     )
                     .unwrap();
                 let library = find_wayland_library().unwrap();
-                (display, library, WindowKind::Wayland)
+                (display, library)
             }
             other => {
                 log::error!("Unsupported RDH {:?}", other);
@@ -269,21 +282,215 @@ impl Context {
         };
 
         let egl_context = EglContext::init(&desc, egl, display)?;
-        let gl = egl_context.load_functions(&desc);
+        let glow = egl_context.load_functions(&desc);
+        let renderbuf = glow.create_renderbuffer().unwrap();
+        let framebuf = glow.create_framebuffer().unwrap();
 
         Ok(Self {
             wsi: Some(WindowSystemInterface {
                 library: Arc::new(wsi_library),
-                kind: wsi_kind,
+                window_handle: window.raw_window_handle(),
+                renderbuf,
+                framebuf,
+                surface_format: crate::TextureFormat::Rgba8Unorm,
             }),
-            inner: Mutex::new((egl_context, gl)),
+            inner: Mutex::new(ContextInner {
+                egl: egl_context,
+                swapchain: None,
+                glow,
+            }),
         })
+    }
+
+    pub fn resize(&self, config: crate::SurfaceConfig) -> crate::TextureFormat {
+        use raw_window_handle::RawWindowHandle as Rwh;
+        let wsi = self.wsi.as_ref().unwrap();
+        let (mut temp_xlib_handle, mut temp_xcb_handle);
+        #[allow(trivial_casts)]
+        let native_window_ptr = match wsi.window_handle {
+            Rwh::Xlib(handle) if cfg!(windows) => handle.window as *mut std::ffi::c_void,
+            Rwh::Xlib(handle) => {
+                temp_xlib_handle = handle.window;
+                &mut temp_xlib_handle as *mut _ as *mut std::ffi::c_void
+            }
+            Rwh::Xcb(handle) => {
+                temp_xcb_handle = handle.window;
+                &mut temp_xcb_handle as *mut _ as *mut std::ffi::c_void
+            }
+            Rwh::AndroidNdk(handle) => handle.a_native_window,
+            Rwh::Wayland(handle) => unsafe {
+                let wl_egl_window_create: libloading::Symbol<WlEglWindowCreateFun> =
+                    wsi.library.get(b"wl_egl_window_create").unwrap();
+                wl_egl_window_create(
+                    handle.surface,
+                    config.size.width as _,
+                    config.size.height as _,
+                ) as *mut _ as *mut std::ffi::c_void
+            },
+            Rwh::Win32(handle) => handle.hwnd,
+            Rwh::AppKit(handle) => {
+                #[cfg(not(target_os = "macos"))]
+                let window_ptr = handle.ns_view;
+                #[cfg(target_os = "macos")]
+                let window_ptr = unsafe {
+                    use objc::{msg_send, runtime::Object, sel, sel_impl};
+                    // ns_view always have a layer and don't need to verify that it exists.
+                    let layer: *mut Object = msg_send![handle.ns_view as *mut Object, layer];
+                    layer as *mut ffi::c_void
+                };
+                window_ptr
+            }
+            other => {
+                panic!("Unable to connect with RWH {:?}", other);
+            }
+        };
+
+        let mut inner = self.inner.lock().unwrap();
+
+        let mut attributes = vec![
+            egl::RENDER_BUFFER,
+            // We don't want any of the buffering done by the driver, because we
+            // manage a swapchain on our side.
+            // Some drivers just fail on surface creation seeing `EGL_SINGLE_BUFFER`.
+            if cfg!(any(target_os = "android", target_os = "macos", windows)) {
+                egl::BACK_BUFFER
+            } else {
+                egl::SINGLE_BUFFER
+            },
+        ];
+        match inner.egl.srgb_kind {
+            SrgbFrameBufferKind::None => {}
+            SrgbFrameBufferKind::Core => {
+                attributes.push(egl::GL_COLORSPACE);
+                attributes.push(egl::GL_COLORSPACE_SRGB);
+            }
+            SrgbFrameBufferKind::Khr => {
+                attributes.push(EGL_GL_COLORSPACE_KHR as i32);
+                attributes.push(EGL_GL_COLORSPACE_SRGB_KHR as i32);
+            }
+        }
+        attributes.push(egl::ATTRIB_NONE as i32);
+
+        // Careful, we can still be in 1.4 version even if `upcast` succeeds
+        let surface = match inner.egl.instance.upcast::<egl::EGL1_5>() {
+            Some(egl) => {
+                let attributes_usize = attributes
+                    .into_iter()
+                    .map(|v| v as usize)
+                    .collect::<Vec<_>>();
+                egl.create_platform_window_surface(
+                    inner.egl.display,
+                    inner.egl.config,
+                    native_window_ptr,
+                    &attributes_usize,
+                )
+                .unwrap()
+            }
+            _ => unsafe {
+                inner
+                    .egl
+                    .instance
+                    .create_window_surface(
+                        inner.egl.display,
+                        inner.egl.config,
+                        native_window_ptr,
+                        Some(&attributes),
+                    )
+                    .unwrap()
+            },
+        };
+        //TODO: remove old surface
+        inner.swapchain = Some(Swapchain {
+            surface,
+            extent: config.size,
+        });
+
+        let format_desc = super::describe_texture_format(wsi.surface_format);
+        unsafe {
+            let gl = &inner.glow;
+            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(wsi.renderbuf));
+            gl.renderbuffer_storage(
+                glow::RENDERBUFFER,
+                format_desc.internal,
+                config.size.width as _,
+                config.size.height as _,
+            );
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(wsi.framebuf));
+            gl.framebuffer_renderbuffer(
+                glow::READ_FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::RENDERBUFFER,
+                Some(wsi.renderbuf),
+            );
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+            gl.bind_renderbuffer(glow::RENDERBUFFER, None);
+        };
+
+        wsi.surface_format
+    }
+
+    pub fn acquire_frame(&self) -> super::Frame {
+        let wsi = self.wsi.as_ref().unwrap();
+        super::Frame {
+            texture: super::Texture {
+                inner: super::TextureInner::Renderbuffer { raw: wsi.renderbuf },
+                format: wsi.surface_format,
+            },
+        }
     }
 
     pub(super) fn lock(&self) -> ContextLock {
         let inner = self.inner.lock().unwrap();
-        inner.0.make_current();
+        inner.egl.make_current();
         ContextLock { guard: inner }
+    }
+}
+
+impl ContextInner {
+    pub(super) fn present(&self, wsi: &WindowSystemInterface) {
+        let sc = self.swapchain.as_ref().unwrap();
+        self.egl
+            .instance
+            .make_current(
+                self.egl.display,
+                Some(sc.surface),
+                Some(sc.surface),
+                Some(self.egl.raw),
+            )
+            .unwrap();
+
+        let gl = &self.glow;
+        unsafe {
+            gl.disable(glow::SCISSOR_TEST);
+            gl.color_mask(true, true, true, true);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(wsi.framebuf));
+            // Note the Y-flipping here. GL's presentation is not flipped,
+            // but main rendering is. Therefore, we Y-flip the output positions
+            // in the shader, and also this blit.
+            gl.blit_framebuffer(
+                0,
+                sc.extent.height as i32,
+                sc.extent.width as i32,
+                0,
+                0,
+                0,
+                sc.extent.width as i32,
+                sc.extent.height as i32,
+                glow::COLOR_BUFFER_BIT,
+                glow::NEAREST,
+            );
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+        }
+
+        self.egl
+            .instance
+            .swap_buffers(self.egl.display, sc.surface)
+            .unwrap();
+        self.egl
+            .instance
+            .make_current(self.egl.display, None, None, None)
+            .unwrap();
     }
 }
 
@@ -475,6 +682,7 @@ impl EglContext {
             version,
             display,
             raw: context,
+            config,
             pbuffer,
             srgb_kind,
         })
@@ -483,7 +691,6 @@ impl EglContext {
     fn load_functions(&self, desc: &crate::ContextDesc) -> glow::Context {
         self.make_current();
         let gl = unsafe {
-            use glow::HasContext as _;
             let gl = glow::Context::from_loader_function(|name| {
                 self.instance
                     .get_proc_address(name)
