@@ -8,7 +8,6 @@ use std::{
 
 const EGL_CONTEXT_FLAGS_KHR: i32 = 0x30FC;
 const EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR: i32 = 0x0001;
-const EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT: i32 = 0x30BF;
 const EGL_PLATFORM_WAYLAND_KHR: u32 = 0x31D8;
 const EGL_PLATFORM_X11_KHR: u32 = 0x31D5;
 const EGL_PLATFORM_ANGLE_ANGLE: u32 = 0x3202;
@@ -205,7 +204,9 @@ impl Context {
         };
 
         let egl_context = EglContext::init(&desc, egl, display)?;
+        egl_context.make_current();
         let glow = egl_context.load_functions(&desc);
+        egl_context.unmake_current();
 
         Ok(Self {
             wsi: None,
@@ -275,6 +276,11 @@ impl Context {
                 let library = find_wayland_library().unwrap();
                 (display, library)
             }
+            Rdh::AppKit(_display_handle) => {
+                let display = egl.get_display(egl::DEFAULT_DISPLAY).unwrap();
+                let library = find_appkit_library().unwrap();
+                (display, library)
+            }
             other => {
                 log::error!("Unsupported RDH {:?}", other);
                 return Err(crate::NotSupportedError);
@@ -282,9 +288,11 @@ impl Context {
         };
 
         let egl_context = EglContext::init(&desc, egl, display)?;
+        egl_context.make_current();
         let glow = egl_context.load_functions(&desc);
         let renderbuf = glow.create_renderbuffer().unwrap();
         let framebuf = glow.create_framebuffer().unwrap();
+        egl_context.unmake_current();
 
         Ok(Self {
             wsi: Some(WindowSystemInterface {
@@ -505,6 +513,11 @@ fn find_x_library() -> Option<libloading::Library> {
 fn find_wayland_library() -> Option<libloading::Library> {
     unsafe { find_library(&["libwayland-egl.so.1", "libwayland-egl.so"]) }
 }
+fn find_appkit_library() -> Option<libloading::Library> {
+    unsafe {
+        libloading::Library::new("/System/Library/Frameworks/AppKit.framework/Versions/Current/Resources/BridgeSupport/AppKit.dylib").ok()
+    }
+}
 
 unsafe extern "system" fn egl_debug_proc(
     error: egl::Enum,
@@ -688,22 +701,17 @@ impl EglContext {
         })
     }
 
-    fn load_functions(&self, desc: &crate::ContextDesc) -> glow::Context {
-        self.make_current();
-        let gl = unsafe {
-            let gl = glow::Context::from_loader_function(|name| {
-                self.instance
-                    .get_proc_address(name)
-                    .map_or(ptr::null(), |p| p as *const _)
-            });
-            if desc.validation && gl.supports_debug() {
-                log::info!("Enabling GLES debug output");
-                gl.enable(glow::DEBUG_OUTPUT);
-                gl.debug_message_callback(gl_debug_message_callback);
-            }
-            gl
-        };
-        self.unmake_current();
+    unsafe fn load_functions(&self, desc: &crate::ContextDesc) -> glow::Context {
+        let gl = glow::Context::from_loader_function(|name| {
+            self.instance
+                .get_proc_address(name)
+                .map_or(ptr::null(), |p| p as *const _)
+        });
+        if desc.validation && gl.supports_debug() {
+            log::info!("Enabling GLES debug output");
+            gl.enable(glow::DEBUG_OUTPUT);
+            gl.debug_message_callback(gl_debug_message_callback);
+        }
         gl
     }
 }

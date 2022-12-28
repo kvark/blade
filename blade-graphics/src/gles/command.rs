@@ -81,6 +81,20 @@ impl super::PassEncoder<'_, super::ComputePipeline> {
         super::PipelineEncoder {
             commands: self.commands,
             bind_group_infos: &pipeline.inner.bind_group_infos,
+            topology: 0,
+        }
+    }
+}
+
+impl super::PassEncoder<'_, super::RenderPipeline> {
+    pub fn with<'b>(
+        &'b mut self,
+        pipeline: &'b super::RenderPipeline,
+    ) -> super::PipelineEncoder<'b> {
+        super::PipelineEncoder {
+            commands: self.commands,
+            bind_group_infos: &pipeline.inner.bind_group_infos,
+            topology: map_primitive_topology(pipeline.topology),
         }
     }
 }
@@ -165,6 +179,49 @@ impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_> {
 impl crate::traits::ComputePipelineEncoder for super::PipelineEncoder<'_> {
     fn dispatch(&mut self, groups: [u32; 3]) {
         self.commands.push(super::Command::Dispatch(groups));
+    }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
+    fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
+        self.commands.push(super::Command::SetScissor(rect.clone()));
+    }
+
+    fn draw(
+        &mut self,
+        start_vertex: u32,
+        vertex_count: u32,
+        start_instance: u32,
+        instance_count: u32,
+    ) {
+        assert_eq!(start_instance, 0);
+        self.commands.push(super::Command::Draw {
+            topology: self.topology,
+            start_vertex,
+            vertex_count,
+            instance_count,
+        });
+    }
+
+    fn draw_indexed(
+        &mut self,
+        index_buf: crate::BufferPiece,
+        index_type: crate::IndexType,
+        index_count: u32,
+        base_vertex: i32,
+        start_instance: u32,
+        instance_count: u32,
+    ) {
+        assert_eq!(start_instance, 0);
+        self.commands.push(super::Command::DrawIndexed {
+            topology: self.topology,
+            index_buf: index_buf.into(),
+            index_type: map_index_type(index_type),
+            index_count,
+            base_vertex,
+            instance_count,
+        });
     }
 }
 
@@ -448,5 +505,23 @@ impl super::Command {
             Self::BindImage { slot, ref binding } => unimplemented!(),
             Self::ResetAllSamplers => unimplemented!(),
         }
+    }
+}
+
+fn map_index_type(ty: crate::IndexType) -> u32 {
+    match ty {
+        crate::IndexType::U16 => glow::UNSIGNED_SHORT,
+        crate::IndexType::U32 => glow::UNSIGNED_INT,
+    }
+}
+
+fn map_primitive_topology(topology: crate::PrimitiveTopology) -> u32 {
+    use crate::PrimitiveTopology as Pt;
+    match topology {
+        Pt::PointList => glow::POINTS,
+        Pt::LineList => glow::LINES,
+        Pt::LineStrip => glow::LINE_STRIP,
+        Pt::TriangleList => glow::TRIANGLES,
+        Pt::TriangleStrip => glow::TRIANGLE_STRIP,
     }
 }

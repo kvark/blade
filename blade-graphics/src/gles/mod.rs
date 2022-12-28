@@ -85,6 +85,7 @@ impl ComputePipeline {
 
 pub struct RenderPipeline {
     inner: PipelineInner,
+    topology: crate::PrimitiveTopology,
 }
 
 pub struct Frame {
@@ -293,6 +294,7 @@ pub struct PassEncoder<'a, P> {
 pub struct PipelineEncoder<'a> {
     commands: &'a mut Vec<Command>,
     bind_group_infos: &'a [BindGroupInfo],
+    topology: u32,
 }
 
 pub struct PipelineContext<'a> {
