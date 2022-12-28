@@ -168,4 +168,14 @@ impl super::Context {
         let inner = unsafe { self.create_pipeline(&[desc.compute], desc.data_layouts, desc.name) };
         super::ComputePipeline { inner, wg_size }
     }
+
+    pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
+        let inner = unsafe {
+            self.create_pipeline(&[desc.vertex, desc.fragment], desc.data_layouts, desc.name)
+        };
+        super::RenderPipeline {
+            inner,
+            topology: desc.primitive.topology,
+        }
+    }
 }

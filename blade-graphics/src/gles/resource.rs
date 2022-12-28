@@ -11,34 +11,38 @@ impl crate::traits::ResourceDevice for super::Context {
     fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         let gl = self.lock();
 
+        let mut storage_flags = 0;
         let mut map_flags = 0;
         match desc.memory {
             crate::Memory::Device => {}
             crate::Memory::Shared => {
-                map_flags |= glow::MAP_PERSISTENT_BIT
+                map_flags = glow::MAP_READ_BIT | glow::MAP_WRITE_BIT | glow::MAP_UNSYNCHRONIZED_BIT;
+                storage_flags |= glow::MAP_PERSISTENT_BIT
                     | glow::MAP_COHERENT_BIT
                     | glow::MAP_READ_BIT
                     | glow::MAP_WRITE_BIT;
             }
             crate::Memory::Upload => {
-                map_flags |=
+                map_flags = glow::MAP_WRITE_BIT | glow::MAP_UNSYNCHRONIZED_BIT;
+                storage_flags |=
                     glow::MAP_PERSISTENT_BIT | glow::MAP_COHERENT_BIT | glow::MAP_WRITE_BIT;
             }
         }
 
         let raw = unsafe { gl.create_buffer() }.unwrap();
+        let mut data = ptr::null_mut();
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(raw));
-            gl.buffer_storage(glow::ARRAY_BUFFER, desc.size as _, None, map_flags);
+            gl.buffer_storage(glow::ARRAY_BUFFER, desc.size as _, None, storage_flags);
+            if map_flags != 0 {
+                data = gl.map_buffer_range(glow::ARRAY_BUFFER, 0, desc.size as _, map_flags);
+            }
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             if !desc.name.is_empty() && gl.supports_debug() {
                 gl.object_label(glow::BUFFER, mem::transmute(raw), Some(desc.name));
             }
         }
-        super::Buffer {
-            raw,
-            data: ptr::null_mut(),
-        }
+        super::Buffer { raw, data }
     }
 
     fn destroy_buffer(&self, buffer: super::Buffer) {
