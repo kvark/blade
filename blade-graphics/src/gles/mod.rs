@@ -62,12 +62,14 @@ impl TextureInner {
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Texture {
     inner: TextureInner,
+    target_size: [u16; 2],
     format: crate::TextureFormat,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct TextureView {
     inner: TextureInner,
+    target_size: [u16; 2],
     aspects: crate::TexelAspects,
 }
 
@@ -115,6 +117,7 @@ impl Frame {
     pub fn texture_view(&self) -> TextureView {
         TextureView {
             inner: self.texture.inner,
+            target_size: self.texture.target_size,
             aspects: crate::TexelAspects::COLOR,
         }
     }
@@ -248,7 +251,7 @@ enum Command {
     },
     Barrier,
     SetViewport {
-        rect: crate::ScissorRect,
+        size: [u16; 2],
         depth: Range<f32>,
     },
     SetScissor(crate::ScissorRect),
@@ -308,14 +311,23 @@ pub struct CommandEncoder {
     limits: Limits,
 }
 
+enum PassKind {
+    Transfer,
+    Compute,
+    Render,
+}
+
 pub struct PassEncoder<'a, P> {
     commands: &'a mut Vec<Command>,
     plain_data: &'a mut Vec<u8>,
-    is_render: bool,
+    kind: PassKind,
     invalidate_attachments: Vec<u32>,
     pipeline: PhantomData<P>,
     limits: &'a Limits,
 }
+
+pub type ComputeCommandEncoder<'a> = PassEncoder<'a, ComputePipeline>;
+pub type RenderCommandEncoder<'a> = PassEncoder<'a, RenderPipeline>;
 
 pub struct PipelineEncoder<'a> {
     commands: &'a mut Vec<Command>,
@@ -368,12 +380,15 @@ impl crate::traits::CommandDevice for Context {
                 let framebuf = gl.create_framebuffer().unwrap();
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuf));
                 let plain_buffer = gl.create_buffer().unwrap();
-                gl.bind_buffer(glow::UNIFORM_BUFFER, Some(plain_buffer));
-                gl.buffer_data_u8_slice(
-                    glow::UNIFORM_BUFFER,
-                    &encoder.plain_data,
-                    glow::STATIC_DRAW,
-                );
+                if !encoder.plain_data.is_empty() {
+                    log::trace!("Allocating plain data of size {}", encoder.plain_data.len());
+                    gl.bind_buffer(glow::UNIFORM_BUFFER, Some(plain_buffer));
+                    gl.buffer_data_u8_slice(
+                        glow::UNIFORM_BUFFER,
+                        &encoder.plain_data,
+                        glow::STATIC_DRAW,
+                    );
+                }
                 ExecutionContext {
                     framebuf,
                     plain_buffer,
@@ -399,6 +414,15 @@ impl crate::traits::CommandDevice for Context {
 
     fn wait_for(&self, _sp: &SyncPoint, _timeout_ms: u32) -> bool {
         false //TODO
+    }
+}
+
+// Align the size up to 16 bytes, as expected by GL.
+fn round_up_uniform_size(size: u32) -> u32 {
+    if size & 0xF != 0 {
+        (size | 0xF) + 1
+    } else {
+        size
     }
 }
 

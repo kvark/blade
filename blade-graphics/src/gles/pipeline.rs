@@ -136,8 +136,22 @@ impl super::Context {
                             targets.push(params[0] as u32);
                         }
                     }
-                    crate::ShaderBinding::Plain { .. } => {
+                    crate::ShaderBinding::Plain { size } => {
                         if let Some(index) = gl.get_uniform_block_index(program, glsl_name) {
+                            let expected_size = gl.get_active_uniform_block_parameter_i32(
+                                program,
+                                index,
+                                glow::UNIFORM_BLOCK_DATA_SIZE,
+                            ) as u32;
+                            let rounded_up_size = super::round_up_uniform_size(size);
+                            assert!(
+                                expected_size <= rounded_up_size,
+                                "Shader expects block[{}] size {}, but data has size of {} (rounded up to {})",
+                                index,
+                                expected_size,
+                                size,
+                                rounded_up_size,
+                            );
                             let slot = if force_uniform_block_assignment {
                                 gl.uniform_block_binding(program, index, index);
                                 index

@@ -11,6 +11,8 @@ const EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR: i32 = 0x0001;
 const EGL_PLATFORM_WAYLAND_KHR: u32 = 0x31D8;
 const EGL_PLATFORM_X11_KHR: u32 = 0x31D5;
 const EGL_PLATFORM_ANGLE_ANGLE: u32 = 0x3202;
+const EGL_PLATFORM_ANGLE_TYPE_ANGLE: u32 = 0x3203;
+const EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE: u32 = 0x3489;
 const EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE: u32 = 0x348F;
 const EGL_PLATFORM_ANGLE_DEBUG_LAYERS_ENABLED: u32 = 0x3451;
 const EGL_PLATFORM_SURFACELESS_MESA: u32 = 0x31DD;
@@ -280,7 +282,20 @@ impl Context {
                 (display, library)
             }
             Rdh::AppKit(_display_handle) => {
-                let display = egl.get_display(egl::DEFAULT_DISPLAY).unwrap();
+                let display_attributes = [
+                    EGL_PLATFORM_ANGLE_TYPE_ANGLE as egl::Attrib,
+                    EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE as egl::Attrib,
+                    EGL_PLATFORM_ANGLE_DEBUG_LAYERS_ENABLED as egl::Attrib,
+                    if desc.validation { 1 } else { 0 },
+                    egl::ATTRIB_NONE,
+                ];
+                let display = egl1_5
+                    .get_platform_display(
+                        EGL_PLATFORM_ANGLE_ANGLE,
+                        ptr::null_mut(),
+                        &display_attributes,
+                    )
+                    .unwrap();
                 let library = find_appkit_library().unwrap();
                 (display, library)
             }
@@ -446,9 +461,12 @@ impl Context {
 
     pub fn acquire_frame(&self) -> super::Frame {
         let wsi = self.wsi.as_ref().unwrap();
+        let inner = self.inner.lock().unwrap();
+        let sc = inner.swapchain.as_ref().unwrap();
         super::Frame {
             texture: super::Texture {
                 inner: super::TextureInner::Renderbuffer { raw: wsi.renderbuf },
+                target_size: [sc.extent.width as u16, sc.extent.height as u16],
                 format: wsi.surface_format,
             },
         }
@@ -562,6 +580,13 @@ unsafe extern "system" fn egl_debug_proc(
     );
 }
 
+const LOG_LEVEL_SEVERITY: &[(log::Level, u32)] = &[
+    (log::Level::Error, glow::DEBUG_SEVERITY_HIGH),
+    (log::Level::Warn, glow::DEBUG_SEVERITY_MEDIUM),
+    (log::Level::Info, glow::DEBUG_SEVERITY_LOW),
+    (log::Level::Trace, glow::DEBUG_SEVERITY_NOTIFICATION),
+];
+
 fn gl_debug_message_callback(source: u32, gltype: u32, id: u32, severity: u32, message: &str) {
     let source_str = match source {
         glow::DEBUG_SOURCE_API => "API",
@@ -573,13 +598,10 @@ fn gl_debug_message_callback(source: u32, gltype: u32, id: u32, severity: u32, m
         _ => unreachable!(),
     };
 
-    let log_severity = match severity {
-        glow::DEBUG_SEVERITY_HIGH => log::Level::Error,
-        glow::DEBUG_SEVERITY_MEDIUM => log::Level::Warn,
-        glow::DEBUG_SEVERITY_LOW => log::Level::Info,
-        glow::DEBUG_SEVERITY_NOTIFICATION => log::Level::Trace,
-        _ => unreachable!(),
-    };
+    let &(log_severity, _) = LOG_LEVEL_SEVERITY
+        .iter()
+        .find(|&&(level, sev)| sev == severity)
+        .unwrap();
 
     let type_str = match gltype {
         glow::DEBUG_TYPE_DEPRECATED_BEHAVIOR => "Deprecated Behavior",
@@ -726,6 +748,15 @@ impl EglContext {
             log::info!("Enabling GLES debug output");
             gl.enable(glow::DEBUG_OUTPUT);
             gl.debug_message_callback(gl_debug_message_callback);
+            for &(level, severity) in LOG_LEVEL_SEVERITY.iter() {
+                gl.debug_message_control(
+                    glow::DONT_CARE,
+                    glow::DONT_CARE,
+                    severity,
+                    &[],
+                    level <= log::max_level(),
+                );
+            }
         }
 
         let extensions = gl.supported_extensions();
