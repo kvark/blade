@@ -125,6 +125,31 @@ impl super::CommandEncoder {
         self.commands.push(super::Command::SetDrawColorBuffers(
             targets.colors.len() as _
         ));
+        // issue the clears
+        for (i, rt) in targets.colors.iter().enumerate() {
+            if let crate::InitOp::Clear(color) = rt.init_op {
+                self.commands.push(super::Command::ClearColor {
+                    draw_buffer: i as u32,
+                    color,
+                    ty: super::ColorType::Float, //TODO: get from the format
+                });
+            }
+        }
+        if let Some(ref rt) = targets.depth_stencil {
+            if let crate::InitOp::Clear(color) = rt.init_op {
+                self.commands.push(super::Command::ClearDepthStencil {
+                    depth: if rt.view.aspects.contains(crate::TexelAspects::DEPTH) {
+                        Some(match color {
+                            crate::TextureColor::White => 1.0,
+                            _ => 0.0,
+                        })
+                    } else {
+                        None
+                    },
+                    stencil: None, //TODO
+                });
+            }
+        }
 
         super::PassEncoder {
             commands: &mut self.commands,
@@ -169,6 +194,10 @@ impl super::PassEncoder<'_, super::RenderPipeline> {
 
 impl<T> Drop for super::PassEncoder<'_, T> {
     fn drop(&mut self) {
+        for attachment in self.invalidate_attachments.drain(..) {
+            self.commands
+                .push(super::Command::InvalidateAttachment(attachment));
+        }
         if self.is_render {
             self.commands.push(super::Command::ResetFramebuffer);
         }
@@ -586,8 +615,49 @@ impl super::Command {
                 draw_buffer,
                 color,
                 ty,
-            } => unimplemented!(),
-            Self::ClearDepthStencil { depth, stencil } => unimplemented!(),
+            } => match ty {
+                super::ColorType::Float => {
+                    gl.clear_buffer_f32_slice(
+                        glow::COLOR,
+                        draw_buffer,
+                        &match color {
+                            crate::TextureColor::TransparentBlack => [0.0; 4],
+                            crate::TextureColor::OpaqueBlack => [0.0, 0.0, 0.0, 1.0],
+                            crate::TextureColor::White => [1.0; 4],
+                        },
+                    );
+                }
+                super::ColorType::Uint => {
+                    gl.clear_buffer_u32_slice(
+                        glow::COLOR,
+                        draw_buffer,
+                        &match color {
+                            crate::TextureColor::TransparentBlack => [0; 4],
+                            crate::TextureColor::OpaqueBlack => [0, 0, 0, !0],
+                            crate::TextureColor::White => [!0; 4],
+                        },
+                    );
+                }
+                super::ColorType::Sint => {
+                    gl.clear_buffer_i32_slice(
+                        glow::COLOR,
+                        draw_buffer,
+                        &match color {
+                            crate::TextureColor::TransparentBlack => [0; 4],
+                            crate::TextureColor::OpaqueBlack => [0, 0, 0, !0],
+                            crate::TextureColor::White => [!0; 4],
+                        },
+                    );
+                }
+            },
+            Self::ClearDepthStencil { depth, stencil } => match (depth, stencil) {
+                (Some(d), Some(s)) => {
+                    gl.clear_buffer_depth_stencil(glow::DEPTH_STENCIL, 0, d, s as i32)
+                }
+                (Some(d), None) => gl.clear_buffer_f32_slice(glow::DEPTH, 0, &[d]),
+                (None, Some(s)) => gl.clear_buffer_i32_slice(glow::STENCIL, 0, &[s as i32]),
+                (None, None) => (),
+            },
             Self::Barrier => unimplemented!(),
             Self::SetViewport {
                 ref rect,

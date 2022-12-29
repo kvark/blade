@@ -169,7 +169,6 @@ struct ImageBinding {
 #[derive(Clone, Copy, Debug)]
 enum ColorType {
     Float,
-    FloatSrgb,
     Uint,
     Sint,
 }
@@ -358,32 +357,41 @@ impl crate::traits::CommandDevice for Context {
     fn destroy_command_encoder(&self, _command_encoder: CommandEncoder) {}
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
-        use glow::HasContext as _;
-        let gl = self.lock();
-        let ec = unsafe {
-            if !encoder.name.is_empty() {
-                gl.push_debug_group(glow::DEBUG_SOURCE_APPLICATION, DEBUG_ID, &encoder.name);
+        {
+            use glow::HasContext as _;
+            let gl = self.lock();
+            let ec = unsafe {
+                if !encoder.name.is_empty() {
+                    gl.push_debug_group(glow::DEBUG_SOURCE_APPLICATION, DEBUG_ID, &encoder.name);
+                }
+                let framebuf = gl.create_framebuffer().unwrap();
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuf));
+                let plain_buffer = gl.create_buffer().unwrap();
+                gl.bind_buffer(glow::UNIFORM_BUFFER, Some(plain_buffer));
+                gl.buffer_data_u8_slice(
+                    glow::UNIFORM_BUFFER,
+                    &encoder.plain_data,
+                    glow::STATIC_DRAW,
+                );
+                ExecutionContext {
+                    framebuf,
+                    plain_buffer,
+                }
+            };
+            for command in encoder.commands.iter() {
+                log::trace!("{:?}", command);
+                unsafe { command.execute(&*gl, &ec) };
             }
-            let framebuf = gl.create_framebuffer().unwrap();
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuf));
-            let plain_buffer = gl.create_buffer().unwrap();
-            gl.bind_buffer(glow::UNIFORM_BUFFER, Some(plain_buffer));
-            gl.buffer_data_u8_slice(glow::UNIFORM_BUFFER, &encoder.plain_data, glow::STATIC_DRAW);
-            ExecutionContext {
-                framebuf,
-                plain_buffer,
+            unsafe {
+                gl.delete_framebuffer(ec.framebuf);
+                gl.delete_buffer(ec.plain_buffer);
+                if !encoder.name.is_empty() {
+                    gl.pop_debug_group();
+                }
             }
-        };
-        for command in encoder.commands.iter() {
-            log::trace!("{:?}", command);
-            unsafe { command.execute(&*gl, &ec) };
         }
-        unsafe {
-            gl.delete_framebuffer(ec.framebuf);
-            gl.delete_buffer(ec.plain_buffer);
-            if !encoder.name.is_empty() {
-                gl.pop_debug_group();
-            }
+        if encoder.has_present {
+            self.present();
         }
         SyncPoint {}
     }
