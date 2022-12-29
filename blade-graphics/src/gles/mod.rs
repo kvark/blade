@@ -10,9 +10,21 @@ type BindTarget = u32;
 pub use platform::Context;
 use std::{marker::PhantomData, ops::Range};
 
+bitflags::bitflags! {
+    struct Capabilities: u32 {
+        const BUFFER_STORAGE = 1 << 0;
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Limits {
+    uniform_buffer_alignment: u32,
+}
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Buffer {
     raw: glow::Buffer,
+    size: u64,
     data: *mut u8,
 }
 
@@ -54,6 +66,7 @@ pub struct Texture {
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct TextureView {
     inner: TextureInner,
+    aspects: crate::TexelAspects,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
@@ -100,6 +113,7 @@ impl Frame {
     pub fn texture_view(&self) -> TextureView {
         TextureView {
             inner: self.texture.inner,
+            aspects: crate::TexelAspects::COLOR,
         }
     }
 }
@@ -215,9 +229,7 @@ enum Command {
         bytes_per_row: u32,
         size: crate::Extent,
     },
-    ResetFramebuffer {
-        is_default: bool,
-    },
+    ResetFramebuffer,
     BindAttachment {
         attachment: u32,
         view: TextureView,
@@ -260,6 +272,11 @@ enum Command {
         draw_buffer_index: Option<u32>,
         //desc: ColorTargetDesc,
     },
+    BindUniform {
+        slot: u32,
+        offset: u32,
+        size: u32,
+    },
     BindBuffer {
         target: BindTarget,
         slot: u32,
@@ -284,26 +301,41 @@ enum Command {
 pub struct CommandEncoder {
     name: String,
     commands: Vec<Command>,
+    plain_data: Vec<u8>,
+    has_present: bool,
+    limits: Limits,
 }
 
 pub struct PassEncoder<'a, P> {
     commands: &'a mut Vec<Command>,
+    plain_data: &'a mut Vec<u8>,
+    is_render: bool,
+    invalidate_attachments: Vec<u32>,
     pipeline: PhantomData<P>,
+    limits: &'a Limits,
 }
 
 pub struct PipelineEncoder<'a> {
     commands: &'a mut Vec<Command>,
+    plain_data: &'a mut Vec<u8>,
     bind_group_infos: &'a [BindGroupInfo],
     topology: u32,
+    limits: &'a Limits,
 }
 
 pub struct PipelineContext<'a> {
     commands: &'a mut Vec<Command>,
+    plain_data: &'a mut Vec<u8>,
     targets: &'a [SlotList],
+    limits: &'a Limits,
 }
 
 #[derive(Clone, Debug)]
 pub struct SyncPoint {}
+
+struct CommandContext {
+    plain_buffer: glow::Buffer,
+}
 
 #[hidden_trait::expose]
 impl crate::traits::CommandDevice for Context {
@@ -314,15 +346,25 @@ impl crate::traits::CommandDevice for Context {
         CommandEncoder {
             name: desc.name.to_string(),
             commands: Vec::new(),
+            plain_data: Vec::new(),
+            has_present: false,
+            limits: self.limits.clone(),
         }
     }
 
     fn destroy_command_encoder(&self, _command_encoder: CommandEncoder) {}
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+        use glow::HasContext as _;
         let gl = self.lock();
+        let cc = unsafe {
+            let plain_buffer = gl.create_buffer().unwrap();
+            gl.bind_buffer(glow::UNIFORM_BUFFER, Some(plain_buffer));
+            gl.buffer_data_u8_slice(glow::UNIFORM_BUFFER, &encoder.plain_data, glow::STATIC_DRAW);
+            CommandContext { plain_buffer }
+        };
         for command in encoder.commands.iter() {
-            unsafe { command.execute(&*gl) };
+            unsafe { command.execute(&*gl, &cc) };
         }
         SyncPoint {}
     }

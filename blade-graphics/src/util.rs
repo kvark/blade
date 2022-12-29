@@ -56,4 +56,11 @@ impl super::TextureFormat {
             Self::Depth32Float => uncompressed(4),
         }
     }
+
+    pub fn aspects(&self) -> super::TexelAspects {
+        match *self {
+            Self::Depth32Float => super::TexelAspects::DEPTH,
+            _ => super::TexelAspects::COLOR,
+        }
+    }
 }
