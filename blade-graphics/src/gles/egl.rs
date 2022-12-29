@@ -77,7 +77,6 @@ enum SrgbFrameBufferKind {
 #[derive(Debug)]
 struct EglContext {
     instance: EglInstance,
-    version: (i32, i32),
     display: egl::Display,
     raw: egl::Context,
     config: egl::Config,
@@ -420,6 +419,7 @@ impl Context {
         });
 
         let format_desc = super::describe_texture_format(wsi.surface_format);
+        inner.egl.make_current();
         unsafe {
             let gl = &inner.glow;
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(wsi.renderbuf));
@@ -439,6 +439,7 @@ impl Context {
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
             gl.bind_renderbuffer(glow::RENDERBUFFER, None);
         };
+        inner.egl.unmake_current();
 
         wsi.surface_format
     }
@@ -698,7 +699,6 @@ impl EglContext {
 
         Ok(Self {
             instance: egl,
-            version,
             display,
             raw: context,
             config,
