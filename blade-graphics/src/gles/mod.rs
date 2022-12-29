@@ -267,6 +267,7 @@ enum Command {
     //SetDepthBias(wgt::DepthBiasState),
     //ConfigureDepthStencil(crate::FormatAspects),
     SetProgram(glow::Program),
+    UnsetProgram,
     //SetPrimitive(PrimitiveState),
     SetBlendConstant([f32; 4]),
     SetColorTarget {

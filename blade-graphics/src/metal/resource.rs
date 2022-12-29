@@ -90,6 +90,8 @@ impl crate::traits::ResourceDevice for super::Context {
         super::Buffer { raw }
     }
 
+    fn sync_buffer(&self, _buffer: super::Buffer) {}
+
     fn destroy_buffer(&self, buffer: super::Buffer) {
         unsafe {
             let () = msg_send![buffer.raw, release];

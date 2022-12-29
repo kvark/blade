@@ -118,6 +118,8 @@ impl crate::traits::ResourceDevice for super::Context {
         }
     }
 
+    fn sync_buffer(&self, _buffer: super::Buffer) {}
+
     fn destroy_buffer(&self, buffer: super::Buffer) {
         unsafe { self.device.core.destroy_buffer(buffer.raw, None) };
         self.free_memory(buffer.memory_handle);
