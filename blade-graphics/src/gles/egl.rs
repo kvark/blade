@@ -459,10 +459,16 @@ impl Context {
         inner.egl.make_current();
         ContextLock { guard: inner }
     }
+
+    pub(super) fn present(&self) {
+        let inner = self.inner.lock().unwrap();
+        let wsi = self.wsi.as_ref().unwrap();
+        inner.present(wsi);
+    }
 }
 
 impl ContextInner {
-    pub(super) fn present(&self, wsi: &WindowSystemInterface) {
+    fn present(&self, wsi: &WindowSystemInterface) {
         let sc = self.swapchain.as_ref().unwrap();
         self.egl
             .instance
