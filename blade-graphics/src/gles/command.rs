@@ -1,6 +1,20 @@
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
-        unimplemented!()
+        let self_slice = bytemuck::bytes_of(self);
+        let alignment = ctx.limits.uniform_buffer_alignment as usize;
+        let rem = ctx.plain_data.len() % alignment;
+        if rem != 0 {
+            ctx.plain_data
+                .resize(ctx.plain_data.len() - rem + alignment, 0);
+        }
+        let offset = ctx.plain_data.len() as u32;
+        let size = self_slice.len() as u32;
+        ctx.plain_data.extend_from_slice(self_slice);
+
+        for &slot in ctx.targets[index as usize].iter() {
+            ctx.commands
+                .push(super::Command::BindUniform { slot, offset, size });
+        }
     }
 }
 impl crate::ShaderBindable for super::TextureView {
@@ -40,25 +54,34 @@ impl crate::ShaderBindable for crate::BufferPiece {
 impl super::CommandEncoder {
     pub fn start(&mut self) {
         self.commands.clear();
+        self.plain_data.clear();
     }
 
     pub fn init_texture(&mut self, _texture: super::Texture) {}
 
     pub fn present(&mut self, _frame: super::Frame) {
-        unimplemented!()
+        self.has_present = true;
     }
 
     pub fn transfer(&mut self) -> super::PassEncoder<()> {
         super::PassEncoder {
             commands: &mut self.commands,
+            plain_data: &mut self.plain_data,
+            is_render: false,
+            invalidate_attachments: Vec::new(),
             pipeline: Default::default(),
+            limits: &self.limits,
         }
     }
 
     pub fn compute(&mut self) -> super::PassEncoder<super::ComputePipeline> {
         super::PassEncoder {
             commands: &mut self.commands,
+            plain_data: &mut self.plain_data,
+            is_render: false,
+            invalidate_attachments: Vec::new(),
             pipeline: Default::default(),
+            limits: &self.limits,
         }
     }
 
@@ -66,9 +89,42 @@ impl super::CommandEncoder {
         &mut self,
         targets: crate::RenderTargetSet,
     ) -> super::PassEncoder<super::RenderPipeline> {
+        let mut invalidate_attachments = Vec::new();
+        for (i, rt) in targets.colors.iter().enumerate() {
+            let attachment = glow::COLOR_ATTACHMENT0 + i as u32;
+            self.commands.push(super::Command::BindAttachment {
+                attachment,
+                view: rt.view,
+            });
+            if let crate::FinishOp::Discard = rt.finish_op {
+                invalidate_attachments.push(attachment);
+            }
+        }
+        if let Some(ref rt) = targets.depth_stencil {
+            let attachment = match rt.view.aspects {
+                crate::TexelAspects::DEPTH => glow::DEPTH_ATTACHMENT,
+                crate::TexelAspects::STENCIL => glow::STENCIL_ATTACHMENT,
+                _ => glow::DEPTH_STENCIL_ATTACHMENT,
+            };
+            self.commands.push(super::Command::BindAttachment {
+                attachment,
+                view: rt.view,
+            });
+            if let crate::FinishOp::Discard = rt.finish_op {
+                invalidate_attachments.push(attachment);
+            }
+        }
+        self.commands.push(super::Command::SetDrawColorBuffers(
+            targets.colors.len() as _
+        ));
+
         super::PassEncoder {
             commands: &mut self.commands,
+            plain_data: &mut self.plain_data,
+            is_render: true,
+            invalidate_attachments,
             pipeline: Default::default(),
+            limits: &self.limits,
         }
     }
 }
@@ -80,8 +136,10 @@ impl super::PassEncoder<'_, super::ComputePipeline> {
     ) -> super::PipelineEncoder<'b> {
         super::PipelineEncoder {
             commands: self.commands,
+            plain_data: self.plain_data,
             bind_group_infos: &pipeline.inner.bind_group_infos,
             topology: 0,
+            limits: self.limits,
         }
     }
 }
@@ -93,8 +151,18 @@ impl super::PassEncoder<'_, super::RenderPipeline> {
     ) -> super::PipelineEncoder<'b> {
         super::PipelineEncoder {
             commands: self.commands,
+            plain_data: self.plain_data,
             bind_group_infos: &pipeline.inner.bind_group_infos,
             topology: map_primitive_topology(pipeline.topology),
+            limits: self.limits,
+        }
+    }
+}
+
+impl<T> Drop for super::PassEncoder<'_, T> {
+    fn drop(&mut self) {
+        if self.is_render {
+            self.commands.push(super::Command::ResetFramebuffer);
         }
     }
 }
@@ -170,7 +238,9 @@ impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_> {
     fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         data.fill(super::PipelineContext {
             commands: self.commands,
+            plain_data: self.plain_data,
             targets: &self.bind_group_infos[group as usize].targets,
+            limits: self.limits,
         });
     }
 }
@@ -235,7 +305,7 @@ const CUBEMAP_FACES: [u32; 6] = [
 ];
 
 impl super::Command {
-    pub(super) unsafe fn execute(&self, gl: &glow::Context) {
+    pub(super) unsafe fn execute(&self, gl: &glow::Context, cc: &super::CommandContext) {
         use glow::HasContext as _;
         match *self {
             Self::Draw {
@@ -344,6 +414,7 @@ impl super::Command {
                 ref dst,
                 ref size,
             } => {
+                gl.bind_texture(dst.target, Some(dst.raw));
                 let fbo = gl.create_framebuffer().unwrap();
                 gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(fbo));
                 gl.framebuffer_texture_2d(
@@ -377,6 +448,7 @@ impl super::Command {
                 let row_texels =
                     bytes_per_row / block_info.size as u32 * block_info.dimensions.0 as u32;
                 gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(src.raw));
+                gl.bind_texture(dst.target, Some(dst.raw));
                 let unpack_data = glow::PixelUnpackData::BufferOffset(src.offset as u32);
                 match dst.target {
                     glow::TEXTURE_3D => gl.tex_sub_image_3d(
@@ -451,13 +523,45 @@ impl super::Command {
                 bytes_per_row,
                 ref size,
             } => unimplemented!(),
-            Self::ResetFramebuffer { is_default } => unimplemented!(),
+            Self::ResetFramebuffer => {
+                unimplemented!()
+            }
             Self::BindAttachment {
                 attachment,
                 ref view,
-            } => unimplemented!(),
-            Self::InvalidateAttachment(id) => unimplemented!(),
-            Self::SetDrawColorBuffers(count) => unimplemented!(),
+            } => match view.inner {
+                super::TextureInner::Renderbuffer { raw } => {
+                    gl.framebuffer_renderbuffer(
+                        glow::DRAW_FRAMEBUFFER,
+                        attachment,
+                        glow::RENDERBUFFER,
+                        Some(raw),
+                    );
+                }
+                super::TextureInner::DefaultRenderbuffer => panic!("Unexpected default RBO"),
+                super::TextureInner::Texture { raw, target } => {
+                    let mip_level = 0; //TODO
+                    gl.framebuffer_texture_2d(
+                        glow::DRAW_FRAMEBUFFER,
+                        attachment,
+                        target,
+                        Some(raw),
+                        mip_level,
+                    );
+                }
+            },
+            Self::InvalidateAttachment(attachment) => {
+                gl.invalidate_framebuffer(glow::DRAW_FRAMEBUFFER, &[attachment]);
+            }
+            Self::SetDrawColorBuffers(count) => {
+                let attachments = [
+                    glow::COLOR_ATTACHMENT0,
+                    glow::COLOR_ATTACHMENT1,
+                    glow::COLOR_ATTACHMENT2,
+                    glow::COLOR_ATTACHMENT3,
+                ];
+                gl.draw_buffers(&attachments[..count as usize]);
+            }
             Self::ClearColor {
                 draw_buffer,
                 color,
@@ -491,6 +595,15 @@ impl super::Command {
                 draw_buffer_index,
                 //desc: ColorTargetDesc,
             } => unimplemented!(),
+            Self::BindUniform { slot, offset, size } => {
+                gl.bind_buffer_range(
+                    glow::UNIFORM_BUFFER,
+                    slot,
+                    Some(cc.plain_buffer),
+                    offset as i32,
+                    size as i32,
+                );
+            }
             Self::BindBuffer {
                 target,
                 slot,

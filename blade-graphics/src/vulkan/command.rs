@@ -56,7 +56,7 @@ impl crate::ShaderBindable for crate::BufferPiece {
 }
 
 impl crate::TexturePiece {
-    fn subresource_layers(&self, aspects: super::FormatAspects) -> vk::ImageSubresourceLayers {
+    fn subresource_layers(&self, aspects: crate::TexelAspects) -> vk::ImageSubresourceLayers {
         vk::ImageSubresourceLayers {
             aspect_mask: super::map_aspects(aspects),
             mip_level: self.mip_level,
@@ -80,13 +80,13 @@ fn make_buffer_image_copy(
     texture: &crate::TexturePiece,
     size: &crate::Extent,
 ) -> vk::BufferImageCopy {
-    let format_info = super::describe_format(texture.texture.format);
+    let block_info = texture.texture.format.block_info();
     vk::BufferImageCopy {
         buffer_offset: buffer.offset,
-        buffer_row_length: format_info.block.width as u32
-            * (bytes_per_row / format_info.block.bytes as u32),
+        buffer_row_length: block_info.dimensions.0 as u32
+            * (bytes_per_row / block_info.size as u32),
         buffer_image_height: 0,
-        image_subresource: texture.subresource_layers(format_info.aspects),
+        image_subresource: texture.subresource_layers(texture.texture.format.aspects()),
         image_offset: map_origin(&texture.origin),
         image_extent: super::map_extent_3d(&size),
     }
@@ -99,7 +99,7 @@ fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo {
         .load_op(vk::AttachmentLoadOp::LOAD);
 
     if let crate::InitOp::Clear(color) = rt.init_op {
-        let cv = if rt.view.aspects.contains(super::FormatAspects::COLOR) {
+        let cv = if rt.view.aspects.contains(crate::TexelAspects::COLOR) {
             vk::ClearValue {
                 color: match color {
                     crate::TextureColor::TransparentBlack => vk::ClearColorValue::default(),
@@ -190,13 +190,12 @@ impl super::CommandEncoder {
     }
 
     pub fn init_texture(&mut self, texture: super::Texture) {
-        let format_info = super::describe_format(texture.format);
         let barrier = vk::ImageMemoryBarrier::builder()
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::GENERAL)
             .image(texture.raw)
             .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: super::map_aspects(format_info.aspects),
+                aspect_mask: super::map_aspects(texture.format.aspects()),
                 base_mip_level: 0,
                 level_count: vk::REMAINING_MIP_LEVELS,
                 base_array_layer: 0,
@@ -280,10 +279,10 @@ impl super::CommandEncoder {
         if let Some(rt) = targets.depth_stencil {
             target_size = rt.view.target_size;
             depth_stencil_attachment = map_render_target(&rt);
-            if rt.view.aspects.contains(super::FormatAspects::DEPTH) {
+            if rt.view.aspects.contains(crate::TexelAspects::DEPTH) {
                 rendering_info = rendering_info.depth_attachment(&depth_stencil_attachment);
             }
-            if rt.view.aspects.contains(super::FormatAspects::STENCIL) {
+            if rt.view.aspects.contains(crate::TexelAspects::STENCIL) {
                 rendering_info = rendering_info.stencil_attachment(&depth_stencil_attachment);
             }
         }
@@ -362,9 +361,9 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
         size: crate::Extent,
     ) {
         let copy = vk::ImageCopy {
-            src_subresource: src.subresource_layers(super::FormatAspects::all()),
+            src_subresource: src.subresource_layers(crate::TexelAspects::all()),
             src_offset: map_origin(&src.origin),
-            dst_subresource: dst.subresource_layers(super::FormatAspects::all()),
+            dst_subresource: dst.subresource_layers(crate::TexelAspects::all()),
             dst_offset: map_origin(&dst.origin),
             extent: super::map_extent_3d(&size),
         };

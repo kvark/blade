@@ -152,6 +152,14 @@ pub struct TexelBlockInfo {
     pub size: u8,
 }
 
+bitflags::bitflags! {
+    pub struct TexelAspects: u8 {
+        const COLOR = 0 << 1;
+        const DEPTH = 1 << 1;
+        const STENCIL = 1 << 2;
+    }
+}
+
 /// Dimensionality of a texture.
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum TextureDimension {

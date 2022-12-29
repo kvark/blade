@@ -133,17 +133,16 @@ impl crate::traits::ResourceDevice for super::Context {
             create_flags |= vk::ImageCreateFlags::CUBE_COMPATIBLE;
         }
 
-        let format_info = super::describe_format(desc.format);
         let vk_info = vk::ImageCreateInfo::builder()
             .flags(create_flags)
             .image_type(map_texture_dimension(desc.dimension))
-            .format(format_info.raw)
+            .format(super::map_texture_format(desc.format))
             .extent(super::map_extent_3d(&desc.size))
             .mip_levels(desc.mip_level_count)
             .array_layers(desc.array_layer_count)
             .samples(vk::SampleCountFlags::from_raw(1)) // desc.sample_count
             .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(map_texture_usage(desc.usage, format_info.aspects))
+            .usage(map_texture_usage(desc.usage, desc.format.aspects()))
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
         let raw = unsafe { self.device.core.create_image(&vk_info, None).unwrap() };
@@ -174,13 +173,12 @@ impl crate::traits::ResourceDevice for super::Context {
     }
 
     fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
-        let format_info = super::describe_format(desc.format);
-        let subresource_range =
-            super::map_subresource_range(desc.subresources, format_info.aspects);
+        let aspects = desc.format.aspects();
+        let subresource_range = super::map_subresource_range(desc.subresources, aspects);
         let vk_info = vk::ImageViewCreateInfo::builder()
             .image(desc.texture.raw)
             .view_type(map_view_dimension(desc.dimension))
-            .format(format_info.raw)
+            .format(super::map_texture_format(desc.format))
             .subresource_range(subresource_range);
 
         let raw = unsafe { self.device.core.create_image_view(&vk_info, None).unwrap() };
@@ -194,7 +192,7 @@ impl crate::traits::ResourceDevice for super::Context {
                 (desc.texture.target_size[0] >> desc.subresources.base_mip_level).max(1),
                 (desc.texture.target_size[1] >> desc.subresources.base_mip_level).max(1),
             ],
-            aspects: format_info.aspects,
+            aspects,
         }
     }
 
@@ -265,7 +263,7 @@ fn map_view_dimension(dimension: crate::ViewDimension) -> vk::ImageViewType {
 
 pub(super) fn map_texture_usage(
     usage: crate::TextureUsage,
-    aspects: super::FormatAspects,
+    aspects: crate::TexelAspects,
 ) -> vk::ImageUsageFlags {
     use vk::ImageUsageFlags as Iuf;
 
@@ -277,7 +275,7 @@ pub(super) fn map_texture_usage(
         flags |= vk::ImageUsageFlags::SAMPLED;
     }
     if usage.contains(crate::TextureUsage::TARGET) {
-        flags |= if aspects.contains(super::FormatAspects::COLOR) {
+        flags |= if aspects.contains(crate::TexelAspects::COLOR) {
             vk::ImageUsageFlags::COLOR_ATTACHMENT
         } else {
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT

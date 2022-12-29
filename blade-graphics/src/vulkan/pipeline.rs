@@ -384,7 +384,7 @@ impl super::Context {
         let mut ds_format = vk::Format::UNDEFINED;
         let mut vk_depth_stencil = vk::PipelineDepthStencilStateCreateInfo::builder();
         if let Some(ref ds) = desc.depth_stencil {
-            ds_format = super::describe_format(ds.format).raw;
+            ds_format = super::map_texture_format(ds.format);
 
             if ds.depth_write_enabled || ds.depth_compare != crate::CompareFunction::Always {
                 vk_depth_stencil = vk_depth_stencil
@@ -429,7 +429,7 @@ impl super::Context {
                     .dst_alpha_blend_factor(alpha_dst);
             }
 
-            color_formats.push(super::describe_format(ct.format).raw);
+            color_formats.push(super::map_texture_format(ct.format));
             vk_attachments.push(vk_attachment.build());
         }
         let vk_color_blend = vk::PipelineColorBlendStateCreateInfo::builder()

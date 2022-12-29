@@ -11,43 +11,68 @@ impl crate::traits::ResourceDevice for super::Context {
     fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         let gl = self.lock();
 
+        let raw = unsafe { gl.create_buffer() }.unwrap();
+        let mut data = ptr::null_mut();
+
         let mut storage_flags = 0;
         let mut map_flags = 0;
-        match desc.memory {
-            crate::Memory::Device => {}
+        let usage = match desc.memory {
+            crate::Memory::Device => glow::STATIC_DRAW,
             crate::Memory::Shared => {
                 map_flags = glow::MAP_READ_BIT | glow::MAP_WRITE_BIT | glow::MAP_UNSYNCHRONIZED_BIT;
-                storage_flags |= glow::MAP_PERSISTENT_BIT
+                storage_flags = glow::MAP_PERSISTENT_BIT
                     | glow::MAP_COHERENT_BIT
                     | glow::MAP_READ_BIT
                     | glow::MAP_WRITE_BIT;
+                glow::STREAM_READ
             }
             crate::Memory::Upload => {
                 map_flags = glow::MAP_WRITE_BIT | glow::MAP_UNSYNCHRONIZED_BIT;
-                storage_flags |=
+                storage_flags =
                     glow::MAP_PERSISTENT_BIT | glow::MAP_COHERENT_BIT | glow::MAP_WRITE_BIT;
+                glow::DYNAMIC_DRAW
             }
-        }
+        };
 
-        let raw = unsafe { gl.create_buffer() }.unwrap();
-        let mut data = ptr::null_mut();
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(raw));
-            gl.buffer_storage(glow::ARRAY_BUFFER, desc.size as _, None, storage_flags);
-            if map_flags != 0 {
-                data = gl.map_buffer_range(glow::ARRAY_BUFFER, 0, desc.size as _, map_flags);
+            if self
+                .capabilities
+                .contains(super::Capabilities::BUFFER_STORAGE)
+            {
+                gl.buffer_storage(glow::ARRAY_BUFFER, desc.size as _, None, storage_flags);
+                if map_flags != 0 {
+                    data = gl.map_buffer_range(glow::ARRAY_BUFFER, 0, desc.size as _, map_flags);
+                }
+            } else {
+                gl.buffer_data_size(glow::ARRAY_BUFFER, desc.size as _, usage);
+                let data_vec = vec![0; desc.size as usize];
+                data = Vec::leak(data_vec).as_mut_ptr();
             }
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             if !desc.name.is_empty() && gl.supports_debug() {
                 gl.object_label(glow::BUFFER, mem::transmute(raw), Some(desc.name));
             }
         }
-        super::Buffer { raw, data }
+        super::Buffer {
+            raw,
+            size: desc.size,
+            data,
+        }
     }
 
     fn destroy_buffer(&self, buffer: super::Buffer) {
         let gl = self.lock();
         unsafe { gl.delete_buffer(buffer.raw) };
+        if !buffer.data.is_null()
+            && !self
+                .capabilities
+                .contains(super::Capabilities::BUFFER_STORAGE)
+        {
+            unsafe {
+                Vec::from_raw_parts(buffer.data, buffer.size as usize, buffer.size as usize);
+            }
+        }
     }
 
     fn create_texture(&self, desc: crate::TextureDesc) -> super::Texture {
@@ -159,8 +184,10 @@ impl crate::traits::ResourceDevice for super::Context {
     }
 
     fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
+        //TODO: actual reinterpretation
         super::TextureView {
             inner: desc.texture.inner,
+            aspects: desc.format.aspects(),
         }
     }
 

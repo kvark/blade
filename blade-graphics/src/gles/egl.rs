@@ -121,6 +121,8 @@ struct ContextInner {
 pub struct Context {
     wsi: Option<WindowSystemInterface>,
     inner: Mutex<ContextInner>,
+    pub(super) capabilities: super::Capabilities,
+    pub(super) limits: super::Limits,
 }
 
 pub struct ContextLock<'a> {
@@ -205,7 +207,7 @@ impl Context {
 
         let egl_context = EglContext::init(&desc, egl, display)?;
         egl_context.make_current();
-        let glow = egl_context.load_functions(&desc);
+        let (glow, capabilities, limits) = egl_context.load_functions(&desc);
         egl_context.unmake_current();
 
         Ok(Self {
@@ -215,6 +217,8 @@ impl Context {
                 swapchain: None,
                 glow,
             }),
+            capabilities,
+            limits,
         })
     }
 
@@ -289,7 +293,7 @@ impl Context {
 
         let egl_context = EglContext::init(&desc, egl, display)?;
         egl_context.make_current();
-        let glow = egl_context.load_functions(&desc);
+        let (glow, capabilities, limits) = egl_context.load_functions(&desc);
         let renderbuf = glow.create_renderbuffer().unwrap();
         let framebuf = glow.create_framebuffer().unwrap();
         egl_context.unmake_current();
@@ -307,6 +311,8 @@ impl Context {
                 swapchain: None,
                 glow,
             }),
+            capabilities,
+            limits,
         })
     }
 
@@ -701,7 +707,10 @@ impl EglContext {
         })
     }
 
-    unsafe fn load_functions(&self, desc: &crate::ContextDesc) -> glow::Context {
+    unsafe fn load_functions(
+        &self,
+        desc: &crate::ContextDesc,
+    ) -> (glow::Context, super::Capabilities, super::Limits) {
         let gl = glow::Context::from_loader_function(|name| {
             self.instance
                 .get_proc_address(name)
@@ -712,7 +721,27 @@ impl EglContext {
             gl.enable(glow::DEBUG_OUTPUT);
             gl.debug_message_callback(gl_debug_message_callback);
         }
-        gl
+
+        let extensions = gl.supported_extensions();
+        log::debug!("Extensions: {:#?}", extensions);
+        let vendor = gl.get_parameter_string(glow::VENDOR);
+        let renderer = gl.get_parameter_string(glow::RENDERER);
+        let version = gl.get_parameter_string(glow::VERSION);
+        log::info!("Vendor: {}", vendor);
+        log::info!("Renderer: {}", renderer);
+        log::info!("Version: {}", version);
+
+        let mut capabilities = super::Capabilities::empty();
+        capabilities.set(
+            super::Capabilities::BUFFER_STORAGE,
+            extensions.contains("GL_EXT_buffer_storage"),
+        );
+
+        let limits = super::Limits {
+            uniform_buffer_alignment: gl.get_parameter_i32(glow::UNIFORM_BUFFER_OFFSET_ALIGNMENT)
+                as u32,
+        };
+        (gl, capabilities, limits)
     }
 }
 

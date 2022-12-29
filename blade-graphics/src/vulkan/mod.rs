@@ -59,7 +59,7 @@ impl Frame {
         TextureView {
             raw: self.view,
             target_size: self.target_size,
-            aspects: FormatAspects::COLOR,
+            aspects: crate::TexelAspects::COLOR,
         }
     }
 }
@@ -120,7 +120,7 @@ pub struct Texture {
 pub struct TextureView {
     raw: vk::ImageView,
     target_size: [u16; 2],
-    aspects: FormatAspects,
+    aspects: crate::TexelAspects,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
@@ -779,11 +779,11 @@ impl Context {
         let mut surface = self.surface.as_ref().unwrap().lock().unwrap();
         let queue_families = [self.queue_family_index];
         let format = crate::TextureFormat::Bgra8UnormSrgb;
-        let format_info = describe_format(format);
+        let vk_format = map_texture_format(format);
         let create_info = vk::SwapchainCreateInfoKHR::builder()
             .surface(surface.raw)
             .min_image_count(config.frame_count)
-            .image_format(format_info.raw)
+            .image_format(vk_format)
             .image_extent(vk::Extent2D {
                 width: config.size.width,
                 height: config.size.height,
@@ -791,7 +791,7 @@ impl Context {
             .image_array_layers(1)
             .image_usage(resource::map_texture_usage(
                 config.usage,
-                FormatAspects::COLOR,
+                crate::TexelAspects::COLOR,
             ))
             .queue_family_indices(&queue_families)
             .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
@@ -831,7 +831,7 @@ impl Context {
             let view_create_info = vk::ImageViewCreateInfo::builder()
                 .image(image)
                 .view_type(vk::ImageViewType::TYPE_2D)
-                .format(format_info.raw)
+                .format(vk_format)
                 .subresource_range(subresource_range);
             let view = unsafe {
                 self.device
@@ -875,48 +875,25 @@ impl Context {
     }
 }
 
-bitflags::bitflags! {
-    struct FormatAspects: u8 {
-        const COLOR = 0 << 1;
-        const DEPTH = 1 << 1;
-        const STENCIL = 1 << 2;
-    }
-}
-
-struct FormatInfo {
-    raw: vk::Format,
-    aspects: FormatAspects,
-    block: BlockInfo,
-}
-
-fn describe_format(format: crate::TextureFormat) -> FormatInfo {
+fn map_texture_format(format: crate::TextureFormat) -> vk::Format {
     use crate::TextureFormat as Tf;
-    let (raw, aspects, bytes) = match format {
-        Tf::Rgba8Unorm => (vk::Format::R8G8B8A8_UNORM, FormatAspects::COLOR, 4),
-        Tf::Rgba8UnormSrgb => (vk::Format::R8G8B8A8_SRGB, FormatAspects::COLOR, 4),
-        Tf::Bgra8UnormSrgb => (vk::Format::B8G8R8A8_SRGB, FormatAspects::COLOR, 4),
-        Tf::Depth32Float => (vk::Format::D32_SFLOAT, FormatAspects::DEPTH, 4),
-    };
-    FormatInfo {
-        raw,
-        aspects,
-        block: BlockInfo {
-            bytes,
-            width: 1,
-            height: 1,
-        },
+    match format {
+        Tf::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+        Tf::Rgba8UnormSrgb => vk::Format::R8G8B8A8_SRGB,
+        Tf::Bgra8UnormSrgb => vk::Format::B8G8R8A8_SRGB,
+        Tf::Depth32Float => vk::Format::D32_SFLOAT,
     }
 }
 
-fn map_aspects(aspects: FormatAspects) -> vk::ImageAspectFlags {
+fn map_aspects(aspects: crate::TexelAspects) -> vk::ImageAspectFlags {
     let mut flags = vk::ImageAspectFlags::empty();
-    if aspects.contains(FormatAspects::COLOR) {
+    if aspects.contains(crate::TexelAspects::COLOR) {
         flags |= vk::ImageAspectFlags::COLOR;
     }
-    if aspects.contains(FormatAspects::DEPTH) {
+    if aspects.contains(crate::TexelAspects::DEPTH) {
         flags |= vk::ImageAspectFlags::DEPTH;
     }
-    if aspects.contains(FormatAspects::STENCIL) {
+    if aspects.contains(crate::TexelAspects::STENCIL) {
         flags |= vk::ImageAspectFlags::STENCIL;
     }
     flags
@@ -932,7 +909,7 @@ fn map_extent_3d(extent: &crate::Extent) -> vk::Extent3D {
 
 fn map_subresource_range(
     subresources: &crate::TextureSubresources,
-    aspects: FormatAspects,
+    aspects: crate::TexelAspects,
 ) -> vk::ImageSubresourceRange {
     vk::ImageSubresourceRange {
         aspect_mask: map_aspects(aspects),
