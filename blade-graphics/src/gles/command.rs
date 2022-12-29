@@ -1,3 +1,10 @@
+const COLOR_ATTACHMENTS: &[u32] = &[
+    glow::COLOR_ATTACHMENT0,
+    glow::COLOR_ATTACHMENT1,
+    glow::COLOR_ATTACHMENT2,
+    glow::COLOR_ATTACHMENT3,
+];
+
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let self_slice = bytemuck::bytes_of(self);
@@ -55,6 +62,7 @@ impl super::CommandEncoder {
     pub fn start(&mut self) {
         self.commands.clear();
         self.plain_data.clear();
+        self.has_present = false;
     }
 
     pub fn init_texture(&mut self, _texture: super::Texture) {}
@@ -305,7 +313,7 @@ const CUBEMAP_FACES: [u32; 6] = [
 ];
 
 impl super::Command {
-    pub(super) unsafe fn execute(&self, gl: &glow::Context, cc: &super::CommandContext) {
+    pub(super) unsafe fn execute(&self, gl: &glow::Context, ec: &super::ExecutionContext) {
         use glow::HasContext as _;
         match *self {
             Self::Draw {
@@ -415,8 +423,6 @@ impl super::Command {
                 ref size,
             } => {
                 gl.bind_texture(dst.target, Some(dst.raw));
-                let fbo = gl.create_framebuffer().unwrap();
-                gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(fbo));
                 gl.framebuffer_texture_2d(
                     glow::READ_FRAMEBUFFER,
                     glow::COLOR_ATTACHMENT0,
@@ -435,7 +441,12 @@ impl super::Command {
                     size.width as i32,
                     size.height as i32,
                 );
-                gl.delete_framebuffer(fbo);
+                gl.framebuffer_renderbuffer(
+                    glow::READ_FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    glow::RENDERBUFFER,
+                    None,
+                );
             }
             Self::CopyBufferToTexture {
                 ref src,
@@ -524,13 +535,28 @@ impl super::Command {
                 ref size,
             } => unimplemented!(),
             Self::ResetFramebuffer => {
-                unimplemented!()
+                for &attachment in COLOR_ATTACHMENTS.iter() {
+                    gl.framebuffer_renderbuffer(
+                        glow::DRAW_FRAMEBUFFER,
+                        attachment,
+                        glow::RENDERBUFFER,
+                        None,
+                    );
+                }
+                gl.framebuffer_renderbuffer(
+                    glow::DRAW_FRAMEBUFFER,
+                    glow::DEPTH_STENCIL_ATTACHMENT,
+                    glow::RENDERBUFFER,
+                    None,
+                );
             }
             Self::BindAttachment {
                 attachment,
                 ref view,
             } => match view.inner {
                 super::TextureInner::Renderbuffer { raw } => {
+                    gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(ec.framebuf));
+                    gl.bind_renderbuffer(glow::RENDERBUFFER, Some(raw));
                     gl.framebuffer_renderbuffer(
                         glow::DRAW_FRAMEBUFFER,
                         attachment,
@@ -554,13 +580,7 @@ impl super::Command {
                 gl.invalidate_framebuffer(glow::DRAW_FRAMEBUFFER, &[attachment]);
             }
             Self::SetDrawColorBuffers(count) => {
-                let attachments = [
-                    glow::COLOR_ATTACHMENT0,
-                    glow::COLOR_ATTACHMENT1,
-                    glow::COLOR_ATTACHMENT2,
-                    glow::COLOR_ATTACHMENT3,
-                ];
-                gl.draw_buffers(&attachments[..count as usize]);
+                gl.draw_buffers(&COLOR_ATTACHMENTS[..count as usize]);
             }
             Self::ClearColor {
                 draw_buffer,
@@ -599,7 +619,7 @@ impl super::Command {
                 gl.bind_buffer_range(
                     glow::UNIFORM_BUFFER,
                     slot,
-                    Some(cc.plain_buffer),
+                    Some(ec.plain_buffer),
                     offset as i32,
                     size as i32,
                 );

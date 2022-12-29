@@ -10,6 +10,8 @@ type BindTarget = u32;
 pub use platform::Context;
 use std::{marker::PhantomData, ops::Range};
 
+const DEBUG_ID: u32 = 0;
+
 bitflags::bitflags! {
     struct Capabilities: u32 {
         const BUFFER_STORAGE = 1 << 0;
@@ -333,7 +335,8 @@ pub struct PipelineContext<'a> {
 #[derive(Clone, Debug)]
 pub struct SyncPoint {}
 
-struct CommandContext {
+struct ExecutionContext {
+    framebuf: glow::Framebuffer,
     plain_buffer: glow::Buffer,
 }
 
@@ -357,14 +360,30 @@ impl crate::traits::CommandDevice for Context {
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         use glow::HasContext as _;
         let gl = self.lock();
-        let cc = unsafe {
+        let ec = unsafe {
+            if !encoder.name.is_empty() {
+                gl.push_debug_group(glow::DEBUG_SOURCE_APPLICATION, DEBUG_ID, &encoder.name);
+            }
+            let framebuf = gl.create_framebuffer().unwrap();
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuf));
             let plain_buffer = gl.create_buffer().unwrap();
             gl.bind_buffer(glow::UNIFORM_BUFFER, Some(plain_buffer));
             gl.buffer_data_u8_slice(glow::UNIFORM_BUFFER, &encoder.plain_data, glow::STATIC_DRAW);
-            CommandContext { plain_buffer }
+            ExecutionContext {
+                framebuf,
+                plain_buffer,
+            }
         };
         for command in encoder.commands.iter() {
-            unsafe { command.execute(&*gl, &cc) };
+            log::trace!("{:?}", command);
+            unsafe { command.execute(&*gl, &ec) };
+        }
+        unsafe {
+            gl.delete_framebuffer(ec.framebuf);
+            gl.delete_buffer(ec.plain_buffer);
+            if !encoder.name.is_empty() {
+                gl.pop_debug_group();
+            }
         }
         SyncPoint {}
     }
