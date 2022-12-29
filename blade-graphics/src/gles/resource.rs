@@ -1,5 +1,5 @@
 use glow::HasContext as _;
-use std::{mem, ptr};
+use std::{mem, ptr, slice};
 
 #[hidden_trait::expose]
 impl crate::traits::ResourceDevice for super::Context {
@@ -58,6 +58,20 @@ impl crate::traits::ResourceDevice for super::Context {
             raw,
             size: desc.size,
             data,
+        }
+    }
+
+    fn sync_buffer(&self, buffer: super::Buffer) {
+        if !self
+            .capabilities
+            .contains(super::Capabilities::BUFFER_STORAGE)
+        {
+            let gl = self.lock();
+            unsafe {
+                let data = slice::from_raw_parts(buffer.data, buffer.size as usize);
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer.raw));
+                gl.buffer_sub_data_u8_slice(glow::ARRAY_BUFFER, 0, data);
+            }
         }
     }
 

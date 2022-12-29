@@ -66,12 +66,10 @@ impl super::Context {
             let msg = gl.get_shader_info_log(shader);
             assert!(compiled_ok, "Compile: {}", msg);
 
+            gl.attach_shader(program, shader);
             baked_shaders.push((shader, reflection));
         }
 
-        for &(shader, _) in baked_shaders.iter() {
-            gl.attach_shader(program, shader);
-        }
         gl.link_program(program);
         log::info!("\tLinked program {:?}", program);
 
@@ -88,6 +86,7 @@ impl super::Context {
             })
             .collect::<Box<[_]>>();
 
+        let force_uniform_block_assignment = true;
         let mut variables_to_bind = Vec::new();
         for (sf, &(shader, ref reflection)) in shaders.iter().zip(baked_shaders.iter()) {
             for (glsl_name, mapping) in reflection.texture_mapping.iter() {
@@ -120,7 +119,7 @@ impl super::Context {
                 let targets = &mut bind_group_infos[group_index].targets[binding_index];
                 match group_layouts[group_index].bindings[binding_index].1 {
                     crate::ShaderBinding::Texture | crate::ShaderBinding::Sampler => {
-                        if let Some(ref location) = gl.get_uniform_location(program, name) {
+                        if let Some(ref location) = gl.get_uniform_location(program, glsl_name) {
                             let mut slots = [0i32];
                             gl.get_uniform_i32(program, location, &mut slots);
                             targets.push(slots[0] as u32);
@@ -139,12 +138,17 @@ impl super::Context {
                     }
                     crate::ShaderBinding::Plain { .. } => {
                         if let Some(index) = gl.get_uniform_block_index(program, glsl_name) {
-                            let slot = gl.get_active_uniform_block_parameter_i32(
-                                program,
-                                index,
-                                glow::UNIFORM_BLOCK_BINDING,
-                            );
-                            targets.push(slot as u32);
+                            let slot = if force_uniform_block_assignment {
+                                gl.uniform_block_binding(program, index, index);
+                                index
+                            } else {
+                                gl.get_active_uniform_block_parameter_i32(
+                                    program,
+                                    index,
+                                    glow::UNIFORM_BLOCK_BINDING,
+                                ) as u32
+                            };
+                            targets.push(slot);
                         }
                     }
                 }

@@ -167,6 +167,8 @@ impl super::PassEncoder<'_, super::ComputePipeline> {
         &'b mut self,
         pipeline: &'b super::ComputePipeline,
     ) -> super::PipelineEncoder<'b> {
+        self.commands
+            .push(super::Command::SetProgram(pipeline.inner.program));
         super::PipelineEncoder {
             commands: self.commands,
             plain_data: self.plain_data,
@@ -182,6 +184,8 @@ impl super::PassEncoder<'_, super::RenderPipeline> {
         &'b mut self,
         pipeline: &'b super::RenderPipeline,
     ) -> super::PipelineEncoder<'b> {
+        self.commands
+            .push(super::Command::SetProgram(pipeline.inner.program));
         super::PipelineEncoder {
             commands: self.commands,
             plain_data: self.plain_data,
@@ -194,6 +198,7 @@ impl super::PassEncoder<'_, super::RenderPipeline> {
 
 impl<T> Drop for super::PassEncoder<'_, T> {
     fn drop(&mut self) {
+        self.commands.push(super::Command::UnsetProgram);
         for attachment in self.invalidate_attachments.drain(..) {
             self.commands
                 .push(super::Command::InvalidateAttachment(attachment));
@@ -678,7 +683,12 @@ impl super::Command {
             //SetDepth(DepthState),
             //SetDepthBias(wgt::DepthBiasState),
             //ConfigureDepthStencil(crate::FormatAspects),
-            Self::SetProgram(raw_program) => unimplemented!(),
+            Self::SetProgram(raw_program) => {
+                gl.use_program(Some(raw_program));
+            }
+            Self::UnsetProgram => {
+                gl.use_program(None);
+            }
             //SetPrimitive(PrimitiveState),
             Self::SetBlendConstant(constant) => unimplemented!(),
             Self::SetColorTarget {
@@ -699,12 +709,17 @@ impl super::Command {
                 slot,
                 ref buffer,
             } => unimplemented!(),
-            Self::BindSampler { slot, sampler } => unimplemented!(),
+            Self::BindSampler { slot, sampler } => {
+                gl.bind_sampler(slot, Some(sampler));
+            }
             Self::BindTexture {
                 slot,
                 texture,
                 target,
-            } => unimplemented!(),
+            } => {
+                gl.active_texture(glow::TEXTURE0 + slot);
+                gl.bind_texture(target, Some(texture));
+            }
             Self::BindImage { slot, ref binding } => unimplemented!(),
             Self::ResetAllSamplers => unimplemented!(),
         }

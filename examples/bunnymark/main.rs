@@ -132,6 +132,7 @@ impl Example {
                 texture_data.len(),
             );
         }
+        context.sync_buffer(upload_buffer);
 
         let sampler = context.create_sampler(blade::SamplerDesc {
             name: "main",
