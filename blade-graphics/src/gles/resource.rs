@@ -180,6 +180,7 @@ impl crate::traits::ResourceDevice for super::Context {
 
         super::Texture {
             inner,
+            target_size: [desc.size.width as u16, desc.size.height as u16],
             format: desc.format,
         }
     }
@@ -201,6 +202,7 @@ impl crate::traits::ResourceDevice for super::Context {
         //TODO: actual reinterpretation
         super::TextureView {
             inner: desc.texture.inner,
+            target_size: desc.texture.target_size,
             aspects: desc.format.aspects(),
         }
     }

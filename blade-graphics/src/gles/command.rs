@@ -15,8 +15,10 @@ impl<T: bytemuck::Pod> crate::ShaderBindable for T {
                 .resize(ctx.plain_data.len() - rem + alignment, 0);
         }
         let offset = ctx.plain_data.len() as u32;
-        let size = self_slice.len() as u32;
+        let size = super::round_up_uniform_size(self_slice.len() as u32);
         ctx.plain_data.extend_from_slice(self_slice);
+        ctx.plain_data
+            .extend((self_slice.len() as u32..size).map(|_| 0));
 
         for &slot in ctx.targets[index as usize].iter() {
             ctx.commands
@@ -75,7 +77,7 @@ impl super::CommandEncoder {
         super::PassEncoder {
             commands: &mut self.commands,
             plain_data: &mut self.plain_data,
-            is_render: false,
+            kind: super::PassKind::Transfer,
             invalidate_attachments: Vec::new(),
             pipeline: Default::default(),
             limits: &self.limits,
@@ -86,7 +88,7 @@ impl super::CommandEncoder {
         super::PassEncoder {
             commands: &mut self.commands,
             plain_data: &mut self.plain_data,
-            is_render: false,
+            kind: super::PassKind::Compute,
             invalidate_attachments: Vec::new(),
             pipeline: Default::default(),
             limits: &self.limits,
@@ -97,9 +99,11 @@ impl super::CommandEncoder {
         &mut self,
         targets: crate::RenderTargetSet,
     ) -> super::PassEncoder<super::RenderPipeline> {
+        let mut target_size = [0u16; 2];
         let mut invalidate_attachments = Vec::new();
         for (i, rt) in targets.colors.iter().enumerate() {
             let attachment = glow::COLOR_ATTACHMENT0 + i as u32;
+            target_size = rt.view.target_size;
             self.commands.push(super::Command::BindAttachment {
                 attachment,
                 view: rt.view,
@@ -114,6 +118,7 @@ impl super::CommandEncoder {
                 crate::TexelAspects::STENCIL => glow::STENCIL_ATTACHMENT,
                 _ => glow::DEPTH_STENCIL_ATTACHMENT,
             };
+            target_size = rt.view.target_size;
             self.commands.push(super::Command::BindAttachment {
                 attachment,
                 view: rt.view,
@@ -122,9 +127,15 @@ impl super::CommandEncoder {
                 invalidate_attachments.push(attachment);
             }
         }
+
         self.commands.push(super::Command::SetDrawColorBuffers(
             targets.colors.len() as _
         ));
+        self.commands.push(super::Command::SetViewport {
+            size: target_size,
+            depth: 0.0..1.0,
+        });
+
         // issue the clears
         for (i, rt) in targets.colors.iter().enumerate() {
             if let crate::InitOp::Clear(color) = rt.init_op {
@@ -154,7 +165,7 @@ impl super::CommandEncoder {
         super::PassEncoder {
             commands: &mut self.commands,
             plain_data: &mut self.plain_data,
-            is_render: true,
+            kind: super::PassKind::Render,
             invalidate_attachments,
             pipeline: Default::default(),
             limits: &self.limits,
@@ -203,8 +214,15 @@ impl<T> Drop for super::PassEncoder<'_, T> {
             self.commands
                 .push(super::Command::InvalidateAttachment(attachment));
         }
-        if self.is_render {
-            self.commands.push(super::Command::ResetFramebuffer);
+        match self.kind {
+            super::PassKind::Transfer => {}
+            super::PassKind::Compute => {
+                self.commands.push(super::Command::ResetAllSamplers);
+            }
+            super::PassKind::Render => {
+                self.commands.push(super::Command::ResetAllSamplers);
+                self.commands.push(super::Command::ResetFramebuffer);
+            }
         }
     }
 }
@@ -664,10 +682,10 @@ impl super::Command {
                 (None, None) => (),
             },
             Self::Barrier => unimplemented!(),
-            Self::SetViewport {
-                ref rect,
-                ref depth,
-            } => unimplemented!(),
+            Self::SetViewport { size, ref depth } => {
+                gl.viewport(0, 0, size[0] as i32, size[1] as i32);
+                gl.depth_range_f32(depth.start, depth.end);
+            }
             Self::SetScissor(ref rect) => unimplemented!(),
             Self::SetStencilFunc {
                 face,
@@ -721,7 +739,12 @@ impl super::Command {
                 gl.bind_texture(target, Some(texture));
             }
             Self::BindImage { slot, ref binding } => unimplemented!(),
-            Self::ResetAllSamplers => unimplemented!(),
+            Self::ResetAllSamplers => {
+                gl.active_texture(glow::TEXTURE0);
+                for slot in 0..4 {
+                    gl.bind_sampler(slot, None);
+                }
+            }
         }
     }
 }
