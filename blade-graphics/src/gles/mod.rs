@@ -41,7 +41,6 @@ enum TextureInner {
     Renderbuffer {
         raw: glow::Renderbuffer,
     },
-    DefaultRenderbuffer,
     Texture {
         raw: glow::Texture,
         target: BindTarget,
@@ -51,7 +50,7 @@ enum TextureInner {
 impl TextureInner {
     fn as_native(&self) -> (glow::Texture, BindTarget) {
         match *self {
-            Self::Renderbuffer { .. } | Self::DefaultRenderbuffer => {
+            Self::Renderbuffer { .. } => {
                 panic!("Unexpected renderbuffer");
             }
             Self::Texture { raw, target } => (raw, target),
@@ -372,9 +371,11 @@ impl crate::traits::CommandDevice for Context {
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         {
             use glow::HasContext as _;
+
             let gl = self.lock();
+            let push_group = !encoder.name.is_empty() && gl.supports_debug();
             let ec = unsafe {
-                if !encoder.name.is_empty() {
+                if push_group {
                     gl.push_debug_group(glow::DEBUG_SOURCE_APPLICATION, DEBUG_ID, &encoder.name);
                 }
                 let framebuf = gl.create_framebuffer().unwrap();
@@ -401,7 +402,7 @@ impl crate::traits::CommandDevice for Context {
             unsafe {
                 gl.delete_framebuffer(ec.framebuf);
                 gl.delete_buffer(ec.plain_buffer);
-                if !encoder.name.is_empty() {
+                if push_group {
                     gl.pop_debug_group();
                 }
             }
