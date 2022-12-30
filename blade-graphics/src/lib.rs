@@ -26,15 +26,14 @@
 pub use naga::{StorageAccess, VectorSize};
 
 #[cfg_attr(
-    all(
-        not(portability),
-        not(gles),
-        any(target_os = "ios", target_os = "macos"),
-    ),
+    all(not(vulkan), not(gles), any(target_os = "ios", target_os = "macos")),
     path = "metal/mod.rs"
 )]
 #[cfg_attr(
-    any(portability, target_os = "linux", target_os = "android",),
+    all(
+        not(gles),
+        any(vulkan, windows, target_os = "linux", target_os = "android")
+    ),
     path = "vulkan/mod.rs"
 )]
 #[cfg_attr(any(gles, target_arch = "wasm32"), path = "gles/mod.rs")]
