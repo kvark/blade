@@ -10,24 +10,42 @@ jobs:
   build:
     strategy:
       matrix:
-        platform: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - name: Linux
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          
+          - name: Windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          
+          - name: MacOS
+            os: macos-latest
+            target: x86_64-apple-darwin
+          
+          - name: Web
+            os: ubuntu-latest
+            target: wasm32-unknown-unknown
 
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v3
     - uses: actions-rs/cargo@v1
 
-    - name: Select Rust channel
+    - name: Setup Rust
       uses: actions-rs/toolchain@v1
       with:
-          profile: minimal
           toolchain: stable
+          profile: minimal
+          target: ${{ matrix.target }}
+          override: true
 
     - name: Check Basics
-      run: cargo check --workspace --no-default-features
+      run: cargo check --target ${{ matrix.target }} --workspace --all --no-default-features
 
     - name: Test All
+      if: matrix.name != 'Web'
       run: cargo test --workspace --all-features
 
   fmt:

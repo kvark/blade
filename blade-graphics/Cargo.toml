@@ -22,7 +22,7 @@ metal = "0.24"
 objc = "0.2.5"
 naga = { workspace = true, features = ["msl-out"] }
 
-[target.'cfg(any(portability, target_os = "linux", target_os = "android"))'.dependencies]
+[target.'cfg(any(vulkan, windows, target_os = "linux", target_os = "android"))'.dependencies]
 ash = "0.37"
 ash-window = "0.12"
 gpu-alloc = "0.5"
