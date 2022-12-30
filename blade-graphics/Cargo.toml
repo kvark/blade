@@ -22,7 +22,7 @@ metal = "0.24"
 objc = "0.2.5"
 naga = { workspace = true, features = ["msl-out"] }
 
-[target.'cfg(any(portability, not(any(target_os = "ios", target_os = "macos"))))'.dependencies]
+[target.'cfg(any(portability, target_os = "linux", target_os = "android"))'.dependencies]
 ash = "0.37"
 ash-window = "0.12"
 gpu-alloc = "0.5"
@@ -30,10 +30,15 @@ gpu-alloc-ash = "0.5"
 naga = { workspace = true, features = ["spv-out"] }
 slab = "0.4"
 
-[target.'cfg(gles)'.dependencies]
+[target.'cfg(any(gles, target_arch = "wasm32"))'.dependencies]
 glow = { git = "https://github.com/kvark/glow", branch = "get-program-resource" }
 naga = { workspace = true, features = ["glsl-out"] }
 
 [target.'cfg(all(gles, not(target_arch = "wasm32")))'.dependencies]
 egl = { package = "khronos-egl", version = "4.1", features = ["dynamic"] }
 libloading = { version = "0.7" }
+
+[target.'cfg(all(target_arch = "wasm32"))'.dependencies]
+wasm-bindgen = "0.2.83"
+web-sys = { workspace = true, features = ["HtmlCanvasElement", "WebGl2RenderingContext"] }
+js-sys = "0.3.60"

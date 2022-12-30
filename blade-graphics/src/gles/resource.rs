@@ -1,5 +1,5 @@
 use glow::HasContext as _;
-use std::{mem, ptr, slice};
+use std::{ptr, slice};
 
 #[hidden_trait::expose]
 impl crate::traits::ResourceDevice for super::Context {
@@ -50,8 +50,9 @@ impl crate::traits::ResourceDevice for super::Context {
                 data = Vec::leak(data_vec).as_mut_ptr();
             }
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
+            #[cfg(not(target_arch = "wasm32"))]
             if !desc.name.is_empty() && gl.supports_debug() {
-                gl.object_label(glow::BUFFER, mem::transmute(raw), Some(desc.name));
+                gl.object_label(glow::BUFFER, std::mem::transmute(raw), Some(desc.name));
             }
         }
         super::Buffer {
@@ -107,8 +108,13 @@ impl crate::traits::ResourceDevice for super::Context {
                     desc.size.height as i32,
                 );
                 gl.bind_renderbuffer(glow::RENDERBUFFER, None);
+                #[cfg(not(target_arch = "wasm32"))]
                 if !desc.name.is_empty() && gl.supports_debug() {
-                    gl.object_label(glow::RENDERBUFFER, mem::transmute(raw), Some(desc.name));
+                    gl.object_label(
+                        glow::RENDERBUFFER,
+                        std::mem::transmute(raw),
+                        Some(desc.name),
+                    );
                 }
             }
             super::TextureInner::Renderbuffer { raw }
@@ -170,8 +176,9 @@ impl crate::traits::ResourceDevice for super::Context {
                 }
 
                 gl.bind_texture(target, None);
+                #[cfg(not(target_arch = "wasm32"))]
                 if !desc.name.is_empty() && gl.supports_debug() {
-                    gl.object_label(glow::TEXTURE, mem::transmute(raw), Some(desc.name));
+                    gl.object_label(glow::TEXTURE, std::mem::transmute(raw), Some(desc.name));
                 }
             }
 
@@ -191,7 +198,6 @@ impl crate::traits::ResourceDevice for super::Context {
             super::TextureInner::Renderbuffer { raw, .. } => unsafe {
                 gl.delete_renderbuffer(raw);
             },
-            super::TextureInner::DefaultRenderbuffer => {}
             super::TextureInner::Texture { raw, .. } => unsafe {
                 gl.delete_texture(raw);
             },
@@ -260,8 +266,9 @@ impl crate::traits::ResourceDevice for super::Context {
                 );
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             if !desc.name.is_empty() && gl.supports_debug() {
-                gl.object_label(glow::SAMPLER, mem::transmute(raw), Some(desc.name));
+                gl.object_label(glow::SAMPLER, std::mem::transmute(raw), Some(desc.name));
             }
         }
         super::Sampler { raw }

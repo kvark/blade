@@ -616,7 +616,6 @@ impl super::Command {
                         Some(raw),
                     );
                 }
-                super::TextureInner::DefaultRenderbuffer => panic!("Unexpected default RBO"),
                 super::TextureInner::Texture { raw, target } => {
                     let mip_level = 0; //TODO
                     gl.framebuffer_texture_2d(

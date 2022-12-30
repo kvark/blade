@@ -332,6 +332,7 @@ impl Context {
 
     pub fn resize(&self, config: crate::SurfaceConfig) -> crate::TextureFormat {
         use raw_window_handle::RawWindowHandle as Rwh;
+
         let wsi = self.wsi.as_ref().unwrap();
         let (mut temp_xlib_handle, mut temp_xcb_handle);
         #[allow(trivial_casts)]

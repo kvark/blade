@@ -1,6 +1,5 @@
 use glow::HasContext as _;
 use naga::back::glsl;
-use std::mem;
 
 impl super::Context {
     unsafe fn create_pipeline(
@@ -12,8 +11,9 @@ impl super::Context {
         let gl = self.lock();
 
         let program = gl.create_program().unwrap();
+        #[cfg(not(target_arch = "wasm32"))]
         if !name.is_empty() && gl.supports_debug() {
-            gl.object_label(glow::PROGRAM, mem::transmute(program), Some(name));
+            gl.object_label(glow::PROGRAM, std::mem::transmute(program), Some(name));
         }
 
         let naga_options = glsl::Options {
@@ -76,6 +76,7 @@ impl super::Context {
         let linked_ok = gl.get_program_link_status(program);
         let msg = gl.get_program_info_log(program);
         assert!(linked_ok, "Link: {}", msg);
+        gl.use_program(Some(program));
 
         //type NameList = Vec<String>;
         //type BindingNames = Vec<NameList>;
@@ -170,6 +171,7 @@ impl super::Context {
 
             gl.delete_shader(shader);
         }
+        gl.use_program(None);
 
         super::PipelineInner {
             program,

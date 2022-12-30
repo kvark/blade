@@ -1,11 +1,11 @@
 #![allow(irrefutable_let_patterns)]
 
 use bytemuck::{Pod, Zeroable};
-use std::{ptr, time};
+use std::ptr;
 
 const BUNNY_SIZE: f32 = 0.15 * 256.0;
 const GRAVITY: f32 = -9.8 * 100.0;
-const MAX_VELOCITY: f32 = 750.0;
+const MAX_VELOCITY: i32 = 750;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -45,7 +45,7 @@ struct Example {
     sampler: blade::Sampler,
     window_size: winit::dpi::PhysicalSize<u32>,
     bunnies: Vec<Sprite>,
-    rng: rand::rngs::ThreadRng,
+    rng: nanorand::WyRand,
     context: blade::Context,
 }
 
@@ -75,6 +75,9 @@ impl Example {
 
         let global_layout = <Params as blade::ShaderData>::layout();
         let local_layout = <Sprite as blade::ShaderData>::layout();
+        #[cfg(target_arch = "wasm32")]
+        let shader_source = include_str!("shader.wgsl");
+        #[cfg(not(target_arch = "wasm32"))]
         let shader_source = std::fs::read_to_string("examples/bunnymark/shader.wgsl").unwrap();
         let shader = context.create_shader(blade::ShaderDesc {
             source: &shader_source,
@@ -172,21 +175,21 @@ impl Example {
             sampler,
             window_size,
             bunnies,
-            rng: rand::thread_rng(),
+            rng: nanorand::WyRand::new_seed(73),
             context,
         }
     }
 
     fn increase(&mut self) {
-        use rand::{Rng as _, RngCore as _};
+        use nanorand::Rng as _;
         let spawn_count = 64 + self.bunnies.len() / 2;
         for _ in 0..spawn_count {
-            let speed = self.rng.gen_range(-1.0..=1.0) * MAX_VELOCITY;
+            let speed = self.rng.generate_range(-MAX_VELOCITY..=MAX_VELOCITY) as f32;
             self.bunnies.push(Sprite {
                 locals: Locals {
                     position: [0.0, 0.5 * (self.window_size.height as f32)],
                     velocity: [speed, 0.0],
-                    color: self.rng.next_u32(),
+                    color: self.rng.generate::<u32>(),
                     pad: 0,
                 },
             });
@@ -271,6 +274,7 @@ impl Example {
 }
 
 fn main() {
+    #[cfg(not(target_arch = "wasm32"))]
     env_logger::init();
 
     let event_loop = winit::event_loop::EventLoop::new();
@@ -279,8 +283,31 @@ fn main() {
         .build(&event_loop)
         .unwrap();
 
+    #[cfg(target_arch = "wasm32")]
+    {
+        use winit::platform::web::WindowExtWebSys as _;
+
+        std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+        console_log::init().expect("could not initialize logger");
+        // On wasm, append the canvas to the document body
+        web_sys::window()
+            .and_then(|win| win.document())
+            .and_then(|doc| doc.body())
+            .and_then(|body| {
+                body.append_child(&web_sys::Element::from(window.canvas()))
+                    .ok()
+            })
+            .expect("couldn't append canvas to document body");
+    }
+
     let mut example = Example::new(&window);
-    let mut last_snapshot = time::Instant::now();
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut last_snapshot = std::time::Instant::now();
+    #[cfg(target_arch = "wasm32")]
+    {
+        example.increase();
+        example.increase();
+    }
     let mut frame_count = 0;
 
     event_loop.run(move |event, _, control_flow| {
@@ -291,6 +318,7 @@ fn main() {
                 window.request_redraw();
             }
             winit::event::Event::WindowEvent { event, .. } => match event {
+                #[cfg(not(target_arch = "wasm32"))]
                 winit::event::WindowEvent::KeyboardInput {
                     input:
                         winit::event::KeyboardInput {
@@ -315,13 +343,14 @@ fn main() {
             },
             winit::event::Event::RedrawRequested(_) => {
                 frame_count += 1;
+                #[cfg(not(target_arch = "wasm32"))]
                 if frame_count == 100 {
                     let accum_time = last_snapshot.elapsed().as_secs_f32();
                     println!(
                         "Avg frame time {}ms",
                         accum_time * 1000.0 / frame_count as f32
                     );
-                    last_snapshot = time::Instant::now();
+                    last_snapshot = std::time::Instant::now();
                     frame_count = 0;
                 }
                 example.step(0.01);

@@ -29,18 +29,15 @@ pub use naga::{StorageAccess, VectorSize};
     all(
         not(portability),
         not(gles),
-        any(target_os = "ios", target_os = "macos")
+        any(target_os = "ios", target_os = "macos"),
     ),
     path = "metal/mod.rs"
 )]
 #[cfg_attr(
-    any(
-        portability,
-        all(not(gles), not(target_os = "ios"), not(target_os = "macos"))
-    ),
+    any(portability, target_os = "linux", target_os = "android",),
     path = "vulkan/mod.rs"
 )]
-#[cfg_attr(all(gles, not(portability)), path = "gles/mod.rs")]
+#[cfg_attr(any(gles, target_arch = "wasm32"), path = "gles/mod.rs")]
 mod hal;
 mod shader;
 mod traits;
@@ -187,6 +184,16 @@ pub struct Extent {
     pub width: u32,
     pub height: u32,
     pub depth: u32,
+}
+
+impl Default for Extent {
+    fn default() -> Self {
+        Self {
+            width: 1,
+            height: 1,
+            depth: 1,
+        }
+    }
 }
 
 impl Extent {
