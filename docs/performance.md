@@ -23,6 +23,15 @@ Windows/Vulkan:
   - wgpu-hal starts at 60K bunnies
   - wgpu starts at 20K bunnies
 
+## Thinkpad Z13 gen1
+
+GPU: Ryzen 6850U
+
+Windows/Vulkan:
+  - Blade starts at around 50K bunnies
+  - wgpu-hal starts at 50K bunnies (also GPU-limited)
+  - wgpu starts at around 15K bunnies
+
 ## Conclusions
 
 Amazingly, Blade performance in the worst case scenario is on par with wgpu (but still far from wgpu-hal). This is the best outcome we could hope for.

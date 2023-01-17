@@ -73,7 +73,11 @@ struct Surface {
 }
 
 fn map_timeout(millis: u32) -> u64 {
-    millis as u64 * 1_000_000
+    if millis == !0 {
+        !0
+    } else {
+        millis as u64 * 1_000_000
+    }
 }
 
 pub struct Context {
@@ -607,7 +611,7 @@ impl crate::traits::CommandDevice for Context {
     fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
         //TODO: these numbers are arbitrary, needs to be replaced by
         // an abstraction from gpu-alloc, if possible.
-        const ROUGH_SET_COUNT: u32 = 50000;
+        const ROUGH_SET_COUNT: u32 = 60000;
         const DESCRIPTOR_SIZES: &[vk::DescriptorPoolSize] = &[
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,

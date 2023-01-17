@@ -140,8 +140,7 @@ impl System {
 
     pub fn update(&self, encoder: &mut blade::CommandEncoder) {
         let main_data = self.main_data();
-        let mut pass = encoder.compute();
-        {
+        if let mut pass = encoder.compute() {
             let mut pc = pass.with(&self.update_pipeline);
             pc.bind(0, &main_data);
             pc.bind(
@@ -157,7 +156,8 @@ impl System {
             let group_count = self.capacity as u32 / group_size[0];
             pc.dispatch([group_count, 1, 1]);
         }
-        {
+        // new pass because both pipelines use the free list
+        if let mut pass = encoder.compute() {
             let mut pc = pass.with(&self.emit_pipeline);
             pc.bind(0, &main_data);
             pc.dispatch([1, 1, 1]); //TODO
@@ -186,5 +186,6 @@ impl System {
 
     pub fn delete(self, context: &blade::Context) {
         context.destroy_buffer(self.particle_buf);
+        context.destroy_buffer(self.free_list_buf);
     }
 }

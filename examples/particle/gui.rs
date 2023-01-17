@@ -62,6 +62,11 @@ impl GuiTexture {
         });
         Self { allocation, view }
     }
+
+    fn delete(self, context: &blade::Context) {
+        context.destroy_texture(self.allocation);
+        context.destroy_texture_view(self.view);
+    }
 }
 
 //TODO: resource deletion
@@ -80,6 +85,10 @@ pub struct GuiPainter {
 
 impl GuiPainter {
     pub fn delete(self, context: &blade::Context) {
+        self.belt.delete(context);
+        for (_, gui_texture) in self.textures {
+            gui_texture.delete(context);
+        }
         context.destroy_sampler(self.sampler);
     }
 
@@ -156,7 +165,7 @@ impl GuiPainter {
             return;
         }
 
-        let mut transfer = command_encoder.transfer();
+        let mut copies = Vec::new();
         for (texture_id, image_delta) in textures_delta.set.iter() {
             let src = match image_delta.image {
                 egui::ImageData::Color(ref c) => self.belt.alloc_data(c.pixels.as_slice(), context),
@@ -193,6 +202,7 @@ impl GuiPainter {
                 Entry::Occupied(mut o) => {
                     if image_delta.pos.is_none() {
                         let texture = GuiTexture::create(context, &label, extent);
+                        command_encoder.init_texture(texture.allocation);
                         let old = o.insert(texture);
                         self.textures_dropped.push(old);
                     }
@@ -200,6 +210,7 @@ impl GuiPainter {
                 }
                 Entry::Vacant(v) => {
                     let texture = GuiTexture::create(context, &label, extent);
+                    command_encoder.init_texture(texture.allocation);
                     v.insert(texture)
                 }
             };
@@ -213,7 +224,13 @@ impl GuiPainter {
                     None => [0; 3],
                 },
             };
-            transfer.copy_buffer_to_texture(src, 4 * extent.width, dst, extent);
+            copies.push((src, dst, extent));
+        }
+
+        if let mut transfer = command_encoder.transfer() {
+            for (src, dst, extent) in copies {
+                transfer.copy_buffer_to_texture(src, 4 * extent.width, dst, extent);
+            }
         }
 
         for texture_id in textures_delta.free.iter() {

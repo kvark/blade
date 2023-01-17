@@ -223,7 +223,7 @@ impl super::CommandEncoder {
         });
 
         let barrier = vk::ImageMemoryBarrier::builder()
-            .old_layout(vk::ImageLayout::UNDEFINED)
+            .old_layout(vk::ImageLayout::GENERAL)
             .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
             .image(frame.image)
             .subresource_range(vk::ImageSubresourceRange {

@@ -23,6 +23,15 @@ impl BufferBelt {
         }
     }
 
+    pub fn delete(self, context: &blade::Context) {
+        for (buffer, _) in self.buffers {
+            context.destroy_buffer(buffer.raw);
+        }
+        for (buffer, _) in self.active {
+            context.destroy_buffer(buffer.raw);
+        }
+    }
+
     pub fn alloc(&mut self, size: u64, context: &blade::Context) -> blade::BufferPiece {
         for &mut (ref rb, ref mut offset) in self.active.iter_mut() {
             if *offset + size <= rb.size {

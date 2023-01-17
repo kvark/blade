@@ -339,9 +339,10 @@ impl super::Context {
 
         let stages = [vs.create_info, fs.create_info];
         let vk_vertex_input = vk::PipelineVertexInputStateCreateInfo::builder().build();
+        let (raw_topology, supports_restart) = map_primitive_topology(desc.primitive.topology);
         let vk_input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
-            .topology(map_primitive_topology(desc.primitive.topology))
-            .primitive_restart_enable(true)
+            .topology(raw_topology)
+            .primitive_restart_enable(supports_restart)
             .build();
         let mut vk_rasterization = vk::PipelineRasterizationStateCreateInfo::builder()
             .polygon_mode(if desc.primitive.wireframe {
@@ -492,14 +493,14 @@ fn map_shader_visibility(visibility: crate::ShaderVisibility) -> vk::ShaderStage
     flags
 }
 
-fn map_primitive_topology(topology: crate::PrimitiveTopology) -> vk::PrimitiveTopology {
+fn map_primitive_topology(topology: crate::PrimitiveTopology) -> (vk::PrimitiveTopology, bool) {
     use crate::PrimitiveTopology as Pt;
     match topology {
-        Pt::PointList => vk::PrimitiveTopology::POINT_LIST,
-        Pt::LineList => vk::PrimitiveTopology::LINE_LIST,
-        Pt::LineStrip => vk::PrimitiveTopology::LINE_STRIP,
-        Pt::TriangleList => vk::PrimitiveTopology::TRIANGLE_LIST,
-        Pt::TriangleStrip => vk::PrimitiveTopology::TRIANGLE_STRIP,
+        Pt::PointList => (vk::PrimitiveTopology::POINT_LIST, false),
+        Pt::LineList => (vk::PrimitiveTopology::LINE_LIST, false),
+        Pt::LineStrip => (vk::PrimitiveTopology::LINE_STRIP, true),
+        Pt::TriangleList => (vk::PrimitiveTopology::TRIANGLE_LIST, false),
+        Pt::TriangleStrip => (vk::PrimitiveTopology::TRIANGLE_STRIP, true),
     }
 }
 
