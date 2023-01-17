@@ -1,10 +1,12 @@
 # Blade
 
+[![Matrix](https://img.shields.io/static/v1?label=dev&message=%23blade&color=blueviolet&logo=matrix)](https://matrix.to/#/#blade-dev:matrix.org)
+[![Build Status](https://github.com/kvark/blade/workflows/check/badge.svg)](https://github.com/kvark/blade/actions)
+
 ![](logo.png)
 
 Blade is a low-level GPU library in Rust with the focus on ergonomics.
-In other words, Blade is an attempt to make graphics programming fun with Rust.
-It doesn't try to be comprehensive or safe, use at your own risk!
+It's unsafe, it's incomprehensive, but it's small, fast, and actually fun to prototype with!
 
 See [motivation](motivation.md), [FAQ](FAQ.md), and [performance](performance.md) for more info.
 
