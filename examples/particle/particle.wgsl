@@ -5,7 +5,8 @@ struct Particle {
     color: u32,
     pos_vel: vec2<f32>,
     rot_vel: f32,
-    age: u32,
+    life: f32,
+    generation: u32,
 }
 var<storage,read_write> particles: array<Particle>;
 
@@ -30,27 +31,43 @@ fn reset(
     }
 }
 
+struct Parameters {
+    life: f32,
+    velocity: f32,
+    scale: f32,
+}
+var<uniform> parameters: Parameters;
 struct UpdateParams {
     time_delta: f32,
-    max_age: u32,
 }
 var<uniform> update_params: UpdateParams;
 
+var<workgroup> emit_end: i32;
+
 @compute @workgroup_size(64, 1, 1)
-fn emit(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let end_offset = atomicSub(&free_list.count, 64);
-    if (end_offset < 64) {
-        atomicAdd(&free_list.count, 64 - max(0, end_offset));
+fn emit(@builtin(local_invocation_index) local_index: u32) {
+    if (local_index == 0u) {
+        emit_end = atomicSub(&free_list.count, 64);
+        if (emit_end < 64) {
+            atomicAdd(&free_list.count, 64 - max(0, emit_end));
+        }
     }
     workgroupBarrier();
-    let list_index = end_offset - 1 - i32(global_id.x);
+
+    let list_index = emit_end - 1 - i32(local_index);
     if (list_index >= 0) {
         var p: Particle;
-        p.scale = f32((list_index + 1123) % 10);
-        p.color = 0xFFFFFFFFu;
-        p.pos_vel = vec2<f32>((vec2<i32>(list_index) + vec2<i32>(123, 178)) % vec2<i32>(80) - vec2<i32>(40));
-        p.rot_vel = f32((list_index + 189) % 1);
         let p_index = free_list.data[list_index];
+        p.generation += 1u;
+        let random = i32(p_index * p.generation);
+        p.life = max(1.0, parameters.life * f32((random + 17) % 20) / 20.0);
+        p.scale = max(0.1, parameters.scale * f32((random + 13) % 10) / 10.0);
+        p.color = ((p_index * 12345678u + p.generation * 912123u) << 8u) | 0xFFu;
+        let angle = f32(random) * 0.3;
+        let a_sin = sin(angle);
+        let a_cos = cos(angle);
+        p.pos_vel = parameters.velocity * vec2<f32>(a_cos, a_sin);
+        p.rot_vel = f32((list_index + 189) % 10);
         particles[p_index] = p;
     }
 }
@@ -61,8 +78,8 @@ fn update(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if ((*p).scale != 0.0) {
         (*p).pos += (*p).pos_vel * update_params.time_delta;
         (*p).rot += (*p).rot_vel * update_params.time_delta;
-        (*p).age += 1u;
-        if ((*p).age >= update_params.max_age) {
+        (*p).life -= update_params.time_delta;
+        if ((*p).life < 0.0) {
             let list_index = atomicAdd(&free_list.count, 1);
             free_list.data[list_index] = global_id.x;
             (*p).scale = 0.0;
@@ -102,7 +119,8 @@ fn draw_vs(
     let particle = particles[instance_index];
     var out: VertexOutput;
     let zero_one_pos = vec2<f32>(vec2<u32>(vertex_index&1u, vertex_index>>1u));
-    let emitter_pos = particle.scale * (2.0 * zero_one_pos - vec2<f32>(1.0)) + particle.pos;
+    let pt = Transform2D(particle.pos, particle.scale, particle.rot);
+    let emitter_pos = transform(pt, 2.0 * zero_one_pos - vec2<f32>(1.0));
     let world_pos = transform(draw_params.t_emitter, emitter_pos);
     out.proj_pos = vec4<f32>((world_pos - draw_params.screen_center) / draw_params.screen_extent, 0.0, 1.0);
     out.color = particle.color;

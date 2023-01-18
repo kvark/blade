@@ -40,7 +40,7 @@ impl Example {
             &context,
             particle::SystemDesc {
                 name: "particle system",
-                capacity: 10000,
+                capacity: 100000,
                 draw_format: surface_format,
             },
         );
@@ -60,6 +60,14 @@ impl Example {
             gui_painter,
             particle_system,
         }
+    }
+
+    fn delete(self) {
+        if let Some(sp) = self.prev_sync_point {
+            self.context.wait_for(&sp, !0);
+        }
+        self.gui_painter.delete(&self.context);
+        self.particle_system.delete(&self.context);
     }
 
     fn render(
@@ -98,14 +106,6 @@ impl Example {
             self.context.wait_for(&sp, !0);
         }
         self.prev_sync_point = Some(sync_point);
-    }
-
-    fn delete(self) {
-        if let Some(sp) = self.prev_sync_point {
-            self.context.wait_for(&sp, !0);
-        }
-        self.gui_painter.delete(&self.context);
-        self.particle_system.delete(&self.context);
     }
 }
 
@@ -164,7 +164,8 @@ fn main() {
                 let raw_input = egui_winit.take_egui_input(&window);
                 let egui_output = egui_ctx.run(raw_input, |egui_ctx| {
                     egui::SidePanel::left("my_side_panel").show(egui_ctx, |ui| {
-                        ui.heading("Hello World!");
+                        ui.heading("Particle System");
+                        example.as_mut().unwrap().particle_system.add_gui(ui);
                         if ui.button("Quit").clicked() {
                             quit = true;
                         }

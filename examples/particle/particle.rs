@@ -1,7 +1,16 @@
 use blade::RenderCommandEncoder;
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct Parameters {
+    pub life: f32,
+    pub velocity: f32,
+    pub scale: f32,
+}
+
 pub struct System {
     capacity: usize,
+    pub params: Parameters,
     particle_buf: blade::Buffer,
     free_list_buf: blade::Buffer,
     reset_pipeline: blade::ComputePipeline,
@@ -26,12 +35,12 @@ struct MainData {
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct UpdateParams {
     time_delta: f32,
-    max_age: u32,
 }
 
 #[derive(blade::ShaderData)]
 struct UpdateData {
     update_params: UpdateParams,
+    parameters: Parameters,
 }
 
 #[repr(C)]
@@ -73,7 +82,7 @@ impl System {
         });
         let emit_pipeline = context.create_compute_pipeline(blade::ComputePipelineDesc {
             name: &format!("{} - emit", desc.name),
-            data_layouts: &[&main_layout],
+            data_layouts: &[&main_layout, &update_layout],
             compute: shader.at("emit"),
         });
         let update_pipeline = context.create_compute_pipeline(blade::ComputePipelineDesc {
@@ -113,6 +122,11 @@ impl System {
 
         Self {
             capacity,
+            params: Parameters {
+                life: 5.0,
+                velocity: 250.0,
+                scale: 15.0,
+            },
             particle_buf,
             free_list_buf,
             reset_pipeline,
@@ -120,6 +134,11 @@ impl System {
             update_pipeline,
             draw_pipeline,
         }
+    }
+
+    pub fn delete(self, context: &blade::Context) {
+        context.destroy_buffer(self.particle_buf);
+        context.destroy_buffer(self.free_list_buf);
     }
 
     fn main_data(&self) -> MainData {
@@ -146,10 +165,8 @@ impl System {
             pc.bind(
                 1,
                 &UpdateData {
-                    update_params: UpdateParams {
-                        time_delta: 0.01,
-                        max_age: 10000,
-                    },
+                    update_params: UpdateParams { time_delta: 0.01 },
+                    parameters: self.params,
                 },
             );
             let group_size = self.update_pipeline.get_workgroup_size();
@@ -160,7 +177,7 @@ impl System {
         if let mut pass = encoder.compute() {
             let mut pc = pass.with(&self.emit_pipeline);
             pc.bind(0, &main_data);
-            pc.dispatch([1, 1, 1]); //TODO
+            pc.dispatch([1, 1, 1]);
         }
     }
 
@@ -184,8 +201,9 @@ impl System {
         pc.draw(0, 4, 0, self.capacity as u32);
     }
 
-    pub fn delete(self, context: &blade::Context) {
-        context.destroy_buffer(self.particle_buf);
-        context.destroy_buffer(self.free_list_buf);
+    pub fn add_gui(&mut self, ui: &mut egui::Ui) {
+        ui.add(egui::Slider::new(&mut self.params.life, 0.1..=10.0).text("life"));
+        ui.add(egui::Slider::new(&mut self.params.velocity, 1.0..=500.0).text("velocity"));
+        ui.add(egui::Slider::new(&mut self.params.scale, 0.1..=50.0).text("scale"));
     }
 }

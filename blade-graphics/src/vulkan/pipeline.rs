@@ -104,8 +104,9 @@ impl super::Context {
 
             assert!(
                 var.binding.is_some(),
-                "Unable to resolve binding for '{}'",
-                var_name
+                "Unable to resolve binding for '{}' in the entry point '{}'",
+                var_name,
+                sf.entry_point,
             );
         }
 
