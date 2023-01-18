@@ -10,6 +10,8 @@ It's unsafe, it's incomprehensive, but it's small, fast, and actually fun to pro
 
 See [motivation](motivation.md), [FAQ](FAQ.md), and [performance](performance.md) for more info.
 
+![](particles.png)
+
 ## Platforms
 
 The backend is selected automatically based on the host platform.
