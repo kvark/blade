@@ -40,7 +40,7 @@ impl Example {
             &context,
             particle::SystemDesc {
                 name: "particle system",
-                capacity: 100000,
+                capacity: 100_000,
                 draw_format: surface_format,
             },
         );

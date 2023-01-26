@@ -287,6 +287,7 @@ impl super::Context {
             binding_map: spv::BindingMap::default(),
             capabilities: None,
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
+            zero_initialize_workgroup_memory: spv::ZeroInitializeWorkgroupMemoryMode::None,
         };
 
         let cs = self.load_shader(desc.compute, &options, desc.data_layouts, &mut group_infos);
@@ -331,6 +332,7 @@ impl super::Context {
             binding_map: spv::BindingMap::default(),
             capabilities: None,
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
+            zero_initialize_workgroup_memory: spv::ZeroInitializeWorkgroupMemoryMode::None,
         };
 
         let vs = self.load_shader(desc.vertex, &options, desc.data_layouts, &mut group_infos);
