@@ -2,6 +2,10 @@
 name = "blade-macros"
 version = "0.1.0"
 edition = "2021"
+description = "Macros helpers for Blade users"
+keywords = ["proc-macro"]
+license = "MIT"
+repository = "https://github.com/kvark/blade"
 
 [lib]
 proc-macro = true

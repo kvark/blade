@@ -127,14 +127,13 @@ impl super::Context {
                         }
                     }
                     crate::ShaderBinding::Buffer => {
-                        if let Some(index) = gl.get_shader_storage_block_index(program, glsl_name) {
-                            let params = gl.get_program_resource_i32(
-                                program,
-                                glow::SHADER_STORAGE_BLOCK,
-                                index,
-                                &[glow::BUFFER_BINDING],
-                            );
-                            targets.push(params[0] as u32);
+                        if let Some(_index) = gl.get_shader_storage_block_index(program, glsl_name)
+                        {
+                            // Temporary workaround to publish v0.1
+                            // can't use https://github.com/grovesNL/glow/pull/237
+                            //let params = gl.get_program_resource_i32(..);
+                            //targets.push(params[0] as u32);
+                            unimplemented!()
                         }
                     }
                     crate::ShaderBinding::Plain { size } => {

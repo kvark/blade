@@ -1,7 +1,11 @@
 [package]
 name = "blade-graphics"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
+description = "Graphics abstraction for Blade"
+keywords = ["graphics"]
+license = "MIT"
+repository = "https://github.com/kvark/blade"
 
 [lib]
 
@@ -31,7 +35,9 @@ naga = { workspace = true, features = ["spv-out"] }
 slab = "0.4"
 
 [target.'cfg(any(gles, target_arch = "wasm32"))'.dependencies]
-glow = { git = "https://github.com/kvark/glow", branch = "get-program-resource" }
+#Temporary workaround to publish v0.1
+#glow = { git = "https://github.com/kvark/glow", branch = "get-program-resource" }
+glow = "0.12"
 naga = { workspace = true, features = ["glsl-out"] }
 
 [target.'cfg(all(gles, not(target_arch = "wasm32")))'.dependencies]

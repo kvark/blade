@@ -293,6 +293,7 @@ impl super::Context {
                 },
             },
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
+            zero_initialize_workgroup_memory: false,
         };
 
         let pipeline_options = msl::PipelineOptions {
