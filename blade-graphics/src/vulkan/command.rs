@@ -432,6 +432,16 @@ impl<'a> super::ComputeCommandEncoder<'a> {
         }
         .init(pipeline.raw)
     }
+
+    //TODO: move into the trait
+    pub fn build_acceleration_structure(&mut self) {
+        let rt = self.device.ray_tracing.as_ref().unwrap();
+        unsafe {
+            //TODO: actual arguments
+            rt.acceleration_structure
+                .cmd_build_acceleration_structures(self.cmd_buf.raw, &[], &[]);
+        }
+    }
 }
 
 impl<'a> super::RenderCommandEncoder<'a> {

@@ -16,10 +16,16 @@ struct Instance {
 }
 
 #[derive(Clone)]
+struct RayTracingDevice {
+    acceleration_structure: khr::AccelerationStructure,
+}
+
+#[derive(Clone)]
 struct Device {
     core: ash::Device,
     timeline_semaphore: khr::TimelineSemaphore,
     dynamic_rendering: khr::DynamicRendering,
+    ray_tracing: Option<RayTracingDevice>,
 }
 
 struct MemoryManager {
@@ -132,6 +138,11 @@ pub struct Sampler {
     raw: vk::Sampler,
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
+pub struct AccelerationStructure {
+    raw: vk::AccelerationStructureKHR,
+}
+
 #[derive(Debug, Default)]
 struct DescriptorSetLayout {
     raw: vk::DescriptorSetLayout,
@@ -216,7 +227,9 @@ pub struct SyncPoint {
 }
 
 struct AdapterCapabilities {
+    api_version: u32,
     properties: vk::PhysicalDeviceProperties,
+    ray_tracing: bool,
 }
 
 unsafe fn inspect_adapter(
@@ -228,9 +241,15 @@ unsafe fn inspect_adapter(
         vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
     let mut timeline_semaphore_properties =
         vk::PhysicalDeviceTimelineSemaphorePropertiesKHR::default();
+    let mut descriptor_indexing_properties =
+        vk::PhysicalDeviceDescriptorIndexingPropertiesEXT::default();
+    let mut acceleration_structure_properties =
+        vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
     let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::builder()
         .push_next(&mut inline_uniform_block_properties)
-        .push_next(&mut timeline_semaphore_properties);
+        .push_next(&mut timeline_semaphore_properties)
+        .push_next(&mut descriptor_indexing_properties)
+        .push_next(&mut acceleration_structure_properties);
     instance
         .get_physical_device_properties2
         .get_physical_device_properties2(phd, &mut properties2_khr);
@@ -248,10 +267,19 @@ unsafe fn inspect_adapter(
         vk::PhysicalDeviceInlineUniformBlockFeaturesEXT::default();
     let mut timeline_semaphore_features = vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR::default();
     let mut dynamic_rendering_features = vk::PhysicalDeviceDynamicRenderingFeaturesKHR::default();
+    let mut descriptor_indexing_features =
+        vk::PhysicalDeviceDescriptorIndexingFeaturesEXT::default();
+    let mut buffer_device_address_features =
+        vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR::default();
+    let mut acceleration_structure_features =
+        vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
     let mut features2_khr = vk::PhysicalDeviceFeatures2::builder()
         .push_next(&mut inline_uniform_block_features)
         .push_next(&mut timeline_semaphore_features)
-        .push_next(&mut dynamic_rendering_features);
+        .push_next(&mut dynamic_rendering_features)
+        .push_next(&mut descriptor_indexing_features)
+        .push_next(&mut buffer_device_address_features)
+        .push_next(&mut acceleration_structure_features);
     instance
         .get_physical_device_properties2
         .get_physical_device_features2(phd, &mut features2_khr);
@@ -290,7 +318,37 @@ unsafe fn inspect_adapter(
         return None;
     }
 
-    Some(AdapterCapabilities { properties })
+    let ray_tracing = if descriptor_indexing_properties.max_per_stage_update_after_bind_resources
+        == vk::FALSE
+    {
+        log::info!(
+            "No ray tracing because of the descriptor indexing. Properties = {:?}. Features = {:?}",
+            descriptor_indexing_properties,
+            descriptor_indexing_features
+        );
+        false
+    } else if buffer_device_address_features.buffer_device_address == vk::FALSE {
+        log::info!(
+            "No ray tracing because of the buffer device address. Features = {:?}",
+            buffer_device_address_features
+        );
+        false
+    } else if acceleration_structure_properties.max_geometry_count == 0
+        || acceleration_structure_features.acceleration_structure == vk::FALSE
+    {
+        log::info!("No ray tracing because of the acceleration structure. Properties = {:?}. Features = {:?}",
+            acceleration_structure_properties, acceleration_structure_features);
+        false
+    } else {
+        log::info!("Ray tracing is supported");
+        true
+    };
+
+    Some(AdapterCapabilities {
+        api_version,
+        properties,
+        ray_tracing,
+    })
 }
 
 impl Context {
@@ -430,6 +488,13 @@ impl Context {
             if is_vulkan_portability {
                 device_extensions.push(vk::KhrPortabilitySubsetFn::name());
             }
+            if capabilities.ray_tracing {
+                if capabilities.api_version < vk::API_VERSION_1_2 {
+                    device_extensions.push(vk::ExtDescriptorIndexingFn::name());
+                    device_extensions.push(vk::KhrBufferDeviceAddressFn::name());
+                }
+                device_extensions.push(vk::KhrDeferredHostOperationsFn::name());
+            }
 
             let str_pointers = device_extensions
                 .iter()
@@ -443,12 +508,31 @@ impl Context {
                 vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR::builder().timeline_semaphore(true);
             let mut khr_dynamic_rendering =
                 vk::PhysicalDeviceDynamicRenderingFeaturesKHR::builder().dynamic_rendering(true);
-            let device_create_info = vk::DeviceCreateInfo::builder()
+            let mut device_create_info = vk::DeviceCreateInfo::builder()
                 .queue_create_infos(&family_infos)
                 .enabled_extension_names(&str_pointers)
                 .push_next(&mut ext_inline_uniform_block)
                 .push_next(&mut khr_timeline_semaphore)
                 .push_next(&mut khr_dynamic_rendering);
+
+            let mut ext_descriptor_indexing;
+            let mut khr_buffer_device_address;
+            let mut khr_acceleration_structure;
+            if capabilities.ray_tracing {
+                ext_descriptor_indexing =
+                    vk::PhysicalDeviceDescriptorIndexingFeaturesEXT::builder();
+                khr_buffer_device_address =
+                    vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR::builder()
+                        .buffer_device_address(true);
+                khr_acceleration_structure =
+                    vk::PhysicalDeviceAccelerationStructureFeaturesKHR::builder()
+                        .acceleration_structure(true);
+                device_create_info = device_create_info
+                    .push_next(&mut ext_descriptor_indexing)
+                    .push_next(&mut khr_buffer_device_address)
+                    .push_next(&mut khr_acceleration_structure);
+            }
+
             instance
                 .core
                 .create_device(physical_device, &device_create_info, None)
@@ -458,6 +542,16 @@ impl Context {
         let device = Device {
             timeline_semaphore: khr::TimelineSemaphore::new(&instance.core, &device_core),
             dynamic_rendering: khr::DynamicRendering::new(&instance.core, &device_core),
+            ray_tracing: if capabilities.ray_tracing {
+                Some(RayTracingDevice {
+                    acceleration_structure: khr::AccelerationStructure::new(
+                        &instance.core,
+                        &device_core,
+                    ),
+                })
+            } else {
+                None
+            },
             core: device_core,
         };
 
