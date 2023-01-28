@@ -44,6 +44,8 @@ pub mod util;
 pub mod limits {
     pub const PLAIN_DATA_SIZE: u32 = 256;
     pub const RESOURCES_IN_GROUP: u32 = 8;
+    pub const STORAGE_BUFFER_ALIGNMENT: u32 = 256;
+    pub const ACCELERATION_STRUCTURE_BUFFER_ALIGNMENT: u32 = 256;
 }
 
 pub use hal::*;
@@ -327,6 +329,23 @@ pub struct SamplerDesc<'a> {
     pub compare: Option<CompareFunction>,
     pub anisotropy_clamp: u32,
     pub border_color: Option<TextureColor>,
+}
+
+#[derive(Debug)]
+pub enum AccelerationStructureType {
+    TopLevel,
+    BottomLevel,
+}
+
+#[derive(Debug)]
+pub struct AccelerationStructureDesc<'a> {
+    pub name: &'a str,
+    pub ty: AccelerationStructureType,
+    pub buffer: Buffer,
+    /// Offset into the buffer where AS is placed.
+    /// Must be a multiple of `limits::ACCELERATION_STRUCTURE_BUFFER_ALIGNMENT`.
+    pub offset: u64,
+    pub size: u64,
 }
 
 pub struct Shader {
