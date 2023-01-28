@@ -24,6 +24,21 @@ impl BindGroupInfo {
 }
 
 impl super::Context {
+    fn make_spv_options(&self) -> spv::Options {
+        spv::Options {
+            lang_version: match self.device.ray_tracing {
+                //FIXME: naga doesn't spew out the interface variables on 1.4 rn
+                Some(_) => (1, 3),
+                None => (1, 3),
+            },
+            flags: self.naga_flags,
+            binding_map: spv::BindingMap::default(),
+            capabilities: None,
+            bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
+            zero_initialize_workgroup_memory: spv::ZeroInitializeWorkgroupMemoryMode::None,
+        }
+    }
+
     fn load_shader(
         &self,
         sf: crate::ShaderFunction,
@@ -281,15 +296,8 @@ impl super::Context {
             .cloned()
             .map(BindGroupInfo::new)
             .collect::<Vec<_>>();
-        let options = spv::Options {
-            lang_version: (1, 3),
-            flags: self.naga_flags,
-            binding_map: spv::BindingMap::default(),
-            capabilities: None,
-            bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
-            zero_initialize_workgroup_memory: spv::ZeroInitializeWorkgroupMemoryMode::None,
-        };
 
+        let options = self.make_spv_options();
         let cs = self.load_shader(desc.compute, &options, desc.data_layouts, &mut group_infos);
 
         let layout = self.create_pipeline_layout(desc.data_layouts, &group_infos);
@@ -326,15 +334,8 @@ impl super::Context {
             .cloned()
             .map(BindGroupInfo::new)
             .collect::<Vec<_>>();
-        let options = spv::Options {
-            lang_version: (1, 3),
-            flags: self.naga_flags,
-            binding_map: spv::BindingMap::default(),
-            capabilities: None,
-            bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
-            zero_initialize_workgroup_memory: spv::ZeroInitializeWorkgroupMemoryMode::None,
-        };
 
+        let options = self.make_spv_options();
         let vs = self.load_shader(desc.vertex, &options, desc.data_layouts, &mut group_infos);
         let fs = self.load_shader(desc.fragment, &options, desc.data_layouts, &mut group_infos);
 

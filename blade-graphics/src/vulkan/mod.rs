@@ -273,13 +273,15 @@ unsafe fn inspect_adapter(
         vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR::default();
     let mut acceleration_structure_features =
         vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+    let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
     let mut features2_khr = vk::PhysicalDeviceFeatures2::builder()
         .push_next(&mut inline_uniform_block_features)
         .push_next(&mut timeline_semaphore_features)
         .push_next(&mut dynamic_rendering_features)
         .push_next(&mut descriptor_indexing_features)
         .push_next(&mut buffer_device_address_features)
-        .push_next(&mut acceleration_structure_features);
+        .push_next(&mut acceleration_structure_features)
+        .push_next(&mut ray_query_features);
     instance
         .get_physical_device_properties2
         .get_physical_device_features2(phd, &mut features2_khr);
@@ -338,6 +340,12 @@ unsafe fn inspect_adapter(
     {
         log::info!("No ray tracing because of the acceleration structure. Properties = {:?}. Features = {:?}",
             acceleration_structure_properties, acceleration_structure_features);
+        false
+    } else if ray_query_features.ray_query == vk::FALSE {
+        log::info!(
+            "No ray tracing because of the ray query. Features = {:?}",
+            ray_query_features
+        );
         false
     } else {
         log::info!("Ray tracing is supported");
@@ -492,8 +500,12 @@ impl Context {
                 if capabilities.api_version < vk::API_VERSION_1_2 {
                     device_extensions.push(vk::ExtDescriptorIndexingFn::name());
                     device_extensions.push(vk::KhrBufferDeviceAddressFn::name());
+                    device_extensions.push(vk::KhrShaderFloatControlsFn::name());
+                    device_extensions.push(vk::KhrSpirv14Fn::name());
                 }
                 device_extensions.push(vk::KhrDeferredHostOperationsFn::name());
+                device_extensions.push(vk::KhrAccelerationStructureFn::name());
+                device_extensions.push(vk::KhrRayQueryFn::name());
             }
 
             let str_pointers = device_extensions
