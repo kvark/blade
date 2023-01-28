@@ -74,6 +74,44 @@ impl super::Context {
                 .dealloc(AshMemoryDevice::wrap(&self.device.core), block);
         }
     }
+
+    pub fn create_acceleration_structure(
+        &self,
+        desc: crate::AccelerationStructureDesc,
+    ) -> super::AccelerationStructure {
+        let raw_ty = match desc.ty {
+            crate::AccelerationStructureType::TopLevel => {
+                vk::AccelerationStructureTypeKHR::TOP_LEVEL
+            }
+            crate::AccelerationStructureType::BottomLevel => {
+                vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL
+            }
+        };
+        let vk_info = vk::AccelerationStructureCreateInfoKHR::builder()
+            .ty(raw_ty)
+            .buffer(desc.buffer.raw)
+            .offset(desc.offset)
+            .size(desc.size);
+
+        let rt = self.device.ray_tracing.as_ref().unwrap();
+        let raw = unsafe {
+            rt.acceleration_structure
+                .create_acceleration_structure(&vk_info, None)
+                .unwrap()
+        };
+        super::AccelerationStructure { raw }
+    }
+
+    pub fn destroy_acceleration_structure(
+        &self,
+        acceleration_structure: super::AccelerationStructure,
+    ) {
+        let rt = self.device.ray_tracing.as_ref().unwrap();
+        unsafe {
+            rt.acceleration_structure
+                .destroy_acceleration_structure(acceleration_structure.raw, None);
+        }
+    }
 }
 
 #[hidden_trait::expose]
