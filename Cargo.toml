@@ -8,7 +8,7 @@ members = [
 exclude = []
 
 [workspace.dependencies]
-naga = { version = "0.11", features = ["wgsl-in", "span", "validate"] }
+naga = { git = "https://github.com/kvark/naga", branch = "ray-query", features = ["wgsl-in", "span", "validate"] }
 web-sys = "0.3.60"
 
 [lib]
