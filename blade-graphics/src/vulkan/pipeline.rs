@@ -2,6 +2,8 @@ use ash::vk;
 use naga::back::spv;
 use std::{ffi, mem, ptr};
 
+const DUMP_PREFIX: Option<&str> = None;
+
 struct CompiledShader {
     vk_module: vk::ShaderModule,
     _entry_point: ffi::CString,
@@ -27,8 +29,8 @@ impl super::Context {
     fn make_spv_options(&self) -> spv::Options {
         spv::Options {
             lang_version: match self.device.ray_tracing {
-                //FIXME: naga doesn't spew out the interface variables on 1.4 rn
-                Some(_) => (1, 3),
+                // Required for ray queries
+                Some(_) => (1, 4),
                 None => (1, 3),
             },
             flags: self.naga_flags,
@@ -137,6 +139,20 @@ impl super::Context {
             Some(&pipeline_options),
         )
         .unwrap();
+
+        if let Some(dump_prefix) = DUMP_PREFIX {
+            let mut file_name = String::new();
+            for i in 1.. {
+                file_name = format!("{}{}_{:?}{}.spv", dump_prefix, sf.entry_point, ep.stage, i);
+                if !std::path::Path::new(&file_name).exists() {
+                    break;
+                }
+            }
+            let spv_bytes =
+                unsafe { std::slice::from_raw_parts(spv.as_ptr() as *const u8, spv.len() * 4) };
+            println!("Dumping {}", file_name);
+            std::fs::write(file_name, spv_bytes).unwrap();
+        }
 
         let vk_info = vk::ShaderModuleCreateInfo::builder().code(&spv);
 
