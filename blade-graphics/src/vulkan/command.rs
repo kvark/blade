@@ -54,6 +54,11 @@ impl crate::ShaderBindable for crate::BufferPiece {
         );
     }
 }
+impl crate::ShaderBindable for super::AccelerationStructure {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        ctx.write(index, self.raw);
+    }
+}
 
 impl crate::TexturePiece {
     fn subresource_layers(&self, aspects: crate::TexelAspects) -> vk::ImageSubresourceLayers {
@@ -128,13 +133,6 @@ fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo {
     }
 
     builder.build()
-}
-
-fn map_index_type(index_type: crate::IndexType) -> vk::IndexType {
-    match index_type {
-        crate::IndexType::U16 => vk::IndexType::UINT16,
-        crate::IndexType::U32 => vk::IndexType::UINT32,
-    }
 }
 
 impl super::CommandEncoder {
@@ -595,7 +593,7 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
         start_instance: u32,
         instance_count: u32,
     ) {
-        let raw_index_type = map_index_type(index_type);
+        let raw_index_type = super::map_index_type(index_type);
         unsafe {
             self.device.core.cmd_bind_index_buffer(
                 self.cmd_buf.raw,

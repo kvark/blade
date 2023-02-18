@@ -9,6 +9,13 @@ struct Allocation {
     handle: usize,
 }
 
+fn map_vertex_format(vertex_format: crate::VertexFormat) -> vk::Format {
+    use crate::VertexFormat as Vf;
+    match vertex_format {
+        Vf::Rgb32Float => vk::Format::R32G32B32_SFLOAT,
+    }
+}
+
 impl super::Context {
     fn allocate_memory(
         &self,
@@ -72,6 +79,70 @@ impl super::Context {
             manager
                 .allocator
                 .dealloc(AshMemoryDevice::wrap(&self.device.core), block);
+        }
+    }
+
+    fn get_device_address(&self, piece: &crate::BufferPiece) -> u64 {
+        let vk_info = vk::BufferDeviceAddressInfo::builder().buffer(piece.buffer.raw);
+        let base = unsafe { self.device.core.get_buffer_device_address(&vk_info) };
+        base + piece.offset
+    }
+
+    pub fn get_bottom_level_acceleration_structure_sizes(
+        &self,
+        meshes: &[crate::AccelerationStructureMesh],
+    ) -> crate::AccelerationStructureSizes {
+        let mut max_primitive_counts = Vec::with_capacity(meshes.len());
+        let mut geometries = Vec::with_capacity(meshes.len());
+        for mesh in meshes {
+            max_primitive_counts.push(mesh.triangle_count);
+            let mut triangles = vk::AccelerationStructureGeometryTrianglesDataKHR::builder()
+                .vertex_format(map_vertex_format(mesh.vertex_format))
+                .vertex_data(vk::DeviceOrHostAddressConstKHR {
+                    device_address: self.get_device_address(&mesh.vertex_data),
+                })
+                .vertex_stride(mesh.vertex_stride as u64)
+                .max_vertex(mesh.vertex_count.saturating_sub(1))
+                .build();
+            if let Some(index_type) = mesh.index_type {
+                triangles.index_type = super::map_index_type(index_type);
+                triangles.index_data = vk::DeviceOrHostAddressConstKHR {
+                    device_address: self.get_device_address(&mesh.index_data),
+                };
+            }
+            if let Some(_) = mesh.transform {
+                // The exact address doesn't matter, just need to signify the presense of a transform
+                triangles.transform_data = vk::DeviceOrHostAddressConstKHR { device_address: !0 };
+            }
+            let geometry = vk::AccelerationStructureGeometryKHR::builder()
+                .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
+                .geometry(vk::AccelerationStructureGeometryDataKHR { triangles })
+                .flags(if mesh.is_opaque {
+                    vk::GeometryFlagsKHR::OPAQUE
+                } else {
+                    vk::GeometryFlagsKHR::empty()
+                })
+                .build();
+            geometries.push(geometry);
+        }
+        let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
+            .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .geometries(&geometries);
+
+        let rt = self.device.ray_tracing.as_ref().unwrap();
+        let sizes_raw = unsafe {
+            rt.acceleration_structure
+                .get_acceleration_structure_build_sizes(
+                    vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                    &build_info,
+                    &max_primitive_counts,
+                )
+        };
+        crate::AccelerationStructureSizes {
+            data: sizes_raw.acceleration_structure_size,
+            scratch: sizes_raw.build_scratch_size,
         }
     }
 

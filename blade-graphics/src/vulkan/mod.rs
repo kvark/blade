@@ -1047,3 +1047,10 @@ fn map_comparison(fun: crate::CompareFunction) -> vk::CompareOp {
         Cf::Always => vk::CompareOp::ALWAYS,
     }
 }
+
+fn map_index_type(index_type: crate::IndexType) -> vk::IndexType {
+    match index_type {
+        crate::IndexType::U16 => vk::IndexType::UINT16,
+        crate::IndexType::U32 => vk::IndexType::UINT32,
+    }
+}

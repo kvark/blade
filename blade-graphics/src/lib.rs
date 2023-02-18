@@ -348,6 +348,33 @@ pub struct AccelerationStructureDesc<'a> {
     pub size: u64,
 }
 
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+pub enum VertexFormat {
+    Rgb32Float,
+}
+
+#[derive(Debug)]
+pub struct AccelerationStructureMesh {
+    pub vertex_data: BufferPiece,
+    pub vertex_format: VertexFormat,
+    pub vertex_stride: u32,
+    pub vertex_count: u32,
+    pub index_data: BufferPiece,
+    pub index_type: Option<IndexType>,
+    pub triangle_count: u32,
+    pub transform: Option<mint::RowMatrix3x4<f32>>,
+    pub is_opaque: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AccelerationStructureSizes {
+    /// Size of the permanent GPU data
+    pub data: u64,
+    /// Size of the scratch space
+    pub scratch: u64,
+}
+
 pub struct Shader {
     module: naga::Module,
     info: naga::valid::ModuleInfo,
@@ -375,6 +402,7 @@ pub enum ShaderBinding {
     Texture,
     Sampler,
     Buffer,
+    AccelerationStructure,
     Plain { size: u32 },
 }
 
@@ -398,6 +426,9 @@ impl HasShaderBinding for Sampler {
 }
 impl HasShaderBinding for BufferPiece {
     const TYPE: ShaderBinding = ShaderBinding::Buffer;
+}
+impl HasShaderBinding for AccelerationStructure {
+    const TYPE: ShaderBinding = ShaderBinding::AccelerationStructure;
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
