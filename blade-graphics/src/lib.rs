@@ -24,6 +24,7 @@
 )]
 
 pub use naga::{StorageAccess, VectorSize};
+pub type Transform = mint::RowMatrix3x4<f32>;
 
 #[cfg_attr(
     all(not(vulkan), not(gles), any(target_os = "ios", target_os = "macos")),
@@ -354,7 +355,7 @@ pub enum VertexFormat {
     Rgb32Float,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AccelerationStructureMesh {
     pub vertex_data: BufferPiece,
     pub vertex_format: VertexFormat,
@@ -363,7 +364,7 @@ pub struct AccelerationStructureMesh {
     pub index_data: BufferPiece,
     pub index_type: Option<IndexType>,
     pub triangle_count: u32,
-    pub transform: Option<mint::RowMatrix3x4<f32>>,
+    pub transform: Option<Transform>,
     pub is_opaque: bool,
 }
 

@@ -432,12 +432,69 @@ impl<'a> super::ComputeCommandEncoder<'a> {
     }
 
     //TODO: move into the trait
-    pub fn build_acceleration_structure(&mut self) {
+    pub fn build_bottom_level_acceleration_structure(
+        &mut self,
+        acceleration_structure: super::AccelerationStructure,
+        meshes: &[crate::AccelerationStructureMesh],
+        scratch_data: crate::BufferPiece,
+    ) {
+        let mut build_range_infos = Vec::with_capacity(meshes.len());
+        let mut geometries = Vec::with_capacity(meshes.len());
+        for mesh in meshes {
+            build_range_infos.push(vk::AccelerationStructureBuildRangeInfoKHR {
+                primitive_count: mesh.triangle_count,
+                primitive_offset: 0,
+                first_vertex: 0,
+                transform_offset: 0,
+            });
+            let mut triangles = vk::AccelerationStructureGeometryTrianglesDataKHR::builder()
+                .vertex_format(super::map_vertex_format(mesh.vertex_format))
+                .vertex_data(vk::DeviceOrHostAddressConstKHR {
+                    device_address: self.device.get_device_address(&mesh.vertex_data),
+                })
+                .vertex_stride(mesh.vertex_stride as u64)
+                .max_vertex(mesh.vertex_count.saturating_sub(1))
+                .build();
+            if let Some(index_type) = mesh.index_type {
+                triangles.index_type = super::map_index_type(index_type);
+                triangles.index_data = vk::DeviceOrHostAddressConstKHR {
+                    device_address: self.device.get_device_address(&mesh.index_data),
+                };
+            }
+            if let Some(ref transform) = mesh.transform {
+                triangles.transform_data = vk::DeviceOrHostAddressConstKHR {
+                    #[allow(trivial_casts)]
+                    host_address: transform as *const crate::Transform as *const _,
+                };
+            }
+            let geometry = vk::AccelerationStructureGeometryKHR::builder()
+                .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
+                .geometry(vk::AccelerationStructureGeometryDataKHR { triangles })
+                .flags(if mesh.is_opaque {
+                    vk::GeometryFlagsKHR::OPAQUE
+                } else {
+                    vk::GeometryFlagsKHR::empty()
+                })
+                .build();
+            geometries.push(geometry);
+        }
+        let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
+            .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .geometries(&geometries)
+            .dst_acceleration_structure(acceleration_structure.raw)
+            .scratch_data(vk::DeviceOrHostAddressKHR {
+                device_address: self.device.get_device_address(&scratch_data),
+            });
+
         let rt = self.device.ray_tracing.as_ref().unwrap();
         unsafe {
-            //TODO: actual arguments
-            rt.acceleration_structure
-                .cmd_build_acceleration_structures(self.cmd_buf.raw, &[], &[]);
+            rt.acceleration_structure.cmd_build_acceleration_structures(
+                self.cmd_buf.raw,
+                &[build_info.build()],
+                &[&build_range_infos],
+            );
         }
     }
 }
