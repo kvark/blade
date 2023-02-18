@@ -223,6 +223,11 @@ impl super::Context {
                     mem::size_of::<vk::DescriptorBufferInfo>(),
                     1u32,
                 ),
+                crate::ShaderBinding::AccelerationStructure => (
+                    vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                    mem::size_of::<vk::AccelerationStructureKHR>(),
+                    1u32,
+                ),
                 crate::ShaderBinding::Plain { size } => (
                     vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
                     size as usize,
