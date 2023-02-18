@@ -28,6 +28,14 @@ struct Device {
     ray_tracing: Option<RayTracingDevice>,
 }
 
+impl Device {
+    fn get_device_address(&self, piece: &crate::BufferPiece) -> u64 {
+        let vk_info = vk::BufferDeviceAddressInfo::builder().buffer(piece.buffer.raw);
+        let base = unsafe { self.core.get_buffer_device_address(&vk_info) };
+        base + piece.offset
+    }
+}
+
 struct MemoryManager {
     allocator: gpu_alloc::GpuAllocator<vk::DeviceMemory>,
     slab: slab::Slab<gpu_alloc::MemoryBlock<vk::DeviceMemory>>,
@@ -530,6 +538,7 @@ impl Context {
             let mut ext_descriptor_indexing;
             let mut khr_buffer_device_address;
             let mut khr_acceleration_structure;
+            let mut khr_ray_query;
             if capabilities.ray_tracing {
                 ext_descriptor_indexing =
                     vk::PhysicalDeviceDescriptorIndexingFeaturesEXT::builder();
@@ -539,10 +548,12 @@ impl Context {
                 khr_acceleration_structure =
                     vk::PhysicalDeviceAccelerationStructureFeaturesKHR::builder()
                         .acceleration_structure(true);
+                khr_ray_query = vk::PhysicalDeviceRayQueryFeaturesKHR::builder().ray_query(true);
                 device_create_info = device_create_info
                     .push_next(&mut ext_descriptor_indexing)
                     .push_next(&mut khr_buffer_device_address)
-                    .push_next(&mut khr_acceleration_structure);
+                    .push_next(&mut khr_acceleration_structure)
+                    .push_next(&mut khr_ray_query);
             }
 
             instance
@@ -596,7 +607,7 @@ impl Context {
                         size: memory_heap.size,
                     })
                     .collect(),
-                buffer_device_address: false,
+                buffer_device_address: capabilities.ray_tracing,
             };
 
             let known_memory_flags = vk::MemoryPropertyFlags::DEVICE_LOCAL
@@ -1052,5 +1063,12 @@ fn map_index_type(index_type: crate::IndexType) -> vk::IndexType {
     match index_type {
         crate::IndexType::U16 => vk::IndexType::UINT16,
         crate::IndexType::U32 => vk::IndexType::UINT32,
+    }
+}
+
+fn map_vertex_format(vertex_format: crate::VertexFormat) -> vk::Format {
+    use crate::VertexFormat as Vf;
+    match vertex_format {
+        Vf::Rgb32Float => vk::Format::R32G32B32_SFLOAT,
     }
 }

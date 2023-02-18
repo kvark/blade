@@ -9,13 +9,6 @@ struct Allocation {
     handle: usize,
 }
 
-fn map_vertex_format(vertex_format: crate::VertexFormat) -> vk::Format {
-    use crate::VertexFormat as Vf;
-    match vertex_format {
-        Vf::Rgb32Float => vk::Format::R32G32B32_SFLOAT,
-    }
-}
-
 impl super::Context {
     fn allocate_memory(
         &self,
@@ -23,13 +16,21 @@ impl super::Context {
         memory: crate::Memory,
     ) -> Allocation {
         let mut manager = self.memory.lock().unwrap();
+        let device_address_usage = if self.device.ray_tracing.is_some() {
+            gpu_alloc::UsageFlags::DEVICE_ADDRESS
+        } else {
+            gpu_alloc::UsageFlags::empty()
+        };
         let alloc_usage = match memory {
-            crate::Memory::Device => gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS,
+            crate::Memory::Device => {
+                gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS | device_address_usage
+            }
             crate::Memory::Shared => {
                 gpu_alloc::UsageFlags::HOST_ACCESS
                     | gpu_alloc::UsageFlags::DOWNLOAD
                     | gpu_alloc::UsageFlags::UPLOAD
                     | gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS
+                    | device_address_usage
             }
             crate::Memory::Upload => {
                 gpu_alloc::UsageFlags::HOST_ACCESS | gpu_alloc::UsageFlags::UPLOAD
@@ -82,12 +83,6 @@ impl super::Context {
         }
     }
 
-    fn get_device_address(&self, piece: &crate::BufferPiece) -> u64 {
-        let vk_info = vk::BufferDeviceAddressInfo::builder().buffer(piece.buffer.raw);
-        let base = unsafe { self.device.core.get_buffer_device_address(&vk_info) };
-        base + piece.offset
-    }
-
     pub fn get_bottom_level_acceleration_structure_sizes(
         &self,
         meshes: &[crate::AccelerationStructureMesh],
@@ -97,9 +92,9 @@ impl super::Context {
         for mesh in meshes {
             max_primitive_counts.push(mesh.triangle_count);
             let mut triangles = vk::AccelerationStructureGeometryTrianglesDataKHR::builder()
-                .vertex_format(map_vertex_format(mesh.vertex_format))
+                .vertex_format(super::map_vertex_format(mesh.vertex_format))
                 .vertex_data(vk::DeviceOrHostAddressConstKHR {
-                    device_address: self.get_device_address(&mesh.vertex_data),
+                    device_address: self.device.get_device_address(&mesh.vertex_data),
                 })
                 .vertex_stride(mesh.vertex_stride as u64)
                 .max_vertex(mesh.vertex_count.saturating_sub(1))
@@ -107,7 +102,7 @@ impl super::Context {
             if let Some(index_type) = mesh.index_type {
                 triangles.index_type = super::map_index_type(index_type);
                 triangles.index_data = vk::DeviceOrHostAddressConstKHR {
-                    device_address: self.get_device_address(&mesh.index_data),
+                    device_address: self.device.get_device_address(&mesh.index_data),
                 };
             }
             if let Some(_) = mesh.transform {
@@ -194,7 +189,7 @@ impl crate::traits::ResourceDevice for super::Context {
 
     fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         use vk::BufferUsageFlags as Buf;
-        let vk_info = vk::BufferCreateInfo::builder()
+        let mut vk_info = vk::BufferCreateInfo::builder()
             .size(desc.size)
             .usage(
                 Buf::TRANSFER_SRC
@@ -205,6 +200,11 @@ impl crate::traits::ResourceDevice for super::Context {
                     | Buf::INDIRECT_BUFFER,
             )
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        if self.device.ray_tracing.is_some() {
+            vk_info.usage |= Buf::SHADER_DEVICE_ADDRESS
+                | Buf::ACCELERATION_STRUCTURE_STORAGE_KHR
+                | Buf::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
+        }
 
         let raw = unsafe { self.device.core.create_buffer(&vk_info, None).unwrap() };
         let requirements = unsafe { self.device.core.get_buffer_memory_requirements(raw) };

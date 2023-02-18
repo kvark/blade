@@ -1,6 +1,11 @@
 #![allow(irrefutable_let_patterns)]
 
+use std::{mem, ptr};
+
 struct Example {
+    //tlas: blade::AccelerationStructure,
+    blas: blade::AccelerationStructure,
+    blas_buffer: blade::Buffer,
     command_encoder: blade::CommandEncoder,
     prev_sync_point: Option<blade::SyncPoint>,
     context: blade::Context,
@@ -30,16 +35,90 @@ impl Example {
             frame_count: 3,
         });
 
+        type Vertex = [f32; 3];
+        let vertices = [
+            [-0.5f32, -0.5, 0.0],
+            [0.0f32, 0.5, 0.0],
+            [0.5f32, -0.5, 0.0],
+        ];
+        let vertex_buf = context.create_buffer(blade::BufferDesc {
+            name: "vertices",
+            size: (vertices.len() * mem::size_of::<Vertex>()) as u64,
+            memory: blade::Memory::Shared,
+        });
+        unsafe {
+            ptr::copy_nonoverlapping(
+                vertices.as_ptr(),
+                vertex_buf.data() as *mut Vertex,
+                vertices.len(),
+            )
+        };
+
+        let indices = [0u16, 1, 2];
+        let index_buf = context.create_buffer(blade::BufferDesc {
+            name: "indices",
+            size: (indices.len() * mem::size_of::<u16>()) as u64,
+            memory: blade::Memory::Shared,
+        });
+        unsafe {
+            ptr::copy_nonoverlapping(
+                indices.as_ptr(),
+                index_buf.data() as *mut u16,
+                indices.len(),
+            )
+        };
+
+        let meshes = [blade::AccelerationStructureMesh {
+            vertex_data: vertex_buf.at(0),
+            vertex_format: blade::VertexFormat::Rgb32Float,
+            vertex_stride: mem::size_of::<Vertex>() as u32,
+            vertex_count: vertices.len() as u32,
+            index_data: index_buf.at(0),
+            index_type: Some(blade::IndexType::U16),
+            triangle_count: 1,
+            transform: None,
+            is_opaque: true,
+        }];
+        let blas_sizes = context.get_bottom_level_acceleration_structure_sizes(&meshes);
+        let blas_buffer = context.create_buffer(blade::BufferDesc {
+            name: "BLAS",
+            size: blas_sizes.data,
+            memory: blade::Memory::Device,
+        });
+        let scratch_buffer = context.create_buffer(blade::BufferDesc {
+            name: "BLAS scratch",
+            size: blas_sizes.scratch,
+            memory: blade::Memory::Device,
+        });
+
+        let blas = context.create_acceleration_structure(blade::AccelerationStructureDesc {
+            name: "triangle",
+            ty: blade::AccelerationStructureType::BottomLevel,
+            buffer: blas_buffer,
+            offset: 0,
+            size: blas_sizes.data,
+        });
+
         let mut command_encoder = context.create_command_encoder(blade::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
         });
         command_encoder.start();
+        if let mut pass = command_encoder.compute() {
+            pass.build_bottom_level_acceleration_structure(blas, &meshes, scratch_buffer.at(0));
+        }
         let sync_point = context.submit(&mut command_encoder);
 
+        context.wait_for(&sync_point, !0);
+        context.destroy_buffer(vertex_buf);
+        context.destroy_buffer(index_buf);
+        context.destroy_buffer(scratch_buffer);
+
         Self {
+            blas,
+            blas_buffer,
             command_encoder,
-            prev_sync_point: Some(sync_point),
+            prev_sync_point: None,
             context,
         }
     }
@@ -48,6 +127,8 @@ impl Example {
         if let Some(sp) = self.prev_sync_point {
             self.context.wait_for(&sp, !0);
         }
+        self.context.destroy_acceleration_structure(self.blas);
+        self.context.destroy_buffer(self.blas_buffer);
     }
 
     fn render(&mut self) {
