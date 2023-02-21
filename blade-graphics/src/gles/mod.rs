@@ -351,6 +351,12 @@ struct ExecutionContext {
     plain_buffer: glow::Buffer,
 }
 
+impl Context {
+    pub fn capabilities(&self) -> crate::Capabilities {
+        crate::Capabilities { ray_query: false }
+    }
+}
+
 #[hidden_trait::expose]
 impl crate::traits::CommandDevice for Context {
     type CommandEncoder = CommandEncoder;

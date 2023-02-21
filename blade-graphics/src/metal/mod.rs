@@ -303,6 +303,10 @@ impl Context {
         context.surface = Some(Mutex::new(surface));
         Ok(context)
     }
+
+    pub fn capabilities(&self) -> crate::Capabilities {
+        crate::Capabilities { ray_query: false }
+    }
 }
 
 #[hidden_trait::expose]

@@ -45,8 +45,9 @@ pub mod util;
 pub mod limits {
     pub const PLAIN_DATA_SIZE: u32 = 256;
     pub const RESOURCES_IN_GROUP: u32 = 8;
-    pub const STORAGE_BUFFER_ALIGNMENT: u32 = 256;
-    pub const ACCELERATION_STRUCTURE_BUFFER_ALIGNMENT: u32 = 256;
+    pub const STORAGE_BUFFER_ALIGNMENT: u64 = 256;
+    pub const ACCELERATION_STRUCTURE_BUFFER_ALIGNMENT: u64 = 256;
+    pub const ACCELERATION_STRUCTURE_SCRATCH_ALIGNMENT: u64 = 256;
 }
 
 pub use hal::*;
@@ -61,6 +62,11 @@ pub struct ContextDesc {
 
 #[derive(Debug)]
 pub struct NotSupportedError;
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Capabilities {
+    pub ray_query: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Memory {
@@ -142,6 +148,7 @@ pub enum TextureFormat {
     Rgba8Unorm,
     Rgba8UnormSrgb,
     Bgra8UnormSrgb,
+    Rgba16Float,
     Depth32Float,
 }
 
@@ -364,8 +371,16 @@ pub struct AccelerationStructureMesh {
     pub index_data: BufferPiece,
     pub index_type: Option<IndexType>,
     pub triangle_count: u32,
-    pub transform: Option<Transform>,
+    pub transform_data: BufferPiece,
     pub is_opaque: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccelerationStructureInstance {
+    pub acceleration_structure: AccelerationStructure,
+    pub transform: Transform,
+    pub mask: u32,
+    pub custom_index: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

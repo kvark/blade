@@ -18,9 +18,12 @@ impl super::Context {
             }
         };
 
+        let device_caps = self.capabilities();
+
         // Bindings are set up at pipeline creation, ignore here
         let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
-        let caps = naga::valid::Capabilities::empty();
+        let mut caps = naga::valid::Capabilities::empty();
+        caps.set(naga::valid::Capabilities::RAY_QUERY, device_caps.ray_query);
         let info = naga::valid::Validator::new(flags, caps)
             .validate(&module)
             .unwrap_or_else(|e| {

@@ -1,6 +1,6 @@
 use ash::vk;
 use gpu_alloc_ash::AshMemoryDevice;
-use std::ptr;
+use std::{mem, ptr};
 
 struct Allocation {
     memory: vk::DeviceMemory,
@@ -87,44 +87,38 @@ impl super::Context {
         &self,
         meshes: &[crate::AccelerationStructureMesh],
     ) -> crate::AccelerationStructureSizes {
-        let mut max_primitive_counts = Vec::with_capacity(meshes.len());
-        let mut geometries = Vec::with_capacity(meshes.len());
-        for mesh in meshes {
-            max_primitive_counts.push(mesh.triangle_count);
-            let mut triangles = vk::AccelerationStructureGeometryTrianglesDataKHR::builder()
-                .vertex_format(super::map_vertex_format(mesh.vertex_format))
-                .vertex_data(vk::DeviceOrHostAddressConstKHR {
-                    device_address: self.device.get_device_address(&mesh.vertex_data),
-                })
-                .vertex_stride(mesh.vertex_stride as u64)
-                .max_vertex(mesh.vertex_count.saturating_sub(1))
-                .build();
-            if let Some(index_type) = mesh.index_type {
-                triangles.index_type = super::map_index_type(index_type);
-                triangles.index_data = vk::DeviceOrHostAddressConstKHR {
-                    device_address: self.device.get_device_address(&mesh.index_data),
-                };
-            }
-            if let Some(_) = mesh.transform {
-                // The exact address doesn't matter, just need to signify the presense of a transform
-                triangles.transform_data = vk::DeviceOrHostAddressConstKHR { device_address: !0 };
-            }
-            let geometry = vk::AccelerationStructureGeometryKHR::builder()
-                .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
-                .geometry(vk::AccelerationStructureGeometryDataKHR { triangles })
-                .flags(if mesh.is_opaque {
-                    vk::GeometryFlagsKHR::OPAQUE
-                } else {
-                    vk::GeometryFlagsKHR::empty()
-                })
-                .build();
-            geometries.push(geometry);
+        let blas_input = self.device.map_acceleration_structure_meshes(meshes);
+        let rt = self.device.ray_tracing.as_ref().unwrap();
+        let sizes_raw = unsafe {
+            rt.acceleration_structure
+                .get_acceleration_structure_build_sizes(
+                    vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                    &blas_input.build_info,
+                    &blas_input.max_primitive_counts,
+                )
+        };
+        crate::AccelerationStructureSizes {
+            data: sizes_raw.acceleration_structure_size,
+            scratch: sizes_raw.build_scratch_size,
         }
+    }
+
+    pub fn get_top_level_acceleration_structure_sizes(
+        &self,
+        instance_count: u32,
+    ) -> crate::AccelerationStructureSizes {
+        let geometry = vk::AccelerationStructureGeometryKHR::builder()
+            .geometry_type(vk::GeometryTypeKHR::INSTANCES)
+            .geometry(vk::AccelerationStructureGeometryDataKHR {
+                instances: vk::AccelerationStructureGeometryInstancesDataKHR::builder().build(),
+            })
+            .build();
+        let geometries = [geometry];
         let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
-            .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(&geometries);
+            .geometries(&geometries)
+            .build();
 
         let rt = self.device.ray_tracing.as_ref().unwrap();
         let sizes_raw = unsafe {
@@ -132,13 +126,50 @@ impl super::Context {
                 .get_acceleration_structure_build_sizes(
                     vk::AccelerationStructureBuildTypeKHR::DEVICE,
                     &build_info,
-                    &max_primitive_counts,
+                    &[instance_count],
                 )
         };
         crate::AccelerationStructureSizes {
             data: sizes_raw.acceleration_structure_size,
             scratch: sizes_raw.build_scratch_size,
         }
+    }
+
+    pub fn create_acceleration_structure_instance_buffer(
+        &self,
+        instances: &[crate::AccelerationStructureInstance],
+    ) -> super::Buffer {
+        let buffer = self.create_buffer(crate::BufferDesc {
+            name: "instance buffer",
+            size: (instances.len() * mem::size_of::<vk::AccelerationStructureInstanceKHR>()) as u64,
+            memory: crate::Memory::Shared,
+        });
+        let rt = self.device.ray_tracing.as_ref().unwrap();
+        for (i, instance) in instances.iter().enumerate() {
+            let device_address_info = vk::AccelerationStructureDeviceAddressInfoKHR::builder()
+                .acceleration_structure(instance.acceleration_structure.raw);
+            let vk_instance = vk::AccelerationStructureInstanceKHR {
+                transform: unsafe { mem::transmute(instance.transform) },
+                instance_custom_index_and_mask: vk::Packed24_8::new(
+                    instance.custom_index,
+                    instance.mask as u8,
+                ),
+                instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(0, 0),
+                acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
+                    device_handle: unsafe {
+                        rt.acceleration_structure
+                            .get_acceleration_structure_device_address(&device_address_info)
+                    },
+                },
+            };
+            unsafe {
+                ptr::write(
+                    (buffer.data() as *mut vk::AccelerationStructureInstanceKHR).add(i),
+                    vk_instance,
+                );
+            }
+        }
+        buffer
     }
 
     pub fn create_acceleration_structure(
