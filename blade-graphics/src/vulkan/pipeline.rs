@@ -94,6 +94,10 @@ impl super::Context {
                         naga::TypeInner::Sampler { .. } => {
                             (crate::ShaderBinding::Sampler, naga::StorageAccess::empty())
                         }
+                        naga::TypeInner::AccelerationStructure => (
+                            crate::ShaderBinding::AccelerationStructure,
+                            naga::StorageAccess::empty(),
+                        ),
                         _ => {
                             let type_layout = &layouter[var.ty];
                             let proto = if var_access.is_empty() {

@@ -263,6 +263,8 @@ impl super::CommandEncoder {
     }
 
     pub fn render(&mut self, targets: crate::RenderTargetSet) -> super::RenderCommandEncoder {
+        self.barrier();
+
         let mut target_size = [0u16; 2];
         let mut color_attachments = Vec::with_capacity(targets.colors.len());
         let depth_stencil_attachment;
@@ -438,62 +440,62 @@ impl<'a> super::ComputeCommandEncoder<'a> {
         meshes: &[crate::AccelerationStructureMesh],
         scratch_data: crate::BufferPiece,
     ) {
-        let mut build_range_infos = Vec::with_capacity(meshes.len());
-        let mut geometries = Vec::with_capacity(meshes.len());
-        for mesh in meshes {
-            build_range_infos.push(vk::AccelerationStructureBuildRangeInfoKHR {
-                primitive_count: mesh.triangle_count,
-                primitive_offset: 0,
-                first_vertex: 0,
-                transform_offset: 0,
-            });
-            let mut triangles = vk::AccelerationStructureGeometryTrianglesDataKHR::builder()
-                .vertex_format(super::map_vertex_format(mesh.vertex_format))
-                .vertex_data(vk::DeviceOrHostAddressConstKHR {
-                    device_address: self.device.get_device_address(&mesh.vertex_data),
-                })
-                .vertex_stride(mesh.vertex_stride as u64)
-                .max_vertex(mesh.vertex_count.saturating_sub(1))
-                .build();
-            if let Some(index_type) = mesh.index_type {
-                triangles.index_type = super::map_index_type(index_type);
-                triangles.index_data = vk::DeviceOrHostAddressConstKHR {
-                    device_address: self.device.get_device_address(&mesh.index_data),
-                };
-            }
-            if let Some(ref transform) = mesh.transform {
-                triangles.transform_data = vk::DeviceOrHostAddressConstKHR {
-                    #[allow(trivial_casts)]
-                    host_address: transform as *const crate::Transform as *const _,
-                };
-            }
-            let geometry = vk::AccelerationStructureGeometryKHR::builder()
-                .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
-                .geometry(vk::AccelerationStructureGeometryDataKHR { triangles })
-                .flags(if mesh.is_opaque {
-                    vk::GeometryFlagsKHR::OPAQUE
-                } else {
-                    vk::GeometryFlagsKHR::empty()
-                })
-                .build();
-            geometries.push(geometry);
-        }
-        let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
-            .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(&geometries)
-            .dst_acceleration_structure(acceleration_structure.raw)
-            .scratch_data(vk::DeviceOrHostAddressKHR {
-                device_address: self.device.get_device_address(&scratch_data),
-            });
+        let mut blas_input = self.device.map_acceleration_structure_meshes(meshes);
+        blas_input.build_info.dst_acceleration_structure = acceleration_structure.raw;
+        blas_input.build_info.scratch_data = vk::DeviceOrHostAddressKHR {
+            device_address: self.device.get_device_address(&scratch_data),
+        };
 
         let rt = self.device.ray_tracing.as_ref().unwrap();
         unsafe {
             rt.acceleration_structure.cmd_build_acceleration_structures(
                 self.cmd_buf.raw,
-                &[build_info.build()],
-                &[&build_range_infos],
+                &[blas_input.build_info],
+                &[&blas_input.build_range_infos],
+            );
+        }
+    }
+
+    pub fn build_top_level_acceleration_structure(
+        &mut self,
+        acceleration_structure: super::AccelerationStructure,
+        instance_count: u32,
+        instance_data: crate::BufferPiece,
+        scratch_data: crate::BufferPiece,
+    ) {
+        let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR {
+            primitive_count: instance_count,
+            primitive_offset: 0,
+            first_vertex: 0,
+            transform_offset: 0,
+        };
+        let geometry = vk::AccelerationStructureGeometryKHR::builder()
+            .geometry_type(vk::GeometryTypeKHR::INSTANCES)
+            .geometry(vk::AccelerationStructureGeometryDataKHR {
+                instances: vk::AccelerationStructureGeometryInstancesDataKHR::builder()
+                    .data(vk::DeviceOrHostAddressConstKHR {
+                        device_address: self.device.get_device_address(&instance_data),
+                    })
+                    .build(),
+            })
+            .build();
+        let geometries = [geometry];
+        let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
+            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
+            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .geometries(&geometries)
+            .scratch_data(vk::DeviceOrHostAddressKHR {
+                device_address: self.device.get_device_address(&scratch_data),
+            })
+            .dst_acceleration_structure(acceleration_structure.raw)
+            .build();
+
+        let rt = self.device.ray_tracing.as_ref().unwrap();
+        unsafe {
+            rt.acceleration_structure.cmd_build_acceleration_structures(
+                self.cmd_buf.raw,
+                &[build_info],
+                &[&[build_range_info]],
             );
         }
     }
