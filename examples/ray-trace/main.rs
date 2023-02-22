@@ -106,26 +106,24 @@ impl Example {
             depth_stencil: None,
         });
 
-        type Vertex = [f32; 3];
-        let vertices = [
-            [-0.5f32, -0.5, 0.0],
-            [0.0f32, 0.5, 0.0],
-            [0.5f32, -0.5, 0.0],
-        ];
+        let (indices_usize, vertex_values) = del_msh::primitive::torus_tri3(3.0, 1.0, 100, 20);
         let vertex_buf = context.create_buffer(blade::BufferDesc {
             name: "vertices",
-            size: (vertices.len() * mem::size_of::<Vertex>()) as u64,
+            size: (vertex_values.len() * mem::size_of::<f32>()) as u64,
             memory: blade::Memory::Shared,
         });
         unsafe {
             ptr::copy_nonoverlapping(
-                vertices.as_ptr(),
-                vertex_buf.data() as *mut Vertex,
-                vertices.len(),
+                vertex_values.as_ptr(),
+                vertex_buf.data() as *mut f32,
+                vertex_values.len(),
             )
         };
 
-        let indices = [0u16, 1, 2];
+        let indices = indices_usize
+            .into_iter()
+            .map(|i| i as u16)
+            .collect::<Vec<_>>();
         let index_buf = context.create_buffer(blade::BufferDesc {
             name: "indices",
             size: (indices.len() * mem::size_of::<u16>()) as u64,
@@ -142,11 +140,11 @@ impl Example {
         let meshes = [blade::AccelerationStructureMesh {
             vertex_data: vertex_buf.at(0),
             vertex_format: blade::VertexFormat::Rgb32Float,
-            vertex_stride: mem::size_of::<Vertex>() as u32,
-            vertex_count: vertices.len() as u32,
+            vertex_stride: mem::size_of::<f32>() as u32 * 3,
+            vertex_count: vertex_values.len() as u32 / 3,
             index_data: index_buf.at(0),
             index_type: Some(blade::IndexType::U16),
-            triangle_count: 1,
+            triangle_count: indices.len() as u32 / 3,
             transform_data: blade::Buffer::default().at(0),
             is_opaque: true,
         }];
@@ -164,17 +162,31 @@ impl Example {
             size: blas_sizes.data,
         });
 
-        let instances = [blade::AccelerationStructureInstance {
-            acceleration_structure: blas,
-            transform: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-            ]
-            .into(),
-            mask: 0xFF,
-            custom_index: 0,
-        }];
+        let x_angle = 0.5f32;
+        let instances = [
+            blade::AccelerationStructureInstance {
+                acceleration_structure: blas,
+                transform: [
+                    [1.0, 0.0, 0.0, -1.5],
+                    [0.0, x_angle.cos(), x_angle.sin(), 0.0],
+                    [0.0, -x_angle.sin(), x_angle.cos(), 0.0],
+                ]
+                .into(),
+                mask: 0xFF,
+                custom_index: 0,
+            },
+            blade::AccelerationStructureInstance {
+                acceleration_structure: blas,
+                transform: [
+                    [1.0, 0.0, 0.0, 1.5],
+                    [0.0, x_angle.sin(), x_angle.cos(), 0.0],
+                    [0.0, -x_angle.cos(), x_angle.sin(), 0.0],
+                ]
+                .into(),
+                mask: 0xFF,
+                custom_index: 0,
+            },
+        ];
         let tlas_sizes = context.get_top_level_acceleration_structure_sizes(instances.len() as u32);
         let instance_buffer = context.create_acceleration_structure_instance_buffer(&instances);
         let tlas_buffer = context.create_buffer(blade::BufferDesc {
@@ -262,14 +274,14 @@ impl Example {
                     (self.screen_size.height + wg_size[1] - 1) / wg_size[1],
                     1,
                 ];
-                let fov_y = 0.2;
+                let fov_y = 0.3;
                 let fov_x = fov_y * self.screen_size.width as f32 / self.screen_size.height as f32;
 
                 pc.bind(
                     0,
                     &ShaderData {
                         parameters: Parameters {
-                            cam_position: [0.0, 0.0, -5.0],
+                            cam_position: [0.0, 0.0, -20.0],
                             depth: 100.0,
                             cam_orientation: [0.0, 0.0, 0.0, 1.0],
                             fov: [fov_x, fov_y],

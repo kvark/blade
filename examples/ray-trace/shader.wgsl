@@ -13,6 +13,23 @@ fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     return v + 2.0*cross(q.xyz, cross(q.xyz,v) + q.w*v);
 }
 
+fn get_miss_color(dir: vec3<f32>) -> vec4<f32> {
+    var colors = array<vec4<f32>, 4>(vec4<f32>(0.0), vec4<f32>(0.9, 0.7, 0.5, 1.0), vec4<f32>(0.5, 0.7, 0.9, 1.0), vec4<f32>(1.0));
+    var thresholds = array<f32, 4>(-0.5, 0.1, 0.7, 1.0);
+    var i = 0;
+    loop {
+        if (dir.y <= thresholds[i]) {
+            let t = (dir.y - thresholds[i - 1]) / (thresholds[i] - thresholds[i - 1]);
+            return mix(colors[i - 1], colors[i], t);
+        }
+        i += 1;
+        if (i >= 4) {
+            break;
+        }
+    }
+    return vec4<f32>(1.0);
+}
+
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let target_size = textureDimensions(output);
@@ -25,14 +42,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let local_dir = vec3<f32>(ndc * tan(parameters.fov), 1.0);
     let world_dir = normalize(qrot(parameters.cam_orientation, local_dir));
 
+    var num_bounces = 0;
     var rq: ray_query;
-    rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, 0xFFu, 0.1, parameters.depth, parameters.cam_position, world_dir));
-    rayQueryProceed(&rq);
-    let intersection = rayQueryGetCommittedIntersection(&rq);
+    var ray_pos = parameters.cam_position;
+    var ray_dir = world_dir;
+    loop {
+        rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, 0xFFu, 0.1, parameters.depth, ray_pos, ray_dir));
+        rayQueryProceed(&rq);
+        let intersection = rayQueryGetCommittedIntersection(&rq);
+        if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
+            break;
+        }
 
-    var color = vec4<f32>(1.0);
-    if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
-        color = vec4<f32>(0.1, 0.2, 0.3, 1.0);
+        ray_pos += ray_dir * intersection.t;
+        num_bounces += 1;
+        if (num_bounces > 0) {
+            break;
+        }
+    }
+    
+    var color = get_miss_color(ray_dir);
+    if (num_bounces != 0) {
+        color = vec4<f32>(1.0);
     }
     textureStore(output, global_id.xy, color);
 }
