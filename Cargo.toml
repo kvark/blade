@@ -32,6 +32,7 @@ blade-graphics = { version = "0.1.0", path = "blade-graphics" }
 
 [dev-dependencies]
 bytemuck = { version = "1", features = ["derive"] }
+del-msh = "0.1"
 egui = { version = "0.20", features = ["bytemuck"] }
 naga = { workspace = true }
 nanorand = { version = "0.7", default-features = false, features = ["wyrand"] }
