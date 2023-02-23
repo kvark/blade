@@ -12,7 +12,8 @@ It's unsafe, it's incomprehensive, but it's small, fast, and actually fun to pro
 
 See [motivation](motivation.md), [FAQ](FAQ.md), and [performance](performance.md) for more info.
 
-![](particles.png)
+![ray-query example](ray-query.gif)
+![particles example](particles.png)
 
 ## Platforms
 
@@ -68,3 +69,10 @@ Vulkan backend can be forced on using "vulkan" config flag. Example invocation t
 ```bash
 RUSTFLAGS="--cfg vulkan" CARGO_TARGET_DIR=./target-vk cargo test
 ```
+
+## Features
+
+| Feature | Vulkan | Metal | GLES |
+| ------- | ------ | ----- | ---- |
+| compute | :white_check_mark: | :white_check_mark: | |
+| ray tracing | :white_check_mark: | | |
