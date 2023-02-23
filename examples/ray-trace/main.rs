@@ -1,6 +1,8 @@
 #![allow(irrefutable_let_patterns)]
 
-use std::{mem, ptr};
+use std::{mem, ptr, time};
+
+const TORUS_RADIUS: f32 = 3.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -9,30 +11,23 @@ pub struct Parameters {
     depth: f32,
     cam_orientation: [f32; 4],
     fov: [f32; 2],
-    _pad: [f32; 2],
+    torus_radius: f32,
+    rotation_angle: f32,
 }
 
 #[derive(blade::ShaderData)]
 struct ShaderData {
     parameters: Parameters,
     acc_struct: blade::AccelerationStructure,
-    output: blade::TextureView,
-}
-
-#[derive(blade::ShaderData)]
-struct DrawData {
-    input: blade::TextureView,
 }
 
 struct Example {
+    start_time: time::Instant,
     blas: blade::AccelerationStructure,
     blas_buffer: blade::Buffer,
     tlas: blade::AccelerationStructure,
     tlas_buffer: blade::Buffer,
-    target: blade::Texture,
-    target_view: blade::TextureView,
-    rt_pipeline: blade::ComputePipeline,
-    draw_pipeline: blade::RenderPipeline,
+    pipeline: blade::RenderPipeline,
     command_encoder: blade::CommandEncoder,
     prev_sync_point: Option<blade::SyncPoint>,
     screen_size: blade::Extent,
@@ -60,23 +55,6 @@ impl Example {
             height: window_size.height,
             depth: 1,
         };
-        let rt_format = blade::TextureFormat::Rgba16Float;
-        let target = context.create_texture(blade::TextureDesc {
-            name: "main",
-            format: rt_format,
-            size: screen_size,
-            dimension: blade::TextureDimension::D2,
-            array_layer_count: 1,
-            mip_level_count: 1,
-            usage: blade::TextureUsage::RESOURCE | blade::TextureUsage::STORAGE,
-        });
-        let target_view = context.create_texture_view(blade::TextureViewDesc {
-            name: "main",
-            texture: target,
-            format: rt_format,
-            dimension: blade::ViewDimension::D2,
-            subresources: &blade::TextureSubresources::default(),
-        });
 
         let surface_format = context.resize(blade::SurfaceConfig {
             size: screen_size,
@@ -87,15 +65,9 @@ impl Example {
         let source = std::fs::read_to_string("examples/ray-trace/shader.wgsl").unwrap();
         let shader = context.create_shader(blade::ShaderDesc { source: &source });
         let data_layout = <ShaderData as blade::ShaderData>::layout();
-        let rt_pipeline = context.create_compute_pipeline(blade::ComputePipelineDesc {
-            name: "ray-trace",
+        let pipeline = context.create_render_pipeline(blade::RenderPipelineDesc {
+            name: "main",
             data_layouts: &[&data_layout],
-            compute: shader.at("main"),
-        });
-        let draw_layout = <DrawData as blade::ShaderData>::layout();
-        let draw_pipeline = context.create_render_pipeline(blade::RenderPipelineDesc {
-            name: "draw",
-            data_layouts: &[&draw_layout],
             primitive: blade::PrimitiveState {
                 topology: blade::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
@@ -106,7 +78,8 @@ impl Example {
             depth_stencil: None,
         });
 
-        let (indices_usize, vertex_values) = del_msh::primitive::torus_tri3(3.0, 1.0, 100, 20);
+        let (indices_usize, vertex_values) =
+            del_msh::primitive::torus_tri3(TORUS_RADIUS, 1.0, 100, 20);
         let vertex_buf = context.create_buffer(blade::BufferDesc {
             name: "vertices",
             size: (vertex_values.len() * mem::size_of::<f32>()) as u64,
@@ -179,8 +152,8 @@ impl Example {
                 acceleration_structure: blas,
                 transform: [
                     [1.0, 0.0, 0.0, 1.5],
-                    [0.0, x_angle.sin(), x_angle.cos(), 0.0],
-                    [0.0, -x_angle.cos(), x_angle.sin(), 0.0],
+                    [0.0, x_angle.sin(), -x_angle.cos(), 0.0],
+                    [0.0, x_angle.cos(), x_angle.sin(), 0.0],
                 ]
                 .into(),
                 mask: 0xFF,
@@ -215,7 +188,6 @@ impl Example {
             buffer_count: 2,
         });
         command_encoder.start();
-        command_encoder.init_texture(target);
         if let mut pass = command_encoder.compute() {
             pass.build_bottom_level_acceleration_structure(blas, &meshes, scratch_buffer.at(0));
         }
@@ -237,14 +209,12 @@ impl Example {
         context.destroy_buffer(instance_buffer);
 
         Self {
+            start_time: time::Instant::now(),
             blas,
             blas_buffer,
             tlas,
             tlas_buffer,
-            target,
-            target_view,
-            rt_pipeline,
-            draw_pipeline,
+            pipeline,
             command_encoder,
             prev_sync_point: None,
             screen_size,
@@ -256,8 +226,6 @@ impl Example {
         if let Some(sp) = self.prev_sync_point {
             self.context.wait_for(&sp, !0);
         }
-        self.context.destroy_texture_view(self.target_view);
-        self.context.destroy_texture(self.target);
         self.context.destroy_acceleration_structure(self.blas);
         self.context.destroy_buffer(self.blas_buffer);
         self.context.destroy_buffer(self.tlas_buffer);
@@ -265,36 +233,6 @@ impl Example {
 
     fn render(&mut self) {
         self.command_encoder.start();
-
-        if let mut pass = self.command_encoder.compute() {
-            if let mut pc = pass.with(&self.rt_pipeline) {
-                let wg_size = self.rt_pipeline.get_workgroup_size();
-                let group_count = [
-                    (self.screen_size.width + wg_size[0] - 1) / wg_size[0],
-                    (self.screen_size.height + wg_size[1] - 1) / wg_size[1],
-                    1,
-                ];
-                let fov_y = 0.3;
-                let fov_x = fov_y * self.screen_size.width as f32 / self.screen_size.height as f32;
-
-                pc.bind(
-                    0,
-                    &ShaderData {
-                        parameters: Parameters {
-                            cam_position: [0.0, 0.0, -20.0],
-                            depth: 100.0,
-                            cam_orientation: [0.0, 0.0, 0.0, 1.0],
-                            fov: [fov_x, fov_y],
-                            _pad: [0.0; 2],
-                        },
-                        acc_struct: self.tlas,
-                        output: self.target_view,
-                    },
-                );
-                pc.dispatch(group_count);
-            }
-        }
-
         let frame = self.context.acquire_frame();
         self.command_encoder.init_texture(frame.texture());
 
@@ -306,11 +244,23 @@ impl Example {
             }],
             depth_stencil: None,
         }) {
-            if let mut pc = pass.with(&self.draw_pipeline) {
+            if let mut pc = pass.with(&self.pipeline) {
+                let fov_y = 0.3;
+                let fov_x = fov_y * self.screen_size.width as f32 / self.screen_size.height as f32;
+                let rotation_angle = self.start_time.elapsed().as_secs_f32() * 0.4;
+
                 pc.bind(
                     0,
-                    &DrawData {
-                        input: self.target_view,
+                    &ShaderData {
+                        parameters: Parameters {
+                            cam_position: [0.0, 0.0, -20.0],
+                            depth: 100.0,
+                            cam_orientation: [0.0, 0.0, 0.0, 1.0],
+                            fov: [fov_x, fov_y],
+                            torus_radius: TORUS_RADIUS,
+                            rotation_angle,
+                        },
+                        acc_struct: self.tlas,
                     },
                 );
                 pc.draw(0, 3, 0, 1);
