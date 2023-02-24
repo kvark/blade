@@ -176,6 +176,22 @@ impl super::Context {
         &self,
         desc: crate::AccelerationStructureDesc,
     ) -> super::AccelerationStructure {
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(desc.size)
+            .usage(vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let buffer = unsafe { self.device.core.create_buffer(&buffer_info, None).unwrap() };
+        let requirements = unsafe { self.device.core.get_buffer_memory_requirements(buffer) };
+        let allocation = self.allocate_memory(requirements, crate::Memory::Device);
+
+        unsafe {
+            self.device
+                .core
+                .bind_buffer_memory(buffer, allocation.memory, allocation.offset)
+                .unwrap()
+        };
+
         let raw_ty = match desc.ty {
             crate::AccelerationStructureType::TopLevel => {
                 vk::AccelerationStructureTypeKHR::TOP_LEVEL
@@ -186,8 +202,7 @@ impl super::Context {
         };
         let vk_info = vk::AccelerationStructureCreateInfoKHR::builder()
             .ty(raw_ty)
-            .buffer(desc.buffer.raw)
-            .offset(desc.offset)
+            .buffer(buffer)
             .size(desc.size);
 
         let rt = self.device.ray_tracing.as_ref().unwrap();
@@ -196,7 +211,16 @@ impl super::Context {
                 .create_acceleration_structure(&vk_info, None)
                 .unwrap()
         };
-        super::AccelerationStructure { raw }
+
+        if !desc.name.is_empty() {
+            self.set_object_name(vk::ObjectType::BUFFER, buffer, desc.name);
+            self.set_object_name(vk::ObjectType::ACCELERATION_STRUCTURE_KHR, raw, desc.name);
+        }
+        super::AccelerationStructure {
+            raw,
+            buffer,
+            memory_handle: allocation.handle,
+        }
     }
 
     pub fn destroy_acceleration_structure(
@@ -207,7 +231,11 @@ impl super::Context {
         unsafe {
             rt.acceleration_structure
                 .destroy_acceleration_structure(acceleration_structure.raw, None);
+            self.device
+                .core
+                .destroy_buffer(acceleration_structure.buffer, None);
         }
+        self.free_memory(acceleration_structure.memory_handle);
     }
 }
 
@@ -232,9 +260,8 @@ impl crate::traits::ResourceDevice for super::Context {
             )
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
         if self.device.ray_tracing.is_some() {
-            vk_info.usage |= Buf::SHADER_DEVICE_ADDRESS
-                | Buf::ACCELERATION_STRUCTURE_STORAGE_KHR
-                | Buf::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
+            vk_info.usage |=
+                Buf::SHADER_DEVICE_ADDRESS | Buf::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
         }
 
         let raw = unsafe { self.device.core.create_buffer(&vk_info, None).unwrap() };

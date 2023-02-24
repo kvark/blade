@@ -46,7 +46,6 @@ pub mod limits {
     pub const PLAIN_DATA_SIZE: u32 = 256;
     pub const RESOURCES_IN_GROUP: u32 = 8;
     pub const STORAGE_BUFFER_ALIGNMENT: u64 = 256;
-    pub const ACCELERATION_STRUCTURE_BUFFER_ALIGNMENT: u64 = 256;
     pub const ACCELERATION_STRUCTURE_SCRATCH_ALIGNMENT: u64 = 256;
 }
 
@@ -349,10 +348,6 @@ pub enum AccelerationStructureType {
 pub struct AccelerationStructureDesc<'a> {
     pub name: &'a str,
     pub ty: AccelerationStructureType,
-    pub buffer: Buffer,
-    /// Offset into the buffer where AS is placed.
-    /// Must be a multiple of `limits::ACCELERATION_STRUCTURE_BUFFER_ALIGNMENT`.
-    pub offset: u64,
     pub size: u64,
 }
 
