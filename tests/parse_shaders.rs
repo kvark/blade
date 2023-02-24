@@ -41,7 +41,7 @@ fn parse_wgsl() {
             //TODO: re-use the validator
             Validator::new(
                 naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS,
-                naga::valid::Capabilities::empty(),
+                naga::valid::Capabilities::RAY_QUERY,
             )
             .validate(&module)
             .unwrap_or_else(|e| {

@@ -22,8 +22,7 @@ raw-window-handle = "0.5"
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 block = "0.1"
 core-graphics-types = "0.1"
-foreign-types = "0.3"
-metal = "0.24"
+metal = { git = "https://github.com/kvark/metal-rs", branch = "rt" }
 objc = "0.2.5"
 naga = { workspace = true, features = ["msl-out"] }
 

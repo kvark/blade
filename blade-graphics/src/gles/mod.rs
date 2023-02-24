@@ -77,6 +77,9 @@ pub struct Sampler {
     raw: glow::Sampler,
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
+pub struct AccelerationStructure {}
+
 type SlotList = Vec<u32>;
 
 struct BindGroupInfo {
@@ -312,6 +315,7 @@ pub struct CommandEncoder {
 
 enum PassKind {
     Transfer,
+    AccelerationStructure,
     Compute,
     Render,
 }
@@ -445,6 +449,7 @@ fn describe_texture_format(format: crate::TextureFormat) -> FormatInfo {
         Tf::Rgba8Unorm => (glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
         Tf::Rgba8UnormSrgb => (glow::SRGB8_ALPHA8, glow::RGBA, glow::UNSIGNED_BYTE),
         Tf::Bgra8UnormSrgb => (glow::SRGB8_ALPHA8, glow::BGRA, glow::UNSIGNED_BYTE),
+        Tf::Rgba16Float => (glow::RGBA16F, glow::RGBA, glow::FLOAT),
         Tf::Depth32Float => (glow::DEPTH_COMPONENT32F, glow::DEPTH_COMPONENT, glow::FLOAT),
     };
     FormatInfo {
