@@ -304,8 +304,9 @@ impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
     }
 }
 
-impl super::PassEncoder<'_, ()> {
-    pub fn build_bottom_level(
+#[hidden_trait::expose]
+impl crate::traits::AccelerationStructureEncoder for super::PassEncoder<'_, ()> {
+    fn build_bottom_level(
         &mut self,
         _acceleration_structure: super::AccelerationStructure,
         _meshes: &[crate::AccelerationStructureMesh],
@@ -314,7 +315,7 @@ impl super::PassEncoder<'_, ()> {
         unimplemented!()
     }
 
-    pub fn build_top_level(
+    fn build_top_level(
         &mut self,
         _acceleration_structure: super::AccelerationStructure,
         _instance_count: u32,

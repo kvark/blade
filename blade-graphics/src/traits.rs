@@ -4,6 +4,7 @@ pub trait ResourceDevice {
     type Texture: Clone + Copy + Debug + Hash + PartialEq;
     type TextureView: Clone + Copy + Debug + Hash + PartialEq;
     type Sampler: Clone + Copy + Debug + Hash + PartialEq;
+    type AccelerationStructure: Clone + Copy + Debug + Hash + PartialEq;
 
     fn create_buffer(&self, desc: super::BufferDesc) -> Self::Buffer;
     fn sync_buffer(&self, buffer: Self::Buffer);
@@ -14,6 +15,11 @@ pub trait ResourceDevice {
     fn destroy_texture_view(&self, view: Self::TextureView);
     fn create_sampler(&self, desc: super::SamplerDesc) -> Self::Sampler;
     fn destroy_sampler(&self, sampler: Self::Sampler);
+    fn create_acceleration_structure(
+        &self,
+        desc: super::AccelerationStructureDesc,
+    ) -> Self::AccelerationStructure;
+    fn destroy_acceleration_structure(&self, acceleration_structure: Self::AccelerationStructure);
 }
 
 pub trait CommandDevice {
@@ -55,6 +61,23 @@ pub trait TransferEncoder {
         dst: super::BufferPiece,
         bytes_per_row: u32,
         size: super::Extent,
+    );
+}
+
+pub trait AccelerationStructureEncoder {
+    fn build_bottom_level(
+        &mut self,
+        acceleration_structure: crate::AccelerationStructure,
+        meshes: &[super::AccelerationStructureMesh],
+        scratch_data: super::BufferPiece,
+    );
+
+    fn build_top_level(
+        &mut self,
+        acceleration_structure: crate::AccelerationStructure,
+        instance_count: u32,
+        instance_data: super::BufferPiece,
+        scratch_data: super::BufferPiece,
     );
 }
 
