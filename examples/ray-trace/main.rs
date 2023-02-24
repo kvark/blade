@@ -24,9 +24,7 @@ struct ShaderData {
 struct Example {
     start_time: time::Instant,
     blas: blade::AccelerationStructure,
-    blas_buffer: blade::Buffer,
     tlas: blade::AccelerationStructure,
-    tlas_buffer: blade::Buffer,
     pipeline: blade::RenderPipeline,
     command_encoder: blade::CommandEncoder,
     prev_sync_point: Option<blade::SyncPoint>,
@@ -122,16 +120,9 @@ impl Example {
             is_opaque: true,
         }];
         let blas_sizes = context.get_bottom_level_acceleration_structure_sizes(&meshes);
-        let blas_buffer = context.create_buffer(blade::BufferDesc {
-            name: "BLAS",
-            size: blas_sizes.data,
-            memory: blade::Memory::Device,
-        });
         let blas = context.create_acceleration_structure(blade::AccelerationStructureDesc {
             name: "triangle",
             ty: blade::AccelerationStructureType::BottomLevel,
-            buffer: blas_buffer,
-            offset: 0,
             size: blas_sizes.data,
         });
 
@@ -162,16 +153,9 @@ impl Example {
         ];
         let tlas_sizes = context.get_top_level_acceleration_structure_sizes(instances.len() as u32);
         let instance_buffer = context.create_acceleration_structure_instance_buffer(&instances);
-        let tlas_buffer = context.create_buffer(blade::BufferDesc {
-            name: "TLAS",
-            size: tlas_sizes.data,
-            memory: blade::Memory::Device,
-        });
         let tlas = context.create_acceleration_structure(blade::AccelerationStructureDesc {
             name: "TLAS",
             ty: blade::AccelerationStructureType::TopLevel,
-            buffer: tlas_buffer,
-            offset: 0,
             size: tlas_sizes.data,
         });
         let tlas_scratch_offset = (blas_sizes.scratch
@@ -211,9 +195,7 @@ impl Example {
         Self {
             start_time: time::Instant::now(),
             blas,
-            blas_buffer,
             tlas,
-            tlas_buffer,
             pipeline,
             command_encoder,
             prev_sync_point: None,
@@ -227,8 +209,7 @@ impl Example {
             self.context.wait_for(&sp, !0);
         }
         self.context.destroy_acceleration_structure(self.blas);
-        self.context.destroy_buffer(self.blas_buffer);
-        self.context.destroy_buffer(self.tlas_buffer);
+        self.context.destroy_acceleration_structure(self.tlas);
     }
 
     fn render(&mut self) {
