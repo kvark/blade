@@ -301,9 +301,11 @@ impl Drop for super::TransferCommandEncoder<'_> {
     }
 }
 
-impl<'a> super::AccelerationStructureCommandEncoder<'a> {
-    //TODO: move into the trait
-    pub fn build_bottom_level(
+#[hidden_trait::expose]
+impl crate::traits::AccelerationStructureEncoder
+    for super::AccelerationStructureCommandEncoder<'_>
+{
+    fn build_bottom_level(
         &mut self,
         _acceleration_structure: super::AccelerationStructure,
         _meshes: &[crate::AccelerationStructureMesh],
@@ -312,7 +314,7 @@ impl<'a> super::AccelerationStructureCommandEncoder<'a> {
         unimplemented!()
     }
 
-    pub fn build_top_level(
+    fn build_top_level(
         &mut self,
         _acceleration_structure: super::AccelerationStructure,
         _instance_count: u32,

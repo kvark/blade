@@ -85,20 +85,6 @@ impl super::Context {
     ) -> super::Buffer {
         unimplemented!()
     }
-
-    pub fn create_acceleration_structure(
-        &self,
-        _desc: crate::AccelerationStructureDesc,
-    ) -> super::AccelerationStructure {
-        unimplemented!()
-    }
-
-    pub fn destroy_acceleration_structure(
-        &self,
-        _acceleration_structure: super::AccelerationStructure,
-    ) {
-        unimplemented!()
-    }
 }
 
 #[hidden_trait::expose]
@@ -107,6 +93,7 @@ impl crate::traits::ResourceDevice for super::Context {
     type Texture = super::Texture;
     type TextureView = super::TextureView;
     type Sampler = super::Sampler;
+    type AccelerationStructure = super::AccelerationStructure;
 
     fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         let options = match desc.memory {
@@ -276,5 +263,19 @@ impl crate::traits::ResourceDevice for super::Context {
         unsafe {
             let () = msg_send![sampler.raw, release];
         }
+    }
+
+    fn create_acceleration_structure(
+        &self,
+        _desc: crate::AccelerationStructureDesc,
+    ) -> super::AccelerationStructure {
+        unimplemented!()
+    }
+
+    fn destroy_acceleration_structure(
+        &self,
+        _acceleration_structure: super::AccelerationStructure,
+    ) {
+        unimplemented!()
     }
 }

@@ -426,9 +426,11 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
     }
 }
 
-impl<'a> super::AccelerationStructureCommandEncoder<'a> {
-    //TODO: move into the trait
-    pub fn build_bottom_level(
+#[hidden_trait::expose]
+impl crate::traits::AccelerationStructureEncoder
+    for super::AccelerationStructureCommandEncoder<'_>
+{
+    fn build_bottom_level(
         &mut self,
         acceleration_structure: super::AccelerationStructure,
         meshes: &[crate::AccelerationStructureMesh],
@@ -450,7 +452,7 @@ impl<'a> super::AccelerationStructureCommandEncoder<'a> {
         }
     }
 
-    pub fn build_top_level(
+    fn build_top_level(
         &mut self,
         acceleration_structure: super::AccelerationStructure,
         instance_count: u32,
