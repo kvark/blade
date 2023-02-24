@@ -253,6 +253,14 @@ impl super::CommandEncoder {
         }
     }
 
+    pub fn acceleration_structure(&mut self) -> super::AccelerationStructureCommandEncoder {
+        self.barrier();
+        super::AccelerationStructureCommandEncoder {
+            raw: self.buffers[0].raw,
+            device: &self.device,
+        }
+    }
+
     pub fn compute(&mut self) -> super::ComputeCommandEncoder {
         self.barrier();
         super::ComputeCommandEncoder {
@@ -418,23 +426,9 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
     }
 }
 
-impl<'a> super::ComputeCommandEncoder<'a> {
-    pub fn with<'b, 'p>(
-        &'b mut self,
-        pipeline: &'p super::ComputePipeline,
-    ) -> super::PipelineEncoder<'b, 'p> {
-        super::PipelineEncoder {
-            cmd_buf: self.cmd_buf,
-            layout: &pipeline.layout,
-            bind_point: vk::PipelineBindPoint::COMPUTE,
-            device: self.device,
-            update_data: self.update_data,
-        }
-        .init(pipeline.raw)
-    }
-
+impl<'a> super::AccelerationStructureCommandEncoder<'a> {
     //TODO: move into the trait
-    pub fn build_bottom_level_acceleration_structure(
+    pub fn build_bottom_level(
         &mut self,
         acceleration_structure: super::AccelerationStructure,
         meshes: &[crate::AccelerationStructureMesh],
@@ -449,14 +443,14 @@ impl<'a> super::ComputeCommandEncoder<'a> {
         let rt = self.device.ray_tracing.as_ref().unwrap();
         unsafe {
             rt.acceleration_structure.cmd_build_acceleration_structures(
-                self.cmd_buf.raw,
+                self.raw,
                 &[blas_input.build_info],
                 &[&blas_input.build_range_infos],
             );
         }
     }
 
-    pub fn build_top_level_acceleration_structure(
+    pub fn build_top_level(
         &mut self,
         acceleration_structure: super::AccelerationStructure,
         instance_count: u32,
@@ -493,11 +487,27 @@ impl<'a> super::ComputeCommandEncoder<'a> {
         let rt = self.device.ray_tracing.as_ref().unwrap();
         unsafe {
             rt.acceleration_structure.cmd_build_acceleration_structures(
-                self.cmd_buf.raw,
+                self.raw,
                 &[build_info],
                 &[&[build_range_info]],
             );
         }
+    }
+}
+
+impl<'a> super::ComputeCommandEncoder<'a> {
+    pub fn with<'b, 'p>(
+        &'b mut self,
+        pipeline: &'p super::ComputePipeline,
+    ) -> super::PipelineEncoder<'b, 'p> {
+        super::PipelineEncoder {
+            cmd_buf: self.cmd_buf,
+            layout: &pipeline.layout,
+            bind_point: vk::PipelineBindPoint::COMPUTE,
+            device: self.device,
+            update_data: self.update_data,
+        }
+        .init(pipeline.raw)
     }
 }
 

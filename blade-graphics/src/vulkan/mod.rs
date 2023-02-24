@@ -213,6 +213,10 @@ pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
     device: &'a Device,
 }
+pub struct AccelerationStructureCommandEncoder<'a> {
+    raw: vk::CommandBuffer,
+    device: &'a Device,
+}
 pub struct ComputeCommandEncoder<'a> {
     cmd_buf: CommandBuffer,
     device: &'a Device,

@@ -62,6 +62,21 @@ impl crate::ShaderBindable for crate::BufferPiece {
         }
     }
 }
+impl crate::ShaderBindable for crate::AccelerationStructure {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        let slot = ctx.targets[index as usize] as _;
+        let value = Some(self.as_ref());
+        if let Some(encoder) = ctx.vs_encoder {
+            encoder.set_vertex_acceleration_structure(slot, value);
+        }
+        if let Some(encoder) = ctx.fs_encoder {
+            encoder.set_fragment_acceleration_structure(slot, value);
+        }
+        if let Some(encoder) = ctx.cs_encoder {
+            encoder.set_acceleration_structure(slot, value);
+        }
+    }
+}
 
 impl super::CommandEncoder {
     pub fn start(&mut self) {
@@ -90,6 +105,20 @@ impl super::CommandEncoder {
                 .to_owned()
         });
         super::TransferCommandEncoder {
+            raw,
+            phantom: PhantomData,
+        }
+    }
+
+    pub fn acceleration_structure(&mut self) -> super::AccelerationStructureCommandEncoder {
+        let raw = objc::rc::autoreleasepool(|| {
+            self.raw
+                .as_mut()
+                .unwrap()
+                .new_acceleration_structure_command_encoder()
+                .to_owned()
+        });
+        super::AccelerationStructureCommandEncoder {
             raw,
             phantom: PhantomData,
         }
@@ -267,6 +296,34 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
 }
 
 impl Drop for super::TransferCommandEncoder<'_> {
+    fn drop(&mut self) {
+        self.raw.end_encoding();
+    }
+}
+
+impl<'a> super::AccelerationStructureCommandEncoder<'a> {
+    //TODO: move into the trait
+    pub fn build_bottom_level(
+        &mut self,
+        _acceleration_structure: super::AccelerationStructure,
+        _meshes: &[crate::AccelerationStructureMesh],
+        _scratch_data: crate::BufferPiece,
+    ) {
+        unimplemented!()
+    }
+
+    pub fn build_top_level(
+        &mut self,
+        _acceleration_structure: super::AccelerationStructure,
+        _instance_count: u32,
+        _instance_data: crate::BufferPiece,
+        _scratch_data: crate::BufferPiece,
+    ) {
+        unimplemented!()
+    }
+}
+
+impl Drop for super::AccelerationStructureCommandEncoder<'_> {
     fn drop(&mut self) {
         self.raw.end_encoding();
     }

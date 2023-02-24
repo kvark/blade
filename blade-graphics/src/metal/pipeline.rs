@@ -126,6 +126,7 @@ impl super::PipelineLayout {
         let mut num_textures = 0u32;
         let mut num_samplers = 0u32;
         let mut num_buffers = 0u32;
+        let mut num_acceleration_structures = 0u32;
         for layout in bind_group_layouts.iter() {
             let mut targets = Vec::with_capacity(layout.bindings.len());
             for &(_, ref binding) in layout.bindings.iter() {
@@ -142,6 +143,10 @@ impl super::PipelineLayout {
                         unsized_buffer_count += 1;
                         num_buffers += 1;
                         num_buffers - 1
+                    }
+                    crate::ShaderBinding::AccelerationStructure => {
+                        num_acceleration_structures += 1;
+                        num_acceleration_structures - 1
                     }
                     crate::ShaderBinding::Plain { .. } => {
                         num_buffers += 1;

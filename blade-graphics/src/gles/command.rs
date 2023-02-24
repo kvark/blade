@@ -59,6 +59,13 @@ impl crate::ShaderBindable for crate::BufferPiece {
         }
     }
 }
+impl crate::ShaderBindable for super::AccelerationStructure {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        for _ in ctx.targets[index as usize].iter() {
+            unimplemented!()
+        }
+    }
+}
 
 impl super::CommandEncoder {
     pub fn start(&mut self) {
@@ -82,6 +89,10 @@ impl super::CommandEncoder {
             pipeline: Default::default(),
             limits: &self.limits,
         }
+    }
+
+    pub fn acceleration_structure(&mut self) -> super::PassEncoder<()> {
+        unimplemented!()
     }
 
     pub fn compute(&mut self) -> super::PassEncoder<super::ComputePipeline> {
@@ -215,7 +226,7 @@ impl<T> Drop for super::PassEncoder<'_, T> {
                 .push(super::Command::InvalidateAttachment(attachment));
         }
         match self.kind {
-            super::PassKind::Transfer => {}
+            super::PassKind::Transfer | super::PassKind::AccelerationStructure => {}
             super::PassKind::Compute => {
                 self.commands.push(super::Command::ResetAllSamplers);
             }
@@ -290,6 +301,27 @@ impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
             bytes_per_row,
             size,
         });
+    }
+}
+
+impl super::PassEncoder<'_, ()> {
+    pub fn build_bottom_level(
+        &mut self,
+        _acceleration_structure: super::AccelerationStructure,
+        _meshes: &[crate::AccelerationStructureMesh],
+        _scratch_data: crate::BufferPiece,
+    ) {
+        unimplemented!()
+    }
+
+    pub fn build_top_level(
+        &mut self,
+        _acceleration_structure: super::AccelerationStructure,
+        _instance_count: u32,
+        _instance_data: crate::BufferPiece,
+        _scratch_data: crate::BufferPiece,
+    ) {
+        unimplemented!()
     }
 }
 

@@ -137,6 +137,9 @@ impl super::Context {
                             targets.push(params[0] as u32);
                         }
                     }
+                    crate::ShaderBinding::AccelerationStructure => {
+                        unimplemented!()
+                    }
                     crate::ShaderBinding::Plain { size } => {
                         if let Some(index) = gl.get_uniform_block_index(program, glsl_name) {
                             let expected_size = gl.get_active_uniform_block_parameter_i32(

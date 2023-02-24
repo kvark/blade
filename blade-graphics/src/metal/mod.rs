@@ -5,7 +5,7 @@ use std::{
     thread, time,
 };
 
-use foreign_types::ForeignTypeRef as _;
+use metal::foreign_types::{ForeignType as _, ForeignTypeRef as _};
 
 mod command;
 mod pipeline;
@@ -124,6 +124,25 @@ impl Sampler {
     }
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
+pub struct AccelerationStructure {
+    raw: *mut metal::MTLAccelerationStructure,
+}
+
+impl Default for AccelerationStructure {
+    fn default() -> Self {
+        Self {
+            raw: ptr::null_mut(),
+        }
+    }
+}
+
+impl AccelerationStructure {
+    fn as_ref(&self) -> &metal::AccelerationStructureRef {
+        unsafe { metal::AccelerationStructureRef::from_ptr(self.raw) }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SyncPoint {
     cmd_buf: metal::CommandBuffer,
@@ -192,6 +211,12 @@ pub struct TransferCommandEncoder<'a> {
 }
 
 #[derive(Debug)]
+pub struct AccelerationStructureCommandEncoder<'a> {
+    raw: metal::AccelerationStructureCommandEncoder,
+    phantom: PhantomData<&'a CommandEncoder>,
+}
+
+#[derive(Debug)]
 pub struct ComputeCommandEncoder<'a> {
     raw: metal::ComputeCommandEncoder,
     phantom: PhantomData<&'a CommandEncoder>,
@@ -232,6 +257,7 @@ fn map_texture_format(format: crate::TextureFormat) -> metal::MTLPixelFormat {
         Tf::Rgba8Unorm => RGBA8Unorm,
         Tf::Rgba8UnormSrgb => RGBA8Unorm_sRGB,
         Tf::Bgra8UnormSrgb => BGRA8Unorm_sRGB,
+        Tf::Rgba16Float => RGBA16Float,
         Tf::Depth32Float => Depth32Float,
     }
 }

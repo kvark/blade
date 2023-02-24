@@ -64,6 +64,43 @@ fn map_border_color(color: crate::TextureColor) -> metal::MTLSamplerBorderColor 
     }
 }
 
+impl super::Context {
+    pub fn get_bottom_level_acceleration_structure_sizes(
+        &self,
+        _meshes: &[crate::AccelerationStructureMesh],
+    ) -> crate::AccelerationStructureSizes {
+        unimplemented!()
+    }
+
+    pub fn get_top_level_acceleration_structure_sizes(
+        &self,
+        _instance_count: u32,
+    ) -> crate::AccelerationStructureSizes {
+        unimplemented!()
+    }
+
+    pub fn create_acceleration_structure_instance_buffer(
+        &self,
+        _instances: &[crate::AccelerationStructureInstance],
+    ) -> super::Buffer {
+        unimplemented!()
+    }
+
+    pub fn create_acceleration_structure(
+        &self,
+        _desc: crate::AccelerationStructureDesc,
+    ) -> super::AccelerationStructure {
+        unimplemented!()
+    }
+
+    pub fn destroy_acceleration_structure(
+        &self,
+        _acceleration_structure: super::AccelerationStructure,
+    ) {
+        unimplemented!()
+    }
+}
+
 #[hidden_trait::expose]
 impl crate::traits::ResourceDevice for super::Context {
     type Buffer = super::Buffer;

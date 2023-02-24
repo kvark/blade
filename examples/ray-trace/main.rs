@@ -188,12 +188,12 @@ impl Example {
             buffer_count: 2,
         });
         command_encoder.start();
-        if let mut pass = command_encoder.compute() {
-            pass.build_bottom_level_acceleration_structure(blas, &meshes, scratch_buffer.at(0));
+        if let mut pass = command_encoder.acceleration_structure() {
+            pass.build_bottom_level(blas, &meshes, scratch_buffer.at(0));
         }
         //Note: separate pass in order to enforce synchronization
-        if let mut pass = command_encoder.compute() {
-            pass.build_top_level_acceleration_structure(
+        if let mut pass = command_encoder.acceleration_structure() {
+            pass.build_top_level(
                 tlas,
                 instances.len() as u32,
                 instance_buffer.at(0),
