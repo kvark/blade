@@ -455,6 +455,7 @@ impl crate::traits::AccelerationStructureEncoder
     fn build_top_level(
         &mut self,
         acceleration_structure: super::AccelerationStructure,
+        _bottom_level: &[super::AccelerationStructure],
         instance_count: u32,
         instance_data: crate::BufferPiece,
         scratch_data: crate::BufferPiece,

@@ -307,21 +307,45 @@ impl crate::traits::AccelerationStructureEncoder
 {
     fn build_bottom_level(
         &mut self,
-        _acceleration_structure: super::AccelerationStructure,
-        _meshes: &[crate::AccelerationStructureMesh],
-        _scratch_data: crate::BufferPiece,
+        acceleration_structure: super::AccelerationStructure,
+        meshes: &[crate::AccelerationStructureMesh],
+        scratch_data: crate::BufferPiece,
     ) {
-        unimplemented!()
+        let descriptor = super::make_bottom_level_acceleration_structure_desc(meshes);
+        self.raw.build_acceleration_structure(
+            acceleration_structure.as_ref(),
+            &descriptor,
+            scratch_data.buffer.as_ref(),
+            scratch_data.offset,
+        );
     }
 
     fn build_top_level(
         &mut self,
-        _acceleration_structure: super::AccelerationStructure,
-        _instance_count: u32,
-        _instance_data: crate::BufferPiece,
-        _scratch_data: crate::BufferPiece,
+        acceleration_structure: super::AccelerationStructure,
+        bottom_level: &[super::AccelerationStructure],
+        instance_count: u32,
+        instance_data: crate::BufferPiece,
+        scratch_data: crate::BufferPiece,
     ) {
-        unimplemented!()
+        let mut primitive_acceleration_structures = Vec::with_capacity(bottom_level.len());
+        for blas in bottom_level {
+            primitive_acceleration_structures.push(blas.as_ref());
+        }
+        let descriptor = metal::InstanceAccelerationStructureDescriptor::descriptor();
+        descriptor.set_instanced_acceleration_structures(&metal::Array::from_slice(
+            &primitive_acceleration_structures,
+        ));
+        descriptor.set_instance_count(instance_count as _);
+        descriptor.set_instance_descriptor_buffer(instance_data.buffer.as_ref());
+        descriptor.set_instance_descriptor_buffer_offset(instance_data.offset);
+
+        self.raw.build_acceleration_structure(
+            acceleration_structure.as_ref(),
+            &descriptor,
+            scratch_data.buffer.as_ref(),
+            scratch_data.offset,
+        );
     }
 }
 
@@ -525,7 +549,7 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
         start_instance: u32,
         instance_count: u32,
     ) {
-        let raw_index_type = map_index_type(index_type);
+        let raw_index_type = super::map_index_type(index_type);
         if base_vertex != 0 || start_instance != 0 {
             self.encoder
                 .draw_indexed_primitives_instanced_base_instance(
@@ -578,13 +602,6 @@ fn map_extent(extent: &crate::Extent) -> metal::MTLSize {
         width: extent.width as u64,
         height: extent.height as u64,
         depth: extent.depth as u64,
-    }
-}
-
-fn map_index_type(ty: crate::IndexType) -> metal::MTLIndexType {
-    match ty {
-        crate::IndexType::U16 => metal::MTLIndexType::UInt16,
-        crate::IndexType::U32 => metal::MTLIndexType::UInt32,
     }
 }
 

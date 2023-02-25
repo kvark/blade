@@ -19,6 +19,7 @@ impl super::Context {
     pub fn create_acceleration_structure_instance_buffer(
         &self,
         _instances: &[crate::AccelerationStructureInstance],
+        _bottom_level: &[super::AccelerationStructure],
     ) -> super::Buffer {
         unimplemented!()
     }

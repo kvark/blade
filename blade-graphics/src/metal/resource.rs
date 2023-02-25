@@ -1,4 +1,5 @@
 use objc::{msg_send, sel, sel_impl};
+use std::mem;
 
 fn map_texture_usage(usage: crate::TextureUsage) -> metal::MTLTextureUsage {
     use crate::TextureUsage as Tu;
@@ -67,23 +68,65 @@ fn map_border_color(color: crate::TextureColor) -> metal::MTLSamplerBorderColor 
 impl super::Context {
     pub fn get_bottom_level_acceleration_structure_sizes(
         &self,
-        _meshes: &[crate::AccelerationStructureMesh],
+        meshes: &[crate::AccelerationStructureMesh],
     ) -> crate::AccelerationStructureSizes {
-        unimplemented!()
+        let descriptor = super::make_bottom_level_acceleration_structure_desc(meshes);
+        let accel_sizes = self
+            .device
+            .lock()
+            .unwrap()
+            .acceleration_structure_sizes_with_descriptor(&descriptor);
+
+        crate::AccelerationStructureSizes {
+            data: accel_sizes.acceleration_structure_size,
+            scratch: accel_sizes.build_scratch_buffer_size,
+        }
     }
 
     pub fn get_top_level_acceleration_structure_sizes(
         &self,
-        _instance_count: u32,
+        instance_count: u32,
     ) -> crate::AccelerationStructureSizes {
-        unimplemented!()
+        let descriptor = metal::InstanceAccelerationStructureDescriptor::descriptor();
+        descriptor.set_instance_count(instance_count as _);
+
+        let accel_sizes = self
+            .device
+            .lock()
+            .unwrap()
+            .acceleration_structure_sizes_with_descriptor(&descriptor);
+
+        crate::AccelerationStructureSizes {
+            data: accel_sizes.acceleration_structure_size,
+            scratch: accel_sizes.build_scratch_buffer_size,
+        }
     }
 
     pub fn create_acceleration_structure_instance_buffer(
         &self,
-        _instances: &[crate::AccelerationStructureInstance],
+        instances: &[crate::AccelerationStructureInstance],
+        _bottom_level: &[super::AccelerationStructure],
     ) -> super::Buffer {
-        unimplemented!()
+        let mut instance_descriptors = Vec::with_capacity(instances.len());
+        for instance in instances {
+            let transposed = mint::ColumnMatrix3x4::from(instance.transform);
+            instance_descriptors.push(metal::MTLAccelerationStructureInstanceDescriptor {
+                acceleration_structure_index: instance.acceleration_structure_index,
+                mask: instance.mask,
+                transformation_matrix: transposed.into(),
+                options: metal::MTLAccelerationStructureInstanceOptions::None,
+                intersection_function_table_offset: 0,
+            });
+        }
+        let buffer = self.device.lock().unwrap().new_buffer_with_data(
+            instance_descriptors.as_ptr() as *const _,
+            (mem::size_of::<metal::MTLAccelerationStructureInstanceDescriptor>() * instances.len())
+                as _,
+            metal::MTLResourceOptions::StorageModePrivate,
+        );
+        super::Buffer {
+            raw: unsafe { msg_send![buffer.as_ref(), retain] },
+        }
     }
 }
 
@@ -267,15 +310,25 @@ impl crate::traits::ResourceDevice for super::Context {
 
     fn create_acceleration_structure(
         &self,
-        _desc: crate::AccelerationStructureDesc,
+        desc: crate::AccelerationStructureDesc,
     ) -> super::AccelerationStructure {
-        unimplemented!()
+        let raw = self
+            .device
+            .lock()
+            .unwrap()
+            .new_acceleration_structure_with_size(desc.size);
+        if !desc.name.is_empty() {
+            raw.set_label(desc.name);
+        }
+
+        super::AccelerationStructure {
+            raw: unsafe { msg_send![raw.as_ref(), retain] },
+        }
     }
 
-    fn destroy_acceleration_structure(
-        &self,
-        _acceleration_structure: super::AccelerationStructure,
-    ) {
-        unimplemented!()
+    fn destroy_acceleration_structure(&self, acceleration_structure: super::AccelerationStructure) {
+        unsafe {
+            let () = msg_send![acceleration_structure.raw, release];
+        }
     }
 }

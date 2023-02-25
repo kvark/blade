@@ -139,6 +139,7 @@ impl super::Context {
     pub fn create_acceleration_structure_instance_buffer(
         &self,
         instances: &[crate::AccelerationStructureInstance],
+        bottom_level: &[super::AccelerationStructure],
     ) -> super::Buffer {
         let buffer = self.create_buffer(crate::BufferDesc {
             name: "instance buffer",
@@ -148,11 +149,13 @@ impl super::Context {
         let rt = self.device.ray_tracing.as_ref().unwrap();
         for (i, instance) in instances.iter().enumerate() {
             let device_address_info = vk::AccelerationStructureDeviceAddressInfoKHR::builder()
-                .acceleration_structure(instance.acceleration_structure.raw);
+                .acceleration_structure(
+                    bottom_level[instance.acceleration_structure_index as usize].raw,
+                );
             let vk_instance = vk::AccelerationStructureInstanceKHR {
                 transform: unsafe { mem::transmute(instance.transform) },
                 instance_custom_index_and_mask: vk::Packed24_8::new(
-                    instance.custom_index,
+                    0, //TODO? Metal doesn't support it
                     instance.mask as u8,
                 ),
                 instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(0, 0),
