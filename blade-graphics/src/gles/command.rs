@@ -318,6 +318,7 @@ impl crate::traits::AccelerationStructureEncoder for super::PassEncoder<'_, ()> 
     fn build_top_level(
         &mut self,
         _acceleration_structure: super::AccelerationStructure,
+        _bottom_level: &[super::AccelerationStructure],
         _instance_count: u32,
         _instance_data: crate::BufferPiece,
         _scratch_data: crate::BufferPiece,

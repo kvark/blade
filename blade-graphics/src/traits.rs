@@ -75,6 +75,7 @@ pub trait AccelerationStructureEncoder {
     fn build_top_level(
         &mut self,
         acceleration_structure: crate::AccelerationStructure,
+        bottom_level: &[crate::AccelerationStructure],
         instance_count: u32,
         instance_data: super::BufferPiece,
         scratch_data: super::BufferPiece,

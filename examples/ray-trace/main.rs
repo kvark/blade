@@ -110,7 +110,7 @@ impl Example {
 
         let meshes = [blade::AccelerationStructureMesh {
             vertex_data: vertex_buf.at(0),
-            vertex_format: blade::VertexFormat::Rgb32Float,
+            vertex_format: blade::VertexFormat::F32Vec3,
             vertex_stride: mem::size_of::<f32>() as u32 * 3,
             vertex_count: vertex_values.len() as u32 / 3,
             index_data: index_buf.at(0),
@@ -129,7 +129,7 @@ impl Example {
         let x_angle = 0.5f32;
         let instances = [
             blade::AccelerationStructureInstance {
-                acceleration_structure: blas,
+                acceleration_structure_index: 0,
                 transform: [
                     [1.0, 0.0, 0.0, -1.5],
                     [0.0, x_angle.cos(), x_angle.sin(), 0.0],
@@ -137,10 +137,9 @@ impl Example {
                 ]
                 .into(),
                 mask: 0xFF,
-                custom_index: 0,
             },
             blade::AccelerationStructureInstance {
-                acceleration_structure: blas,
+                acceleration_structure_index: 0,
                 transform: [
                     [1.0, 0.0, 0.0, 1.5],
                     [0.0, x_angle.sin(), -x_angle.cos(), 0.0],
@@ -148,11 +147,11 @@ impl Example {
                 ]
                 .into(),
                 mask: 0xFF,
-                custom_index: 0,
             },
         ];
         let tlas_sizes = context.get_top_level_acceleration_structure_sizes(instances.len() as u32);
-        let instance_buffer = context.create_acceleration_structure_instance_buffer(&instances);
+        let instance_buffer =
+            context.create_acceleration_structure_instance_buffer(&instances, &[blas]);
         let tlas = context.create_acceleration_structure(blade::AccelerationStructureDesc {
             name: "TLAS",
             ty: blade::AccelerationStructureType::TopLevel,
@@ -179,6 +178,7 @@ impl Example {
         if let mut pass = command_encoder.acceleration_structure() {
             pass.build_top_level(
                 tlas,
+                &[blas],
                 instances.len() as u32,
                 instance_buffer.at(0),
                 scratch_buffer.at(tlas_scratch_offset),

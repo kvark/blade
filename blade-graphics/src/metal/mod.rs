@@ -277,6 +277,19 @@ fn map_compare_function(fun: crate::CompareFunction) -> metal::MTLCompareFunctio
     }
 }
 
+fn map_index_type(ty: crate::IndexType) -> metal::MTLIndexType {
+    match ty {
+        crate::IndexType::U16 => metal::MTLIndexType::UInt16,
+        crate::IndexType::U32 => metal::MTLIndexType::UInt32,
+    }
+}
+
+fn map_vertex_format(format: crate::VertexFormat) -> metal::MTLVertexFormat {
+    match format {
+        crate::VertexFormat::F32Vec3 => metal::MTLVertexFormat::Float3,
+    }
+}
+
 impl Context {
     pub unsafe fn init(desc: super::ContextDesc) -> Result<Self, super::NotSupportedError> {
         if desc.validation {
@@ -331,7 +344,7 @@ impl Context {
     }
 
     pub fn capabilities(&self) -> crate::Capabilities {
-        crate::Capabilities { ray_query: false }
+        crate::Capabilities { ray_query: true }
     }
 }
 
@@ -379,4 +392,35 @@ impl Drop for Context {
             capture_manager.stop_capture();
         }
     }
+}
+
+fn make_bottom_level_acceleration_structure_desc(
+    meshes: &[crate::AccelerationStructureMesh],
+) -> metal::PrimitiveAccelerationStructureDescriptor {
+    let mut geometry_descriptors = Vec::with_capacity(meshes.len());
+    for mesh in meshes {
+        let descriptor = metal::AccelerationStructureTriangleGeometryDescriptor::descriptor();
+        descriptor.set_vertex_buffer(Some(mesh.vertex_data.buffer.as_ref()));
+        descriptor.set_index_buffer_offset(mesh.vertex_data.offset);
+        descriptor.set_vertex_stride(mesh.vertex_stride as _);
+        descriptor.set_vertex_format(map_vertex_format(mesh.vertex_format));
+        descriptor.set_triangle_count(mesh.triangle_count as _);
+        if let Some(index_type) = mesh.index_type {
+            descriptor.set_index_buffer(Some(mesh.index_data.buffer.as_ref()));
+            descriptor.set_index_buffer_offset(mesh.index_data.offset);
+            descriptor.set_index_type(map_index_type(index_type));
+        }
+        if !mesh.transform_data.buffer.raw.is_null() {
+            descriptor.set_transformation_matrix_buffer(Some(mesh.transform_data.buffer.as_ref()));
+            descriptor.set_transformation_matrix_buffer_offset(mesh.transform_data.offset);
+        }
+        geometry_descriptors.push(metal::AccelerationStructureGeometryDescriptor::from(
+            descriptor,
+        ));
+    }
+
+    let geometry_descriptor_array = metal::Array::from_owned_slice(&geometry_descriptors);
+    let accel_descriptor = metal::PrimitiveAccelerationStructureDescriptor::descriptor();
+    accel_descriptor.set_geometry_descriptors(geometry_descriptor_array);
+    accel_descriptor
 }

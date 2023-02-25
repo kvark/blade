@@ -354,7 +354,7 @@ pub struct AccelerationStructureDesc<'a> {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
 pub enum VertexFormat {
-    Rgb32Float,
+    F32Vec3,
 }
 
 #[derive(Clone, Debug)]
@@ -372,10 +372,9 @@ pub struct AccelerationStructureMesh {
 
 #[derive(Clone, Debug)]
 pub struct AccelerationStructureInstance {
-    pub acceleration_structure: AccelerationStructure,
+    pub acceleration_structure_index: u32,
     pub transform: Transform,
     pub mask: u32,
-    pub custom_index: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

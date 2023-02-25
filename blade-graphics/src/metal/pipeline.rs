@@ -239,6 +239,13 @@ impl super::Context {
                                 ..Default::default()
                             },
                         ),
+                        naga::TypeInner::AccelerationStructure => (
+                            crate::ShaderBinding::AccelerationStructure,
+                            msl::BindTarget {
+                                acceleration_structure: Some(resource_index as _),
+                                ..Default::default()
+                            },
+                        ),
                         _ => {
                             let type_layout = &layouter[var.ty];
                             let expected_proto = if access.is_empty() {
