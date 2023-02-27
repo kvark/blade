@@ -126,7 +126,6 @@ impl super::PipelineLayout {
         let mut num_textures = 0u32;
         let mut num_samplers = 0u32;
         let mut num_buffers = 0u32;
-        let mut num_acceleration_structures = 0u32;
         for layout in bind_group_layouts.iter() {
             let mut targets = Vec::with_capacity(layout.bindings.len());
             for &(_, ref binding) in layout.bindings.iter() {
@@ -145,8 +144,8 @@ impl super::PipelineLayout {
                         num_buffers - 1
                     }
                     crate::ShaderBinding::AccelerationStructure => {
-                        num_acceleration_structures += 1;
-                        num_acceleration_structures - 1
+                        num_buffers += 1;
+                        num_buffers - 1
                     }
                     crate::ShaderBinding::Plain { .. } => {
                         num_buffers += 1;
@@ -180,7 +179,7 @@ impl super::Context {
         layout: &mut super::PipelineLayout,
         flags: ShaderFlags,
     ) -> CompiledShader {
-        let mut naga_resources = msl::PerStageResources::default();
+        let mut naga_resources = msl::EntryPointResources::default();
         if let Some(slot) = layout.sizes_buffer_slot {
             naga_resources.sizes_buffer = Some(slot as _);
         }
@@ -242,7 +241,7 @@ impl super::Context {
                         naga::TypeInner::AccelerationStructure => (
                             crate::ShaderBinding::AccelerationStructure,
                             msl::BindTarget {
-                                acceleration_structure: Some(resource_index as _),
+                                buffer: Some(resource_index as _),
                                 ..Default::default()
                             },
                         ),
@@ -284,26 +283,17 @@ impl super::Context {
             );
         }
 
-        let msl_version = metal::MTLLanguageVersion::V2_2;
         let naga_options = msl::Options {
-            lang_version: ((msl_version as u32 >> 16) as u8, msl_version as u8),
+            lang_version: (
+                (self.info.language_version as u32 >> 16) as u8,
+                self.info.language_version as u8,
+            ),
             inline_samplers: Default::default(),
             spirv_cross_compatibility: false,
             fake_missing_bindings: false,
-            per_stage_map: match naga_stage {
-                naga::ShaderStage::Compute => msl::PerStageMap {
-                    cs: naga_resources,
-                    ..Default::default()
-                },
-                naga::ShaderStage::Vertex => msl::PerStageMap {
-                    vs: naga_resources,
-                    ..Default::default()
-                },
-                naga::ShaderStage::Fragment => msl::PerStageMap {
-                    fs: naga_resources,
-                    ..Default::default()
-                },
-            },
+            per_entry_point_map: Some((sf.entry_point.to_string(), naga_resources))
+                .into_iter()
+                .collect(),
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
             zero_initialize_workgroup_memory: false,
         };
@@ -322,7 +312,7 @@ impl super::Context {
         );
 
         let options = metal::CompileOptions::new();
-        options.set_language_version(msl_version);
+        options.set_language_version(self.info.language_version);
         options.set_preserve_invariance(true);
 
         let library = self

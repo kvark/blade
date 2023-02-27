@@ -251,7 +251,7 @@ impl crate::traits::CommandDevice for Context {
         //TODO: these numbers are arbitrary, needs to be replaced by
         // an abstraction from gpu-alloc, if possible.
         const ROUGH_SET_COUNT: u32 = 60000;
-        const DESCRIPTOR_SIZES: &[vk::DescriptorPoolSize] = &[
+        let mut descriptor_sizes = vec![
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
                 descriptor_count: ROUGH_SET_COUNT * crate::limits::PLAIN_DATA_SIZE,
@@ -272,11 +272,13 @@ impl crate::traits::CommandDevice for Context {
                 ty: vk::DescriptorType::STORAGE_IMAGE,
                 descriptor_count: ROUGH_SET_COUNT,
             },
-            vk::DescriptorPoolSize {
+        ];
+        if self.device.ray_tracing.is_some() {
+            descriptor_sizes.push(vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
                 descriptor_count: ROUGH_SET_COUNT,
-            },
-        ];
+            });
+        }
 
         let pool_info = vk::CommandPoolCreateInfo::builder()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
@@ -306,7 +308,7 @@ impl crate::traits::CommandDevice for Context {
                         .max_inline_uniform_block_bindings(ROUGH_SET_COUNT);
                 let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
                     .max_sets(ROUGH_SET_COUNT)
-                    .pool_sizes(DESCRIPTOR_SIZES)
+                    .pool_sizes(&descriptor_sizes)
                     .push_next(&mut inline_uniform_block_info);
                 let descriptor_pool = unsafe {
                     self.device

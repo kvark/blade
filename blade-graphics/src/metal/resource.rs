@@ -122,7 +122,7 @@ impl super::Context {
             instance_descriptors.as_ptr() as *const _,
             (mem::size_of::<metal::MTLAccelerationStructureInstanceDescriptor>() * instances.len())
                 as _,
-            metal::MTLResourceOptions::StorageModePrivate,
+            metal::MTLResourceOptions::StorageModeShared,
         );
         super::Buffer {
             raw: unsafe { msg_send![buffer.as_ref(), retain] },

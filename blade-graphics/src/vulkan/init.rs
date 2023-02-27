@@ -497,7 +497,10 @@ impl super::Context {
 
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
-            ray_query: self.device.ray_tracing.is_some(),
+            ray_query: match self.device.ray_tracing {
+                Some(_) => crate::ShaderVisibility::all(),
+                None => crate::ShaderVisibility::empty(),
+            },
         }
     }
 }

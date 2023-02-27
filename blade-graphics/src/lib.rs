@@ -64,7 +64,8 @@ pub struct NotSupportedError;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Capabilities {
-    pub ray_query: bool,
+    /// Which shader stages support ray queries
+    pub ray_query: ShaderVisibility,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -260,7 +261,7 @@ pub struct TextureViewDesc<'a> {
 
 bitflags::bitflags! {
     #[derive(Default)]
-    struct ShaderVisibility: u32 {
+    pub struct ShaderVisibility: u32 {
         const COMPUTE = 1 << 0;
         const VERTEX = 1 << 1;
         const FRAGMENT = 1 << 2;

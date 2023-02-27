@@ -46,7 +46,9 @@ impl Example {
             .unwrap()
         };
         let capabilities = context.capabilities();
-        assert!(capabilities.ray_query);
+        assert!(capabilities
+            .ray_query
+            .contains(blade::ShaderVisibility::COMPUTE));
 
         let screen_size = blade::Extent {
             width: window_size.width,

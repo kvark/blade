@@ -357,7 +357,9 @@ struct ExecutionContext {
 
 impl Context {
     pub fn capabilities(&self) -> crate::Capabilities {
-        crate::Capabilities { ray_query: false }
+        crate::Capabilities {
+            ray_query: crate::ShaderVisibility::empty(),
+        }
     }
 }
 
