@@ -289,7 +289,7 @@ fn map_index_type(ty: crate::IndexType) -> metal::MTLIndexType {
     }
 }
 
-fn _map_attribute_format(format: crate::VertexFormat) -> metal::MTLAttributeFormat {
+fn map_attribute_format(format: crate::VertexFormat) -> metal::MTLAttributeFormat {
     match format {
         crate::VertexFormat::F32Vec3 => metal::MTLAttributeFormat::Float3,
     }
@@ -420,20 +420,24 @@ fn make_bottom_level_acceleration_structure_desc(
     let mut geometry_descriptors = Vec::with_capacity(meshes.len());
     for mesh in meshes {
         let descriptor = metal::AccelerationStructureTriangleGeometryDescriptor::descriptor();
+        descriptor.set_opaque(mesh.is_opaque);
         descriptor.set_vertex_buffer(Some(mesh.vertex_data.buffer.as_ref()));
         descriptor.set_vertex_buffer_offset(mesh.vertex_data.offset);
         descriptor.set_vertex_stride(mesh.vertex_stride as _);
-        //TODO: requires macOS-13 ?
-        //descriptor.set_vertex_format(map_attribute_format(mesh.vertex_format));
         descriptor.set_triangle_count(mesh.triangle_count as _);
         if let Some(index_type) = mesh.index_type {
             descriptor.set_index_buffer(Some(mesh.index_data.buffer.as_ref()));
             descriptor.set_index_buffer_offset(mesh.index_data.offset);
             descriptor.set_index_type(map_index_type(index_type));
         }
-        if !mesh.transform_data.buffer.raw.is_null() {
-            descriptor.set_transformation_matrix_buffer(Some(mesh.transform_data.buffer.as_ref()));
-            descriptor.set_transformation_matrix_buffer_offset(mesh.transform_data.offset);
+        //TODO: requires macOS-13 ?
+        if false {
+            descriptor.set_vertex_format(map_attribute_format(mesh.vertex_format));
+            if !mesh.transform_data.buffer.raw.is_null() {
+                descriptor
+                    .set_transformation_matrix_buffer(Some(mesh.transform_data.buffer.as_ref()));
+                descriptor.set_transformation_matrix_buffer_offset(mesh.transform_data.offset);
+            }
         }
         geometry_descriptors.push(metal::AccelerationStructureGeometryDescriptor::from(
             descriptor,

@@ -22,7 +22,7 @@ raw-window-handle = "0.5"
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 block = "0.1"
 core-graphics-types = "0.1"
-metal = { git = "https://github.com/gfx-rs/metal-rs", rev = "73e6be3992f0765fd17d623db59aec6716996c20" }
+metal = { git = "https://github.com/gfx-rs/metal-rs", rev = "33c96191390c1f9c69060f9703667e95dd75b475" }
 objc = "0.2.5"
 naga = { workspace = true, features = ["msl-out"] }
 
