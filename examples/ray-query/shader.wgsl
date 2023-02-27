@@ -22,10 +22,10 @@ fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
 
 fn get_miss_color(dir: vec3<f32>) -> vec4<f32> {
     var colors = array<vec4<f32>, 4>(vec4<f32>(1.0), vec4<f32>(0.6, 0.9, 0.3, 1.0), vec4<f32>(0.3, 0.6, 0.9, 1.0), vec4<f32>(0.0));
-    var thresholds = array<f32, 4>(-0.8, -0.3, 0.4, 1.0);
+    var thresholds = array<f32, 4>(-1.0, -0.3, 0.4, 1.0);
     var i = 0;
     loop {
-        if (dir.y <= thresholds[i]) {
+        if (dir.y < thresholds[i]) {
             let t = (dir.y - thresholds[i - 1]) / (thresholds[i] - thresholds[i - 1]);
             return mix(colors[i - 1], colors[i], t);
         }
@@ -34,7 +34,7 @@ fn get_miss_color(dir: vec3<f32>) -> vec4<f32> {
             break;
         }
     }
-    return vec4<f32>(1.0);
+    return colors[3];
 }
 
 fn get_torus_normal(world_point: vec3<f32>, intersection: RayIntersection) -> vec3<f32> {
