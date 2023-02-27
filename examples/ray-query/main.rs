@@ -89,7 +89,7 @@ impl Example {
             frame_count: 3,
         });
 
-        let source = std::fs::read_to_string("examples/ray-trace/shader.wgsl").unwrap();
+        let source = std::fs::read_to_string("examples/ray-query/shader.wgsl").unwrap();
         let shader = context.create_shader(blade::ShaderDesc { source: &source });
         let rt_layout = <ShaderData as blade::ShaderData>::layout();
         let draw_layout = <DrawData as blade::ShaderData>::layout();
