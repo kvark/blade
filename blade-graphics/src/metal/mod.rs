@@ -37,11 +37,16 @@ impl Frame {
     }
 }
 
+struct DeviceInfo {
+    language_version: metal::MTLLanguageVersion,
+}
+
 pub struct Context {
     device: Mutex<metal::Device>,
     queue: Arc<Mutex<metal::CommandQueue>>,
     surface: Option<Mutex<Surface>>,
     capture: Option<metal::CaptureManager>,
+    info: DeviceInfo,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
@@ -284,9 +289,9 @@ fn map_index_type(ty: crate::IndexType) -> metal::MTLIndexType {
     }
 }
 
-fn map_vertex_format(format: crate::VertexFormat) -> metal::MTLVertexFormat {
+fn _map_attribute_format(format: crate::VertexFormat) -> metal::MTLAttributeFormat {
     match format {
-        crate::VertexFormat::F32Vec3 => metal::MTLVertexFormat::Float3,
+        crate::VertexFormat::F32Vec3 => metal::MTLAttributeFormat::Float3,
     }
 }
 
@@ -316,6 +321,10 @@ impl Context {
             queue: Arc::new(Mutex::new(queue)),
             surface: None,
             capture,
+            info: DeviceInfo {
+                //TODO: determine based on OS version
+                language_version: metal::MTLLanguageVersion::V2_4,
+            },
         })
     }
 
@@ -344,7 +353,18 @@ impl Context {
     }
 
     pub fn capabilities(&self) -> crate::Capabilities {
-        crate::Capabilities { ray_query: true }
+        let device = self.device.lock().unwrap();
+        crate::Capabilities {
+            ray_query: if device.supports_family(metal::MTLGPUFamily::Apple6) {
+                crate::ShaderVisibility::all()
+            } else if device.supports_family(metal::MTLGPUFamily::Mac2)
+                || device.supports_family(metal::MTLGPUFamily::Metal3)
+            {
+                crate::ShaderVisibility::COMPUTE
+            } else {
+                crate::ShaderVisibility::empty()
+            },
+        }
     }
 }
 
@@ -401,9 +421,10 @@ fn make_bottom_level_acceleration_structure_desc(
     for mesh in meshes {
         let descriptor = metal::AccelerationStructureTriangleGeometryDescriptor::descriptor();
         descriptor.set_vertex_buffer(Some(mesh.vertex_data.buffer.as_ref()));
-        descriptor.set_index_buffer_offset(mesh.vertex_data.offset);
+        descriptor.set_vertex_buffer_offset(mesh.vertex_data.offset);
         descriptor.set_vertex_stride(mesh.vertex_stride as _);
-        descriptor.set_vertex_format(map_vertex_format(mesh.vertex_format));
+        //TODO: requires macOS-13 ?
+        //descriptor.set_vertex_format(map_attribute_format(mesh.vertex_format));
         descriptor.set_triangle_count(mesh.triangle_count as _);
         if let Some(index_type) = mesh.index_type {
             descriptor.set_index_buffer(Some(mesh.index_data.buffer.as_ref()));
@@ -423,4 +444,24 @@ fn make_bottom_level_acceleration_structure_desc(
     let accel_descriptor = metal::PrimitiveAccelerationStructureDescriptor::descriptor();
     accel_descriptor.set_geometry_descriptors(geometry_descriptor_array);
     accel_descriptor
+}
+
+fn _print_class_methods(class: &objc::runtime::Class) {
+    let mut count = 0;
+    let methods = unsafe { objc::runtime::class_copyMethodList(class, &mut count) };
+    println!("Class {} methods:", class.name());
+    for i in 0..count {
+        let method = unsafe { &**methods.add(i as usize) };
+        println!("\t{}", method.name().name());
+    }
+}
+
+fn _print_class_methods_by_name(class_name: &str) {
+    let class = objc::runtime::Class::get(class_name).unwrap();
+    _print_class_methods(class);
+}
+
+fn _print_class_methods_by_object(foreign_object: &impl metal::foreign_types::ForeignType) {
+    let object = foreign_object.as_ptr() as *mut objc::runtime::Object;
+    _print_class_methods(unsafe { &*object }.class());
 }
