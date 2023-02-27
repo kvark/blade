@@ -3,6 +3,7 @@
 use std::{mem, ptr, time};
 
 const TORUS_RADIUS: f32 = 3.0;
+const TARGET_FORMAT: blade::TextureFormat = blade::TextureFormat::Rgba16Float;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -19,13 +20,22 @@ pub struct Parameters {
 struct ShaderData {
     parameters: Parameters,
     acc_struct: blade::AccelerationStructure,
+    output: blade::TextureView,
+}
+
+#[derive(blade::ShaderData)]
+struct DrawData {
+    input: blade::TextureView,
 }
 
 struct Example {
     start_time: time::Instant,
+    target: blade::Texture,
+    target_view: blade::TextureView,
     blas: blade::AccelerationStructure,
     tlas: blade::AccelerationStructure,
-    pipeline: blade::RenderPipeline,
+    rt_pipeline: blade::ComputePipeline,
+    draw_pipeline: blade::RenderPipeline,
     command_encoder: blade::CommandEncoder,
     prev_sync_point: Option<blade::SyncPoint>,
     screen_size: blade::Extent,
@@ -56,6 +66,23 @@ impl Example {
             depth: 1,
         };
 
+        let target = context.create_texture(blade::TextureDesc {
+            name: "main",
+            format: TARGET_FORMAT,
+            size: screen_size,
+            dimension: blade::TextureDimension::D2,
+            array_layer_count: 1,
+            mip_level_count: 1,
+            usage: blade::TextureUsage::RESOURCE | blade::TextureUsage::STORAGE,
+        });
+        let target_view = context.create_texture_view(blade::TextureViewDesc {
+            name: "main",
+            texture: target,
+            format: TARGET_FORMAT,
+            dimension: blade::ViewDimension::D2,
+            subresources: &blade::TextureSubresources::default(),
+        });
+
         let surface_format = context.resize(blade::SurfaceConfig {
             size: screen_size,
             usage: blade::TextureUsage::TARGET,
@@ -64,10 +91,16 @@ impl Example {
 
         let source = std::fs::read_to_string("examples/ray-trace/shader.wgsl").unwrap();
         let shader = context.create_shader(blade::ShaderDesc { source: &source });
-        let data_layout = <ShaderData as blade::ShaderData>::layout();
-        let pipeline = context.create_render_pipeline(blade::RenderPipelineDesc {
+        let rt_layout = <ShaderData as blade::ShaderData>::layout();
+        let draw_layout = <DrawData as blade::ShaderData>::layout();
+        let rt_pipeline = context.create_compute_pipeline(blade::ComputePipelineDesc {
+            name: "ray-trace",
+            data_layouts: &[&rt_layout],
+            compute: shader.at("main"),
+        });
+        let draw_pipeline = context.create_render_pipeline(blade::RenderPipelineDesc {
             name: "main",
-            data_layouts: &[&data_layout],
+            data_layouts: &[&draw_layout],
             primitive: blade::PrimitiveState {
                 topology: blade::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
@@ -173,6 +206,7 @@ impl Example {
             buffer_count: 2,
         });
         command_encoder.start();
+        command_encoder.init_texture(target);
         if let mut pass = command_encoder.acceleration_structure() {
             pass.build_bottom_level(blas, &meshes, scratch_buffer.at(0));
         }
@@ -196,9 +230,12 @@ impl Example {
 
         Self {
             start_time: time::Instant::now(),
+            target,
+            target_view,
             blas,
             tlas,
-            pipeline,
+            rt_pipeline,
+            draw_pipeline,
             command_encoder,
             prev_sync_point: None,
             screen_size,
@@ -210,24 +247,23 @@ impl Example {
         if let Some(sp) = self.prev_sync_point {
             self.context.wait_for(&sp, !0);
         }
+        self.context.destroy_texture_view(self.target_view);
+        self.context.destroy_texture(self.target);
         self.context.destroy_acceleration_structure(self.blas);
         self.context.destroy_acceleration_structure(self.tlas);
     }
 
     fn render(&mut self) {
         self.command_encoder.start();
-        let frame = self.context.acquire_frame();
-        self.command_encoder.init_texture(frame.texture());
 
-        if let mut pass = self.command_encoder.render(blade::RenderTargetSet {
-            colors: &[blade::RenderTarget {
-                view: frame.texture_view(),
-                init_op: blade::InitOp::Clear(blade::TextureColor::TransparentBlack),
-                finish_op: blade::FinishOp::Store,
-            }],
-            depth_stencil: None,
-        }) {
-            if let mut pc = pass.with(&self.pipeline) {
+        if let mut pass = self.command_encoder.compute() {
+            if let mut pc = pass.with(&self.rt_pipeline) {
+                let wg_size = self.rt_pipeline.get_workgroup_size();
+                let group_count = [
+                    (self.screen_size.width + wg_size[0] - 1) / wg_size[0],
+                    (self.screen_size.height + wg_size[1] - 1) / wg_size[1],
+                    1,
+                ];
                 let fov_y = 0.3;
                 let fov_x = fov_y * self.screen_size.width as f32 / self.screen_size.height as f32;
                 let rotation_angle = self.start_time.elapsed().as_secs_f32() * 0.4;
@@ -244,6 +280,29 @@ impl Example {
                             rotation_angle,
                         },
                         acc_struct: self.tlas,
+                        output: self.target_view,
+                    },
+                );
+                pc.dispatch(group_count);
+            }
+        }
+
+        let frame = self.context.acquire_frame();
+        self.command_encoder.init_texture(frame.texture());
+
+        if let mut pass = self.command_encoder.render(blade::RenderTargetSet {
+            colors: &[blade::RenderTarget {
+                view: frame.texture_view(),
+                init_op: blade::InitOp::Clear(blade::TextureColor::TransparentBlack),
+                finish_op: blade::FinishOp::Store,
+            }],
+            depth_stencil: None,
+        }) {
+            if let mut pc = pass.with(&self.draw_pipeline) {
+                pc.bind(
+                    0,
+                    &DrawData {
+                        input: self.target_view,
                     },
                 );
                 pc.draw(0, 3, 0, 1);

@@ -11,6 +11,7 @@ struct Parameters {
 
 var<uniform> parameters: Parameters;
 var acc_struct: acceleration_structure;
+var output: texture_storage_2d<rgba8unorm, write>;
 
 fn qmake(axis: vec3<f32>, angle: f32) -> vec4<f32> {
     return vec4<f32>(axis * sin(angle), cos(angle));
@@ -45,22 +46,16 @@ fn get_torus_normal(world_point: vec3<f32>, intersection: RayIntersection) -> ve
     return normalize(world_point - world_point_on_guiding_line);
 }
 
-struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
-    @location(0) out_pos: vec2<f32>,
-}
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let target_size = textureDimensions(output);
+    let half_size = vec2<f32>(target_size >> vec2<u32>(1u));
+    let ndc = (vec2<f32>(global_id.xy) - half_size) / half_size;
+    if (any(global_id.xy > target_size)) {
+        return;
+    }
 
-@vertex
-fn draw_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
-    var vo: VertexOutput;
-    vo.clip_pos = vec4<f32>(f32(vi & 1u) * 4.0 - 1.0, f32(vi & 2u) * 2.0 - 1.0, 0.0, 1.0);
-    vo.out_pos = vo.clip_pos.xy;
-    return vo;
-}
-
-@fragment
-fn draw_fs(vi: VertexOutput) -> @location(0) vec4<f32> {
-    let local_dir = vec3<f32>(vi.out_pos * tan(parameters.fov), 1.0);
+    let local_dir = vec3<f32>(ndc * tan(parameters.fov), 1.0);
     let world_dir = normalize(qrot(parameters.cam_orientation, local_dir));
     let rotator = qmake(vec3<f32>(0.0, 1.0, 0.0), parameters.rotation_angle);
 
@@ -86,5 +81,23 @@ fn draw_fs(vi: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
     
-    return get_miss_color(ray_dir);
+    let color = get_miss_color(ray_dir);
+    textureStore(output, global_id.xy, color);
+}
+
+struct VertexOutput {
+    
+    @location(0) out_pos: vec2<f32>,
+}
+
+@vertex
+fn draw_vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(f32(vi & 1u) * 4.0 - 1.0, f32(vi & 2u) * 2.0 - 1.0, 0.0, 1.0);
+}
+
+var input: texture_2d<f32>;
+
+@fragment
+fn draw_fs(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
+    return textureLoad(input, vec2<i32>(frag_coord.xy), 0);
 }
