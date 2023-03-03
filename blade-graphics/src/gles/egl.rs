@@ -101,7 +101,7 @@ impl EglContext {
 
 #[derive(Clone, Debug)]
 struct WindowSystemInterface {
-    library: Arc<libloading::Library>,
+    library: Option<Arc<libloading::Library>>,
     window_handle: raw_window_handle::RawWindowHandle,
     renderbuf: glow::Renderbuffer,
     framebuf: glow::Framebuffer,
@@ -237,7 +237,7 @@ impl Context {
             .ok_or(crate::NotSupportedError)?;
 
         let (display, wsi_library) = match window.raw_display_handle() {
-            Rdh::Xlib(display_handle) if cfg!(windows) => {
+            Rdh::Windows(display_handle) => {
                 let display_attributes = [
                     EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE as egl::Attrib,
                     EGL_PLATFORM_X11_KHR as egl::Attrib,
@@ -248,12 +248,11 @@ impl Context {
                 let display = egl1_5
                     .get_platform_display(
                         EGL_PLATFORM_ANGLE_ANGLE,
-                        display_handle.display,
+                        ptr::null_mut(),
                         &display_attributes,
                     )
                     .unwrap();
-                let library = find_x_library().unwrap();
-                (display, library)
+                (display, None)
             }
             Rdh::Xlib(display_handle) => {
                 log::info!("Using X11 platform");
@@ -266,7 +265,7 @@ impl Context {
                     )
                     .unwrap();
                 let library = find_x_library().unwrap();
-                (display, library)
+                (display, Some(library))
             }
             Rdh::Wayland(display_handle) => {
                 log::info!("Using Wayland platform");
@@ -279,7 +278,7 @@ impl Context {
                     )
                     .unwrap();
                 let library = find_wayland_library().unwrap();
-                (display, library)
+                (display, Some(library))
             }
             Rdh::AppKit(_display_handle) => {
                 let display_attributes = [
@@ -296,8 +295,7 @@ impl Context {
                         &display_attributes,
                     )
                     .unwrap();
-                let library = find_appkit_library().unwrap();
-                (display, library)
+                (display, None)
             }
             other => {
                 log::error!("Unsupported RDH {:?}", other);
@@ -314,7 +312,7 @@ impl Context {
 
         Ok(Self {
             wsi: Some(WindowSystemInterface {
-                library: Arc::new(wsi_library),
+                library: wsi_library.map(Arc::new),
                 window_handle: window.raw_window_handle(),
                 renderbuf,
                 framebuf,
@@ -348,8 +346,12 @@ impl Context {
             }
             Rwh::AndroidNdk(handle) => handle.a_native_window,
             Rwh::Wayland(handle) => unsafe {
-                let wl_egl_window_create: libloading::Symbol<WlEglWindowCreateFun> =
-                    wsi.library.get(b"wl_egl_window_create").unwrap();
+                let wl_egl_window_create: libloading::Symbol<WlEglWindowCreateFun> = wsi
+                    .library
+                    .as_ref()
+                    .unwrap()
+                    .get(b"wl_egl_window_create")
+                    .unwrap();
                 wl_egl_window_create(
                     handle.surface,
                     config.size.width as _,
@@ -544,11 +546,6 @@ fn find_x_library() -> Option<libloading::Library> {
 }
 fn find_wayland_library() -> Option<libloading::Library> {
     unsafe { find_library(&["libwayland-egl.so.1", "libwayland-egl.so"]) }
-}
-fn find_appkit_library() -> Option<libloading::Library> {
-    unsafe {
-        libloading::Library::new("/System/Library/Frameworks/AppKit.framework/Versions/Current/Resources/BridgeSupport/AppKit.dylib").ok()
-    }
 }
 
 unsafe extern "system" fn egl_debug_proc(
