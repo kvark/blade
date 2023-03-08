@@ -148,7 +148,7 @@ pub struct Sampler {
     raw: vk::Sampler,
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq)]
 pub struct AccelerationStructure {
     raw: vk::AccelerationStructureKHR,
     buffer: vk::Buffer,
