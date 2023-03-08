@@ -148,6 +148,7 @@ impl AccelerationStructure {
     }
 }
 
+//TODO: make this copyable?
 #[derive(Clone, Debug)]
 pub struct SyncPoint {
     cmd_buf: metal::CommandBuffer,

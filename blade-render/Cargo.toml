@@ -1,0 +1,17 @@
+[package]
+name = "blade-render"
+version = "0.1.0"
+edition = "2021"
+description = "Renderer built on Blade"
+keywords = ["graphics", "engine"]
+license = "MIT"
+repository = "https://github.com/kvark/blade"
+
+[lib]
+
+[dependencies]
+bg = { package = "blade-graphics", version = "0.2", path = "../blade-graphics"}
+gltf = { version = "1.1", features = ["names", "utils"] }
+glam = { workspace = true }
+log = { workspace = true }
+mint = { workspace = true }
