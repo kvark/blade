@@ -21,7 +21,12 @@ fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
 }
 
 fn get_miss_color(dir: vec3<f32>) -> vec4<f32> {
-    var colors = array<vec4<f32>, 4>(vec4<f32>(1.0), vec4<f32>(0.6, 0.9, 0.3, 1.0), vec4<f32>(0.3, 0.6, 0.9, 1.0), vec4<f32>(0.0));
+    var colors = array<vec4<f32>, 4>(
+        vec4<f32>(1.0),
+        vec4<f32>(0.6, 0.9, 0.3, 1.0),
+        vec4<f32>(0.3, 0.6, 0.9, 1.0),
+        vec4<f32>(0.0)
+    );
     var thresholds = array<f32, 4>(-1.0, -0.3, 0.4, 1.0);
     var i = 0;
     loop {
