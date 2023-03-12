@@ -36,7 +36,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var color = vec4<f32>(0.0);
     if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
-        color = vec4<f32>(fract(intersection.t));
+        color = vec4<f32>(intersection.barycentrics, 0.0, 1.0);
     }
     textureStore(output, global_id.xy, color);
 }

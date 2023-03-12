@@ -2,9 +2,9 @@ use std::{mem, path::Path, ptr};
 
 struct LoadContext<'a> {
     gltf_buffers: &'a [gltf::buffer::Data],
-    gpu: &'a bg::Context,
-    encoder: bg::TransferCommandEncoder<'a>,
-    temp_buffers: Vec<bg::Buffer>,
+    gpu: &'a blade::Context,
+    encoder: blade::TransferCommandEncoder<'a>,
+    temp_buffers: Vec<blade::Buffer>,
     scene: &'a mut super::Scene,
 }
 
@@ -24,46 +24,46 @@ impl LoadContext<'_> {
                 name: g_node.name().map_or(String::new(), str::to_string),
                 geometries: Vec::new(),
                 transform: mint::RowMatrix3x4::from(col_matrix).into(),
-                acceleration_structure: bg::AccelerationStructure::default(),
+                acceleration_structure: blade::AccelerationStructure::default(),
             };
 
             for g_primitive in g_mesh.primitives() {
                 let mut geometry = super::Geometry {
-                    vertex_buf: bg::Buffer::default(),
+                    vertex_buf: blade::Buffer::default(),
                     vertex_count: 0,
-                    index_buf: bg::Buffer::default(),
+                    index_buf: blade::Buffer::default(),
                     index_type: None,
                     triangle_count: 0,
                 };
                 let vertex_count = g_primitive.get(&gltf::Semantic::Positions).unwrap().count();
                 let vertex_buf_size = mem::size_of::<super::Vertex>() * vertex_count;
                 geometry.vertex_count = vertex_count as u32;
-                geometry.vertex_buf = self.gpu.create_buffer(bg::BufferDesc {
+                geometry.vertex_buf = self.gpu.create_buffer(blade::BufferDesc {
                     name: "vertex",
                     size: vertex_buf_size as u64,
-                    memory: bg::Memory::Device,
+                    memory: blade::Memory::Device,
                 });
 
                 let reader = g_primitive.reader(|buffer| Some(&self.gltf_buffers[buffer.index()]));
                 let mut indices = Vec::new();
                 if let Some(read) = reader.read_indices() {
                     indices.extend(read.into_u32());
-                    geometry.index_buf = self.gpu.create_buffer(bg::BufferDesc {
+                    geometry.index_buf = self.gpu.create_buffer(blade::BufferDesc {
                         name: "index",
                         size: indices.len() as u64 * 4,
-                        memory: bg::Memory::Device,
+                        memory: blade::Memory::Device,
                     });
-                    geometry.index_type = Some(bg::IndexType::U32);
+                    geometry.index_type = Some(blade::IndexType::U32);
                     geometry.triangle_count = indices.len() as u32 / 3;
                 } else {
                     geometry.triangle_count = vertex_count as u32 / 3;
                 }
 
                 let staging_size = vertex_buf_size + indices.len() * 4;
-                let staging_buf = self.gpu.create_buffer(bg::BufferDesc {
+                let staging_buf = self.gpu.create_buffer(blade::BufferDesc {
                     name: "mesh staging",
                     size: staging_size as u64,
-                    memory: bg::Memory::Upload,
+                    memory: blade::Memory::Upload,
                 });
                 for (i, pos) in reader.read_positions().unwrap().enumerate() {
                     unsafe {
@@ -106,9 +106,9 @@ impl LoadContext<'_> {
 impl super::Scene {
     pub fn load_gltf(
         path: &Path,
-        encoder: &mut bg::CommandEncoder,
-        gpu: &bg::Context,
-    ) -> (Self, Vec<bg::Buffer>) {
+        encoder: &mut blade::CommandEncoder,
+        gpu: &blade::Context,
+    ) -> (Self, Vec<blade::Buffer>) {
         let (doc, buffers, _images) = gltf::import(path).unwrap();
         let mut scene = super::Scene::default();
         let g_scene = doc.scenes().next().unwrap();
@@ -124,9 +124,7 @@ impl super::Scene {
         }
 
         let mut temp_buffers = loader.temp_buffers;
-        let other_temp_buffers = scene.populate_acceleration_structures(gpu, encoder);
-        temp_buffers.extend(other_temp_buffers);
-
+        scene.populate_bottom_level_acceleration_structures(gpu, encoder, &mut temp_buffers);
         (scene, temp_buffers)
     }
 }

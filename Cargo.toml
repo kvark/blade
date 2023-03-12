@@ -9,6 +9,7 @@ members = [
 exclude = []
 
 [workspace.dependencies]
+bytemuck = { version = "1", features = ["derive"] }
 glam = { version = "0.23", features = ["mint"] }
 log = "0.4"
 mint = "0.5"
@@ -36,7 +37,7 @@ blade-graphics = { version = "0.2.0", path = "blade-graphics" }
 blade-render = { version = "0.1.0", path = "blade-render" }
 
 [dev-dependencies]
-bytemuck = { version = "1", features = ["derive"] }
+bytemuck = { workspace = true }
 del-msh = "0.1"
 egui = { version = "0.20", features = ["bytemuck"] }
 glam = { workspace = true }
