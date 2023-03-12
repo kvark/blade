@@ -119,6 +119,7 @@ fn main() {
         pos: [0.0, 1.0, 5.0].into(),
         rot: [0.0, 1.0, 0.0, 0.0].into(),
         fov_y: 0.3,
+        depth: 100.0,
     };
     let mut example = Example::new(&window, "examples/scene/data/cornellBox.gltf", camera);
 

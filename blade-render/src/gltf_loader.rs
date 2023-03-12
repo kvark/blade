@@ -112,18 +112,21 @@ impl super::Scene {
         let (doc, buffers, _images) = gltf::import(path).unwrap();
         let mut scene = super::Scene::default();
         let g_scene = doc.scenes().next().unwrap();
-        let mut loader = LoadContext {
-            gltf_buffers: &buffers,
-            gpu,
-            encoder: encoder.transfer(),
-            temp_buffers: Vec::new(),
-            scene: &mut scene,
-        };
-        for g_node in g_scene.nodes() {
-            loader.populate(g_node, glam::Mat4::IDENTITY);
-        }
 
-        let mut temp_buffers = loader.temp_buffers;
+        let mut temp_buffers = {
+            let mut loader = LoadContext {
+                gltf_buffers: &buffers,
+                gpu,
+                encoder: encoder.transfer(),
+                temp_buffers: Vec::new(),
+                scene: &mut scene,
+            };
+            for g_node in g_scene.nodes() {
+                loader.populate(g_node, glam::Mat4::IDENTITY);
+            }
+            loader.temp_buffers
+        };
+
         scene.populate_bottom_level_acceleration_structures(gpu, encoder, &mut temp_buffers);
         (scene, temp_buffers)
     }

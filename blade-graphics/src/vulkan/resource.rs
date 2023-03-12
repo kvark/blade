@@ -155,7 +155,7 @@ impl super::Context {
             let vk_instance = vk::AccelerationStructureInstanceKHR {
                 transform: unsafe { mem::transmute(instance.transform) },
                 instance_custom_index_and_mask: vk::Packed24_8::new(
-                    0, //TODO? Metal doesn't support it
+                    instance.custom_index,
                     instance.mask as u8,
                 ),
                 instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(0, 0),

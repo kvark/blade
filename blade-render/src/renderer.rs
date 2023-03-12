@@ -24,6 +24,12 @@ struct DrawData {
     input: blade::TextureView,
 }
 
+#[repr(C)]
+struct HitEntry {
+    index_buf: u32,
+    vertex_buf: u32,
+}
+
 impl super::Scene {
     pub(super) fn populate_bottom_level_acceleration_structures(
         &mut self,
@@ -81,17 +87,20 @@ impl super::Scene {
         command_encoder: &mut blade::CommandEncoder,
         gpu: &blade::Context,
         temp_buffers: &mut Vec<blade::Buffer>,
-    ) -> blade::AccelerationStructure {
+    ) -> (blade::AccelerationStructure, u32) {
         let mut instances = Vec::with_capacity(self.objects.len());
         let mut blases = Vec::with_capacity(self.objects.len());
+        let mut custom_index = 0;
 
         for object in self.objects.iter() {
             instances.push(blade::AccelerationStructureInstance {
                 acceleration_structure_index: blases.len() as u32,
                 transform: object.transform.into(),
                 mask: 0xFF,
+                custom_index,
             });
             blases.push(object.acceleration_structure);
+            custom_index += object.geometries.len() as u32;
         }
 
         // Needs to be a separate encoder in order to force synchronization
@@ -120,7 +129,7 @@ impl super::Scene {
 
         temp_buffers.push(instance_buf);
         temp_buffers.push(scratch_buf);
-        acceleration_structure
+        (acceleration_structure, custom_index)
     }
 }
 
@@ -184,6 +193,7 @@ impl super::Renderer {
             rt_pipeline,
             draw_pipeline,
             acceleration_structure: blade::AccelerationStructure::default(),
+            hit_buf: blade::Buffer::default(),
             is_tlas_dirty: true,
             screen_size,
         }
@@ -215,16 +225,26 @@ impl super::Renderer {
         temp_buffers: &mut Vec<blade::Buffer>,
     ) {
         if self.is_tlas_dirty {
-            self.acceleration_structure = self.scene.build_top_level_acceleration_structure(
+            self.is_tlas_dirty = false;
+            //TODO: properly remove the old TLAS and buffers
+            let (tlas, geometry_count) = self.scene.build_top_level_acceleration_structure(
                 command_encoder,
                 gpu,
                 temp_buffers,
             );
-            self.is_tlas_dirty = false;
+            self.acceleration_structure = tlas;
+            temp_buffers.push(self.hit_buf);
+            self.hit_buf = gpu.create_buffer(blade::BufferDesc {
+                name: "hit entries",
+                size: (geometry_count as usize * mem::size_of::<HitEntry>()) as u64,
+                memory: blade::Memory::Device,
+            });
         }
     }
 
     pub fn ray_trace(&self, command_encoder: &mut blade::CommandEncoder, camera: &super::Camera) {
+        assert!(!self.is_tlas_dirty);
+
         let mut pass = command_encoder.compute();
         let mut pc = pass.with(&self.rt_pipeline);
         let wg_size = self.rt_pipeline.get_workgroup_size();
@@ -240,7 +260,7 @@ impl super::Renderer {
             &ShaderData {
                 parameters: Parameters {
                     cam_position: camera.pos.into(),
-                    depth: 100.0,
+                    depth: camera.depth,
                     cam_orientation: camera.rot.into(),
                     fov: [fov_x, camera.fov_y],
                     pad: [0.0; 2],

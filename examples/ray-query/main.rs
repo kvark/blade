@@ -172,6 +172,7 @@ impl Example {
                 ]
                 .into(),
                 mask: 0xFF,
+                custom_index: 0,
             },
             blade::AccelerationStructureInstance {
                 acceleration_structure_index: 0,
@@ -182,6 +183,7 @@ impl Example {
                 ]
                 .into(),
                 mask: 0xFF,
+                custom_index: 0,
             },
         ];
         let tlas_sizes = context.get_top_level_acceleration_structure_sizes(instances.len() as u32);
