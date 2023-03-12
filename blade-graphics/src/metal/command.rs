@@ -337,6 +337,9 @@ impl crate::traits::AccelerationStructureEncoder
             &primitive_acceleration_structures,
         ));
         descriptor.set_instance_count(instance_count as _);
+        descriptor.set_instance_descriptor_type(
+            metal::MTLAccelerationStructureInstanceDescriptorType::UserID,
+        );
         descriptor.set_instance_descriptor_buffer(instance_data.buffer.as_ref());
         descriptor.set_instance_descriptor_buffer_offset(instance_data.offset);
 

@@ -1,4 +1,6 @@
+#[cfg(not(target_arch = "wasm32"))]
 mod gltf_loader;
+#[cfg(not(target_arch = "wasm32"))]
 mod renderer;
 
 pub struct Vertex {
@@ -32,6 +34,7 @@ pub struct Renderer {
     draw_pipeline: blade::RenderPipeline,
     scene: Scene,
     acceleration_structure: blade::AccelerationStructure,
+    hit_buf: blade::Buffer,
     is_tlas_dirty: bool,
     screen_size: blade::Extent,
 }
@@ -40,4 +43,5 @@ pub struct Camera {
     pub pos: mint::Vector3<f32>,
     pub rot: mint::Quaternion<f32>,
     pub fov_y: f32,
+    pub depth: f32,
 }

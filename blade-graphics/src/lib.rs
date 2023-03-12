@@ -376,6 +376,7 @@ pub struct AccelerationStructureInstance {
     pub acceleration_structure_index: u32,
     pub transform: Transform,
     pub mask: u32,
+    pub custom_index: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

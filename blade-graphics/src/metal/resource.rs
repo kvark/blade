@@ -110,18 +110,19 @@ impl super::Context {
         let mut instance_descriptors = Vec::with_capacity(instances.len());
         for instance in instances {
             let transposed = mint::ColumnMatrix3x4::from(instance.transform);
-            instance_descriptors.push(metal::MTLAccelerationStructureInstanceDescriptor {
+            instance_descriptors.push(metal::MTLAccelerationStructureUserIDInstanceDescriptor {
                 acceleration_structure_index: instance.acceleration_structure_index,
                 mask: instance.mask,
                 transformation_matrix: transposed.into(),
                 options: metal::MTLAccelerationStructureInstanceOptions::None,
                 intersection_function_table_offset: 0,
+                user_id: instance.custom_index,
             });
         }
         let buffer = self.device.lock().unwrap().new_buffer_with_data(
             instance_descriptors.as_ptr() as *const _,
-            (mem::size_of::<metal::MTLAccelerationStructureInstanceDescriptor>() * instances.len())
-                as _,
+            (mem::size_of::<metal::MTLAccelerationStructureUserIDInstanceDescriptor>()
+                * instances.len()) as _,
             metal::MTLResourceOptions::StorageModeShared,
         );
         super::Buffer {
