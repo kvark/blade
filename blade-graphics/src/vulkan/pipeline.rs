@@ -98,6 +98,20 @@ impl super::Context {
                             crate::ShaderBinding::AccelerationStructure,
                             naga::StorageAccess::empty(),
                         ),
+                        naga::TypeInner::BindingArray { base, size: _ } => {
+                            //Note: we could extract the count from `size` for more rigor
+                            let count = match proto_binding {
+                                crate::ShaderBinding::BufferArray { count } => count,
+                                _ => 0,
+                            };
+                            let proto = match module.types[base].inner {
+                                naga::TypeInner::Struct { .. } => {
+                                    crate::ShaderBinding::BufferArray { count }
+                                }
+                                ref other => panic!("Unsupported binding array for {:?}", other),
+                            };
+                            (proto, var_access)
+                        }
                         _ => {
                             let type_layout = &layouter[var.ty];
                             let proto = if var_access.is_empty() {
@@ -217,26 +231,29 @@ impl super::Context {
                     mem::size_of::<vk::DescriptorImageInfo>(),
                     1u32,
                 ),
-                crate::ShaderBinding::Sampler { .. } => (
+                crate::ShaderBinding::Sampler => (
                     vk::DescriptorType::SAMPLER,
                     mem::size_of::<vk::DescriptorImageInfo>(),
                     1u32,
                 ),
-                crate::ShaderBinding::Buffer { .. } => (
+                crate::ShaderBinding::Buffer => (
                     vk::DescriptorType::STORAGE_BUFFER,
                     mem::size_of::<vk::DescriptorBufferInfo>(),
                     1u32,
+                ),
+                crate::ShaderBinding::BufferArray { count } => (
+                    vk::DescriptorType::STORAGE_BUFFER,
+                    mem::size_of::<vk::DescriptorBufferInfo>(),
+                    count,
                 ),
                 crate::ShaderBinding::AccelerationStructure => (
                     vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
                     mem::size_of::<vk::AccelerationStructureKHR>(),
                     1u32,
                 ),
-                crate::ShaderBinding::Plain { size } => (
-                    vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
-                    size as usize,
-                    size,
-                ),
+                crate::ShaderBinding::Plain { size } => {
+                    (vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT, 1, size)
+                }
             };
             vk_bindings.push(vk::DescriptorSetLayoutBinding {
                 binding: binding_index as u32,
@@ -251,10 +268,10 @@ impl super::Context {
                 descriptor_count,
                 descriptor_type,
                 offset: update_offset,
-                stride: 0,
+                stride: descriptor_size,
             });
             template_offsets.push(update_offset as u32);
-            update_offset += descriptor_size;
+            update_offset += descriptor_size * descriptor_count as usize;
         }
 
         let set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&vk_bindings);

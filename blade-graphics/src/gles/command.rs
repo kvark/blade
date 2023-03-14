@@ -59,6 +59,11 @@ impl crate::ShaderBindable for crate::BufferPiece {
         }
     }
 }
+impl<'a, const N: crate::BufferIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
+    fn bind_to(&self, _ctx: &mut super::PipelineContext, _index: u32) {
+        unimplemented!()
+    }
+}
 impl crate::ShaderBindable for super::AccelerationStructure {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         for _ in ctx.targets[index as usize].iter() {

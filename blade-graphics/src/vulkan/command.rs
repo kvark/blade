@@ -54,6 +54,23 @@ impl crate::ShaderBindable for crate::BufferPiece {
         );
     }
 }
+impl<'a, const N: crate::BufferIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        let base_offset = ctx.template_offsets[index as usize];
+        let base_ptr = unsafe {
+            ctx.update_data.as_mut_ptr().offset(base_offset as isize)
+                as *mut vk::DescriptorBufferInfo
+        };
+        for (i, piece) in self.data.iter().enumerate() {
+            let value = vk::DescriptorBufferInfo {
+                buffer: piece.buffer.raw,
+                offset: piece.offset,
+                range: vk::WHOLE_SIZE,
+            };
+            unsafe { std::ptr::write(base_ptr.add(i), value) };
+        }
+    }
+}
 impl crate::ShaderBindable for super::AccelerationStructure {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         ctx.write(index, self.raw);

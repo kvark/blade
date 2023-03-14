@@ -3,6 +3,8 @@ mod gltf_loader;
 #[cfg(not(target_arch = "wasm32"))]
 mod renderer;
 
+const MAX_DATA_BUFFERS: u32 = 1000;
+
 pub struct Vertex {
     pub position: [f32; 3],
 }
@@ -35,6 +37,7 @@ pub struct Renderer {
     scene: Scene,
     acceleration_structure: blade::AccelerationStructure,
     hit_buf: blade::Buffer,
+    data_buf_array: blade::BufferArray<MAX_DATA_BUFFERS>,
     is_tlas_dirty: bool,
     screen_size: blade::Extent,
 }

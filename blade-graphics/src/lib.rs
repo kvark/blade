@@ -123,6 +123,51 @@ impl Buffer {
     }
 }
 
+pub type BufferIndex = u32;
+/// An array of buffer pointers, to be used with shader bindings.
+/// The generic argument tells the maximum number of buffers.
+pub struct BufferArray<const N: BufferIndex> {
+    data: Vec<BufferPiece>,
+    free_list: Vec<BufferIndex>,
+}
+impl<const N: BufferIndex> BufferArray<N> {
+    pub fn new() -> Self {
+        Self {
+            data: Vec::with_capacity(N as usize),
+            free_list: Vec::new(),
+        }
+    }
+    pub fn alloc(&mut self, piece: BufferPiece) -> BufferIndex {
+        if let Some(index) = self.free_list.pop() {
+            self.data[index as usize] = piece;
+            index
+        } else {
+            let index = self.data.len() as u32;
+            assert!(index < N);
+            self.data.push(piece);
+            index
+        }
+    }
+    pub fn free(&mut self, index: BufferIndex) {
+        self.free_list.push(index);
+    }
+    pub fn clear(&mut self) {
+        self.data.clear();
+        self.free_list.clear();
+    }
+}
+impl<const N: BufferIndex> std::ops::Index<BufferIndex> for BufferArray<N> {
+    type Output = BufferPiece;
+    fn index(&self, index: BufferIndex) -> &BufferPiece {
+        &self.data[index as usize]
+    }
+}
+impl<const N: BufferIndex> std::ops::IndexMut<BufferIndex> for BufferArray<N> {
+    fn index_mut(&mut self, index: BufferIndex) -> &mut BufferPiece {
+        &mut self.data[index as usize]
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct TexturePiece {
     pub texture: Texture,
@@ -414,6 +459,7 @@ pub enum ShaderBinding {
     Texture,
     Sampler,
     Buffer,
+    BufferArray { count: u32 },
     AccelerationStructure,
     Plain { size: u32 },
 }
@@ -438,6 +484,9 @@ impl HasShaderBinding for Sampler {
 }
 impl HasShaderBinding for BufferPiece {
     const TYPE: ShaderBinding = ShaderBinding::Buffer;
+}
+impl<'a, const N: BufferIndex> HasShaderBinding for &'a BufferArray<N> {
+    const TYPE: ShaderBinding = ShaderBinding::BufferArray { count: N };
 }
 impl HasShaderBinding for AccelerationStructure {
     const TYPE: ShaderBinding = ShaderBinding::AccelerationStructure;
