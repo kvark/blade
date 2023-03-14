@@ -143,6 +143,7 @@ impl super::PipelineLayout {
                         num_buffers += 1;
                         num_buffers - 1
                     }
+                    crate::ShaderBinding::BufferArray { count: _ } => unimplemented!(),
                     crate::ShaderBinding::AccelerationStructure => {
                         num_buffers += 1;
                         num_buffers - 1

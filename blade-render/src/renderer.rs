@@ -1,4 +1,4 @@
-use std::mem;
+use std::{mem, ptr};
 
 const TARGET_FORMAT: blade::TextureFormat = blade::TextureFormat::Rgba16Float;
 
@@ -194,6 +194,7 @@ impl super::Renderer {
             draw_pipeline,
             acceleration_structure: blade::AccelerationStructure::default(),
             hit_buf: blade::Buffer::default(),
+            data_buf_array: blade::BufferArray::new(),
             is_tlas_dirty: true,
             screen_size,
         }
@@ -233,12 +234,36 @@ impl super::Renderer {
                 temp_buffers,
             );
             self.acceleration_structure = tlas;
+
             temp_buffers.push(self.hit_buf);
             self.hit_buf = gpu.create_buffer(blade::BufferDesc {
                 name: "hit entries",
                 size: (geometry_count as usize * mem::size_of::<HitEntry>()) as u64,
                 memory: blade::Memory::Device,
             });
+            let staging = gpu.create_buffer(blade::BufferDesc {
+                name: "hit staging",
+                size: (geometry_count as usize * mem::size_of::<HitEntry>()) as u64,
+                memory: blade::Memory::Upload,
+            });
+
+            self.data_buf_array.clear();
+            let mut geometry_index = 0;
+            for object in self.scene.objects.iter() {
+                for geometry in object.geometries.iter() {
+                    let hit_entry = HitEntry {
+                        index_buf: self.data_buf_array.alloc(geometry.index_buf.at(0)),
+                        vertex_buf: self.data_buf_array.alloc(geometry.vertex_buf.at(0)),
+                    };
+                    unsafe {
+                        ptr::write(
+                            (staging.data() as *mut HitEntry).add(geometry_index),
+                            hit_entry,
+                        );
+                    }
+                    geometry_index += 1;
+                }
+            }
         }
     }
 
