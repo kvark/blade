@@ -101,6 +101,10 @@ unsafe fn inspect_adapter(
 
     let ray_tracing = if descriptor_indexing_properties.max_per_stage_update_after_bind_resources
         == vk::FALSE
+        || descriptor_indexing_features.descriptor_binding_partially_bound == vk::FALSE
+        || descriptor_indexing_features.shader_storage_buffer_array_non_uniform_indexing
+            == vk::FALSE
+        || descriptor_indexing_features.shader_sampled_image_array_non_uniform_indexing == vk::FALSE
     {
         log::info!(
             "No ray tracing because of the descriptor indexing. Properties = {:?}. Features = {:?}",
@@ -312,7 +316,10 @@ impl super::Context {
             let mut khr_ray_query;
             if capabilities.ray_tracing {
                 ext_descriptor_indexing =
-                    vk::PhysicalDeviceDescriptorIndexingFeaturesEXT::builder();
+                    vk::PhysicalDeviceDescriptorIndexingFeaturesEXT::builder()
+                        .shader_storage_buffer_array_non_uniform_indexing(true)
+                        .shader_sampled_image_array_non_uniform_indexing(true)
+                        .descriptor_binding_partially_bound(true);
                 khr_buffer_device_address =
                     vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR::builder()
                         .buffer_device_address(true);

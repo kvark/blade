@@ -207,6 +207,12 @@ impl crate::traits::ResourceDevice for super::Context {
         let requirements = unsafe { self.device.core.get_buffer_memory_requirements(raw) };
         let allocation = self.allocate_memory(requirements, desc.memory);
 
+        log::info!(
+            "Creating buffer {:?}, name '{}', handle {:?}",
+            raw,
+            desc.name,
+            allocation.handle
+        );
         unsafe {
             self.device
                 .core
@@ -227,6 +233,11 @@ impl crate::traits::ResourceDevice for super::Context {
     fn sync_buffer(&self, _buffer: super::Buffer) {}
 
     fn destroy_buffer(&self, buffer: super::Buffer) {
+        log::info!(
+            "Destroying buffer {:?}, handle {:?}",
+            buffer.raw,
+            buffer.memory_handle
+        );
         unsafe { self.device.core.destroy_buffer(buffer.raw, None) };
         self.free_memory(buffer.memory_handle);
     }

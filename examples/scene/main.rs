@@ -66,6 +66,9 @@ impl Example {
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);
         }
+        for buffer in self.prev_temp_buffers.drain(..) {
+            self.context.destroy_buffer(buffer);
+        }
         self.renderer.destroy(&self.context);
     }
 

@@ -13,7 +13,7 @@ bytemuck = { version = "1", features = ["derive"] }
 glam = { version = "0.23", features = ["mint"] }
 log = "0.4"
 mint = "0.5"
-naga = { git = "https://github.com/kvark/naga", branch = "ray-query", features = ["wgsl-in", "span", "validate"] }
+naga = { git = "https://github.com/kvark/naga", branch = "storage-array", features = ["wgsl-in", "span", "validate"] }
 web-sys = "0.3.60"
 
 [lib]

@@ -27,9 +27,24 @@ fn impl_shader_data(input_stream: TokenStream) -> syn::Result<proc_macro2::Token
         });
     }
 
+    let mut generics = Vec::new();
+    for param in item_struct.generics.params {
+        match param {
+            syn::GenericParam::Lifetime(lt) => {
+                generics.push(lt.lifetime);
+            }
+            syn::GenericParam::Type(_) | syn::GenericParam::Const(_) => {
+                return Err(syn::Error::new(
+                    item_struct.struct_token.span,
+                    "Unsupported generic parameters",
+                ))
+            }
+        }
+    }
+
     let struct_name = item_struct.ident;
     Ok(quote! {
-        impl blade::ShaderData for #struct_name {
+        impl<#(#generics),*> blade::ShaderData for #struct_name<#(#generics),*> {
             fn layout() -> blade::ShaderDataLayout {
                 blade::ShaderDataLayout {
                     bindings: vec![#(#bindings),*],
