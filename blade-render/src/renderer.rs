@@ -1,3 +1,4 @@
+use super::MAX_DATA_BUFFERS;
 use std::{mem, ptr};
 
 const TARGET_FORMAT: blade::TextureFormat = blade::TextureFormat::Rgba16Float;
@@ -13,9 +14,12 @@ struct Parameters {
 }
 
 #[derive(blade_macros::ShaderData)]
-struct ShaderData {
+struct ShaderData<'a> {
     parameters: Parameters,
     acc_struct: blade::AccelerationStructure,
+    hit_entries: blade::BufferPiece,
+    index_buffers: &'a blade::BufferArray<MAX_DATA_BUFFERS>,
+    vertex_buffers: &'a blade::BufferArray<MAX_DATA_BUFFERS>,
     output: blade::TextureView,
 }
 
@@ -25,9 +29,11 @@ struct DrawData {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 struct HitEntry {
     index_buf: u32,
     vertex_buf: u32,
+    //geometry_to_object: mint::RowMatrix3x4<f32>,
 }
 
 impl super::Scene {
@@ -193,8 +199,9 @@ impl super::Renderer {
             rt_pipeline,
             draw_pipeline,
             acceleration_structure: blade::AccelerationStructure::default(),
-            hit_buf: blade::Buffer::default(),
-            data_buf_array: blade::BufferArray::new(),
+            hit_buffer: blade::Buffer::default(),
+            vertex_buffers: blade::BufferArray::new(),
+            index_buffers: blade::BufferArray::new(),
             is_tlas_dirty: true,
             screen_size,
         }
@@ -212,6 +219,9 @@ impl super::Renderer {
         }
         gpu.destroy_texture_view(self.target_view);
         gpu.destroy_texture(self.target);
+        if self.hit_buffer != blade::Buffer::default() {
+            gpu.destroy_buffer(self.hit_buffer);
+        }
         gpu.destroy_acceleration_structure(self.acceleration_structure);
     }
 
@@ -227,34 +237,51 @@ impl super::Renderer {
     ) {
         if self.is_tlas_dirty {
             self.is_tlas_dirty = false;
-            //TODO: properly remove the old TLAS and buffers
+            if self.acceleration_structure != blade::AccelerationStructure::default() {
+                temp_buffers.push(self.hit_buffer);
+                //TODO: delay this or stall the GPU
+                gpu.destroy_acceleration_structure(self.acceleration_structure);
+            }
+
             let (tlas, geometry_count) = self.scene.build_top_level_acceleration_structure(
                 command_encoder,
                 gpu,
                 temp_buffers,
             );
             self.acceleration_structure = tlas;
+            log::info!("Preparing ray tracing with {geometry_count} geometries in total");
 
-            temp_buffers.push(self.hit_buf);
-            self.hit_buf = gpu.create_buffer(blade::BufferDesc {
+            let hit_size = (geometry_count as usize * mem::size_of::<HitEntry>()) as u64;
+            self.hit_buffer = gpu.create_buffer(blade::BufferDesc {
                 name: "hit entries",
-                size: (geometry_count as usize * mem::size_of::<HitEntry>()) as u64,
+                size: hit_size,
                 memory: blade::Memory::Device,
             });
             let staging = gpu.create_buffer(blade::BufferDesc {
                 name: "hit staging",
-                size: (geometry_count as usize * mem::size_of::<HitEntry>()) as u64,
+                size: hit_size,
                 memory: blade::Memory::Upload,
             });
+            temp_buffers.push(staging);
+            command_encoder.transfer().copy_buffer_to_buffer(
+                staging.at(0),
+                self.hit_buffer.at(0),
+                hit_size,
+            );
 
-            self.data_buf_array.clear();
+            self.vertex_buffers.clear();
+            self.index_buffers.clear();
             let mut geometry_index = 0;
             for object in self.scene.objects.iter() {
                 for geometry in object.geometries.iter() {
                     let hit_entry = HitEntry {
-                        index_buf: self.data_buf_array.alloc(geometry.index_buf.at(0)),
-                        vertex_buf: self.data_buf_array.alloc(geometry.vertex_buf.at(0)),
+                        index_buf: match geometry.index_type {
+                            Some(_) => self.index_buffers.alloc(geometry.index_buf.at(0)),
+                            None => !0,
+                        },
+                        vertex_buf: self.vertex_buffers.alloc(geometry.vertex_buf.at(0)),
                     };
+                    log::debug!("Entry[{geometry_index}] = {hit_entry:?}");
                     unsafe {
                         ptr::write(
                             (staging.data() as *mut HitEntry).add(geometry_index),
@@ -264,6 +291,7 @@ impl super::Renderer {
                     geometry_index += 1;
                 }
             }
+            assert_eq!(geometry_index, geometry_count as usize);
         }
     }
 
@@ -291,6 +319,9 @@ impl super::Renderer {
                     pad: [0.0; 2],
                 },
                 acc_struct: self.acceleration_structure,
+                hit_entries: self.hit_buffer.at(0),
+                index_buffers: &self.index_buffers,
+                vertex_buffers: &self.vertex_buffers,
                 output: self.target_view,
             },
         );

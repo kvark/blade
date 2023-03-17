@@ -214,6 +214,7 @@ impl super::Context {
         let mut vk_bindings = Vec::with_capacity(layout.bindings.len());
         let mut template_entries = Vec::with_capacity(layout.bindings.len());
         let mut template_offsets = Vec::with_capacity(layout.bindings.len());
+        let mut binding_flags = Vec::with_capacity(layout.bindings.len());
         let mut update_offset = 0;
         for (binding_index, (&(_, binding), &access)) in layout
             .bindings
@@ -221,7 +222,7 @@ impl super::Context {
             .zip(info.binding_access.iter())
             .enumerate()
         {
-            let (descriptor_type, descriptor_size, descriptor_count) = match binding {
+            let (descriptor_type, descriptor_size, descriptor_count, flag) = match binding {
                 crate::ShaderBinding::Texture => (
                     if access.is_empty() {
                         vk::DescriptorType::SAMPLED_IMAGE
@@ -230,30 +231,38 @@ impl super::Context {
                     },
                     mem::size_of::<vk::DescriptorImageInfo>(),
                     1u32,
+                    vk::DescriptorBindingFlags::empty(),
                 ),
                 crate::ShaderBinding::Sampler => (
                     vk::DescriptorType::SAMPLER,
                     mem::size_of::<vk::DescriptorImageInfo>(),
                     1u32,
+                    vk::DescriptorBindingFlags::empty(),
                 ),
                 crate::ShaderBinding::Buffer => (
                     vk::DescriptorType::STORAGE_BUFFER,
                     mem::size_of::<vk::DescriptorBufferInfo>(),
                     1u32,
+                    vk::DescriptorBindingFlags::empty(),
                 ),
                 crate::ShaderBinding::BufferArray { count } => (
                     vk::DescriptorType::STORAGE_BUFFER,
                     mem::size_of::<vk::DescriptorBufferInfo>(),
                     count,
+                    vk::DescriptorBindingFlags::PARTIALLY_BOUND,
                 ),
                 crate::ShaderBinding::AccelerationStructure => (
                     vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
                     mem::size_of::<vk::AccelerationStructureKHR>(),
                     1u32,
+                    vk::DescriptorBindingFlags::empty(),
                 ),
-                crate::ShaderBinding::Plain { size } => {
-                    (vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT, 1, size)
-                }
+                crate::ShaderBinding::Plain { size } => (
+                    vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
+                    1,
+                    size,
+                    vk::DescriptorBindingFlags::empty(),
+                ),
             };
             vk_bindings.push(vk::DescriptorSetLayoutBinding {
                 binding: binding_index as u32,
@@ -271,10 +280,15 @@ impl super::Context {
                 stride: descriptor_size,
             });
             template_offsets.push(update_offset as u32);
+            binding_flags.push(flag);
             update_offset += descriptor_size * descriptor_count as usize;
         }
 
-        let set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&vk_bindings);
+        let mut binding_flags_info =
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::builder().binding_flags(&binding_flags);
+        let set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder()
+            .bindings(&vk_bindings)
+            .push_next(&mut binding_flags_info);
         let raw = unsafe {
             self.device
                 .core

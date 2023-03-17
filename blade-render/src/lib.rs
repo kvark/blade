@@ -5,8 +5,10 @@ mod renderer;
 
 const MAX_DATA_BUFFERS: u32 = 1000;
 
+#[repr(C)]
 pub struct Vertex {
     pub position: [f32; 3],
+    pub dummy: f32,
 }
 
 pub struct Geometry {
@@ -36,8 +38,9 @@ pub struct Renderer {
     draw_pipeline: blade::RenderPipeline,
     scene: Scene,
     acceleration_structure: blade::AccelerationStructure,
-    hit_buf: blade::Buffer,
-    data_buf_array: blade::BufferArray<MAX_DATA_BUFFERS>,
+    hit_buffer: blade::Buffer,
+    vertex_buffers: blade::BufferArray<MAX_DATA_BUFFERS>,
+    index_buffers: blade::BufferArray<MAX_DATA_BUFFERS>,
     is_tlas_dirty: bool,
     screen_size: blade::Extent,
 }
