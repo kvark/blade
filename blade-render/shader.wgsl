@@ -1,4 +1,3 @@
-const MAX_DATA_BUFFERS: u32 = 1000u;
 const MAX_BOUNCES: i32 = 3;
 
 struct Parameters {
@@ -19,8 +18,8 @@ struct VertexBuffer {
 struct IndexBuffer {
     data: array<u32>,
 }
-var<storage, read> vertex_buffers: binding_array<VertexBuffer, MAX_DATA_BUFFERS>;
-var<storage, read> index_buffers: binding_array<IndexBuffer, MAX_DATA_BUFFERS>;
+var<storage, read> vertex_buffers: binding_array<VertexBuffer, 1>;
+var<storage, read> index_buffers: binding_array<IndexBuffer, 1>;
 
 struct HitEntry {
     index_buf: u32,
@@ -79,8 +78,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var ray_pos = parameters.cam_position;
     var ray_dir = world_dir;
     rayQueryInitialize(&rq, acc_struct, RayDesc(0u, 0xFFu, 0.1, parameters.depth, ray_pos, ray_dir));
-    rayQueryProceed(&rq);
-    //TODO: skip candidates
+    while (rayQueryProceed(&rq)) {}
     let intersection = rayQueryGetCommittedIntersection(&rq);
 
     var color = vec4<f32>(0.0);
