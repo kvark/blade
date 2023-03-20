@@ -8,7 +8,10 @@ const MAX_DATA_BUFFERS: u32 = 1000;
 #[repr(C)]
 pub struct Vertex {
     pub position: [f32; 3],
-    pub dummy: f32,
+    // XY of the normal encoded as signed-normalized
+    pub normal: [i16; 2],
+    pub tex_coords: [f32; 2],
+    pub pad: [f32; 2],
 }
 
 pub struct Geometry {
@@ -17,6 +20,7 @@ pub struct Geometry {
     pub index_buf: blade::Buffer,
     pub index_type: Option<blade::IndexType>,
     pub triangle_count: u32,
+    pub material_index: u32,
 }
 
 pub struct Object {
@@ -26,9 +30,21 @@ pub struct Object {
     pub acceleration_structure: blade::AccelerationStructure,
 }
 
+pub struct Texture {
+    texture: blade::Texture,
+    view: blade::TextureView,
+}
+
+pub struct Material {
+    base_color_texture_index: u32,
+    base_color_factor: [f32; 4],
+}
+
 #[derive(Default)]
 pub struct Scene {
     pub objects: Vec<Object>,
+    pub materials: Vec<Material>,
+    pub textures: Vec<Texture>,
 }
 
 pub struct Renderer {

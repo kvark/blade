@@ -1,3 +1,4 @@
+use core::slice;
 use std::{mem, path::Path, ptr};
 
 struct LoadContext<'a> {
@@ -28,12 +29,28 @@ impl LoadContext<'_> {
             };
 
             for g_primitive in g_mesh.primitives() {
+                if g_primitive.mode() != gltf::mesh::Mode::Triangles {
+                    log::warn!(
+                        "Skipping primitive for having mesh mode {:?}",
+                        g_primitive.mode()
+                    );
+                    continue;
+                }
+                let material_index = match g_primitive.material().index() {
+                    Some(index) => index as u32,
+                    None => {
+                        log::warn!("Skipping primitive for having default material");
+                        continue;
+                    }
+                };
+
                 let mut geometry = super::Geometry {
                     vertex_buf: blade::Buffer::default(),
                     vertex_count: 0,
                     index_buf: blade::Buffer::default(),
                     index_type: None,
                     triangle_count: 0,
+                    material_index,
                 };
                 let vertex_count = g_primitive.get(&gltf::Semantic::Positions).unwrap().count();
                 let vertex_buf_size = mem::size_of::<super::Vertex>() * vertex_count;
@@ -65,11 +82,34 @@ impl LoadContext<'_> {
                     size: staging_size as u64,
                     memory: blade::Memory::Upload,
                 });
+                unsafe {
+                    ptr::write_bytes(staging_buf.data(), 0, staging_size);
+                }
                 for (i, pos) in reader.read_positions().unwrap().enumerate() {
                     unsafe {
                         (*(staging_buf.data() as *mut super::Vertex).add(i)).position = pos;
                     }
                 }
+                if let Some(iter) = reader.read_tex_coords(0) {
+                    for (i, tc) in iter.into_f32().enumerate() {
+                        unsafe {
+                            (*(staging_buf.data() as *mut super::Vertex).add(i)).tex_coords = tc;
+                        }
+                    }
+                }
+                if let Some(iter) = reader.read_normals() {
+                    for (i, normal) in iter.enumerate() {
+                        // convert floating point to i16 normalized
+                        let nu = [
+                            (normal[0] * i16::MAX as f32) as i16,
+                            (normal[1] * i16::MAX as f32) as i16,
+                        ];
+                        unsafe {
+                            (*(staging_buf.data() as *mut super::Vertex).add(i)).normal = nu;
+                        }
+                    }
+                }
+
                 self.encoder.copy_buffer_to_buffer(
                     staging_buf.at(0),
                     geometry.vertex_buf.at(0),
@@ -109,16 +149,78 @@ impl super::Scene {
         encoder: &mut blade::CommandEncoder,
         gpu: &blade::Context,
     ) -> (Self, Vec<blade::Buffer>) {
-        let (doc, buffers, _images) = gltf::import(path).unwrap();
+        let (doc, buffers, images) = gltf::import(path).unwrap();
         let mut scene = super::Scene::default();
         let g_scene = doc.scenes().next().unwrap();
+        let mut temp_buffers = Vec::new();
+
+        let mut transfer_pass = encoder.transfer();
+
+        for g_texture in doc.textures() {
+            let img_data = &images[g_texture.source().index()];
+            let (format, source_bytes_pp) = match img_data.format {
+                gltf::image::Format::R8G8B8 => (blade::TextureFormat::Rgba8UnormSrgb, 3),
+                gltf::image::Format::R8G8B8A8 => (blade::TextureFormat::Rgba8UnormSrgb, 4),
+                other => panic!("Unsupported image format {:?}", other),
+            };
+            let size = blade::Extent {
+                width: img_data.width,
+                height: img_data.height,
+                depth: 1,
+            };
+            let name = g_texture.name().unwrap_or_default();
+            let texture = gpu.create_texture(blade::TextureDesc {
+                name,
+                format,
+                size,
+                array_layer_count: 1,
+                mip_level_count: 1, //TODO
+                dimension: blade::TextureDimension::D2,
+                usage: blade::TextureUsage::COPY | blade::TextureUsage::RESOURCE,
+            });
+            let view = gpu.create_texture_view(blade::TextureViewDesc {
+                name,
+                format,
+                texture,
+                dimension: blade::ViewDimension::D2,
+                subresources: &blade::TextureSubresources::default(),
+            });
+            let bytes_pp = format.block_info().size as u32;
+            let stage_size = (img_data.width * img_data.height * bytes_pp) as u64;
+            let staging = gpu.create_buffer(blade::BufferDesc {
+                name: "staging",
+                size: stage_size,
+                memory: blade::Memory::Upload,
+            });
+            let staging_slice =
+                unsafe { slice::from_raw_parts_mut(staging.data(), stage_size as usize) };
+            for (src_bytes, dst_bytes) in img_data
+                .pixels
+                .chunks(source_bytes_pp)
+                .zip(staging_slice.chunks_mut(bytes_pp as usize))
+            {
+                let (dst_copy, dst_fill) = dst_bytes.split_at_mut(source_bytes_pp);
+                dst_copy.copy_from_slice(src_bytes);
+                dst_fill.fill(!0);
+            }
+
+            encoder.init_texture(texture);
+            encoder.transfer().copy_buffer_to_texture(
+                staging.into(),
+                img_data.width * bytes_pp,
+                texture.into(),
+                size,
+            );
+            temp_buffers.push(staging);
+            scene.textures.push(super::Texture { texture, view });
+        }
 
         let mut temp_buffers = {
             let mut loader = LoadContext {
                 gltf_buffers: &buffers,
                 gpu,
                 encoder: encoder.transfer(),
-                temp_buffers: Vec::new(),
+                temp_buffers,
                 scene: &mut scene,
             };
             for g_node in g_scene.nodes() {
