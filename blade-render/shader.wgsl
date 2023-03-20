@@ -22,6 +22,8 @@ struct IndexBuffer {
 }
 var<storage, read> vertex_buffers: binding_array<VertexBuffer, 1>;
 var<storage, read> index_buffers: binding_array<IndexBuffer, 1>;
+var textures: binding_array<texture_2d<f32>, 1>;
+var sampler_linear: sampler;
 
 struct HitEntry {
     index_buf: u32,
@@ -29,6 +31,9 @@ struct HitEntry {
     // packed object->world rotation quaternion
     rotation: u32,
     //geometry_to_object_rm: mat3x4<f32>,
+    base_color_texture: u32,
+    // packed color factor
+    base_color_factor: u32,
 }
 var<storage, read> hit_entries: array<HitEntry>;
 
@@ -69,7 +74,12 @@ fn compute_hit_color(ri: RayIntersection, hit_world: vec3<f32>) -> vec4<f32> {
 
     // Note: this line allows to check the correctness of data passed in
     //return vec4<f32>(abs(pos_world - hit_world) * 1000000.0, 1.0);
-    return vec4<f32>(normal_world, 1.0);
+    //return vec4<f32>(normal_world, 1.0);
+
+    let base_color_factor = unpack4x8unorm(entry.base_color_factor);
+    let lod = 0.0; //TODO: this is actually complicated
+    let base_color_sample = textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tex_coords, lod);
+    return base_color_factor * base_color_sample;
 }
 
 @compute @workgroup_size(8, 8)

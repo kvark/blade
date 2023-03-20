@@ -24,7 +24,7 @@ impl super::Context {
         let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
         let mut caps = naga::valid::Capabilities::empty();
         caps.set(
-            naga::valid::Capabilities::RAY_QUERY,
+            naga::valid::Capabilities::RAY_QUERY | naga::valid::Capabilities::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING,
             !device_caps.ray_query.is_empty(),
         );
         let info = naga::valid::Validator::new(flags, caps)

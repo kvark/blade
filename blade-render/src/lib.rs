@@ -3,7 +3,7 @@ mod gltf_loader;
 #[cfg(not(target_arch = "wasm32"))]
 mod renderer;
 
-const MAX_DATA_BUFFERS: u32 = 1000;
+pub use renderer::Renderer;
 
 #[repr(C)]
 pub struct Vertex {
@@ -20,7 +20,7 @@ pub struct Geometry {
     pub index_buf: blade::Buffer,
     pub index_type: Option<blade::IndexType>,
     pub triangle_count: u32,
-    pub material_index: u32,
+    pub material_index: usize,
 }
 
 pub struct Object {
@@ -36,7 +36,7 @@ pub struct Texture {
 }
 
 pub struct Material {
-    base_color_texture_index: u32,
+    base_color_texture_index: usize,
     base_color_factor: [f32; 4],
 }
 
@@ -45,20 +45,6 @@ pub struct Scene {
     pub objects: Vec<Object>,
     pub materials: Vec<Material>,
     pub textures: Vec<Texture>,
-}
-
-pub struct Renderer {
-    target: blade::Texture,
-    target_view: blade::TextureView,
-    rt_pipeline: blade::ComputePipeline,
-    draw_pipeline: blade::RenderPipeline,
-    scene: Scene,
-    acceleration_structure: blade::AccelerationStructure,
-    hit_buffer: blade::Buffer,
-    vertex_buffers: blade::BufferArray<MAX_DATA_BUFFERS>,
-    index_buffers: blade::BufferArray<MAX_DATA_BUFFERS>,
-    is_tlas_dirty: bool,
-    screen_size: blade::Extent,
 }
 
 pub struct Camera {

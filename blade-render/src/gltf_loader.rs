@@ -37,7 +37,7 @@ impl LoadContext<'_> {
                     continue;
                 }
                 let material_index = match g_primitive.material().index() {
-                    Some(index) => index as u32,
+                    Some(index) => index,
                     None => {
                         log::warn!("Skipping primitive for having default material");
                         continue;
@@ -154,8 +154,6 @@ impl super::Scene {
         let g_scene = doc.scenes().next().unwrap();
         let mut temp_buffers = Vec::new();
 
-        let mut transfer_pass = encoder.transfer();
-
         for g_texture in doc.textures() {
             let img_data = &images[g_texture.source().index()];
             let (format, source_bytes_pp) = match img_data.format {
@@ -213,6 +211,17 @@ impl super::Scene {
             );
             temp_buffers.push(staging);
             scene.textures.push(super::Texture { texture, view });
+        }
+
+        for g_material in doc.materials() {
+            let pbr = g_material.pbr_metallic_roughness();
+            scene.materials.push(super::Material {
+                base_color_texture_index: match pbr.base_color_texture() {
+                    Some(info) => info.texture().index(),
+                    None => !0,
+                },
+                base_color_factor: pbr.base_color_factor(),
+            });
         }
 
         let mut temp_buffers = {

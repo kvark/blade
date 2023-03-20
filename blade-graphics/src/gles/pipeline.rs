@@ -137,7 +137,8 @@ impl super::Context {
                             targets.push(params[0] as u32);
                         }
                     }
-                    crate::ShaderBinding::BufferArray { .. }
+                    crate::ShaderBinding::TextureArray { .. }
+                    | crate::ShaderBinding::BufferArray { .. }
                     | crate::ShaderBinding::AccelerationStructure => {
                         unimplemented!()
                     }

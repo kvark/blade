@@ -11,6 +11,16 @@ impl super::PipelineContext<'_> {
             )
         };
     }
+
+    #[inline]
+    fn write_array<I: Iterator>(&mut self, index: u32, iter: I) {
+        let base_offset = self.template_offsets[index as usize];
+        let base_ptr =
+            unsafe { self.update_data.as_mut_ptr().offset(base_offset as isize) as *mut I::Item };
+        for (i, value) in iter.enumerate() {
+            unsafe { std::ptr::write(base_ptr.add(i), value) };
+        }
+    }
 }
 
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
@@ -27,6 +37,18 @@ impl crate::ShaderBindable for super::TextureView {
                 image_view: self.raw,
                 image_layout: vk::ImageLayout::GENERAL,
             },
+        );
+    }
+}
+impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::TextureArray<N> {
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        ctx.write_array(
+            index,
+            self.data.iter().map(|view| vk::DescriptorImageInfo {
+                sampler: vk::Sampler::null(),
+                image_view: view.raw,
+                image_layout: vk::ImageLayout::GENERAL,
+            }),
         );
     }
 }
@@ -54,21 +76,16 @@ impl crate::ShaderBindable for crate::BufferPiece {
         );
     }
 }
-impl<'a, const N: crate::BufferIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
+impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
-        let base_offset = ctx.template_offsets[index as usize];
-        let base_ptr = unsafe {
-            ctx.update_data.as_mut_ptr().offset(base_offset as isize)
-                as *mut vk::DescriptorBufferInfo
-        };
-        for (i, piece) in self.data.iter().enumerate() {
-            let value = vk::DescriptorBufferInfo {
+        ctx.write_array(
+            index,
+            self.data.iter().map(|piece| vk::DescriptorBufferInfo {
                 buffer: piece.buffer.raw,
                 offset: piece.offset,
                 range: vk::WHOLE_SIZE,
-            };
-            unsafe { std::ptr::write(base_ptr.add(i), value) };
-        }
+            }),
+        );
     }
 }
 impl crate::ShaderBindable for super::AccelerationStructure {
