@@ -33,6 +33,7 @@ struct DrawData {
 struct HitEntry {
     index_buf: u32,
     vertex_buf: u32,
+    rotation: [i8; 4],
     //geometry_to_object: mint::RowMatrix3x4<f32>,
 }
 
@@ -208,6 +209,10 @@ impl super::Renderer {
     }
 
     pub fn destroy(&mut self, gpu: &blade::Context) {
+        for texture in self.scene.textures.drain(..) {
+            gpu.destroy_texture_view(texture.view);
+            gpu.destroy_texture(texture.texture);
+        }
         for mut object in self.scene.objects.drain(..) {
             for geometry in object.geometries.drain(..) {
                 gpu.destroy_buffer(geometry.vertex_buf);
@@ -273,6 +278,18 @@ impl super::Renderer {
             self.index_buffers.clear();
             let mut geometry_index = 0;
             for object in self.scene.objects.iter() {
+                let rotation = {
+                    let col_matrix = mint::ColumnMatrix3x4::from(object.transform);
+                    let m3 = glam::Mat3::from_cols(
+                        col_matrix.x.into(),
+                        col_matrix.y.into(),
+                        col_matrix.z.into(),
+                    );
+                    let m3_normal = m3.inverse().transpose();
+                    let quat = glam::Quat::from_mat3(&m3_normal);
+                    let qv = glam::Vec4::from(quat) * 127.0;
+                    [qv.x as i8, qv.y as i8, qv.z as i8, qv.w as i8]
+                };
                 for geometry in object.geometries.iter() {
                     let hit_entry = HitEntry {
                         index_buf: match geometry.index_type {
@@ -280,6 +297,7 @@ impl super::Renderer {
                             None => !0,
                         },
                         vertex_buf: self.vertex_buffers.alloc(geometry.vertex_buf.at(0)),
+                        rotation,
                     };
                     log::debug!("Entry[{geometry_index}] = {hit_entry:?}");
                     unsafe {
