@@ -1,7 +1,34 @@
-use super::MAX_DATA_BUFFERS;
 use std::{mem, ptr};
 
 const TARGET_FORMAT: blade::TextureFormat = blade::TextureFormat::Rgba16Float;
+const MAX_RESOURCES: u32 = 1000;
+
+struct DummyResources {
+    size: blade::Extent,
+    white_texture: blade::Texture,
+    white_view: blade::TextureView,
+}
+
+struct Samplers {
+    linear: blade::Sampler,
+}
+
+pub struct Renderer {
+    target: blade::Texture,
+    target_view: blade::TextureView,
+    rt_pipeline: blade::ComputePipeline,
+    draw_pipeline: blade::RenderPipeline,
+    scene: super::Scene,
+    acceleration_structure: blade::AccelerationStructure,
+    dummy: DummyResources,
+    hit_buffer: blade::Buffer,
+    vertex_buffers: blade::BufferArray<MAX_RESOURCES>,
+    index_buffers: blade::BufferArray<MAX_RESOURCES>,
+    textures: blade::TextureArray<MAX_RESOURCES>,
+    samplers: Samplers,
+    is_tlas_dirty: bool,
+    screen_size: blade::Extent,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -18,8 +45,10 @@ struct ShaderData<'a> {
     parameters: Parameters,
     acc_struct: blade::AccelerationStructure,
     hit_entries: blade::BufferPiece,
-    index_buffers: &'a blade::BufferArray<MAX_DATA_BUFFERS>,
-    vertex_buffers: &'a blade::BufferArray<MAX_DATA_BUFFERS>,
+    index_buffers: &'a blade::BufferArray<MAX_RESOURCES>,
+    vertex_buffers: &'a blade::BufferArray<MAX_RESOURCES>,
+    textures: &'a blade::TextureArray<MAX_RESOURCES>,
+    sampler_linear: blade::Sampler,
     output: blade::TextureView,
 }
 
@@ -35,6 +64,8 @@ struct HitEntry {
     vertex_buf: u32,
     rotation: [i8; 4],
     //geometry_to_object: mint::RowMatrix3x4<f32>,
+    base_color_texture: u32,
+    base_color_factor: [u8; 4],
 }
 
 impl super::Scene {
@@ -193,6 +224,47 @@ impl super::Renderer {
 
         encoder.init_texture(target);
 
+        let dummy = {
+            let size = blade::Extent {
+                width: 1,
+                height: 1,
+                depth: 1,
+            };
+            let white_texture = context.create_texture(blade::TextureDesc {
+                name: "dummy/white",
+                format: blade::TextureFormat::Rgba8Unorm,
+                size,
+                array_layer_count: 1,
+                mip_level_count: 1,
+                dimension: blade::TextureDimension::D2,
+                usage: blade::TextureUsage::COPY | blade::TextureUsage::RESOURCE,
+            });
+            let white_view = context.create_texture_view(blade::TextureViewDesc {
+                name: "dummy/white",
+                texture: white_texture,
+                format: blade::TextureFormat::Rgba8Unorm,
+                dimension: blade::ViewDimension::D2,
+                subresources: &blade::TextureSubresources::default(),
+            });
+            encoder.init_texture(white_texture);
+            DummyResources {
+                size,
+                white_texture,
+                white_view,
+            }
+        };
+
+        let samplers = Samplers {
+            linear: context.create_sampler(blade::SamplerDesc {
+                name: "linear",
+                address_modes: [blade::AddressMode::ClampToEdge; 3],
+                mag_filter: blade::FilterMode::Linear,
+                min_filter: blade::FilterMode::Linear,
+                mipmap_filter: blade::FilterMode::Linear,
+                ..Default::default()
+            }),
+        };
+
         Self {
             target,
             target_view,
@@ -200,15 +272,19 @@ impl super::Renderer {
             rt_pipeline,
             draw_pipeline,
             acceleration_structure: blade::AccelerationStructure::default(),
+            dummy,
             hit_buffer: blade::Buffer::default(),
             vertex_buffers: blade::BufferArray::new(),
             index_buffers: blade::BufferArray::new(),
+            textures: blade::TextureArray::new(),
+            samplers,
             is_tlas_dirty: true,
             screen_size,
         }
     }
 
     pub fn destroy(&mut self, gpu: &blade::Context) {
+        // scene
         for texture in self.scene.textures.drain(..) {
             gpu.destroy_texture_view(texture.view);
             gpu.destroy_texture(texture.texture);
@@ -222,12 +298,18 @@ impl super::Renderer {
             }
             gpu.destroy_acceleration_structure(object.acceleration_structure);
         }
+        // internal resources
         gpu.destroy_texture_view(self.target_view);
         gpu.destroy_texture(self.target);
         if self.hit_buffer != blade::Buffer::default() {
             gpu.destroy_buffer(self.hit_buffer);
         }
         gpu.destroy_acceleration_structure(self.acceleration_structure);
+        // dummy resources
+        gpu.destroy_texture_view(self.dummy.white_view);
+        gpu.destroy_texture(self.dummy.white_texture);
+        // samplers
+        gpu.destroy_sampler(self.samplers.linear);
     }
 
     pub fn merge_scene(&mut self, scene: super::Scene) {
@@ -255,24 +337,50 @@ impl super::Renderer {
             );
             self.acceleration_structure = tlas;
             log::info!("Preparing ray tracing with {geometry_count} geometries in total");
+            let mut transfers = command_encoder.transfer();
 
-            let hit_size = (geometry_count as usize * mem::size_of::<HitEntry>()) as u64;
-            self.hit_buffer = gpu.create_buffer(blade::BufferDesc {
-                name: "hit entries",
-                size: hit_size,
-                memory: blade::Memory::Device,
-            });
-            let staging = gpu.create_buffer(blade::BufferDesc {
-                name: "hit staging",
-                size: hit_size,
-                memory: blade::Memory::Upload,
-            });
-            temp_buffers.push(staging);
-            command_encoder.transfer().copy_buffer_to_buffer(
-                staging.at(0),
-                self.hit_buffer.at(0),
-                hit_size,
-            );
+            {
+                // init the dummy
+                let staging = gpu.create_buffer(blade::BufferDesc {
+                    name: "dummy staging",
+                    size: 4,
+                    memory: blade::Memory::Upload,
+                });
+                unsafe {
+                    ptr::write(staging.data() as *mut _, [!0u8; 4]);
+                }
+                transfers.copy_buffer_to_texture(
+                    staging.into(),
+                    4,
+                    self.dummy.white_texture.into(),
+                    self.dummy.size,
+                );
+                temp_buffers.push(staging);
+            }
+            let hit_staging = {
+                // init the hit buffer
+                let hit_size = (geometry_count as usize * mem::size_of::<HitEntry>()) as u64;
+                self.hit_buffer = gpu.create_buffer(blade::BufferDesc {
+                    name: "hit entries",
+                    size: hit_size,
+                    memory: blade::Memory::Device,
+                });
+                let staging = gpu.create_buffer(blade::BufferDesc {
+                    name: "hit staging",
+                    size: hit_size,
+                    memory: blade::Memory::Upload,
+                });
+                temp_buffers.push(staging);
+                transfers.copy_buffer_to_buffer(staging.at(0), self.hit_buffer.at(0), hit_size);
+                staging
+            };
+
+            self.textures.clear();
+            let dummy_white = self.textures.alloc(self.dummy.white_view);
+            let mut texture_indices = Vec::with_capacity(self.scene.textures.len());
+            for texture in self.scene.textures.iter() {
+                texture_indices.push(self.textures.alloc(texture.view));
+            }
 
             self.vertex_buffers.clear();
             self.index_buffers.clear();
@@ -291,6 +399,7 @@ impl super::Renderer {
                     [qv.x as i8, qv.y as i8, qv.z as i8, qv.w as i8]
                 };
                 for geometry in object.geometries.iter() {
+                    let material = &self.scene.materials[geometry.material_index];
                     let hit_entry = HitEntry {
                         index_buf: match geometry.index_type {
                             Some(_) => self.index_buffers.alloc(geometry.index_buf.at(0)),
@@ -298,11 +407,25 @@ impl super::Renderer {
                         },
                         vertex_buf: self.vertex_buffers.alloc(geometry.vertex_buf.at(0)),
                         rotation,
+                        base_color_texture: if material.base_color_texture_index == !0 {
+                            dummy_white
+                        } else {
+                            texture_indices[material.base_color_texture_index]
+                        },
+                        base_color_factor: {
+                            let c = material.base_color_factor;
+                            [
+                                (c[0] * 255.0) as u8,
+                                (c[1] * 255.0) as u8,
+                                (c[2] * 255.0) as u8,
+                                (c[3] * 255.0) as u8,
+                            ]
+                        },
                     };
                     log::debug!("Entry[{geometry_index}] = {hit_entry:?}");
                     unsafe {
                         ptr::write(
-                            (staging.data() as *mut HitEntry).add(geometry_index),
+                            (hit_staging.data() as *mut HitEntry).add(geometry_index),
                             hit_entry,
                         );
                     }
@@ -340,6 +463,8 @@ impl super::Renderer {
                 hit_entries: self.hit_buffer.at(0),
                 index_buffers: &self.index_buffers,
                 vertex_buffers: &self.vertex_buffers,
+                textures: &self.textures,
+                sampler_linear: self.samplers.linear,
                 output: self.target_view,
             },
         );

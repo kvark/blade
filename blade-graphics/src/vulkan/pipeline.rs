@@ -31,17 +31,21 @@ impl super::Context {
         let mut binding_map = spv::BindingMap::default();
         for (group_index, layout) in data_layouts.iter().enumerate() {
             for (binding_index, (_, binding)) in layout.bindings.iter().enumerate() {
-                if let crate::ShaderBinding::BufferArray { count } = *binding {
-                    let rb = naga::ResourceBinding {
-                        group: group_index as u32,
-                        binding: binding_index as u32,
-                    };
-                    binding_map.insert(
-                        rb,
-                        spv::BindingInfo {
-                            binding_array_size: Some(count),
-                        },
-                    );
+                match *binding {
+                    crate::ShaderBinding::TextureArray { count }
+                    | crate::ShaderBinding::BufferArray { count } => {
+                        let rb = naga::ResourceBinding {
+                            group: group_index as u32,
+                            binding: binding_index as u32,
+                        };
+                        binding_map.insert(
+                            rb,
+                            spv::BindingInfo {
+                                binding_array_size: Some(count),
+                            },
+                        );
+                    }
+                    _ => {}
                 }
             }
         }
@@ -120,10 +124,14 @@ impl super::Context {
                         naga::TypeInner::BindingArray { base, size: _ } => {
                             //Note: we could extract the count from `size` for more rigor
                             let count = match proto_binding {
+                                crate::ShaderBinding::TextureArray { count } => count,
                                 crate::ShaderBinding::BufferArray { count } => count,
                                 _ => 0,
                             };
                             let proto = match module.types[base].inner {
+                                naga::TypeInner::Image { .. } => {
+                                    crate::ShaderBinding::TextureArray { count }
+                                }
                                 naga::TypeInner::Struct { .. } => {
                                     crate::ShaderBinding::BufferArray { count }
                                 }
@@ -251,6 +259,16 @@ impl super::Context {
                     mem::size_of::<vk::DescriptorImageInfo>(),
                     1u32,
                     vk::DescriptorBindingFlags::empty(),
+                ),
+                crate::ShaderBinding::TextureArray { count } => (
+                    if access.is_empty() {
+                        vk::DescriptorType::SAMPLED_IMAGE
+                    } else {
+                        vk::DescriptorType::STORAGE_IMAGE
+                    },
+                    mem::size_of::<vk::DescriptorImageInfo>(),
+                    count,
+                    vk::DescriptorBindingFlags::PARTIALLY_BOUND,
                 ),
                 crate::ShaderBinding::Sampler => (
                     vk::DescriptorType::SAMPLER,

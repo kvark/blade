@@ -59,7 +59,7 @@ impl crate::ShaderBindable for crate::BufferPiece {
         }
     }
 }
-impl<'a, const N: crate::BufferIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
+impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
     fn bind_to(&self, _ctx: &mut super::PipelineContext, _index: u32) {
         unimplemented!()
     }
