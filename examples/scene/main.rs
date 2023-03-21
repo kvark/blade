@@ -124,6 +124,21 @@ impl Example {
         self.prev_sync_point = Some(sync_point);
         self.prev_temp_buffers.extend(temp_buffers);
     }
+
+    fn add_gui(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Eye");
+        ui.horizontal(|ui| {
+            ui.label("Position:");
+            ui.add(egui::DragValue::new(&mut self.camera.pos.x));
+            ui.add(egui::DragValue::new(&mut self.camera.pos.y));
+            ui.add(egui::DragValue::new(&mut self.camera.pos.z));
+        });
+    }
+
+    fn move_camera_by(&mut self, offset: glam::Vec3) {
+        let dir = glam::Quat::from(self.camera.rot) * offset;
+        self.camera.pos = (glam::Vec3::from(self.camera.pos) + dir).into();
+    }
 }
 
 fn main() {
@@ -150,6 +165,8 @@ fn main() {
         depth: 1000.0,
     };
     let mut example = Example::new(&window, &path_to_scene, camera);
+
+    let move_speed = 1.0f32;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = winit::event_loop::ControlFlow::Poll;
@@ -179,6 +196,24 @@ fn main() {
                         winit::event::VirtualKeyCode::Escape => {
                             *control_flow = winit::event_loop::ControlFlow::Exit;
                         }
+                        winit::event::VirtualKeyCode::W => {
+                            example.move_camera_by(glam::Vec3::new(0.0, 0.0, move_speed));
+                        }
+                        winit::event::VirtualKeyCode::S => {
+                            example.move_camera_by(glam::Vec3::new(0.0, 0.0, -move_speed));
+                        }
+                        winit::event::VirtualKeyCode::A => {
+                            example.move_camera_by(glam::Vec3::new(-move_speed, 0.0, 0.0));
+                        }
+                        winit::event::VirtualKeyCode::D => {
+                            example.move_camera_by(glam::Vec3::new(move_speed, 0.0, 0.0));
+                        }
+                        winit::event::VirtualKeyCode::Z => {
+                            example.move_camera_by(glam::Vec3::new(0.0, -move_speed, 0.0));
+                        }
+                        winit::event::VirtualKeyCode::X => {
+                            example.move_camera_by(glam::Vec3::new(0.0, move_speed, 0.0));
+                        }
                         _ => {}
                     },
                     winit::event::WindowEvent::CloseRequested => {
@@ -192,7 +227,7 @@ fn main() {
                 let raw_input = egui_winit.take_egui_input(&window);
                 let egui_output = egui_ctx.run(raw_input, |egui_ctx| {
                     egui::SidePanel::left("my_side_panel").show(egui_ctx, |ui| {
-                        ui.heading("Eye");
+                        example.add_gui(ui);
                         if ui.button("Quit").clicked() {
                             quit = true;
                         }
