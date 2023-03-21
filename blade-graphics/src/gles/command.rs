@@ -38,6 +38,11 @@ impl crate::ShaderBindable for super::TextureView {
         }
     }
 }
+impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::TextureArray<N> {
+    fn bind_to(&self, _ctx: &mut super::PipelineContext, _index: u32) {
+        unimplemented!()
+    }
+}
 impl crate::ShaderBindable for super::Sampler {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         for &slot in ctx.targets[index as usize].iter() {

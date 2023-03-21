@@ -31,6 +31,11 @@ impl crate::ShaderBindable for super::TextureView {
         }
     }
 }
+impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::TextureArray<N> {
+    fn bind_to(&self, _ctx: &mut super::PipelineContext, _index: u32) {
+        unimplemented!()
+    }
+}
 impl crate::ShaderBindable for super::Sampler {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         //self.raw.set_sampler_state(index as _, sampler.as_ref());
@@ -62,7 +67,7 @@ impl crate::ShaderBindable for crate::BufferPiece {
         }
     }
 }
-impl<'a, const N: crate::BufferIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
+impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
     fn bind_to(&self, _ctx: &mut super::PipelineContext, _index: u32) {
         unimplemented!()
     }

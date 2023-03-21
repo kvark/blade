@@ -8,6 +8,7 @@ struct Example {
     prev_temp_buffers: Vec<blade::Buffer>,
     prev_sync_point: Option<blade::SyncPoint>,
     renderer: Renderer,
+    gui_painter: blade_egui::GuiPainter,
     command_encoder: blade::CommandEncoder,
     context: blade::Context,
     camera: blade_render::Camera,
@@ -46,6 +47,8 @@ impl Example {
         let mut renderer =
             Renderer::new(&mut command_encoder, &context, screen_size, surface_format);
 
+        let gui_painter = blade_egui::GuiPainter::new(&context, surface_format);
+
         let (scene, prev_temp_buffers) =
             blade_render::Scene::load_gltf(gltf_path.as_ref(), &mut command_encoder, &context);
         renderer.merge_scene(scene);
@@ -56,6 +59,7 @@ impl Example {
             prev_temp_buffers,
             prev_sync_point: Some(sync_point),
             renderer,
+            gui_painter,
             command_encoder,
             context,
             camera,
@@ -69,11 +73,20 @@ impl Example {
         for buffer in self.prev_temp_buffers.drain(..) {
             self.context.destroy_buffer(buffer);
         }
+        self.gui_painter.destroy(&self.context);
         self.renderer.destroy(&self.context);
     }
 
-    fn render(&mut self) {
+    fn render(
+        &mut self,
+        gui_primitives: &[egui::ClippedPrimitive],
+        gui_textures: &egui::TexturesDelta,
+        screen_desc: &blade_egui::ScreenDescriptor,
+    ) {
         self.command_encoder.start();
+
+        self.gui_painter
+            .update_textures(&mut self.command_encoder, gui_textures, &self.context);
 
         let mut temp_buffers = Vec::new();
         self.renderer
@@ -93,10 +106,13 @@ impl Example {
             depth_stencil: None,
         }) {
             self.renderer.blit(&mut pass);
+            self.gui_painter
+                .paint(&mut pass, gui_primitives, screen_desc, &self.context);
         }
 
         self.command_encoder.present(frame);
         let sync_point = self.context.submit(&mut self.command_encoder);
+        self.gui_painter.after_submit(sync_point.clone());
 
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);
@@ -118,6 +134,9 @@ fn main() {
         .build(&event_loop)
         .unwrap();
 
+    let egui_ctx = egui::Context::default();
+    let mut egui_winit = egui_winit::State::new(&event_loop);
+
     let mut args = std::env::args();
     let path_to_scene = args
         .nth(1)
@@ -137,29 +156,70 @@ fn main() {
             winit::event::Event::RedrawEventsCleared => {
                 window.request_redraw();
             }
-            winit::event::Event::WindowEvent { event, .. } => match event {
-                winit::event::WindowEvent::KeyboardInput {
-                    input:
-                        winit::event::KeyboardInput {
-                            virtual_keycode: Some(key_code),
-                            state: winit::event::ElementState::Pressed,
-                            ..
-                        },
-                    ..
-                } => match key_code {
-                    winit::event::VirtualKeyCode::Escape => {
+            winit::event::Event::WindowEvent { event, .. } => {
+                let response = egui_winit.on_event(&egui_ctx, &event);
+                if response.consumed {
+                    return;
+                }
+                if response.repaint {
+                    window.request_redraw();
+                }
+
+                match event {
+                    winit::event::WindowEvent::KeyboardInput {
+                        input:
+                            winit::event::KeyboardInput {
+                                virtual_keycode: Some(key_code),
+                                state: winit::event::ElementState::Pressed,
+                                ..
+                            },
+                        ..
+                    } => match key_code {
+                        winit::event::VirtualKeyCode::Escape => {
+                            *control_flow = winit::event_loop::ControlFlow::Exit;
+                        }
+                        _ => {}
+                    },
+                    winit::event::WindowEvent::CloseRequested => {
                         *control_flow = winit::event_loop::ControlFlow::Exit;
                     }
                     _ => {}
-                },
-                winit::event::WindowEvent::CloseRequested => {
-                    *control_flow = winit::event_loop::ControlFlow::Exit;
                 }
-                _ => {}
-            },
+            }
             winit::event::Event::RedrawRequested(_) => {
-                *control_flow = winit::event_loop::ControlFlow::Wait;
-                example.render();
+                let mut quit = false;
+                let raw_input = egui_winit.take_egui_input(&window);
+                let egui_output = egui_ctx.run(raw_input, |egui_ctx| {
+                    egui::SidePanel::left("my_side_panel").show(egui_ctx, |ui| {
+                        ui.heading("Eye");
+                        if ui.button("Quit").clicked() {
+                            quit = true;
+                        }
+                    });
+                });
+
+                egui_winit.handle_platform_output(&window, &egui_ctx, egui_output.platform_output);
+
+                let primitives = egui_ctx.tessellate(egui_output.shapes);
+
+                *control_flow = if quit {
+                    winit::event_loop::ControlFlow::Exit
+                } else if let Some(repaint_after_instant) =
+                    std::time::Instant::now().checked_add(egui_output.repaint_after)
+                {
+                    winit::event_loop::ControlFlow::WaitUntil(repaint_after_instant)
+                } else {
+                    winit::event_loop::ControlFlow::Wait
+                };
+
+                //Note: this will probably look different with proper support for resizing
+                let window_size = window.inner_size();
+                let screen_desc = blade_egui::ScreenDescriptor {
+                    physical_size: (window_size.width, window_size.height),
+                    scale_factor: egui_ctx.pixels_per_point(),
+                };
+
+                example.render(&primitives, &egui_output.textures_delta, &screen_desc);
             }
             winit::event::Event::LoopDestroyed => {
                 example.destroy();

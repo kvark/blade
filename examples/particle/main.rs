@@ -1,14 +1,12 @@
 #![allow(irrefutable_let_patterns)]
 
-pub mod belt;
-mod gui;
 mod particle;
 
 struct Example {
     command_encoder: blade::CommandEncoder,
     prev_sync_point: Option<blade::SyncPoint>,
     context: blade::Context,
-    gui_painter: gui::GuiPainter,
+    gui_painter: blade_egui::GuiPainter,
     particle_system: particle::System,
 }
 
@@ -35,7 +33,7 @@ impl Example {
             usage: blade::TextureUsage::TARGET,
             frame_count: 3,
         });
-        let gui_painter = gui::GuiPainter::new(&context, surface_format);
+        let gui_painter = blade_egui::GuiPainter::new(&context, surface_format);
         let particle_system = particle::System::new(
             &context,
             particle::SystemDesc {
@@ -62,19 +60,19 @@ impl Example {
         }
     }
 
-    fn delete(self) {
-        if let Some(sp) = self.prev_sync_point {
+    fn destroy(&mut self) {
+        if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);
         }
-        self.gui_painter.delete(&self.context);
-        self.particle_system.delete(&self.context);
+        self.gui_painter.destroy(&self.context);
+        self.particle_system.destroy(&self.context);
     }
 
     fn render(
         &mut self,
         gui_primitives: &[egui::ClippedPrimitive],
         gui_textures: &egui::TexturesDelta,
-        screen_desc: &gui::ScreenDescriptor,
+        screen_desc: &blade_egui::ScreenDescriptor,
     ) {
         let frame = self.context.acquire_frame();
 
@@ -121,7 +119,7 @@ fn main() {
     let egui_ctx = egui::Context::default();
     let mut egui_winit = egui_winit::State::new(&event_loop);
 
-    let mut example = Some(Example::new(&window));
+    let mut example = Example::new(&window);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = winit::event_loop::ControlFlow::Poll;
@@ -165,7 +163,7 @@ fn main() {
                 let egui_output = egui_ctx.run(raw_input, |egui_ctx| {
                     egui::SidePanel::left("my_side_panel").show(egui_ctx, |ui| {
                         ui.heading("Particle System");
-                        example.as_mut().unwrap().particle_system.add_gui(ui);
+                        example.particle_system.add_gui(ui);
                         if ui.button("Quit").clicked() {
                             quit = true;
                         }
@@ -188,19 +186,15 @@ fn main() {
 
                 //Note: this will probably look different with proper support for resizing
                 let window_size = window.inner_size();
-                let screen_desc = gui::ScreenDescriptor {
+                let screen_desc = blade_egui::ScreenDescriptor {
                     physical_size: (window_size.width, window_size.height),
                     scale_factor: egui_ctx.pixels_per_point(),
                 };
 
-                example.as_mut().unwrap().render(
-                    &primitives,
-                    &egui_output.textures_delta,
-                    &screen_desc,
-                );
+                example.render(&primitives, &egui_output.textures_delta, &screen_desc);
             }
             winit::event::Event::LoopDestroyed => {
-                example.take().unwrap().delete();
+                example.destroy();
             }
             _ => {}
         }
