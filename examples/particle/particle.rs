@@ -136,7 +136,7 @@ impl System {
         }
     }
 
-    pub fn delete(self, context: &blade::Context) {
+    pub fn destroy(&mut self, context: &blade::Context) {
         context.destroy_buffer(self.particle_buf);
         context.destroy_buffer(self.free_list_buf);
     }

@@ -8,6 +8,8 @@ pub struct BeltDescriptor {
     pub min_chunk_size: u64,
 }
 
+/// A belt of buffers, used by the EguiPainter to cheaply
+/// find staging space for uploads.
 pub struct BufferBelt {
     desc: BeltDescriptor,
     buffers: Vec<(ReusableBuffer, blade::SyncPoint)>,
@@ -23,11 +25,11 @@ impl BufferBelt {
         }
     }
 
-    pub fn delete(self, context: &blade::Context) {
-        for (buffer, _) in self.buffers {
+    pub fn destroy(&mut self, context: &blade::Context) {
+        for (buffer, _) in self.buffers.drain(..) {
             context.destroy_buffer(buffer.raw);
         }
-        for (buffer, _) in self.active {
+        for (buffer, _) in self.active.drain(..) {
             context.destroy_buffer(buffer.raw);
         }
     }

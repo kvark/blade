@@ -1,4 +1,8 @@
-use super::belt::{BeltDescriptor, BufferBelt};
+#![allow(irrefutable_let_patterns)]
+
+mod belt;
+
+use belt::{BeltDescriptor, BufferBelt};
 use std::{
     collections::hash_map::{Entry, HashMap},
     fs, mem, ptr,
@@ -11,13 +15,13 @@ struct Uniforms {
     padding: [f32; 2],
 }
 
-#[derive(blade::ShaderData)]
+#[derive(blade_macros::ShaderData)]
 struct Globals {
     r_uniforms: Uniforms,
     r_sampler: blade::Sampler,
 }
 
-#[derive(blade::ShaderData)]
+#[derive(blade_macros::ShaderData)]
 struct Locals {
     r_vertex_data: blade::BufferPiece,
     r_texture: blade::TextureView,
@@ -84,16 +88,16 @@ pub struct GuiPainter {
 }
 
 impl GuiPainter {
-    pub fn delete(self, context: &blade::Context) {
-        self.belt.delete(context);
-        for (_, gui_texture) in self.textures {
+    pub fn destroy(&mut self, context: &blade::Context) {
+        self.belt.destroy(context);
+        for (_, gui_texture) in self.textures.drain() {
             gui_texture.delete(context);
         }
         context.destroy_sampler(self.sampler);
     }
 
     pub fn new(context: &blade::Context, output_format: blade::TextureFormat) -> Self {
-        let shader_source = fs::read_to_string("examples/particle/gui.wgsl").unwrap();
+        let shader_source = fs::read_to_string("blade-egui/shader.wgsl").unwrap();
         let shader = context.create_shader(blade::ShaderDesc {
             source: &shader_source,
         });

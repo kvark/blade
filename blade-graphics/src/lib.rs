@@ -72,7 +72,7 @@ pub struct Capabilities {
 pub enum Memory {
     /// Device-local memory. Fast for GPU operations.
     Device,
-    /// Shared CPU-GPU memory. Not so far for GPU.
+    /// Shared CPU-GPU memory. Not so fast for GPU.
     Shared,
     /// Upload memory. Can only be transferred on GPU.
     Upload,

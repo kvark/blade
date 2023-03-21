@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "blade-egui",
     "blade-graphics",
     "blade-macros",
     "blade-render",
@@ -10,6 +11,7 @@ exclude = []
 
 [workspace.dependencies]
 bytemuck = { version = "1", features = ["derive"] }
+egui = "0.20"
 glam = { version = "0.23", features = ["mint"] }
 log = "0.4"
 mint = "0.5"
@@ -37,9 +39,10 @@ blade-graphics = { version = "0.2.0", path = "blade-graphics" }
 blade-render = { version = "0.1.0", path = "blade-render" }
 
 [dev-dependencies]
+blade-egui = { version = "0.1.0", path = "blade-egui" }
 bytemuck = { workspace = true }
+egui = { workspace = true }
 del-msh = "0.1"
-egui = { version = "0.20", features = ["bytemuck"] }
 glam = { workspace = true }
 naga = { workspace = true }
 nanorand = { version = "0.7", default-features = false, features = ["wyrand"] }
