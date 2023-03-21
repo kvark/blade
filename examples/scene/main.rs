@@ -1,4 +1,5 @@
 #![allow(irrefutable_let_patterns)]
+#![cfg(not(target_arch = "wasm32"))]
 
 use blade_render::{Camera, Renderer};
 use std::time;
