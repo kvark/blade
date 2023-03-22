@@ -133,11 +133,22 @@ impl Example {
             ui.add(egui::DragValue::new(&mut self.camera.pos.y));
             ui.add(egui::DragValue::new(&mut self.camera.pos.z));
         });
+        ui.horizontal(|ui| {
+            ui.label("Rotation:");
+            ui.add(egui::DragValue::new(&mut self.camera.rot.v.x));
+            ui.add(egui::DragValue::new(&mut self.camera.rot.v.y));
+            ui.add(egui::DragValue::new(&mut self.camera.rot.v.z));
+            ui.add(egui::DragValue::new(&mut self.camera.rot.s));
+        });
     }
 
     fn move_camera_by(&mut self, offset: glam::Vec3) {
         let dir = glam::Quat::from(self.camera.rot) * offset;
         self.camera.pos = (glam::Vec3::from(self.camera.pos) + dir).into();
+    }
+    fn rotate_camera_z_by(&mut self, angle: f32) {
+        let quat = glam::Quat::from(self.camera.rot);
+        self.camera.rot = (quat * glam::Quat::from_rotation_z(angle)).into();
     }
 }
 
@@ -159,14 +170,23 @@ fn main() {
         .unwrap_or("examples/scene/data/CesiumMilkTruck.gltf".to_string());
 
     let camera = Camera {
-        pos: [5.0, 2.0, 7.0].into(),
-        rot: [0.0, 1.0, 0.0, 0.0].into(),
+        pos: [2.7, 1.6, 2.1].into(),
+        rot: glam::Quat::from_xyzw(-0.04, 0.92, -0.05, -0.37)
+            .normalize()
+            .into(),
         fov_y: 0.8,
         depth: 1000.0,
     };
     let mut example = Example::new(&window, &path_to_scene, camera);
 
     let move_speed = 1.0f32;
+    let rotate_speed = 0.01f32;
+    let rotate_speed_z = 0.1f32;
+    struct Drag {
+        screen_pos: Option<winit::dpi::PhysicalPosition<f64>>,
+        rotation: glam::Quat,
+    }
+    let mut drag_start = None;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = winit::event_loop::ControlFlow::Poll;
@@ -214,10 +234,44 @@ fn main() {
                         winit::event::VirtualKeyCode::X => {
                             example.move_camera_by(glam::Vec3::new(0.0, move_speed, 0.0));
                         }
+                        winit::event::VirtualKeyCode::Q => {
+                            example.rotate_camera_z_by(rotate_speed_z);
+                        }
+                        winit::event::VirtualKeyCode::E => {
+                            example.rotate_camera_z_by(-rotate_speed_z);
+                        }
                         _ => {}
                     },
                     winit::event::WindowEvent::CloseRequested => {
                         *control_flow = winit::event_loop::ControlFlow::Exit;
+                    }
+                    winit::event::WindowEvent::MouseInput {
+                        state,
+                        button: winit::event::MouseButton::Left,
+                        ..
+                    } => {
+                        drag_start = match state {
+                            winit::event::ElementState::Pressed => Some(Drag {
+                                screen_pos: None,
+                                rotation: example.camera.rot.into(),
+                            }),
+                            winit::event::ElementState::Released => None,
+                        };
+                    }
+                    winit::event::WindowEvent::CursorMoved { position, .. } => {
+                        if let Some(ref mut drag) = drag_start {
+                            if let Some(ref screen_pos) = drag.screen_pos {
+                                let qx = glam::Quat::from_rotation_y(
+                                    (position.x - screen_pos.x) as f32 * rotate_speed,
+                                );
+                                let qy = glam::Quat::from_rotation_x(
+                                    (position.y - screen_pos.y) as f32 * rotate_speed,
+                                );
+                                example.camera.rot = (drag.rotation * qy * qx).into();
+                            } else {
+                                drag.screen_pos = Some(position);
+                            }
+                        }
                     }
                     _ => {}
                 }
