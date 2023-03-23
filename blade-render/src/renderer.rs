@@ -1,4 +1,4 @@
-use std::{mem, ptr};
+use std::{mem, ptr, time};
 
 const TARGET_FORMAT: blade::TextureFormat = blade::TextureFormat::Rgba16Float;
 const MAX_RESOURCES: u32 = 1000;
@@ -28,6 +28,7 @@ pub struct Renderer {
     samplers: Samplers,
     is_tlas_dirty: bool,
     screen_size: blade::Extent,
+    init_time: time::Instant,
 }
 
 #[repr(C)]
@@ -37,7 +38,8 @@ struct Parameters {
     depth: f32,
     cam_orientation: [f32; 4],
     fov: [f32; 2],
-    pad: [f32; 2],
+    random_seed: u32,
+    pad: f32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -280,6 +282,7 @@ impl super::Renderer {
             samplers,
             is_tlas_dirty: true,
             screen_size,
+            init_time: time::Instant::now(),
         }
     }
 
@@ -457,7 +460,8 @@ impl super::Renderer {
                     depth: camera.depth,
                     cam_orientation: camera.rot.into(),
                     fov: [fov_x, camera.fov_y],
-                    pad: [0.0; 2],
+                    random_seed: self.init_time.elapsed().subsec_micros(),
+                    pad: 0.0,
                 },
                 acc_struct: self.acceleration_structure,
                 hit_entries: self.hit_buffer.at(0),
