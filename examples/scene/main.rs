@@ -267,7 +267,7 @@ fn main() {
                                 let qy = glam::Quat::from_rotation_x(
                                     (position.y - screen_pos.y) as f32 * rotate_speed,
                                 );
-                                example.camera.rot = (drag.rotation * qy * qx).into();
+                                example.camera.rot = (drag.rotation * qx * qy).into();
                             } else {
                                 drag.screen_pos = Some(position);
                             }
