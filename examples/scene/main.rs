@@ -13,6 +13,7 @@ struct Example {
     command_encoder: blade::CommandEncoder,
     context: blade::Context,
     camera: blade_render::Camera,
+    debug_mode: blade_render::DebugMode,
 }
 
 impl Example {
@@ -64,6 +65,7 @@ impl Example {
             command_encoder,
             context,
             camera,
+            debug_mode: blade_render::DebugMode::None,
         }
     }
 
@@ -93,7 +95,7 @@ impl Example {
         self.renderer
             .prepare(&mut self.command_encoder, &self.context, &mut temp_buffers);
         self.renderer
-            .ray_trace(&mut self.command_encoder, &self.camera);
+            .ray_trace(&mut self.command_encoder, &self.camera, self.debug_mode);
 
         let frame = self.context.acquire_frame();
         self.command_encoder.init_texture(frame.texture());
@@ -140,6 +142,15 @@ impl Example {
             ui.add(egui::DragValue::new(&mut self.camera.rot.v.z));
             ui.add(egui::DragValue::new(&mut self.camera.rot.s));
         });
+        ui.heading("Debug");
+        egui::ComboBox::from_label("View mode")
+            .selected_text(format!("{:?}", self.debug_mode))
+            .show_ui(ui, |ui| {
+                use blade_render::DebugMode as Dm;
+                for value in [Dm::None, Dm::Depth, Dm::Normal] {
+                    ui.selectable_value(&mut self.debug_mode, value, format!("{value:?}"));
+                }
+            });
     }
 
     fn move_camera_by(&mut self, offset: glam::Vec3) {

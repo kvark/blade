@@ -4,7 +4,7 @@ mod gltf_loader;
 mod renderer;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use renderer::Renderer;
+pub use renderer::*;
 
 #[repr(C)]
 pub struct Vertex {

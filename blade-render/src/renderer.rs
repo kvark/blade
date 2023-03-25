@@ -13,6 +13,14 @@ struct Samplers {
     linear: blade::Sampler,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[repr(u32)]
+pub enum DebugMode {
+    None = 0,
+    Depth = 1,
+    Normal = 2,
+}
+
 pub struct Renderer {
     target: blade::Texture,
     target_view: blade::TextureView,
@@ -39,7 +47,7 @@ struct Parameters {
     cam_orientation: [f32; 4],
     fov: [f32; 2],
     random_seed: u32,
-    pad: f32,
+    debug_mode: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -173,7 +181,7 @@ impl super::Scene {
     }
 }
 
-impl super::Renderer {
+impl Renderer {
     pub fn new(
         encoder: &mut blade::CommandEncoder,
         context: &blade::Context,
@@ -439,7 +447,7 @@ impl super::Renderer {
         }
     }
 
-    pub fn ray_trace(&self, command_encoder: &mut blade::CommandEncoder, camera: &super::Camera) {
+    pub fn ray_trace(&self, command_encoder: &mut blade::CommandEncoder, camera: &super::Camera, debug_mode: DebugMode) {
         assert!(!self.is_tlas_dirty);
 
         let mut pass = command_encoder.compute();
@@ -461,7 +469,7 @@ impl super::Renderer {
                     cam_orientation: camera.rot.into(),
                     fov: [fov_x, camera.fov_y],
                     random_seed: self.init_time.elapsed().subsec_micros(),
-                    pad: 0.0,
+                    debug_mode: debug_mode as u32,
                 },
                 acc_struct: self.acceleration_structure,
                 hit_entries: self.hit_buffer.at(0),
