@@ -8,6 +8,7 @@ use std::{ffi, mem, sync::Mutex};
 struct AdapterCapabilities {
     api_version: u32,
     properties: vk::PhysicalDeviceProperties,
+    layered: bool,
     ray_tracing: bool,
 }
 
@@ -24,11 +25,14 @@ unsafe fn inspect_adapter(
         vk::PhysicalDeviceDescriptorIndexingPropertiesEXT::default();
     let mut acceleration_structure_properties =
         vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
+    let mut portability_subset_properties =
+        vk::PhysicalDevicePortabilitySubsetPropertiesKHR::default();
     let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::builder()
         .push_next(&mut inline_uniform_block_properties)
         .push_next(&mut timeline_semaphore_properties)
         .push_next(&mut descriptor_indexing_properties)
-        .push_next(&mut acceleration_structure_properties);
+        .push_next(&mut acceleration_structure_properties)
+        .push_next(&mut portability_subset_properties);
     instance
         .get_physical_device_properties2
         .get_physical_device_properties2(phd, &mut properties2_khr);
@@ -134,6 +138,7 @@ unsafe fn inspect_adapter(
     Some(AdapterCapabilities {
         api_version,
         properties,
+        layered: portability_subset_properties.min_vertex_input_binding_stride_alignment != 0,
         ray_tracing,
     })
 }
@@ -188,8 +193,6 @@ impl super::Context {
             .iter()
             .map(|ext_prop| ffi::CStr::from_ptr(ext_prop.extension_name.as_ptr()))
             .collect::<Vec<_>>();
-        let is_vulkan_portability =
-            supported_instance_extensions.contains(&vk::KhrPortabilityEnumerationFn::name());
 
         let core_instance = {
             let mut create_flags = vk::InstanceCreateFlags::empty();
@@ -213,8 +216,7 @@ impl super::Context {
                     return Err(crate::NotSupportedError);
                 }
             }
-            if is_vulkan_portability {
-                log::info!("Enabling Vulkan Portability");
+            if supported_instance_extensions.contains(&vk::KhrPortabilityEnumerationFn::name()) {
                 instance_extensions.push(vk::KhrPortabilityEnumerationFn::name());
                 create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
             }
@@ -272,7 +274,8 @@ impl super::Context {
             if surface_handles.is_some() {
                 device_extensions.push(vk::KhrSwapchainFn::name());
             }
-            if is_vulkan_portability {
+            if capabilities.layered {
+                log::info!("Enabling Vulkan Portability");
                 device_extensions.push(vk::KhrPortabilitySubsetFn::name());
             }
             if capabilities.ray_tracing {
