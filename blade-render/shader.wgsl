@@ -7,7 +7,13 @@ struct Parameters {
     cam_orientation: vec4<f32>,
     fov: vec2<f32>,
     random_seed: u32,
+    debug_mode: u32,
 };
+
+//Must match host side `DebugMode`
+const DEBUG_MODE_NONE: u32 = 0u;
+const DEBUG_MODE_DEPTH: u32 = 1u;
+const DEBUG_MODE_NORMAL: u32 = 2u;
 
 // Has to match the host!
 struct Vertex {
@@ -66,6 +72,9 @@ fn halton(base: i32, start_index: i32) -> f32
 
 fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f32>, random: u32) -> vec4<f32> {
     let entry = hit_entries[ri.instance_custom_index + ri.geometry_index];
+    if (parameters.debug_mode == DEBUG_MODE_DEPTH) {
+        return vec4<f32>(ri.t / parameters.depth);
+    }
 
     var indices = ri.primitive_index * 3u + vec3<u32>(0u, 1u, 2u);
     if (entry.index_buf != ~0u) {
@@ -91,7 +100,9 @@ fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f3
 
     // Note: this line allows to check the correctness of data passed in
     //return vec4<f32>(abs(pos_world - hit_world) * 1000000.0, 1.0);
-    //return vec4<f32>(normal_world, 1.0);
+    if (parameters.debug_mode == DEBUG_MODE_NORMAL) {
+        return vec4<f32>(normal_world, 1.0);
+    }
 
     let pre_tangent = select(
         vec3<f32>(0.0, 0.0, 1.0),
@@ -106,6 +117,7 @@ fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f3
     var color = vec3<f32>(0.0);
     var rq: ray_query;
     for (var i = 0i; i < num_diffuse_samples; i += 1) {
+        //TODO: proper random generator
         let r = random * u32(i+1);
         let h1 = halton(halton_base, i32(r >> 16u));
         let h2 = halton(halton_base, i32(r & 0xFFFFu));
@@ -113,7 +125,7 @@ fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f3
         let gamma = h2 * PI * 0.5;
         let light_dir_tbn = vec3<f32>(sin(alpha) * cos(gamma), cos(alpha) * cos(gamma), sin(gamma));
         let light_dir = light_dir_tbn.x * tangent + light_dir_tbn.y * bitangent + light_dir_tbn.z * normal_world;
-        if (light_dir.z <= 0.0) {
+        if (light_dir.y <= 0.0) {
             continue;
         }
 
