@@ -142,6 +142,7 @@ impl Example {
             ui.add(egui::DragValue::new(&mut self.camera.rot.v.z));
             ui.add(egui::DragValue::new(&mut self.camera.rot.s));
         });
+        ui.add(egui::DragValue::new(&mut self.camera.depth));
         ui.heading("Debug");
         egui::ComboBox::from_label("View mode")
             .selected_text(format!("{:?}", self.debug_mode))
@@ -178,7 +179,7 @@ fn main() {
     let mut args = std::env::args();
     let path_to_scene = args
         .nth(1)
-        .unwrap_or("examples/scene/data/CesiumMilkTruck.gltf".to_string());
+        .unwrap_or("examples/scene/data/monkey.gltf".to_string());
 
     let camera = Camera {
         pos: [2.7, 1.6, 2.1].into(),
@@ -186,7 +187,7 @@ fn main() {
             .normalize()
             .into(),
         fov_y: 0.8,
-        depth: 1000.0,
+        depth: 100.0,
     };
     let mut example = Example::new(&window, &path_to_scene, camera);
 
