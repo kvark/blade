@@ -1,4 +1,4 @@
-use std::{mem, ptr, time};
+use std::{mem, ptr};
 
 const TARGET_FORMAT: blade::TextureFormat = blade::TextureFormat::Rgba16Float;
 const MAX_RESOURCES: u32 = 1000;
@@ -36,7 +36,7 @@ pub struct Renderer {
     samplers: Samplers,
     is_tlas_dirty: bool,
     screen_size: blade::Extent,
-    init_time: time::Instant,
+    frame_index: u32,
 }
 
 #[repr(C)]
@@ -46,7 +46,7 @@ struct Parameters {
     depth: f32,
     cam_orientation: [f32; 4],
     fov: [f32; 2],
-    random_seed: u32,
+    frame_index: u32,
     debug_mode: u32,
 }
 
@@ -290,7 +290,7 @@ impl Renderer {
             samplers,
             is_tlas_dirty: true,
             screen_size,
-            init_time: time::Instant::now(),
+            frame_index: 0,
         }
     }
 
@@ -333,6 +333,7 @@ impl Renderer {
         gpu: &blade::Context,
         temp_buffers: &mut Vec<blade::Buffer>,
     ) {
+        self.frame_index += 1;
         if self.is_tlas_dirty {
             self.is_tlas_dirty = false;
             if self.acceleration_structure != blade::AccelerationStructure::default() {
@@ -447,7 +448,12 @@ impl Renderer {
         }
     }
 
-    pub fn ray_trace(&self, command_encoder: &mut blade::CommandEncoder, camera: &super::Camera, debug_mode: DebugMode) {
+    pub fn ray_trace(
+        &self,
+        command_encoder: &mut blade::CommandEncoder,
+        camera: &super::Camera,
+        debug_mode: DebugMode,
+    ) {
         assert!(!self.is_tlas_dirty);
 
         let mut pass = command_encoder.compute();
@@ -468,7 +474,7 @@ impl Renderer {
                     depth: camera.depth,
                     cam_orientation: camera.rot.into(),
                     fov: [fov_x, camera.fov_y],
-                    random_seed: self.init_time.elapsed().subsec_micros(),
+                    frame_index: self.frame_index,
                     debug_mode: debug_mode as u32,
                 },
                 acc_struct: self.acceleration_structure,
