@@ -8,6 +8,7 @@ struct Parameters {
     fov: vec2<f32>,
     frame_index: u32,
     debug_mode: u32,
+    num_environment_samples: u32,
 };
 
 //Must match host side `DebugMode`
@@ -137,8 +138,9 @@ fn sample_uniform_hemisphere(rng: ptr<function, RandomState>) -> vec3<f32> {
     return vec3<f32>(tangential.xy, h);
 }
 
-fn get_environment_radiance(dir: vec3<f32>) -> vec3<f32> {
-    return select(vec3<f32>(0.0), vec3<f32>(1.0), dir.y > 0.0);
+fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
+    //Note: Y axis is up
+    return vec3<f32>(max(dir.y, 0.0));
 }
 
 fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f32>, rng: ptr<function, RandomState>) -> vec3<f32> {
@@ -184,14 +186,13 @@ fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f3
 
     let steradians_in_hemisphere = 2.0 * PI;
     let lambert_brdf = 1.0 / PI;
-    let num_diffuse_samples = 10;
     var color = vec3<f32>(0.0);
     var rq: ray_query;
-    for (var i = 0i; i < num_diffuse_samples; i += 1) {
+    for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
         let light_dir_tbn = sample_uniform_hemisphere(rng);
         let light_dir = light_dir_tbn.x * tangent + light_dir_tbn.y * bitangent + light_dir_tbn.z * normal_world;
         let lambert_term = light_dir_tbn.z;
-        let estimate_color = get_environment_radiance(light_dir) * lambert_term;
+        let estimate_color = evaluate_environment(light_dir) * lambert_term;
         if (dot(estimate_color, estimate_color) < 0.01) {
             continue;
         }
@@ -203,7 +204,7 @@ fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f3
             color += estimate_color * steradians_in_hemisphere * lambert_brdf;
         }
     }
-    color /= f32(num_diffuse_samples);
+    color /= f32(parameters.num_environment_samples);
 
     let base_color_factor = unpack4x8unorm(entry.base_color_factor);
     let lod = 0.0; //TODO: this is actually complicated
@@ -237,7 +238,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var color = vec3<f32>(0.0);
     if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
-        color = get_environment_radiance(ray_dir);
+        color = evaluate_environment(ray_dir);
     } else {
         let expected = ray_pos + intersection.t * ray_dir;
         color = compute_hit_color(intersection, ray_dir, expected, &rng);

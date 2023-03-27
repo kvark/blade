@@ -21,6 +21,11 @@ pub enum DebugMode {
     Normal = 2,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct RayConfig {
+    pub num_environment_samples: u32,
+}
+
 pub struct Renderer {
     target: blade::Texture,
     target_view: blade::TextureView,
@@ -48,6 +53,8 @@ struct Parameters {
     fov: [f32; 2],
     frame_index: u32,
     debug_mode: u32,
+    num_environment_samples: u32,
+    pad: [u32; 3],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -453,6 +460,7 @@ impl Renderer {
         command_encoder: &mut blade::CommandEncoder,
         camera: &super::Camera,
         debug_mode: DebugMode,
+        ray_config: RayConfig,
     ) {
         assert!(!self.is_tlas_dirty);
 
@@ -476,6 +484,8 @@ impl Renderer {
                     fov: [fov_x, camera.fov_y],
                     frame_index: self.frame_index,
                     debug_mode: debug_mode as u32,
+                    num_environment_samples: ray_config.num_environment_samples,
+                    pad: [0; 3],
                 },
                 acc_struct: self.acceleration_structure,
                 hit_entries: self.hit_buffer.at(0),

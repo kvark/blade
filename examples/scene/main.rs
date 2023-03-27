@@ -14,6 +14,7 @@ struct Example {
     context: blade::Context,
     camera: blade_render::Camera,
     debug_mode: blade_render::DebugMode,
+    ray_config: blade_render::RayConfig,
 }
 
 impl Example {
@@ -66,6 +67,9 @@ impl Example {
             context,
             camera,
             debug_mode: blade_render::DebugMode::None,
+            ray_config: blade_render::RayConfig {
+                num_environment_samples: 1,
+            },
         }
     }
 
@@ -94,8 +98,12 @@ impl Example {
         let mut temp_buffers = Vec::new();
         self.renderer
             .prepare(&mut self.command_encoder, &self.context, &mut temp_buffers);
-        self.renderer
-            .ray_trace(&mut self.command_encoder, &self.camera, self.debug_mode);
+        self.renderer.ray_trace(
+            &mut self.command_encoder,
+            &self.camera,
+            self.debug_mode,
+            self.ray_config,
+        );
 
         let frame = self.context.acquire_frame();
         self.command_encoder.init_texture(frame.texture());
@@ -128,29 +136,42 @@ impl Example {
     }
 
     fn add_gui(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Eye");
-        ui.horizontal(|ui| {
-            ui.label("Position:");
-            ui.add(egui::DragValue::new(&mut self.camera.pos.x));
-            ui.add(egui::DragValue::new(&mut self.camera.pos.y));
-            ui.add(egui::DragValue::new(&mut self.camera.pos.z));
+        egui::CollapsingHeader::new("Eye").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Position:");
+                ui.add(egui::DragValue::new(&mut self.camera.pos.x));
+                ui.add(egui::DragValue::new(&mut self.camera.pos.y));
+                ui.add(egui::DragValue::new(&mut self.camera.pos.z));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Rotation:");
+                ui.add(egui::DragValue::new(&mut self.camera.rot.v.x));
+                ui.add(egui::DragValue::new(&mut self.camera.rot.v.y));
+                ui.add(egui::DragValue::new(&mut self.camera.rot.v.z));
+                ui.add(egui::DragValue::new(&mut self.camera.rot.s));
+            });
+            ui.add(egui::DragValue::new(&mut self.camera.depth));
         });
-        ui.horizontal(|ui| {
-            ui.label("Rotation:");
-            ui.add(egui::DragValue::new(&mut self.camera.rot.v.x));
-            ui.add(egui::DragValue::new(&mut self.camera.rot.v.y));
-            ui.add(egui::DragValue::new(&mut self.camera.rot.v.z));
-            ui.add(egui::DragValue::new(&mut self.camera.rot.s));
-        });
-        ui.add(egui::DragValue::new(&mut self.camera.depth));
-        ui.heading("Debug");
-        egui::ComboBox::from_label("View mode")
-            .selected_text(format!("{:?}", self.debug_mode))
-            .show_ui(ui, |ui| {
-                use blade_render::DebugMode as Dm;
-                for value in [Dm::None, Dm::Depth, Dm::Normal] {
-                    ui.selectable_value(&mut self.debug_mode, value, format!("{value:?}"));
-                }
+        egui::CollapsingHeader::new("Debug")
+            .default_open(true)
+            .show(ui, |ui| {
+                egui::ComboBox::from_label("View mode")
+                    .selected_text(format!("{:?}", self.debug_mode))
+                    .show_ui(ui, |ui| {
+                        use blade_render::DebugMode as Dm;
+                        for value in [Dm::None, Dm::Depth, Dm::Normal] {
+                            ui.selectable_value(&mut self.debug_mode, value, format!("{value:?}"));
+                        }
+                    });
+            });
+        egui::CollapsingHeader::new("Ray Trace")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.add(
+                    egui::Slider::new(&mut self.ray_config.num_environment_samples, 1..=100u32)
+                        .text("Num env samples")
+                        .logarithmic(true),
+                );
             });
     }
 
