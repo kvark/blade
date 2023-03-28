@@ -397,6 +397,19 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
             instance_count,
         });
     }
+
+    fn draw_indirect(&mut self, _indirect_buf: crate::BufferPiece) {
+        unimplemented!()
+    }
+
+    fn draw_indexed_indirect(
+        &mut self,
+        _index_buf: crate::BufferPiece,
+        _index_type: crate::IndexType,
+        _indirect_buf: crate::BufferPiece,
+    ) {
+        unimplemented!()
+    }
 }
 
 const CUBEMAP_FACES: [u32; 6] = [

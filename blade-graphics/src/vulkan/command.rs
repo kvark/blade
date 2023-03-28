@@ -717,4 +717,40 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
             );
         }
     }
+
+    fn draw_indirect(&mut self, indirect_buf: crate::BufferPiece) {
+        unsafe {
+            self.device.core.cmd_draw_indirect(
+                self.cmd_buf.raw,
+                indirect_buf.buffer.raw,
+                indirect_buf.offset,
+                1,
+                0,
+            );
+        }
+    }
+
+    fn draw_indexed_indirect(
+        &mut self,
+        index_buf: crate::BufferPiece,
+        index_type: crate::IndexType,
+        indirect_buf: crate::BufferPiece,
+    ) {
+        let raw_index_type = super::map_index_type(index_type);
+        unsafe {
+            self.device.core.cmd_bind_index_buffer(
+                self.cmd_buf.raw,
+                index_buf.buffer.raw,
+                index_buf.offset,
+                raw_index_type,
+            );
+            self.device.core.cmd_draw_indexed_indirect(
+                self.cmd_buf.raw,
+                indirect_buf.buffer.raw,
+                indirect_buf.offset,
+                1,
+                0,
+            );
+        }
+    }
 }

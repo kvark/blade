@@ -594,6 +594,31 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
             );
         }
     }
+
+    fn draw_indirect(&mut self, indirect_buf: crate::BufferPiece) {
+        self.encoder.draw_primitives_indirect(
+            self.primitive_type,
+            indirect_buf.buffer.as_ref(),
+            indirect_buf.offset,
+        );
+    }
+
+    fn draw_indexed_indirect(
+        &mut self,
+        index_buf: crate::BufferPiece,
+        index_type: crate::IndexType,
+        indirect_buf: crate::BufferPiece,
+    ) {
+        let raw_index_type = super::map_index_type(index_type);
+        self.encoder.draw_indexed_primitives_indirect(
+            self.primitive_type,
+            raw_index_type,
+            index_buf.buffer.as_ref(),
+            index_buf.offset,
+            indirect_buf.buffer.as_ref(),
+            indirect_buf.offset,
+        );
+    }
 }
 
 impl Drop for super::RenderPipelineContext<'_> {
