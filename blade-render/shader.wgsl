@@ -49,12 +49,67 @@ var<storage, read> hit_entries: array<HitEntry>;
 var<uniform> parameters: Parameters;
 var acc_struct: acceleration_structure;
 
-
-var output: texture_storage_2d<rgba8unorm, write>;
-
 fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     return v + 2.0*cross(q.xyz, cross(q.xyz,v) + q.w*v);
 }
+fn qinv(q: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(-q.xyz,q.w);
+}
+
+struct DebugPoint {
+    pos: vec3<f32>,
+    color: u32,
+}
+struct DebugLine {
+    a: DebugPoint,
+    b: DebugPoint,
+}
+struct DebugBuffer {
+    vertex_count: u32,
+    instance_count: atomic<u32>,
+    first_vertex: u32,
+    first_instance: u32,
+    capacity: u32,
+    lines: array<DebugLine>,
+}
+var<storage, read_write> debug_buf: DebugBuffer;
+
+fn debug_vec(pos: vec3<f32>, dir: vec3<f32>, color: u32) {
+    let index = atomicAdd(&debug_buf.instance_count, 1u);
+    if (index < debug_buf.capacity) {
+        debug_buf.lines[index] = DebugLine(DebugPoint(pos, color), DebugPoint(pos+dir, color));
+    } else {
+        // ensure the final value is never above the capacity
+        atomicSub(&debug_buf.instance_count, 1u);
+    }
+}
+struct DebugVarying {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) color: vec4<f32>,
+}
+@vertex
+fn debug_vs(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) instance_id: u32) -> DebugVarying {
+    let line = debug_buf.lines[instance_id];
+    var point = line.a;
+    if (vertex_id != 0u) {
+        point = line.b;
+    }
+
+    let world_dir = point.pos - parameters.cam_position;
+    let local_dir = qrot(qinv(parameters.cam_orientation), world_dir);
+    let ndc = local_dir.xy / tan(parameters.fov);
+
+    var out: DebugVarying;
+    out.pos = vec4<f32>(ndc, 0.0, local_dir.z);
+    out.color = unpack4x8unorm(point.color);
+    return out;
+}
+@fragment
+fn debug_fs(in: DebugVarying) -> @location(0) vec4<f32> {
+    return in.color;
+}
+
+var output: texture_storage_2d<rgba8unorm, write>;
 
 struct RandomState {
     seed: u32,
@@ -253,7 +308,7 @@ struct VertexOutput {
 }
 
 @vertex
-fn draw_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
+fn blit_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
     var vo: VertexOutput;
     vo.clip_pos = vec4<f32>(f32(vi & 1u) * 4.0 - 1.0, f32(vi & 2u) * 2.0 - 1.0, 0.0, 1.0);
     vo.input_size = textureDimensions(input, 0);
@@ -261,7 +316,7 @@ fn draw_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
 }
 
 @fragment
-fn draw_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
+fn blit_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
     let tc = vec2<i32>(i32(vo.clip_pos.x), i32(vo.input_size.y) - i32(vo.clip_pos.y));
     return textureLoad(input, tc, 0);
 }

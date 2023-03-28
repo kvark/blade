@@ -1,3 +1,5 @@
+#![allow(irrefutable_let_patterns)]
+
 #[cfg(not(target_arch = "wasm32"))]
 mod gltf_loader;
 #[cfg(not(target_arch = "wasm32"))]

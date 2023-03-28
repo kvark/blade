@@ -1,7 +1,7 @@
 #![allow(irrefutable_let_patterns)]
 #![cfg(not(target_arch = "wasm32"))]
 
-use blade_render::{Camera, Renderer};
+use blade_render::{Camera, RenderConfig, Renderer};
 use std::time;
 
 struct Example {
@@ -47,8 +47,12 @@ impl Example {
         });
         command_encoder.start();
 
-        let mut renderer =
-            Renderer::new(&mut command_encoder, &context, screen_size, surface_format);
+        let render_config = RenderConfig {
+            screen_size,
+            surface_format,
+            max_debug_lines: 1000,
+        };
+        let mut renderer = Renderer::new(&mut command_encoder, &context, &render_config);
 
         let gui_painter = blade_egui::GuiPainter::new(&context, surface_format);
 
@@ -116,7 +120,7 @@ impl Example {
             }],
             depth_stencil: None,
         }) {
-            self.renderer.blit(&mut pass);
+            self.renderer.blit(&mut pass, &self.camera);
             self.gui_painter
                 .paint(&mut pass, gui_primitives, screen_desc, &self.context);
         }

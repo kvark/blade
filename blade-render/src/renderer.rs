@@ -3,6 +3,12 @@ use std::{mem, ptr};
 const TARGET_FORMAT: blade::TextureFormat = blade::TextureFormat::Rgba16Float;
 const MAX_RESOURCES: u32 = 1000;
 
+pub struct RenderConfig {
+    pub screen_size: blade::Extent,
+    pub surface_format: blade::TextureFormat,
+    pub max_debug_lines: u32,
+}
+
 struct DummyResources {
     size: blade::Extent,
     white_texture: blade::Texture,
@@ -26,11 +32,17 @@ pub struct RayConfig {
     pub num_environment_samples: u32,
 }
 
+struct DebugRender {
+    capacity: u32,
+    buffer: blade::Buffer,
+    pipeline: blade::RenderPipeline,
+}
+
 pub struct Renderer {
     target: blade::Texture,
     target_view: blade::TextureView,
     rt_pipeline: blade::ComputePipeline,
-    draw_pipeline: blade::RenderPipeline,
+    blit_pipeline: blade::RenderPipeline,
     scene: super::Scene,
     acceleration_structure: blade::AccelerationStructure,
     dummy: DummyResources,
@@ -39,6 +51,7 @@ pub struct Renderer {
     index_buffers: blade::BufferArray<MAX_RESOURCES>,
     textures: blade::TextureArray<MAX_RESOURCES>,
     samplers: Samplers,
+    debug: DebugRender,
     is_tlas_dirty: bool,
     screen_size: blade::Extent,
     frame_index: u32,
@@ -66,12 +79,19 @@ struct ShaderData<'a> {
     vertex_buffers: &'a blade::BufferArray<MAX_RESOURCES>,
     textures: &'a blade::TextureArray<MAX_RESOURCES>,
     sampler_linear: blade::Sampler,
+    debug_buf: blade::BufferPiece,
     output: blade::TextureView,
 }
 
 #[derive(blade_macros::ShaderData)]
-struct DrawData {
+struct BlitData {
     input: blade::TextureView,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct DebugData {
+    parameters: Parameters,
+    debug_buf: blade::BufferPiece,
 }
 
 #[repr(C)]
@@ -191,25 +211,24 @@ impl super::Scene {
 impl Renderer {
     pub fn new(
         encoder: &mut blade::CommandEncoder,
-        context: &blade::Context,
-        screen_size: blade::Extent,
-        surface_format: blade::TextureFormat,
+        gpu: &blade::Context,
+        config: &RenderConfig,
     ) -> Self {
-        let capabilities = context.capabilities();
+        let capabilities = gpu.capabilities();
         assert!(capabilities
             .ray_query
             .contains(blade::ShaderVisibility::COMPUTE));
 
-        let target = context.create_texture(blade::TextureDesc {
+        let target = gpu.create_texture(blade::TextureDesc {
             name: "main",
             format: TARGET_FORMAT,
-            size: screen_size,
+            size: config.screen_size,
             dimension: blade::TextureDimension::D2,
             array_layer_count: 1,
             mip_level_count: 1,
             usage: blade::TextureUsage::RESOURCE | blade::TextureUsage::STORAGE,
         });
-        let target_view = context.create_texture_view(blade::TextureViewDesc {
+        let target_view = gpu.create_texture_view(blade::TextureViewDesc {
             name: "main",
             texture: target,
             format: TARGET_FORMAT,
@@ -218,24 +237,24 @@ impl Renderer {
         });
 
         let source = std::fs::read_to_string("blade-render/shader.wgsl").unwrap();
-        let shader = context.create_shader(blade::ShaderDesc { source: &source });
+        let shader = gpu.create_shader(blade::ShaderDesc { source: &source });
         let rt_layout = <ShaderData as blade::ShaderData>::layout();
-        let rt_pipeline = context.create_compute_pipeline(blade::ComputePipelineDesc {
+        let rt_pipeline = gpu.create_compute_pipeline(blade::ComputePipelineDesc {
             name: "ray-trace",
             data_layouts: &[&rt_layout],
             compute: shader.at("main"),
         });
-        let draw_layout = <DrawData as blade::ShaderData>::layout();
-        let draw_pipeline = context.create_render_pipeline(blade::RenderPipelineDesc {
+        let blit_layout = <BlitData as blade::ShaderData>::layout();
+        let blit_pipeline = gpu.create_render_pipeline(blade::RenderPipelineDesc {
             name: "main",
-            data_layouts: &[&draw_layout],
+            data_layouts: &[&blit_layout],
             primitive: blade::PrimitiveState {
                 topology: blade::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
             },
-            vertex: shader.at("draw_vs"),
-            fragment: shader.at("draw_fs"),
-            color_targets: &[surface_format.into()],
+            vertex: shader.at("blit_vs"),
+            fragment: shader.at("blit_fs"),
+            color_targets: &[config.surface_format.into()],
             depth_stencil: None,
         });
 
@@ -247,7 +266,7 @@ impl Renderer {
                 height: 1,
                 depth: 1,
             };
-            let white_texture = context.create_texture(blade::TextureDesc {
+            let white_texture = gpu.create_texture(blade::TextureDesc {
                 name: "dummy/white",
                 format: blade::TextureFormat::Rgba8Unorm,
                 size,
@@ -256,7 +275,7 @@ impl Renderer {
                 dimension: blade::TextureDimension::D2,
                 usage: blade::TextureUsage::COPY | blade::TextureUsage::RESOURCE,
             });
-            let white_view = context.create_texture_view(blade::TextureViewDesc {
+            let white_view = gpu.create_texture_view(blade::TextureViewDesc {
                 name: "dummy/white",
                 texture: white_texture,
                 format: blade::TextureFormat::Rgba8Unorm,
@@ -272,7 +291,7 @@ impl Renderer {
         };
 
         let samplers = Samplers {
-            linear: context.create_sampler(blade::SamplerDesc {
+            linear: gpu.create_sampler(blade::SamplerDesc {
                 name: "linear",
                 address_modes: [blade::AddressMode::ClampToEdge; 3],
                 mag_filter: blade::FilterMode::Linear,
@@ -282,12 +301,39 @@ impl Renderer {
             }),
         };
 
+        let debug = {
+            let debug_line_size = shader.get_struct_size("DebugLine");
+            let debug_buffer_size = shader.get_struct_size("DebugBuffer");
+            let debug_layout = <DebugData as blade::ShaderData>::layout();
+            DebugRender {
+                capacity: config.max_debug_lines,
+                buffer: gpu.create_buffer(blade::BufferDesc {
+                    name: "debug",
+                    size: (debug_buffer_size + (config.max_debug_lines - 1) * debug_line_size)
+                        as u64,
+                    memory: blade::Memory::Device,
+                }),
+                pipeline: gpu.create_render_pipeline(blade::RenderPipelineDesc {
+                    name: "debug",
+                    data_layouts: &[&debug_layout],
+                    vertex: shader.at("debug_vs"),
+                    primitive: blade::PrimitiveState {
+                        topology: blade::PrimitiveTopology::LineList,
+                        ..Default::default()
+                    },
+                    depth_stencil: None,
+                    fragment: shader.at("debug_fs"),
+                    color_targets: &[config.surface_format.into()],
+                }),
+            }
+        };
+
         Self {
             target,
             target_view,
             scene: super::Scene::default(),
             rt_pipeline,
-            draw_pipeline,
+            blit_pipeline,
             acceleration_structure: blade::AccelerationStructure::default(),
             dummy,
             hit_buffer: blade::Buffer::default(),
@@ -295,8 +341,9 @@ impl Renderer {
             index_buffers: blade::BufferArray::new(),
             textures: blade::TextureArray::new(),
             samplers,
+            debug,
             is_tlas_dirty: true,
-            screen_size,
+            screen_size: config.screen_size,
             frame_index: 0,
         }
     }
@@ -328,6 +375,8 @@ impl Renderer {
         gpu.destroy_texture(self.dummy.white_texture);
         // samplers
         gpu.destroy_sampler(self.samplers.linear);
+        // debug
+        gpu.destroy_buffer(self.debug.buffer);
     }
 
     pub fn merge_scene(&mut self, scene: super::Scene) {
@@ -376,6 +425,22 @@ impl Renderer {
                 );
                 temp_buffers.push(staging);
             }
+            {
+                // init the debug buffer
+                let data = [2, 0, 0, 0, self.debug.capacity];
+                let size = 4 * data.len() as u64;
+                let staging = gpu.create_buffer(blade::BufferDesc {
+                    name: "debug buf staging",
+                    size,
+                    memory: blade::Memory::Upload,
+                });
+                unsafe {
+                    ptr::write(staging.data() as *mut _, data);
+                }
+                transfers.copy_buffer_to_buffer(staging.into(), self.debug.buffer.into(), size);
+                temp_buffers.push(staging);
+            }
+
             let hit_staging = {
                 // init the hit buffer
                 let hit_size = (geometry_count as usize * mem::size_of::<HitEntry>()) as u64;
@@ -452,6 +517,10 @@ impl Renderer {
                 }
             }
             assert_eq!(geometry_index, geometry_count as usize);
+        } else {
+            let mut transfer = command_encoder.transfer();
+            // reset the debug line count
+            transfer.fill_buffer(self.debug.buffer.at(4), 4, 0);
         }
     }
 
@@ -488,25 +557,48 @@ impl Renderer {
                     pad: [0; 3],
                 },
                 acc_struct: self.acceleration_structure,
-                hit_entries: self.hit_buffer.at(0),
+                hit_entries: self.hit_buffer.into(),
                 index_buffers: &self.index_buffers,
                 vertex_buffers: &self.vertex_buffers,
                 textures: &self.textures,
                 sampler_linear: self.samplers.linear,
+                debug_buf: self.debug.buffer.into(),
                 output: self.target_view,
             },
         );
         pc.dispatch(group_count);
     }
 
-    pub fn blit(&self, pass: &mut blade::RenderCommandEncoder) {
-        let mut pc = pass.with(&self.draw_pipeline);
-        pc.bind(
-            0,
-            &DrawData {
-                input: self.target_view,
-            },
-        );
-        pc.draw(0, 3, 0, 1);
+    pub fn blit(&self, pass: &mut blade::RenderCommandEncoder, camera: &super::Camera) {
+        if let mut pc = pass.with(&self.blit_pipeline) {
+            pc.bind(
+                0,
+                &BlitData {
+                    input: self.target_view,
+                },
+            );
+            pc.draw(0, 3, 0, 1);
+        }
+        if let mut pc = pass.with(&self.debug.pipeline) {
+            let fov_x =
+                camera.fov_y * self.screen_size.width as f32 / self.screen_size.height as f32;
+            pc.bind(
+                0,
+                &DebugData {
+                    parameters: Parameters {
+                        cam_position: camera.pos.into(),
+                        depth: camera.depth,
+                        cam_orientation: camera.rot.into(),
+                        fov: [fov_x, camera.fov_y],
+                        frame_index: 0,
+                        debug_mode: 0,
+                        num_environment_samples: 0,
+                        pad: [0; 3],
+                    },
+                    debug_buf: self.debug.buffer.into(),
+                },
+            );
+            pc.draw_indirect(self.debug.buffer.at(0));
+        }
     }
 }
