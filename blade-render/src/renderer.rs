@@ -66,8 +66,9 @@ struct Parameters {
     fov: [f32; 2],
     frame_index: u32,
     debug_mode: u32,
+    mouse_pos: [i32; 2],
     num_environment_samples: u32,
-    pad: [u32; 3],
+    pad: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -388,8 +389,8 @@ impl Renderer {
         command_encoder: &mut blade::CommandEncoder,
         gpu: &blade::Context,
         temp_buffers: &mut Vec<blade::Buffer>,
+        enable_debug: bool,
     ) {
-        self.frame_index += 1;
         if self.is_tlas_dirty {
             self.is_tlas_dirty = false;
             if self.acceleration_structure != blade::AccelerationStructure::default() {
@@ -427,7 +428,7 @@ impl Renderer {
             }
             {
                 // init the debug buffer
-                let data = [2, 0, 0, 0, self.debug.capacity];
+                let data = [2, 0, 0, 0, self.debug.capacity, 0];
                 let size = 4 * data.len() as u64;
                 let staging = gpu.create_buffer(blade::BufferDesc {
                     name: "debug buf staging",
@@ -517,10 +518,16 @@ impl Renderer {
                 }
             }
             assert_eq!(geometry_index, geometry_count as usize);
-        } else {
-            let mut transfer = command_encoder.transfer();
+        }
+
+        self.frame_index += 1;
+        let mut transfer = command_encoder.transfer();
+        if enable_debug {
             // reset the debug line count
             transfer.fill_buffer(self.debug.buffer.at(4), 4, 0);
+            transfer.fill_buffer(self.debug.buffer.at(20), 4, 1);
+        } else {
+            transfer.fill_buffer(self.debug.buffer.at(20), 4, 0);
         }
     }
 
@@ -529,6 +536,7 @@ impl Renderer {
         command_encoder: &mut blade::CommandEncoder,
         camera: &super::Camera,
         debug_mode: DebugMode,
+        mouse_pos: Option<[i32; 2]>,
         ray_config: RayConfig,
     ) {
         assert!(!self.is_tlas_dirty);
@@ -553,8 +561,12 @@ impl Renderer {
                     fov: [fov_x, camera.fov_y],
                     frame_index: self.frame_index,
                     debug_mode: debug_mode as u32,
+                    mouse_pos: match mouse_pos {
+                        Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
+                        None => [-1; 2],
+                    },
                     num_environment_samples: ray_config.num_environment_samples,
-                    pad: [0; 3],
+                    pad: 0,
                 },
                 acc_struct: self.acceleration_structure,
                 hit_entries: self.hit_buffer.into(),
@@ -592,8 +604,9 @@ impl Renderer {
                         fov: [fov_x, camera.fov_y],
                         frame_index: 0,
                         debug_mode: 0,
+                        mouse_pos: [0; 2],
                         num_environment_samples: 0,
-                        pad: [0; 3],
+                        pad: 0,
                     },
                     debug_buf: self.debug.buffer.into(),
                 },

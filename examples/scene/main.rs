@@ -5,7 +5,6 @@ use blade_render::{Camera, RenderConfig, Renderer};
 use std::time;
 
 struct Example {
-    _start_time: time::Instant,
     prev_temp_buffers: Vec<blade::Buffer>,
     prev_sync_point: Option<blade::SyncPoint>,
     renderer: Renderer,
@@ -15,6 +14,7 @@ struct Example {
     camera: blade_render::Camera,
     debug_mode: blade_render::DebugMode,
     ray_config: blade_render::RayConfig,
+    mouse_pos: Option<[i32; 2]>,
 }
 
 impl Example {
@@ -62,7 +62,6 @@ impl Example {
         let sync_point = context.submit(&mut command_encoder);
 
         Self {
-            _start_time: time::Instant::now(),
             prev_temp_buffers,
             prev_sync_point: Some(sync_point),
             renderer,
@@ -74,6 +73,7 @@ impl Example {
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
             },
+            mouse_pos: None,
         }
     }
 
@@ -100,12 +100,17 @@ impl Example {
             .update_textures(&mut self.command_encoder, gui_textures, &self.context);
 
         let mut temp_buffers = Vec::new();
-        self.renderer
-            .prepare(&mut self.command_encoder, &self.context, &mut temp_buffers);
+        self.renderer.prepare(
+            &mut self.command_encoder,
+            &self.context,
+            &mut temp_buffers,
+            self.mouse_pos.is_some(),
+        );
         self.renderer.ray_trace(
             &mut self.command_encoder,
             &self.camera,
             self.debug_mode,
+            self.mouse_pos,
             self.ray_config,
         );
 
@@ -216,17 +221,21 @@ fn main() {
     };
     let mut example = Example::new(&window, &path_to_scene, camera);
 
-    let move_speed = 1.0f32;
-    let rotate_speed = 0.01f32;
-    let rotate_speed_z = 0.1f32;
     struct Drag {
         screen_pos: Option<winit::dpi::PhysicalPosition<f64>>,
         rotation: glam::Quat,
     }
     let mut drag_start = None;
+    let mut last_event = time::Instant::now();
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = winit::event_loop::ControlFlow::Poll;
+        let delta = last_event.elapsed().as_secs_f32();
+        last_event = time::Instant::now();
+        let move_speed = 1000.0 * delta;
+        let rotate_speed = 0.01f32;
+        let rotate_speed_z = 200.0 * delta;
+
         match event {
             winit::event::Event::RedrawEventsCleared => {
                 window.request_redraw();
@@ -284,7 +293,7 @@ fn main() {
                     }
                     winit::event::WindowEvent::MouseInput {
                         state,
-                        button: winit::event::MouseButton::Left,
+                        button: winit::event::MouseButton::Right,
                         ..
                     } => {
                         drag_start = match state {
@@ -292,6 +301,16 @@ fn main() {
                                 screen_pos: None,
                                 rotation: example.camera.rot.into(),
                             }),
+                            winit::event::ElementState::Released => None,
+                        };
+                    }
+                    winit::event::WindowEvent::MouseInput {
+                        state,
+                        button: winit::event::MouseButton::Left,
+                        ..
+                    } => {
+                        example.mouse_pos = match state {
+                            winit::event::ElementState::Pressed => Some([0; 2]),
                             winit::event::ElementState::Released => None,
                         };
                     }
@@ -304,10 +323,13 @@ fn main() {
                                 let qy = glam::Quat::from_rotation_x(
                                     (position.y - screen_pos.y) as f32 * rotate_speed,
                                 );
-                                example.camera.rot = (drag.rotation * qx * qy).into();
+                                example.camera.rot = (qx * drag.rotation * qy).into();
                             } else {
                                 drag.screen_pos = Some(position);
                             }
+                        }
+                        if let Some(ref mut pos) = example.mouse_pos {
+                            *pos = [position.x as i32, position.y as i32];
                         }
                     }
                     _ => {}

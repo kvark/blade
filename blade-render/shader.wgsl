@@ -8,6 +8,7 @@ struct Parameters {
     fov: vec2<f32>,
     frame_index: u32,
     debug_mode: u32,
+    mouse_pos: vec2<u32>,
     num_environment_samples: u32,
 };
 
@@ -70,17 +71,20 @@ struct DebugBuffer {
     first_vertex: u32,
     first_instance: u32,
     capacity: u32,
+    open: u32,
     lines: array<DebugLine>,
 }
 var<storage, read_write> debug_buf: DebugBuffer;
 
-fn debug_vec(pos: vec3<f32>, dir: vec3<f32>, color: u32) {
-    let index = atomicAdd(&debug_buf.instance_count, 1u);
-    if (index < debug_buf.capacity) {
-        debug_buf.lines[index] = DebugLine(DebugPoint(pos, color), DebugPoint(pos+dir, color));
-    } else {
-        // ensure the final value is never above the capacity
-        atomicSub(&debug_buf.instance_count, 1u);
+fn debug_line(a: vec3<f32>, b: vec3<f32>, color: u32) {
+    if (debug_buf.open != 0u) {
+        let index = atomicAdd(&debug_buf.instance_count, 1u);
+        if (index < debug_buf.capacity) {
+            debug_buf.lines[index] = DebugLine(DebugPoint(a, color), DebugPoint(b, color));
+        } else {
+            // ensure the final value is never above the capacity
+            atomicSub(&debug_buf.instance_count, 1u);
+        }
     }
 }
 struct DebugVarying {
@@ -195,10 +199,10 @@ fn sample_uniform_hemisphere(rng: ptr<function, RandomState>) -> vec3<f32> {
 
 fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
     //Note: Y axis is up
-    return vec3<f32>(max(dir.y, 0.0));
+    return vec3<f32>(max(2.0 * dir.y, 0.0));
 }
 
-fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f32>, rng: ptr<function, RandomState>) -> vec3<f32> {
+fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f32>, rng: ptr<function, RandomState>, enable_debug: bool) -> vec3<f32> {
     let entry = hit_entries[ri.instance_custom_index + ri.geometry_index];
     if (parameters.debug_mode == DEBUG_MODE_DEPTH) {
         return vec3<f32>(ri.t / parameters.depth);
@@ -225,6 +229,18 @@ fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f3
     let normal_object = vec3<f32>(normal_rough, sqrt(max(0.0, 1.0 - dot(normal_rough, normal_rough))));
     let object_to_world_rot = normalize(unpack4x8snorm(entry.rotation));
     let normal_world = qrot(object_to_world_rot, normal_object);
+
+    let debug_len = ri.t * 0.2;
+    if (enable_debug) {
+        let positions = ri.object_to_world * mat3x4(vec4<f32>(vertices[0].pos, 1.0), vec4<f32>(vertices[1].pos, 1.0), vec4<f32>(vertices[2].pos, 1.0));
+        debug_line(positions[0].xyz, positions[1].xyz, 0x00FF00u);
+        debug_line(positions[1].xyz, positions[2].xyz, 0x00FF00u);
+        debug_line(positions[2].xyz, positions[0].xyz, 0x00FF00u);
+        let poly_normal = normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
+        let poly_center = (positions[0].xyz + positions[1].xyz + positions[2].xyz) / 3.0;
+        debug_line(poly_center, poly_center + debug_len * poly_normal, 0x0000FFu);
+        debug_line(hit_world, hit_world + debug_len * normal_world, 0xFF0000u);
+    }
 
     // Note: this line allows to check the correctness of data passed in
     //return abs(pos_world - hit_world) * 1000000.0;
@@ -296,7 +312,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         color = evaluate_environment(ray_dir);
     } else {
         let expected = ray_pos + intersection.t * ray_dir;
-        color = compute_hit_color(intersection, ray_dir, expected, &rng);
+        let enable_debug = all(global_id.xy == parameters.mouse_pos);
+        color = compute_hit_color(intersection, ray_dir, expected, &rng, enable_debug);
     }
     textureStore(output, global_id.xy, vec4<f32>(color, 1.0));
 }
