@@ -94,6 +94,9 @@ impl Example {
         gui_textures: &egui::TexturesDelta,
         screen_desc: &blade_egui::ScreenDescriptor,
     ) {
+        self.renderer
+            .hot_reload(&self.context, self.prev_sync_point.as_ref().unwrap());
+
         self.command_encoder.start();
 
         self.gui_painter

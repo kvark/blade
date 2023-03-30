@@ -9,14 +9,14 @@ impl From<naga::ShaderStage> for super::ShaderVisibility {
 }
 
 impl super::Context {
-    pub fn create_shader(&self, desc: super::ShaderDesc) -> super::Shader {
-        let module = match naga::front::wgsl::parse_str(desc.source) {
-            Ok(module) => module,
-            Err(ref e) => {
-                e.emit_to_stderr_with_path(desc.source, "");
-                panic!("Shader compilation failed");
-            }
-        };
+    pub fn try_create_shader(
+        &self,
+        desc: super::ShaderDesc,
+    ) -> Result<super::Shader, &'static str> {
+        let module = naga::front::wgsl::parse_str(desc.source).map_err(|e| {
+            e.emit_to_stderr_with_path(desc.source, "");
+            "compilation failed"
+        })?;
 
         let device_caps = self.capabilities();
 
@@ -29,13 +29,17 @@ impl super::Context {
         );
         let info = naga::valid::Validator::new(flags, caps)
             .validate(&module)
-            .unwrap_or_else(|e| {
+            .map_err(|e| {
                 crate::util::emit_annotated_error(&e, "", desc.source);
                 crate::util::print_err(&e);
-                panic!("Shader validation failed");
-            });
+                "validation failed"
+            })?;
 
-        super::Shader { module, info }
+        Ok(super::Shader { module, info })
+    }
+
+    pub fn create_shader(&self, desc: super::ShaderDesc) -> super::Shader {
+        self.try_create_shader(desc).unwrap()
     }
 }
 

@@ -1,8 +1,9 @@
-use std::{mem, ptr};
+use std::{fs, mem, ptr, time};
 
 const TARGET_FORMAT: blade::TextureFormat = blade::TextureFormat::Rgba16Float;
 const MAX_RESOURCES: u32 = 1000;
 
+#[derive(Clone, Copy, Debug)]
 pub struct RenderConfig {
     pub screen_size: blade::Extent,
     pub surface_format: blade::TextureFormat,
@@ -39,8 +40,10 @@ struct DebugRender {
 }
 
 pub struct Renderer {
+    config: RenderConfig,
     target: blade::Texture,
     target_view: blade::TextureView,
+    shader_modified_time: Option<time::SystemTime>,
     rt_pipeline: blade::ComputePipeline,
     blit_pipeline: blade::RenderPipeline,
     scene: super::Scene,
@@ -209,7 +212,65 @@ impl super::Scene {
     }
 }
 
+struct ShaderProducts {
+    rt_pipeline: blade::ComputePipeline,
+    blit_pipeline: blade::RenderPipeline,
+    debug_buffer: blade::Buffer,
+    debug_pipeline: blade::RenderPipeline,
+}
+
 impl Renderer {
+    const SHADER_PATH: &str = "blade-render/shader.wgsl";
+    fn init_shader_products(
+        config: &RenderConfig,
+        gpu: &blade::Context,
+    ) -> Result<ShaderProducts, &'static str> {
+        let source = fs::read_to_string(Self::SHADER_PATH).unwrap();
+        let shader = gpu.try_create_shader(blade::ShaderDesc { source: &source })?;
+        let rt_layout = <ShaderData as blade::ShaderData>::layout();
+        let blit_layout = <BlitData as blade::ShaderData>::layout();
+        let debug_line_size = shader.get_struct_size("DebugLine");
+        let debug_buffer_size = shader.get_struct_size("DebugBuffer");
+        let debug_layout = <DebugData as blade::ShaderData>::layout();
+
+        Ok(ShaderProducts {
+            rt_pipeline: gpu.create_compute_pipeline(blade::ComputePipelineDesc {
+                name: "ray-trace",
+                data_layouts: &[&rt_layout],
+                compute: shader.at("main"),
+            }),
+            blit_pipeline: gpu.create_render_pipeline(blade::RenderPipelineDesc {
+                name: "main",
+                data_layouts: &[&blit_layout],
+                primitive: blade::PrimitiveState {
+                    topology: blade::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                vertex: shader.at("blit_vs"),
+                fragment: shader.at("blit_fs"),
+                color_targets: &[config.surface_format.into()],
+                depth_stencil: None,
+            }),
+            debug_buffer: gpu.create_buffer(blade::BufferDesc {
+                name: "debug",
+                size: (debug_buffer_size + (config.max_debug_lines - 1) * debug_line_size) as u64,
+                memory: blade::Memory::Device,
+            }),
+            debug_pipeline: gpu.create_render_pipeline(blade::RenderPipelineDesc {
+                name: "debug",
+                data_layouts: &[&debug_layout],
+                vertex: shader.at("debug_vs"),
+                primitive: blade::PrimitiveState {
+                    topology: blade::PrimitiveTopology::LineList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                fragment: shader.at("debug_fs"),
+                color_targets: &[config.surface_format.into()],
+            }),
+        })
+    }
+
     pub fn new(
         encoder: &mut blade::CommandEncoder,
         gpu: &blade::Context,
@@ -237,27 +298,10 @@ impl Renderer {
             subresources: &blade::TextureSubresources::default(),
         });
 
-        let source = std::fs::read_to_string("blade-render/shader.wgsl").unwrap();
-        let shader = gpu.create_shader(blade::ShaderDesc { source: &source });
-        let rt_layout = <ShaderData as blade::ShaderData>::layout();
-        let rt_pipeline = gpu.create_compute_pipeline(blade::ComputePipelineDesc {
-            name: "ray-trace",
-            data_layouts: &[&rt_layout],
-            compute: shader.at("main"),
-        });
-        let blit_layout = <BlitData as blade::ShaderData>::layout();
-        let blit_pipeline = gpu.create_render_pipeline(blade::RenderPipelineDesc {
-            name: "main",
-            data_layouts: &[&blit_layout],
-            primitive: blade::PrimitiveState {
-                topology: blade::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            vertex: shader.at("blit_vs"),
-            fragment: shader.at("blit_fs"),
-            color_targets: &[config.surface_format.into()],
-            depth_stencil: None,
-        });
+        let shader_modified_time = fs::metadata(Self::SHADER_PATH)
+            .and_then(|m| m.modified())
+            .ok();
+        let sp = Self::init_shader_products(config, gpu).unwrap();
 
         encoder.init_texture(target);
 
@@ -302,39 +346,14 @@ impl Renderer {
             }),
         };
 
-        let debug = {
-            let debug_line_size = shader.get_struct_size("DebugLine");
-            let debug_buffer_size = shader.get_struct_size("DebugBuffer");
-            let debug_layout = <DebugData as blade::ShaderData>::layout();
-            DebugRender {
-                capacity: config.max_debug_lines,
-                buffer: gpu.create_buffer(blade::BufferDesc {
-                    name: "debug",
-                    size: (debug_buffer_size + (config.max_debug_lines - 1) * debug_line_size)
-                        as u64,
-                    memory: blade::Memory::Device,
-                }),
-                pipeline: gpu.create_render_pipeline(blade::RenderPipelineDesc {
-                    name: "debug",
-                    data_layouts: &[&debug_layout],
-                    vertex: shader.at("debug_vs"),
-                    primitive: blade::PrimitiveState {
-                        topology: blade::PrimitiveTopology::LineList,
-                        ..Default::default()
-                    },
-                    depth_stencil: None,
-                    fragment: shader.at("debug_fs"),
-                    color_targets: &[config.surface_format.into()],
-                }),
-            }
-        };
-
         Self {
+            config: *config,
             target,
             target_view,
             scene: super::Scene::default(),
-            rt_pipeline,
-            blit_pipeline,
+            shader_modified_time,
+            rt_pipeline: sp.rt_pipeline,
+            blit_pipeline: sp.blit_pipeline,
             acceleration_structure: blade::AccelerationStructure::default(),
             dummy,
             hit_buffer: blade::Buffer::default(),
@@ -342,7 +361,11 @@ impl Renderer {
             index_buffers: blade::BufferArray::new(),
             textures: blade::TextureArray::new(),
             samplers,
-            debug,
+            debug: DebugRender {
+                capacity: config.max_debug_lines,
+                buffer: sp.debug_buffer,
+                pipeline: sp.debug_pipeline,
+            },
             is_tlas_dirty: true,
             screen_size: config.screen_size,
             frame_index: 0,
@@ -382,6 +405,26 @@ impl Renderer {
 
     pub fn merge_scene(&mut self, scene: super::Scene) {
         self.scene = scene;
+    }
+
+    pub fn hot_reload(&mut self, gpu: &blade::Context, sync_point: &blade::SyncPoint) -> bool {
+        if let Some(ref mut last_mod_time) = self.shader_modified_time {
+            let cur_mod_time = fs::metadata(Self::SHADER_PATH).unwrap().modified().unwrap();
+            if *last_mod_time != cur_mod_time {
+                log::info!("Hot-reloading shaders...");
+                *last_mod_time = cur_mod_time;
+                if let Ok(sp) = Self::init_shader_products(&self.config, gpu) {
+                    gpu.wait_for(sync_point, !0);
+                    self.rt_pipeline = sp.rt_pipeline;
+                    self.blit_pipeline = sp.blit_pipeline;
+                    gpu.destroy_buffer(self.debug.buffer);
+                    self.debug.buffer = sp.debug_buffer;
+                    self.debug.pipeline = sp.debug_pipeline;
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     pub fn prepare(
