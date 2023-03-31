@@ -6,11 +6,11 @@ struct CameraParams {
     depth: f32,
     orientation: vec4<f32>,
     fov: vec2<f32>,
+    mouse_pos: vec2<u32>,
 };
 struct MainParams {
     frame_index: u32,
     debug_mode: u32,
-    mouse_pos: vec2<u32>,
     num_environment_samples: u32,
 };
 
@@ -58,6 +58,11 @@ fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
 }
 fn qinv(q: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(-q.xyz,q.w);
+}
+fn make_quat(m: mat3x3<f32>) -> vec4<f32> {
+    let w = sqrt(1.0 + m[0].x + m[1].y + m[2].z) / 2.0;
+    let v = vec3<f32>(m[1].z - m[2].y, m[2].x - m[0].z, m[0].y - m[1].x);
+    return vec4<f32>(v / (4.0 * w), w);
 }
 
 struct DebugPoint {
@@ -117,34 +122,93 @@ fn debug_fs(in: DebugVarying) -> @location(0) vec4<f32> {
 }
 
 var out_depth: texture_storage_2d<r32float, write>;
+var out_basis: texture_storage_2d<rgba8snorm, write>;
+var out_albedo: texture_storage_2d<rgba8unorm, write>;
+
+fn get_ray_direction(global_id: vec2<u32>, target_size: vec2<u32>) -> vec3<f32> {
+    let half_size = vec2<f32>(target_size >> vec2<u32>(1u));
+    let ndc = (vec2<f32>(global_id) - half_size) / half_size;
+    let local_dir = vec3<f32>(ndc * tan(camera.fov), 1.0);
+    return normalize(qrot(camera.orientation, local_dir));
+}
 
 @compute @workgroup_size(8, 8)
 fn fill_gbuf(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let target_size = textureDimensions(out_depth);
-    let half_size = vec2<f32>(target_size >> vec2<u32>(1u));
-    let ndc = (vec2<f32>(global_id.xy) - half_size) / half_size;
     if (any(global_id.xy > target_size)) {
         return;
     }
 
-    let global_index = global_id.y * target_size.x + global_id.x;
-    let local_dir = vec3<f32>(ndc * tan(camera.fov), 1.0);
-    let world_dir = normalize(qrot(camera.orientation, local_dir));
-
     var rq: ray_query;
-    var ray_pos = camera.position;
-    var ray_dir = world_dir;
-    rayQueryInitialize(&rq, acc_struct, RayDesc(0x10u, 0xFFu, 0.0, camera.depth, ray_pos, ray_dir));
+    let ray_dir = get_ray_direction(global_id.xy, target_size);
+    rayQueryInitialize(&rq, acc_struct, RayDesc(0x10u, 0xFFu, 0.0, camera.depth, camera.position, ray_dir));
     rayQueryProceed(&rq);
     let intersection = rayQueryGetCommittedIntersection(&rq);
 
     var depth = 0.0;
+    var basis = vec4<f32>(0.0);
+    var albedo = vec3<f32>(0.0);
     if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
+        let enable_debug = all(global_id.xy == camera.mouse_pos);
+        let entry = hit_entries[intersection.instance_custom_index + intersection.geometry_index];
         depth = intersection.t;
+
+        var indices = intersection.primitive_index * 3u + vec3<u32>(0u, 1u, 2u);
+        if (entry.index_buf != ~0u) {
+            let iptr = &index_buffers[entry.index_buf].data;
+            indices = vec3<u32>((*iptr)[indices.x], (*iptr)[indices.y], (*iptr)[indices.z]);
+        }
+
+        let vptr = &vertex_buffers[entry.vertex_buf].data;
+        let vertices = array<Vertex, 3>(
+            (*vptr)[indices.x],
+            (*vptr)[indices.y],
+            (*vptr)[indices.z],
+        );
+
+        let barycentrics = vec3<f32>(1.0 - intersection.barycentrics.x - intersection.barycentrics.y, intersection.barycentrics);
+        let tex_coords = mat3x2(vertices[0].tex_coords, vertices[1].tex_coords, vertices[2].tex_coords) * barycentrics;
+        let normal_rough = mat3x2(unpack2x16snorm(vertices[0].normal), unpack2x16snorm(vertices[1].normal), unpack2x16snorm(vertices[2].normal)) * barycentrics;
+        let normal_object = vec3<f32>(normal_rough, sqrt(max(0.0, 1.0 - dot(normal_rough, normal_rough))));
+        let object_to_world_rot = normalize(unpack4x8snorm(entry.rotation));
+        let normal_world = qrot(object_to_world_rot, normal_object);
+
+        if (enable_debug) {
+            let debug_len = intersection.t * 0.2;
+            let positions = intersection.object_to_world * mat3x4(
+                vec4<f32>(vertices[0].pos, 1.0), vec4<f32>(vertices[1].pos, 1.0), vec4<f32>(vertices[2].pos, 1.0)
+            );
+            debug_line(positions[0].xyz, positions[1].xyz, 0x00FF00u);
+            debug_line(positions[1].xyz, positions[2].xyz, 0x00FF00u);
+            debug_line(positions[2].xyz, positions[0].xyz, 0x00FF00u);
+            let poly_normal = normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
+            let poly_center = (positions[0].xyz + positions[1].xyz + positions[2].xyz) / 3.0;
+            debug_line(poly_center, poly_center + debug_len * poly_normal, 0x0000FFu);
+            let pos_world = camera.position + intersection.t * ray_dir;
+            debug_line(pos_world, pos_world + debug_len * normal_world, 0xFF0000u);
+        }
+
+        let pre_tangent = select(
+            vec3<f32>(0.0, 0.0, 1.0),
+            vec3<f32>(0.0, 1.0, 0.0),
+            abs(dot(normal_world, vec3<f32>(0.0, 1.0, 0.0))) < abs(dot(normal_world, vec3<f32>(0.0, 0.0, 1.0))));
+        let bitangent = normalize(cross(normal_world, pre_tangent));
+        let tangent = normalize(cross(bitangent, normal_world));
+        basis = make_quat(mat3x3(tangent, bitangent, normal_world));
+
+        let base_color_factor = unpack4x8unorm(entry.base_color_factor);
+        let lod = 0.0; //TODO: this is actually complicated
+        let base_color_sample = textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tex_coords, lod);
+        albedo = (base_color_factor * base_color_sample).xyz;
     }
     textureStore(out_depth, global_id.xy, vec4<f32>(depth, 0.0, 0.0, 0.0));
+    textureStore(out_basis, global_id.xy, basis);
+    textureStore(out_albedo, global_id.xy, vec4<f32>(albedo, 0.0));
 }
 
+var in_depth: texture_2d<f32>;
+var in_basis: texture_2d<f32>;
+var in_albedo: texture_2d<f32>;
 var output: texture_storage_2d<rgba16float, write>;
 
 struct RandomState {
@@ -234,73 +298,41 @@ fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(max(2.0 * dir.y, 0.0));
 }
 
-fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f32>, rng: ptr<function, RandomState>, enable_debug: bool) -> vec3<f32> {
-    let entry = hit_entries[ri.instance_custom_index + ri.geometry_index];
+struct Surface {
+    basis: vec4<f32>,
+    albedo: vec3<f32>,
+}
+
+fn compute_hit_color(ray_dir: vec3<f32>, depth: f32, surface: Surface, rng: ptr<function, RandomState>) -> vec3<f32> {
     if (parameters.debug_mode == DEBUG_MODE_DEPTH) {
-        return vec3<f32>(ri.t / camera.depth);
+        return vec3<f32>(depth / camera.depth);
+    }
+    if (depth == 0.0) {
+        return evaluate_environment(ray_dir);
     }
 
-    var indices = ri.primitive_index * 3u + vec3<u32>(0u, 1u, 2u);
-    if (entry.index_buf != ~0u) {
-        let iptr = &index_buffers[entry.index_buf].data;
-        indices = vec3<u32>((*iptr)[indices.x], (*iptr)[indices.y], (*iptr)[indices.z]);
-    }
-
-    let vptr = &vertex_buffers[entry.vertex_buf].data;
-    let vertices = array<Vertex, 3>(
-        (*vptr)[indices.x],
-        (*vptr)[indices.y],
-        (*vptr)[indices.z],
-    );
-
-    let barycentrics = vec3<f32>(1.0 - ri.barycentrics.x - ri.barycentrics.y, ri.barycentrics);
-    //let pos_object = mat3x3(vertices[0].pos, vertices[1].pos, vertices[2].pos) * barycentrics;
-    //let pos_world = ri.object_to_world * vec4<f32>(pos_object, 1.0);
-    let tex_coords = mat3x2(vertices[0].tex_coords, vertices[1].tex_coords, vertices[2].tex_coords) * barycentrics;
-    let normal_rough = mat3x2(unpack2x16snorm(vertices[0].normal), unpack2x16snorm(vertices[1].normal), unpack2x16snorm(vertices[2].normal)) * barycentrics;
-    let normal_object = vec3<f32>(normal_rough, sqrt(max(0.0, 1.0 - dot(normal_rough, normal_rough))));
-    let object_to_world_rot = normalize(unpack4x8snorm(entry.rotation));
-    let normal_world = qrot(object_to_world_rot, normal_object);
-
-    let debug_len = ri.t * 0.2;
-    if (enable_debug) {
-        let positions = ri.object_to_world * mat3x4(vec4<f32>(vertices[0].pos, 1.0), vec4<f32>(vertices[1].pos, 1.0), vec4<f32>(vertices[2].pos, 1.0));
-        debug_line(positions[0].xyz, positions[1].xyz, 0x00FF00u);
-        debug_line(positions[1].xyz, positions[2].xyz, 0x00FF00u);
-        debug_line(positions[2].xyz, positions[0].xyz, 0x00FF00u);
-        let poly_normal = normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
-        let poly_center = (positions[0].xyz + positions[1].xyz + positions[2].xyz) / 3.0;
-        debug_line(poly_center, poly_center + debug_len * poly_normal, 0x0000FFu);
-        debug_line(hit_world, hit_world + debug_len * normal_world, 0xFF0000u);
-    }
-
-    // Note: this line allows to check the correctness of data passed in
-    //return abs(pos_world - hit_world) * 1000000.0;
+    let position = camera.position + depth * ray_dir;
+    let normal = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
     if (parameters.debug_mode == DEBUG_MODE_NORMAL) {
-        return normal_world;
+        return normal;
     }
-
-    let pre_tangent = select(
-        vec3<f32>(0.0, 0.0, 1.0),
-        vec3<f32>(0.0, 1.0, 0.0),
-        abs(dot(normal_world, vec3<f32>(0.0, 1.0, 0.0))) < abs(dot(normal_world, vec3<f32>(0.0, 0.0, 1.0))));
-    let bitangent = normalize(cross(normal_world, pre_tangent));
-    let tangent = normalize(cross(bitangent, normal_world));
 
     let steradians_in_hemisphere = 2.0 * PI;
     let lambert_brdf = 1.0 / PI;
+    let start_t = 0.5; // some offset required to avoid self-shadowing
+
     var color = vec3<f32>(0.0);
     var rq: ray_query;
     for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
         let light_dir_tbn = sample_uniform_hemisphere(rng);
-        let light_dir = light_dir_tbn.x * tangent + light_dir_tbn.y * bitangent + light_dir_tbn.z * normal_world;
+        let light_dir = qrot(surface.basis, light_dir_tbn);
         let lambert_term = light_dir_tbn.z;
         let estimate_color = evaluate_environment(light_dir) * lambert_term;
         if (dot(estimate_color, estimate_color) < 0.01) {
             continue;
         }
 
-        rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, 0xFFu, 0.5, camera.depth, hit_world, light_dir));
+        rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, 0xFFu, start_t, camera.depth, position, light_dir));
         rayQueryProceed(&rq);
         let intersection = rayQueryGetCommittedIntersection(&rq);
         if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
@@ -308,45 +340,25 @@ fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f3
         }
     }
     color /= f32(parameters.num_environment_samples);
-
-    let base_color_factor = unpack4x8unorm(entry.base_color_factor);
-    let lod = 0.0; //TODO: this is actually complicated
-    let base_color_sample = textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tex_coords, lod);
-
-    //return (base_color_factor * base_color_sample).xyz * color;
-    return color;
+    return surface.albedo * color;
 }
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let target_size = textureDimensions(output);
-    let half_size = vec2<f32>(target_size >> vec2<u32>(1u));
-    let ndc = (vec2<f32>(global_id.xy) - half_size) / half_size;
     if (any(global_id.xy > target_size)) {
         return;
     }
 
     let global_index = global_id.y * target_size.x + global_id.x;
     var rng = random_init(global_index, parameters.frame_index);
-    let local_dir = vec3<f32>(ndc * tan(camera.fov), 1.0);
-    let world_dir = normalize(qrot(camera.orientation, local_dir));
 
-    var rq: ray_query;
-    var ray_pos = camera.position;
-    var ray_dir = world_dir;
-    rayQueryInitialize(&rq, acc_struct, RayDesc(0x10u, 0xFFu, 0.0, camera.depth, ray_pos, ray_dir));
-    var iterations = 0u;
-    while (rayQueryProceed(&rq)) {iterations += 1u;}
-    let intersection = rayQueryGetCommittedIntersection(&rq);
-
-    var color = vec3<f32>(0.0);
-    if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
-        color = evaluate_environment(ray_dir);
-    } else {
-        let expected = ray_pos + intersection.t * ray_dir;
-        let enable_debug = all(global_id.xy == parameters.mouse_pos);
-        color = compute_hit_color(intersection, ray_dir, expected, &rng, enable_debug);
-    }
+    var surface: Surface;
+    let ray_dir = get_ray_direction(global_id.xy, target_size);
+    let depth = textureLoad(in_depth, global_id.xy, 0).x;
+    surface.basis = normalize(textureLoad(in_basis, global_id.xy, 0));
+    surface.albedo = textureLoad(in_albedo, global_id.xy, 0).xyz;
+    let color = compute_hit_color(ray_dir, depth, surface, &rng);
     textureStore(output, global_id.xy, vec4<f32>(color, 1.0));
 }
 
