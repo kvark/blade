@@ -54,6 +54,7 @@ impl super::TextureFormat {
             Self::Rgba8UnormSrgb => uncompressed(4),
             Self::Bgra8UnormSrgb => uncompressed(4),
             Self::Rgba16Float => uncompressed(8),
+            Self::R32Float => uncompressed(4),
             Self::Depth32Float => uncompressed(4),
         }
     }

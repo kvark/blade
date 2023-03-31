@@ -1,6 +1,5 @@
 use std::{fs, mem, ptr, time};
 
-const TARGET_FORMAT: blade::TextureFormat = blade::TextureFormat::Rgba16Float;
 const MAX_RESOURCES: u32 = 1000;
 
 #[derive(Clone, Copy, Debug)]
@@ -39,10 +38,65 @@ struct DebugRender {
     pipeline: blade::RenderPipeline,
 }
 
+struct Targets {
+    main: blade::Texture,
+    main_view: blade::TextureView,
+    depth: blade::Texture,
+    depth_view: blade::TextureView,
+}
+
+impl Targets {
+    fn create_target(
+        name: &str,
+        format: blade::TextureFormat,
+        size: blade::Extent,
+        gpu: &blade::Context,
+    ) -> (blade::Texture, blade::TextureView) {
+        let texture = gpu.create_texture(blade::TextureDesc {
+            name,
+            format,
+            size,
+            dimension: blade::TextureDimension::D2,
+            array_layer_count: 1,
+            mip_level_count: 1,
+            usage: blade::TextureUsage::RESOURCE | blade::TextureUsage::STORAGE,
+        });
+        let view = gpu.create_texture_view(blade::TextureViewDesc {
+            name,
+            texture,
+            format,
+            dimension: blade::ViewDimension::D2,
+            subresources: &blade::TextureSubresources::default(),
+        });
+        (texture, view)
+    }
+
+    fn new(size: blade::Extent, encoder: &mut blade::CommandEncoder, gpu: &blade::Context) -> Self {
+        let (main, main_view) =
+            Self::create_target("main", blade::TextureFormat::Rgba16Float, size, gpu);
+        encoder.init_texture(main);
+        let (depth, depth_view) =
+            Self::create_target("depth", blade::TextureFormat::R32Float, size, gpu);
+        encoder.init_texture(depth);
+        Self {
+            main,
+            main_view,
+            depth,
+            depth_view,
+        }
+    }
+
+    fn destroy(&self, gpu: &blade::Context) {
+        gpu.destroy_texture_view(self.main_view);
+        gpu.destroy_texture(self.main);
+        gpu.destroy_texture_view(self.depth_view);
+        gpu.destroy_texture(self.depth);
+    }
+}
+
 pub struct Renderer {
     config: RenderConfig,
-    target: blade::Texture,
-    target_view: blade::TextureView,
+    targets: Targets,
     shader_modified_time: Option<time::SystemTime>,
     rt_pipeline: blade::ComputePipeline,
     blit_pipeline: blade::RenderPipeline,
@@ -109,109 +163,6 @@ struct HitEntry {
     base_color_factor: [u8; 4],
 }
 
-impl super::Scene {
-    pub(super) fn populate_bottom_level_acceleration_structures(
-        &mut self,
-        gpu: &blade::Context,
-        encoder: &mut blade::CommandEncoder,
-        temp_buffers: &mut Vec<blade::Buffer>,
-    ) {
-        let mut blas_encoder = encoder.acceleration_structure();
-        let mut meshes = Vec::new();
-
-        for object in self.objects.iter_mut() {
-            log::debug!("Object {}", object.name);
-            meshes.clear();
-            for geometry in object.geometries.iter() {
-                log::debug!(
-                    "Geomtry vertices {}, trianges {}",
-                    geometry.vertex_count,
-                    geometry.triangle_count
-                );
-                meshes.push(blade::AccelerationStructureMesh {
-                    vertex_data: geometry.vertex_buf.at(0),
-                    vertex_format: blade::VertexFormat::F32Vec3,
-                    vertex_stride: mem::size_of::<super::Vertex>() as u32,
-                    vertex_count: geometry.vertex_count,
-                    index_data: geometry.index_buf.at(0),
-                    index_type: geometry.index_type,
-                    triangle_count: geometry.triangle_count,
-                    transform_data: blade::Buffer::default().at(0),
-                    is_opaque: true,
-                });
-            }
-            let sizes = gpu.get_bottom_level_acceleration_structure_sizes(&meshes);
-            object.acceleration_structure =
-                gpu.create_acceleration_structure(blade::AccelerationStructureDesc {
-                    name: &object.name,
-                    ty: blade::AccelerationStructureType::BottomLevel,
-                    size: sizes.data,
-                });
-            let scratch_buffer = gpu.create_buffer(blade::BufferDesc {
-                name: "BLAS scratch",
-                size: sizes.scratch,
-                memory: blade::Memory::Device,
-            });
-            blas_encoder.build_bottom_level(
-                object.acceleration_structure,
-                &meshes,
-                scratch_buffer.at(0),
-            );
-            temp_buffers.push(scratch_buffer);
-        }
-    }
-
-    fn build_top_level_acceleration_structure(
-        &self,
-        command_encoder: &mut blade::CommandEncoder,
-        gpu: &blade::Context,
-        temp_buffers: &mut Vec<blade::Buffer>,
-    ) -> (blade::AccelerationStructure, u32) {
-        let mut instances = Vec::with_capacity(self.objects.len());
-        let mut blases = Vec::with_capacity(self.objects.len());
-        let mut custom_index = 0;
-
-        for object in self.objects.iter() {
-            instances.push(blade::AccelerationStructureInstance {
-                acceleration_structure_index: blases.len() as u32,
-                transform: object.transform.into(),
-                mask: 0xFF,
-                custom_index,
-            });
-            blases.push(object.acceleration_structure);
-            custom_index += object.geometries.len() as u32;
-        }
-
-        // Needs to be a separate encoder in order to force synchronization
-        let sizes = gpu.get_top_level_acceleration_structure_sizes(instances.len() as u32);
-        let acceleration_structure =
-            gpu.create_acceleration_structure(blade::AccelerationStructureDesc {
-                name: "TLAS",
-                ty: blade::AccelerationStructureType::TopLevel,
-                size: sizes.data,
-            });
-        let instance_buf = gpu.create_acceleration_structure_instance_buffer(&instances, &blases);
-        let scratch_buf = gpu.create_buffer(blade::BufferDesc {
-            name: "TLAS scratch",
-            size: sizes.scratch,
-            memory: blade::Memory::Device,
-        });
-
-        let mut tlas_encoder = command_encoder.acceleration_structure();
-        tlas_encoder.build_top_level(
-            acceleration_structure,
-            &blases,
-            instances.len() as u32,
-            instance_buf.at(0),
-            scratch_buf.at(0),
-        );
-
-        temp_buffers.push(instance_buf);
-        temp_buffers.push(scratch_buf);
-        (acceleration_structure, custom_index)
-    }
-}
-
 struct ShaderProducts {
     rt_pipeline: blade::ComputePipeline,
     blit_pipeline: blade::RenderPipeline,
@@ -221,6 +172,7 @@ struct ShaderProducts {
 
 impl Renderer {
     const SHADER_PATH: &str = "blade-render/shader.wgsl";
+
     fn init_shader_products(
         config: &RenderConfig,
         gpu: &blade::Context,
@@ -281,29 +233,12 @@ impl Renderer {
             .ray_query
             .contains(blade::ShaderVisibility::COMPUTE));
 
-        let target = gpu.create_texture(blade::TextureDesc {
-            name: "main",
-            format: TARGET_FORMAT,
-            size: config.screen_size,
-            dimension: blade::TextureDimension::D2,
-            array_layer_count: 1,
-            mip_level_count: 1,
-            usage: blade::TextureUsage::RESOURCE | blade::TextureUsage::STORAGE,
-        });
-        let target_view = gpu.create_texture_view(blade::TextureViewDesc {
-            name: "main",
-            texture: target,
-            format: TARGET_FORMAT,
-            dimension: blade::ViewDimension::D2,
-            subresources: &blade::TextureSubresources::default(),
-        });
-
         let shader_modified_time = fs::metadata(Self::SHADER_PATH)
             .and_then(|m| m.modified())
             .ok();
         let sp = Self::init_shader_products(config, gpu).unwrap();
 
-        encoder.init_texture(target);
+        let targets = Targets::new(config.screen_size, encoder, gpu);
 
         let dummy = {
             let size = blade::Extent {
@@ -348,8 +283,7 @@ impl Renderer {
 
         Self {
             config: *config,
-            target,
-            target_view,
+            targets,
             scene: super::Scene::default(),
             shader_modified_time,
             rt_pipeline: sp.rt_pipeline,
@@ -388,8 +322,7 @@ impl Renderer {
             gpu.destroy_acceleration_structure(object.acceleration_structure);
         }
         // internal resources
-        gpu.destroy_texture_view(self.target_view);
-        gpu.destroy_texture(self.target);
+        self.targets.destroy(gpu);
         if self.hit_buffer != blade::Buffer::default() {
             gpu.destroy_buffer(self.hit_buffer);
         }
@@ -618,7 +551,7 @@ impl Renderer {
                 textures: &self.textures,
                 sampler_linear: self.samplers.linear,
                 debug_buf: self.debug.buffer.into(),
-                output: self.target_view,
+                output: self.targets.main_view,
             },
         );
         pc.dispatch(group_count);
@@ -629,7 +562,7 @@ impl Renderer {
             pc.bind(
                 0,
                 &BlitData {
-                    input: self.target_view,
+                    input: self.targets.main_view,
                 },
             );
             pc.draw(0, 3, 0, 1);

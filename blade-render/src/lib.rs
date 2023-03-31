@@ -4,6 +4,8 @@
 mod gltf_loader;
 #[cfg(not(target_arch = "wasm32"))]
 mod renderer;
+#[cfg(not(target_arch = "wasm32"))]
+mod scene;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use renderer::*;
