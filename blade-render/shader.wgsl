@@ -1,11 +1,13 @@
 const MAX_BOUNCES: i32 = 3;
 const PI: f32 = 3.1415926;
 
-struct Parameters {
-    cam_position: vec3<f32>,
+struct CameraParams {
+    position: vec3<f32>,
     depth: f32,
-    cam_orientation: vec4<f32>,
+    orientation: vec4<f32>,
     fov: vec2<f32>,
+};
+struct MainParams {
     frame_index: u32,
     debug_mode: u32,
     mouse_pos: vec2<u32>,
@@ -47,7 +49,8 @@ struct HitEntry {
 }
 var<storage, read> hit_entries: array<HitEntry>;
 
-var<uniform> parameters: Parameters;
+var<uniform> camera: CameraParams;
+var<uniform> parameters: MainParams;
 var acc_struct: acceleration_structure;
 
 fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
@@ -99,9 +102,9 @@ fn debug_vs(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) inst
         point = line.b;
     }
 
-    let world_dir = point.pos - parameters.cam_position;
-    let local_dir = qrot(qinv(parameters.cam_orientation), world_dir);
-    let ndc = local_dir.xy / tan(parameters.fov);
+    let world_dir = point.pos - camera.position;
+    let local_dir = qrot(qinv(camera.orientation), world_dir);
+    let ndc = local_dir.xy / tan(camera.fov);
 
     var out: DebugVarying;
     out.pos = vec4<f32>(ndc, 0.0, local_dir.z);
@@ -113,7 +116,36 @@ fn debug_fs(in: DebugVarying) -> @location(0) vec4<f32> {
     return in.color;
 }
 
-var output: texture_storage_2d<rgba8unorm, write>;
+var out_depth: texture_storage_2d<r32float, write>;
+
+@compute @workgroup_size(8, 8)
+fn fill_gbuf(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let target_size = textureDimensions(out_depth);
+    let half_size = vec2<f32>(target_size >> vec2<u32>(1u));
+    let ndc = (vec2<f32>(global_id.xy) - half_size) / half_size;
+    if (any(global_id.xy > target_size)) {
+        return;
+    }
+
+    let global_index = global_id.y * target_size.x + global_id.x;
+    let local_dir = vec3<f32>(ndc * tan(camera.fov), 1.0);
+    let world_dir = normalize(qrot(camera.orientation, local_dir));
+
+    var rq: ray_query;
+    var ray_pos = camera.position;
+    var ray_dir = world_dir;
+    rayQueryInitialize(&rq, acc_struct, RayDesc(0x10u, 0xFFu, 0.0, camera.depth, ray_pos, ray_dir));
+    rayQueryProceed(&rq);
+    let intersection = rayQueryGetCommittedIntersection(&rq);
+
+    var depth = 0.0;
+    if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
+        depth = intersection.t;
+    }
+    textureStore(out_depth, global_id.xy, vec4<f32>(depth, 0.0, 0.0, 0.0));
+}
+
+var output: texture_storage_2d<rgba16float, write>;
 
 struct RandomState {
     seed: u32,
@@ -205,7 +237,7 @@ fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
 fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f32>, rng: ptr<function, RandomState>, enable_debug: bool) -> vec3<f32> {
     let entry = hit_entries[ri.instance_custom_index + ri.geometry_index];
     if (parameters.debug_mode == DEBUG_MODE_DEPTH) {
-        return vec3<f32>(ri.t / parameters.depth);
+        return vec3<f32>(ri.t / camera.depth);
     }
 
     var indices = ri.primitive_index * 3u + vec3<u32>(0u, 1u, 2u);
@@ -268,7 +300,7 @@ fn compute_hit_color(ri: RayIntersection, ray_dir: vec3<f32>, hit_world: vec3<f3
             continue;
         }
 
-        rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, 0xFFu, 0.5, parameters.depth, hit_world, light_dir));
+        rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, 0xFFu, 0.5, camera.depth, hit_world, light_dir));
         rayQueryProceed(&rq);
         let intersection = rayQueryGetCommittedIntersection(&rq);
         if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
@@ -296,13 +328,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let global_index = global_id.y * target_size.x + global_id.x;
     var rng = random_init(global_index, parameters.frame_index);
-    let local_dir = vec3<f32>(ndc * tan(parameters.fov), 1.0);
-    let world_dir = normalize(qrot(parameters.cam_orientation, local_dir));
+    let local_dir = vec3<f32>(ndc * tan(camera.fov), 1.0);
+    let world_dir = normalize(qrot(camera.orientation, local_dir));
 
     var rq: ray_query;
-    var ray_pos = parameters.cam_position;
+    var ray_pos = camera.position;
     var ray_dir = world_dir;
-    rayQueryInitialize(&rq, acc_struct, RayDesc(0x10u, 0xFFu, 0.0, parameters.depth, ray_pos, ray_dir));
+    rayQueryInitialize(&rq, acc_struct, RayDesc(0x10u, 0xFFu, 0.0, camera.depth, ray_pos, ray_dir));
     var iterations = 0u;
     while (rayQueryProceed(&rq)) {iterations += 1u;}
     let intersection = rayQueryGetCommittedIntersection(&rq);
