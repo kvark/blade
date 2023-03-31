@@ -43,6 +43,10 @@ struct Targets {
     main_view: blade::TextureView,
     depth: blade::Texture,
     depth_view: blade::TextureView,
+    basis: blade::Texture,
+    basis_view: blade::TextureView,
+    albedo: blade::Texture,
+    albedo_view: blade::TextureView,
 }
 
 impl Targets {
@@ -78,11 +82,21 @@ impl Targets {
         let (depth, depth_view) =
             Self::create_target("depth", blade::TextureFormat::R32Float, size, gpu);
         encoder.init_texture(depth);
+        let (basis, basis_view) =
+            Self::create_target("basis", blade::TextureFormat::Rgba8Snorm, size, gpu);
+        encoder.init_texture(basis);
+        let (albedo, albedo_view) =
+            Self::create_target("basis", blade::TextureFormat::Rgba8Unorm, size, gpu);
+        encoder.init_texture(albedo);
         Self {
             main,
             main_view,
             depth,
             depth_view,
+            basis,
+            basis_view,
+            albedo,
+            albedo_view,
         }
     }
 
@@ -91,6 +105,10 @@ impl Targets {
         gpu.destroy_texture(self.main);
         gpu.destroy_texture_view(self.depth_view);
         gpu.destroy_texture(self.depth);
+        gpu.destroy_texture_view(self.basis_view);
+        gpu.destroy_texture(self.basis);
+        gpu.destroy_texture_view(self.albedo_view);
+        gpu.destroy_texture(self.albedo);
     }
 }
 
@@ -122,7 +140,7 @@ struct CameraParams {
     depth: f32,
     orientation: [f32; 4],
     fov: [f32; 2],
-    pad: [u32; 2],
+    mouse_pos: [i32; 2],
 }
 
 #[repr(C)]
@@ -130,9 +148,7 @@ struct CameraParams {
 struct MainParams {
     frame_index: u32,
     debug_mode: u32,
-    mouse_pos: [i32; 2],
     num_environment_samples: u32,
-    pad: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -146,18 +162,18 @@ struct FillData<'a> {
     sampler_linear: blade::Sampler,
     debug_buf: blade::BufferPiece,
     out_depth: blade::TextureView,
+    out_basis: blade::TextureView,
+    out_albedo: blade::TextureView,
 }
 
 #[derive(blade_macros::ShaderData)]
-struct MainData<'a> {
+struct MainData {
     camera: CameraParams,
     parameters: MainParams,
     acc_struct: blade::AccelerationStructure,
-    hit_entries: blade::BufferPiece,
-    index_buffers: &'a blade::BufferArray<MAX_RESOURCES>,
-    vertex_buffers: &'a blade::BufferArray<MAX_RESOURCES>,
-    textures: &'a blade::TextureArray<MAX_RESOURCES>,
-    sampler_linear: blade::Sampler,
+    in_depth: blade::TextureView,
+    in_basis: blade::TextureView,
+    in_albedo: blade::TextureView,
     debug_buf: blade::BufferPiece,
     output: blade::TextureView,
 }
@@ -537,14 +553,21 @@ impl Renderer {
         }
     }
 
-    fn make_camera_params(&self, camera: &super::Camera) -> CameraParams {
+    fn make_camera_params(
+        &self,
+        camera: &super::Camera,
+        mouse_pos: Option<[i32; 2]>,
+    ) -> CameraParams {
         let fov_x = camera.fov_y * self.screen_size.width as f32 / self.screen_size.height as f32;
         CameraParams {
             position: camera.pos.into(),
             depth: camera.depth,
             orientation: camera.rot.into(),
             fov: [fov_x, camera.fov_y],
-            pad: [0; 2],
+            mouse_pos: match mouse_pos {
+                Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
+                None => [-1; 2],
+            },
         }
     }
 
@@ -570,7 +593,7 @@ impl Renderer {
             pc.bind(
                 0,
                 &FillData {
-                    camera: self.make_camera_params(camera),
+                    camera: self.make_camera_params(camera, mouse_pos),
                     acc_struct: self.acceleration_structure,
                     hit_entries: self.hit_buffer.into(),
                     index_buffers: &self.index_buffers,
@@ -579,6 +602,8 @@ impl Renderer {
                     sampler_linear: self.samplers.linear,
                     debug_buf: self.debug.buffer.into(),
                     out_depth: self.targets.depth_view,
+                    out_basis: self.targets.basis_view,
+                    out_albedo: self.targets.albedo_view,
                 },
             );
             pc.dispatch(group_count);
@@ -596,23 +621,16 @@ impl Renderer {
             pc.bind(
                 0,
                 &MainData {
-                    camera: self.make_camera_params(camera),
+                    camera: self.make_camera_params(camera, mouse_pos),
                     parameters: MainParams {
                         frame_index: self.frame_index,
                         debug_mode: debug_mode as u32,
-                        mouse_pos: match mouse_pos {
-                            Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
-                            None => [-1; 2],
-                        },
                         num_environment_samples: ray_config.num_environment_samples,
-                        pad: 0,
                     },
                     acc_struct: self.acceleration_structure,
-                    hit_entries: self.hit_buffer.into(),
-                    index_buffers: &self.index_buffers,
-                    vertex_buffers: &self.vertex_buffers,
-                    textures: &self.textures,
-                    sampler_linear: self.samplers.linear,
+                    in_depth: self.targets.depth_view,
+                    in_basis: self.targets.basis_view,
+                    in_albedo: self.targets.albedo_view,
                     debug_buf: self.debug.buffer.into(),
                     output: self.targets.main_view,
                 },
@@ -635,7 +653,7 @@ impl Renderer {
             pc.bind(
                 0,
                 &DebugData {
-                    camera: self.make_camera_params(camera),
+                    camera: self.make_camera_params(camera, None),
                     debug_buf: self.debug.buffer.into(),
                 },
             );
