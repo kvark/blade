@@ -196,6 +196,7 @@ pub enum TextureFormat {
     Rgba8UnormSrgb,
     Bgra8UnormSrgb,
     Rgba16Float,
+    R32Float,
     Depth32Float,
 }
 
@@ -207,9 +208,9 @@ pub struct TexelBlockInfo {
 
 bitflags::bitflags! {
     pub struct TexelAspects: u8 {
-        const COLOR = 0 << 1;
-        const DEPTH = 1 << 1;
-        const STENCIL = 1 << 2;
+        const COLOR = 0x1;
+        const DEPTH = 0x2;
+        const STENCIL = 0x4;
     }
 }
 
