@@ -98,7 +98,8 @@ pub struct Renderer {
     config: RenderConfig,
     targets: Targets,
     shader_modified_time: Option<time::SystemTime>,
-    rt_pipeline: blade::ComputePipeline,
+    fill_pipeline: blade::ComputePipeline,
+    main_pipeline: blade::ComputePipeline,
     blit_pipeline: blade::RenderPipeline,
     scene: super::Scene,
     acceleration_structure: blade::AccelerationStructure,
@@ -116,11 +117,17 @@ pub struct Renderer {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct Parameters {
-    cam_position: [f32; 3],
+struct CameraParams {
+    position: [f32; 3],
     depth: f32,
-    cam_orientation: [f32; 4],
+    orientation: [f32; 4],
     fov: [f32; 2],
+    pad: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct MainParams {
     frame_index: u32,
     debug_mode: u32,
     mouse_pos: [i32; 2],
@@ -129,8 +136,22 @@ struct Parameters {
 }
 
 #[derive(blade_macros::ShaderData)]
-struct ShaderData<'a> {
-    parameters: Parameters,
+struct FillData<'a> {
+    camera: CameraParams,
+    acc_struct: blade::AccelerationStructure,
+    hit_entries: blade::BufferPiece,
+    index_buffers: &'a blade::BufferArray<MAX_RESOURCES>,
+    vertex_buffers: &'a blade::BufferArray<MAX_RESOURCES>,
+    textures: &'a blade::TextureArray<MAX_RESOURCES>,
+    sampler_linear: blade::Sampler,
+    debug_buf: blade::BufferPiece,
+    out_depth: blade::TextureView,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct MainData<'a> {
+    camera: CameraParams,
+    parameters: MainParams,
     acc_struct: blade::AccelerationStructure,
     hit_entries: blade::BufferPiece,
     index_buffers: &'a blade::BufferArray<MAX_RESOURCES>,
@@ -148,7 +169,7 @@ struct BlitData {
 
 #[derive(blade_macros::ShaderData)]
 struct DebugData {
-    parameters: Parameters,
+    camera: CameraParams,
     debug_buf: blade::BufferPiece,
 }
 
@@ -164,7 +185,8 @@ struct HitEntry {
 }
 
 struct ShaderProducts {
-    rt_pipeline: blade::ComputePipeline,
+    fill_pipeline: blade::ComputePipeline,
+    main_pipeline: blade::ComputePipeline,
     blit_pipeline: blade::RenderPipeline,
     debug_buffer: blade::Buffer,
     debug_pipeline: blade::RenderPipeline,
@@ -179,16 +201,22 @@ impl Renderer {
     ) -> Result<ShaderProducts, &'static str> {
         let source = fs::read_to_string(Self::SHADER_PATH).unwrap();
         let shader = gpu.try_create_shader(blade::ShaderDesc { source: &source })?;
-        let rt_layout = <ShaderData as blade::ShaderData>::layout();
+        let fill_layout = <FillData as blade::ShaderData>::layout();
+        let main_layout = <MainData as blade::ShaderData>::layout();
         let blit_layout = <BlitData as blade::ShaderData>::layout();
         let debug_line_size = shader.get_struct_size("DebugLine");
         let debug_buffer_size = shader.get_struct_size("DebugBuffer");
         let debug_layout = <DebugData as blade::ShaderData>::layout();
 
         Ok(ShaderProducts {
-            rt_pipeline: gpu.create_compute_pipeline(blade::ComputePipelineDesc {
+            fill_pipeline: gpu.create_compute_pipeline(blade::ComputePipelineDesc {
+                name: "fill-gbuf",
+                data_layouts: &[&fill_layout],
+                compute: shader.at("fill_gbuf"),
+            }),
+            main_pipeline: gpu.create_compute_pipeline(blade::ComputePipelineDesc {
                 name: "ray-trace",
-                data_layouts: &[&rt_layout],
+                data_layouts: &[&main_layout],
                 compute: shader.at("main"),
             }),
             blit_pipeline: gpu.create_render_pipeline(blade::RenderPipelineDesc {
@@ -286,7 +314,8 @@ impl Renderer {
             targets,
             scene: super::Scene::default(),
             shader_modified_time,
-            rt_pipeline: sp.rt_pipeline,
+            fill_pipeline: sp.fill_pipeline,
+            main_pipeline: sp.main_pipeline,
             blit_pipeline: sp.blit_pipeline,
             acceleration_structure: blade::AccelerationStructure::default(),
             dummy,
@@ -348,7 +377,8 @@ impl Renderer {
                 *last_mod_time = cur_mod_time;
                 if let Ok(sp) = Self::init_shader_products(&self.config, gpu) {
                     gpu.wait_for(sync_point, !0);
-                    self.rt_pipeline = sp.rt_pipeline;
+                    self.fill_pipeline = sp.fill_pipeline;
+                    self.main_pipeline = sp.main_pipeline;
                     self.blit_pipeline = sp.blit_pipeline;
                     gpu.destroy_buffer(self.debug.buffer);
                     self.debug.buffer = sp.debug_buffer;
@@ -507,6 +537,17 @@ impl Renderer {
         }
     }
 
+    fn make_camera_params(&self, camera: &super::Camera) -> CameraParams {
+        let fov_x = camera.fov_y * self.screen_size.width as f32 / self.screen_size.height as f32;
+        CameraParams {
+            position: camera.pos.into(),
+            depth: camera.depth,
+            orientation: camera.rot.into(),
+            fov: [fov_x, camera.fov_y],
+            pad: [0; 2],
+        }
+    }
+
     pub fn ray_trace(
         &self,
         command_encoder: &mut blade::CommandEncoder,
@@ -517,44 +558,67 @@ impl Renderer {
     ) {
         assert!(!self.is_tlas_dirty);
 
-        let mut pass = command_encoder.compute();
-        let mut pc = pass.with(&self.rt_pipeline);
-        let wg_size = self.rt_pipeline.get_workgroup_size();
-        let group_count = [
-            (self.screen_size.width + wg_size[0] - 1) / wg_size[0],
-            (self.screen_size.height + wg_size[1] - 1) / wg_size[1],
-            1,
-        ];
-        let fov_x = camera.fov_y * self.screen_size.width as f32 / self.screen_size.height as f32;
+        if let mut pass = command_encoder.compute() {
+            let mut pc = pass.with(&self.fill_pipeline);
+            let wg_size = self.fill_pipeline.get_workgroup_size();
+            let group_count = [
+                (self.screen_size.width + wg_size[0] - 1) / wg_size[0],
+                (self.screen_size.height + wg_size[1] - 1) / wg_size[1],
+                1,
+            ];
 
-        pc.bind(
-            0,
-            &ShaderData {
-                parameters: Parameters {
-                    cam_position: camera.pos.into(),
-                    depth: camera.depth,
-                    cam_orientation: camera.rot.into(),
-                    fov: [fov_x, camera.fov_y],
-                    frame_index: self.frame_index,
-                    debug_mode: debug_mode as u32,
-                    mouse_pos: match mouse_pos {
-                        Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
-                        None => [-1; 2],
-                    },
-                    num_environment_samples: ray_config.num_environment_samples,
-                    pad: 0,
+            pc.bind(
+                0,
+                &FillData {
+                    camera: self.make_camera_params(camera),
+                    acc_struct: self.acceleration_structure,
+                    hit_entries: self.hit_buffer.into(),
+                    index_buffers: &self.index_buffers,
+                    vertex_buffers: &self.vertex_buffers,
+                    textures: &self.textures,
+                    sampler_linear: self.samplers.linear,
+                    debug_buf: self.debug.buffer.into(),
+                    out_depth: self.targets.depth_view,
                 },
-                acc_struct: self.acceleration_structure,
-                hit_entries: self.hit_buffer.into(),
-                index_buffers: &self.index_buffers,
-                vertex_buffers: &self.vertex_buffers,
-                textures: &self.textures,
-                sampler_linear: self.samplers.linear,
-                debug_buf: self.debug.buffer.into(),
-                output: self.targets.main_view,
-            },
-        );
-        pc.dispatch(group_count);
+            );
+            pc.dispatch(group_count);
+        }
+
+        if let mut pass = command_encoder.compute() {
+            let mut pc = pass.with(&self.main_pipeline);
+            let wg_size = self.main_pipeline.get_workgroup_size();
+            let group_count = [
+                (self.screen_size.width + wg_size[0] - 1) / wg_size[0],
+                (self.screen_size.height + wg_size[1] - 1) / wg_size[1],
+                1,
+            ];
+
+            pc.bind(
+                0,
+                &MainData {
+                    camera: self.make_camera_params(camera),
+                    parameters: MainParams {
+                        frame_index: self.frame_index,
+                        debug_mode: debug_mode as u32,
+                        mouse_pos: match mouse_pos {
+                            Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
+                            None => [-1; 2],
+                        },
+                        num_environment_samples: ray_config.num_environment_samples,
+                        pad: 0,
+                    },
+                    acc_struct: self.acceleration_structure,
+                    hit_entries: self.hit_buffer.into(),
+                    index_buffers: &self.index_buffers,
+                    vertex_buffers: &self.vertex_buffers,
+                    textures: &self.textures,
+                    sampler_linear: self.samplers.linear,
+                    debug_buf: self.debug.buffer.into(),
+                    output: self.targets.main_view,
+                },
+            );
+            pc.dispatch(group_count);
+        }
     }
 
     pub fn blit(&self, pass: &mut blade::RenderCommandEncoder, camera: &super::Camera) {
@@ -568,22 +632,10 @@ impl Renderer {
             pc.draw(0, 3, 0, 1);
         }
         if let mut pc = pass.with(&self.debug.pipeline) {
-            let fov_x =
-                camera.fov_y * self.screen_size.width as f32 / self.screen_size.height as f32;
             pc.bind(
                 0,
                 &DebugData {
-                    parameters: Parameters {
-                        cam_position: camera.pos.into(),
-                        depth: camera.depth,
-                        cam_orientation: camera.rot.into(),
-                        fov: [fov_x, camera.fov_y],
-                        frame_index: 0,
-                        debug_mode: 0,
-                        mouse_pos: [0; 2],
-                        num_environment_samples: 0,
-                        pad: 0,
-                    },
+                    camera: self.make_camera_params(camera),
                     debug_buf: self.debug.buffer.into(),
                 },
             );
