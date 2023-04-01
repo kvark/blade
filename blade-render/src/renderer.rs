@@ -127,8 +127,10 @@ pub struct Renderer {
     index_buffers: blade::BufferArray<MAX_RESOURCES>,
     textures: blade::TextureArray<MAX_RESOURCES>,
     samplers: Samplers,
+    reservoir_buffer: blade::Buffer,
     debug: DebugRender,
     is_tlas_dirty: bool,
+    are_reservoirs_dirty: bool,
     screen_size: blade::Extent,
     frame_index: u32,
 }
@@ -175,6 +177,7 @@ struct MainData {
     in_basis: blade::TextureView,
     in_albedo: blade::TextureView,
     debug_buf: blade::BufferPiece,
+    reservoirs: blade::BufferPiece,
     output: blade::TextureView,
 }
 
@@ -200,42 +203,39 @@ struct HitEntry {
     base_color_factor: [u8; 4],
 }
 
-struct ShaderProducts {
-    fill_pipeline: blade::ComputePipeline,
-    main_pipeline: blade::ComputePipeline,
-    blit_pipeline: blade::RenderPipeline,
-    debug_buffer: blade::Buffer,
-    debug_pipeline: blade::RenderPipeline,
+struct ShaderPipelines {
+    fill: blade::ComputePipeline,
+    main: blade::ComputePipeline,
+    blit: blade::RenderPipeline,
+    debug: blade::RenderPipeline,
+    debug_line_size: u32,
+    debug_buffer_size: u32,
+    reservoir_size: u32,
 }
 
-impl Renderer {
-    const SHADER_PATH: &str = "blade-render/shader.wgsl";
+const SHADER_PATH: &str = "blade-render/shader.wgsl";
 
-    fn init_shader_products(
-        config: &RenderConfig,
-        gpu: &blade::Context,
-    ) -> Result<ShaderProducts, &'static str> {
-        let source = fs::read_to_string(Self::SHADER_PATH).unwrap();
+impl ShaderPipelines {
+    fn init(config: &RenderConfig, gpu: &blade::Context) -> Result<Self, &'static str> {
+        let source = fs::read_to_string(SHADER_PATH).unwrap();
         let shader = gpu.try_create_shader(blade::ShaderDesc { source: &source })?;
         let fill_layout = <FillData as blade::ShaderData>::layout();
         let main_layout = <MainData as blade::ShaderData>::layout();
         let blit_layout = <BlitData as blade::ShaderData>::layout();
-        let debug_line_size = shader.get_struct_size("DebugLine");
-        let debug_buffer_size = shader.get_struct_size("DebugBuffer");
         let debug_layout = <DebugData as blade::ShaderData>::layout();
 
-        Ok(ShaderProducts {
-            fill_pipeline: gpu.create_compute_pipeline(blade::ComputePipelineDesc {
+        Ok(Self {
+            fill: gpu.create_compute_pipeline(blade::ComputePipelineDesc {
                 name: "fill-gbuf",
                 data_layouts: &[&fill_layout],
                 compute: shader.at("fill_gbuf"),
             }),
-            main_pipeline: gpu.create_compute_pipeline(blade::ComputePipelineDesc {
+            main: gpu.create_compute_pipeline(blade::ComputePipelineDesc {
                 name: "ray-trace",
                 data_layouts: &[&main_layout],
                 compute: shader.at("main"),
             }),
-            blit_pipeline: gpu.create_render_pipeline(blade::RenderPipelineDesc {
+            blit: gpu.create_render_pipeline(blade::RenderPipelineDesc {
                 name: "main",
                 data_layouts: &[&blit_layout],
                 primitive: blade::PrimitiveState {
@@ -247,12 +247,7 @@ impl Renderer {
                 color_targets: &[config.surface_format.into()],
                 depth_stencil: None,
             }),
-            debug_buffer: gpu.create_buffer(blade::BufferDesc {
-                name: "debug",
-                size: (debug_buffer_size + (config.max_debug_lines - 1) * debug_line_size) as u64,
-                memory: blade::Memory::Device,
-            }),
-            debug_pipeline: gpu.create_render_pipeline(blade::RenderPipelineDesc {
+            debug: gpu.create_render_pipeline(blade::RenderPipelineDesc {
                 name: "debug",
                 data_layouts: &[&debug_layout],
                 vertex: shader.at("debug_vs"),
@@ -264,9 +259,14 @@ impl Renderer {
                 fragment: shader.at("debug_fs"),
                 color_targets: &[config.surface_format.into()],
             }),
+            debug_line_size: shader.get_struct_size("DebugLine"),
+            debug_buffer_size: shader.get_struct_size("DebugBuffer"),
+            reservoir_size: shader.get_struct_size("Reservoir"),
         })
     }
+}
 
+impl Renderer {
     pub fn new(
         encoder: &mut blade::CommandEncoder,
         gpu: &blade::Context,
@@ -277,10 +277,21 @@ impl Renderer {
             .ray_query
             .contains(blade::ShaderVisibility::COMPUTE));
 
-        let shader_modified_time = fs::metadata(Self::SHADER_PATH)
-            .and_then(|m| m.modified())
-            .ok();
-        let sp = Self::init_shader_products(config, gpu).unwrap();
+        let shader_modified_time = fs::metadata(SHADER_PATH).and_then(|m| m.modified()).ok();
+        let sp = ShaderPipelines::init(config, gpu).unwrap();
+
+        let debug_buffer = gpu.create_buffer(blade::BufferDesc {
+            name: "debug",
+            size: (sp.debug_buffer_size + (config.max_debug_lines - 1) * sp.debug_line_size) as u64,
+            memory: blade::Memory::Device,
+        });
+        let total_reservoirs =
+            config.screen_size.width as usize * config.screen_size.height as usize;
+        let reservoir_buffer = gpu.create_buffer(blade::BufferDesc {
+            name: "reservoirs",
+            size: sp.reservoir_size as u64 * total_reservoirs as u64,
+            memory: blade::Memory::Device,
+        });
 
         let targets = Targets::new(config.screen_size, encoder, gpu);
 
@@ -330,9 +341,9 @@ impl Renderer {
             targets,
             scene: super::Scene::default(),
             shader_modified_time,
-            fill_pipeline: sp.fill_pipeline,
-            main_pipeline: sp.main_pipeline,
-            blit_pipeline: sp.blit_pipeline,
+            fill_pipeline: sp.fill,
+            main_pipeline: sp.main,
+            blit_pipeline: sp.blit,
             acceleration_structure: blade::AccelerationStructure::default(),
             dummy,
             hit_buffer: blade::Buffer::default(),
@@ -340,12 +351,14 @@ impl Renderer {
             index_buffers: blade::BufferArray::new(),
             textures: blade::TextureArray::new(),
             samplers,
+            reservoir_buffer,
             debug: DebugRender {
                 capacity: config.max_debug_lines,
-                buffer: sp.debug_buffer,
-                pipeline: sp.debug_pipeline,
+                buffer: debug_buffer,
+                pipeline: sp.debug,
             },
             is_tlas_dirty: true,
+            are_reservoirs_dirty: true,
             screen_size: config.screen_size,
             frame_index: 0,
         }
@@ -377,8 +390,9 @@ impl Renderer {
         gpu.destroy_texture(self.dummy.white_texture);
         // samplers
         gpu.destroy_sampler(self.samplers.linear);
-        // debug
+        // buffers
         gpu.destroy_buffer(self.debug.buffer);
+        gpu.destroy_buffer(self.reservoir_buffer);
     }
 
     pub fn merge_scene(&mut self, scene: super::Scene) {
@@ -387,18 +401,16 @@ impl Renderer {
 
     pub fn hot_reload(&mut self, gpu: &blade::Context, sync_point: &blade::SyncPoint) -> bool {
         if let Some(ref mut last_mod_time) = self.shader_modified_time {
-            let cur_mod_time = fs::metadata(Self::SHADER_PATH).unwrap().modified().unwrap();
+            let cur_mod_time = fs::metadata(SHADER_PATH).unwrap().modified().unwrap();
             if *last_mod_time != cur_mod_time {
                 log::info!("Hot-reloading shaders...");
                 *last_mod_time = cur_mod_time;
-                if let Ok(sp) = Self::init_shader_products(&self.config, gpu) {
+                if let Ok(sp) = ShaderPipelines::init(&self.config, gpu) {
                     gpu.wait_for(sync_point, !0);
-                    self.fill_pipeline = sp.fill_pipeline;
-                    self.main_pipeline = sp.main_pipeline;
-                    self.blit_pipeline = sp.blit_pipeline;
-                    gpu.destroy_buffer(self.debug.buffer);
-                    self.debug.buffer = sp.debug_buffer;
-                    self.debug.pipeline = sp.debug_pipeline;
+                    self.fill_pipeline = sp.fill;
+                    self.main_pipeline = sp.main;
+                    self.blit_pipeline = sp.blit;
+                    self.debug.pipeline = sp.debug;
                     return true;
                 }
             }
@@ -551,6 +563,11 @@ impl Renderer {
         } else {
             transfer.fill_buffer(self.debug.buffer.at(20), 4, 0);
         }
+        if self.are_reservoirs_dirty {
+            self.are_reservoirs_dirty = false;
+            let total_reservoirs = self.screen_size.width as u64 * self.screen_size.height as u64;
+            transfer.fill_buffer(self.reservoir_buffer.into(), total_reservoirs, 0);
+        }
     }
 
     fn make_camera_params(
@@ -632,6 +649,7 @@ impl Renderer {
                     in_basis: self.targets.basis_view,
                     in_albedo: self.targets.albedo_view,
                     debug_buf: self.debug.buffer.into(),
+                    reservoirs: self.reservoir_buffer.into(),
                     output: self.targets.main_view,
                 },
             );
