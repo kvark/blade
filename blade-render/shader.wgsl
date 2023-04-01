@@ -206,6 +206,13 @@ fn fill_gbuf(@builtin(global_invocation_id) global_id: vec3<u32>) {
     textureStore(out_albedo, global_id.xy, vec4<f32>(albedo, 0.0));
 }
 
+struct Reservoir {
+    light_dir: vec3<f32>,
+    weight_sum: f32,
+    confidence: f32,
+}
+var<storage, read_write> reservoirs: array<Reservoir>;
+
 var in_depth: texture_2d<f32>;
 var in_basis: texture_2d<f32>;
 var in_albedo: texture_2d<f32>;
