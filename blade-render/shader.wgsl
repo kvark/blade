@@ -206,12 +206,43 @@ fn fill_gbuf(@builtin(global_invocation_id) global_id: vec3<u32>) {
     textureStore(out_albedo, global_id.xy, vec4<f32>(albedo, 0.0));
 }
 
-struct Reservoir {
+struct FinalReservoir {
     light_dir: vec3<f32>,
-    weight_sum: f32,
+    weight: f32,
     confidence: f32,
 }
-var<storage, read_write> reservoirs: array<Reservoir>;
+
+struct LightSample {
+    dir: vec3<f32>,
+    radiance: vec3<f32>,
+    pdf: f32,
+}
+
+struct LiveReservoir {
+    selected: LightSample,
+    weight_sum: f32,
+    count: u32,
+}
+
+fn compute_target_score(radiance: vec3<f32>) -> f32 {
+    return dot(radiance, vec3<f32>(0.3, 0.4, 0.3));
+}
+
+fn bump_reservoir(r: ptr<function, LiveReservoir>) {
+    (*r).count += 1u;
+}
+fn update_reservoir(r: ptr<function, LiveReservoir>, s: LightSample, random: f32) -> bool {
+    let target_score = compute_target_score(s.radiance);
+    let weight = target_score / s.pdf;
+    (*r).weight_sum += weight;
+    (*r).count += 1u;
+    if ((*r).weight_sum * random < weight) {
+        (*r).selected = s;
+        return true;
+    } else {
+        return false;
+    }
+}
 
 var in_depth: texture_2d<f32>;
 var in_basis: texture_2d<f32>;
@@ -310,7 +341,16 @@ struct Surface {
     albedo: vec3<f32>,
 }
 
-fn compute_hit_color(ray_dir: vec3<f32>, depth: f32, surface: Surface, rng: ptr<function, RandomState>) -> vec3<f32> {
+fn evaluate_color(surface: Surface, ls: LightSample) -> vec3<f32> {
+    let lambert_brdf = 1.0 / PI;
+    let lambert_term = qrot(qinv(surface.basis), ls.dir).z;
+    if (lambert_term <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    return surface.albedo * ls.radiance * lambert_brdf;
+}
+
+fn compute_restir(ray_dir: vec3<f32>, depth: f32, surface: Surface, pixel_index: u32, rng: ptr<function, RandomState>) -> vec3<f32> {
     if (parameters.debug_mode == DEBUG_MODE_DEPTH) {
         return vec3<f32>(depth / camera.depth);
     }
@@ -324,30 +364,37 @@ fn compute_hit_color(ray_dir: vec3<f32>, depth: f32, surface: Surface, rng: ptr<
         return normal;
     }
 
-    let steradians_in_hemisphere = 2.0 * PI;
-    let lambert_brdf = 1.0 / PI;
     let start_t = 0.5; // some offset required to avoid self-shadowing
 
+    var reservoir = LiveReservoir();
     var color = vec3<f32>(0.0);
     var rq: ray_query;
     for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
+        var ls = LightSample();
+        ls.pdf = 1.0 / (2.0 * PI);
         let light_dir_tbn = sample_uniform_hemisphere(rng);
-        let light_dir = qrot(surface.basis, light_dir_tbn);
-        let lambert_term = light_dir_tbn.z;
-        let estimate_color = evaluate_environment(light_dir) * lambert_term;
-        if (dot(estimate_color, estimate_color) < 0.01) {
+        ls.dir = qrot(surface.basis, light_dir_tbn);
+        ls.radiance = evaluate_environment(ls.dir);
+        let target_score = compute_target_score(ls.radiance);
+        if (target_score < 0.01) {
+            bump_reservoir(&reservoir);
             continue;
         }
 
-        rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, 0xFFu, start_t, camera.depth, position, light_dir));
+        rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, 0xFFu,
+            start_t, camera.depth, position, ls.dir));
         rayQueryProceed(&rq);
         let intersection = rayQueryGetCommittedIntersection(&rq);
-        if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
-            color += estimate_color * steradians_in_hemisphere * lambert_brdf;
+        if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
+            bump_reservoir(&reservoir);
+            continue;
         }
+
+        update_reservoir(&reservoir, ls, random_gen(rng));
     }
-    color /= f32(parameters.num_environment_samples);
-    return surface.albedo * color;
+
+    let contribution_weight = reservoir.weight_sum / (compute_target_score(reservoir.selected.radiance) * f32(reservoir.count));
+    return contribution_weight * evaluate_color(surface, reservoir.selected);
 }
 
 @compute @workgroup_size(8, 8)
@@ -365,7 +412,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let depth = textureLoad(in_depth, global_id.xy, 0).x;
     surface.basis = normalize(textureLoad(in_basis, global_id.xy, 0));
     surface.albedo = textureLoad(in_albedo, global_id.xy, 0).xyz;
-    let color = compute_hit_color(ray_dir, depth, surface, &rng);
+    let color = compute_restir(ray_dir, depth, surface, global_index, &rng);
     textureStore(output, global_id.xy, vec4<f32>(color, 1.0));
 }
 

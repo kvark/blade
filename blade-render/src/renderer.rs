@@ -261,7 +261,7 @@ impl ShaderPipelines {
             }),
             debug_line_size: shader.get_struct_size("DebugLine"),
             debug_buffer_size: shader.get_struct_size("DebugBuffer"),
-            reservoir_size: shader.get_struct_size("Reservoir"),
+            reservoir_size: shader.get_struct_size("FinalReservoir"),
         })
     }
 }
