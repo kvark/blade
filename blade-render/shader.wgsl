@@ -12,6 +12,7 @@ struct MainParams {
     frame_index: u32,
     debug_mode: u32,
     num_environment_samples: u32,
+    temporal_history: u32,
 };
 
 //Must match host side `DebugMode`
@@ -206,11 +207,13 @@ fn fill_gbuf(@builtin(global_invocation_id) global_id: vec3<u32>) {
     textureStore(out_albedo, global_id.xy, vec4<f32>(albedo, 0.0));
 }
 
-struct FinalReservoir {
+struct StoredReservoir {
     light_dir: vec3<f32>,
-    weight: f32,
+    target_score: f32,
+    contribution_weight: f32,
     confidence: f32,
 }
+var<storage, read_write> reservoirs: array<StoredReservoir>;
 
 struct LightSample {
     dir: vec3<f32>,
@@ -219,7 +222,8 @@ struct LightSample {
 }
 
 struct LiveReservoir {
-    selected: LightSample,
+    selected_dir: vec3<f32>,
+    selected_target_score: f32,
     weight_sum: f32,
     count: u32,
 }
@@ -231,17 +235,46 @@ fn compute_target_score(radiance: vec3<f32>) -> f32 {
 fn bump_reservoir(r: ptr<function, LiveReservoir>) {
     (*r).count += 1u;
 }
-fn update_reservoir(r: ptr<function, LiveReservoir>, s: LightSample, random: f32) -> bool {
-    let target_score = compute_target_score(s.radiance);
-    let weight = target_score / s.pdf;
-    (*r).weight_sum += weight;
-    (*r).count += 1u;
-    if ((*r).weight_sum * random < weight) {
-        (*r).selected = s;
+fn make_reservoir(ls: LightSample) -> LiveReservoir {
+    var r: LiveReservoir;
+    r.selected_dir = ls.dir;
+    r.selected_target_score = compute_target_score(ls.radiance);
+    r.weight_sum = r.selected_target_score / ls.pdf;
+    r.count = 1u;
+    return r;
+}
+fn merge_reservoir(r: ptr<function, LiveReservoir>, other: LiveReservoir, random: f32) -> bool {
+    (*r).weight_sum += other.weight_sum;
+    (*r).count += other.count;
+    if ((*r).weight_sum * random < other.weight_sum) {
+        (*r).selected_dir = other.selected_dir;
+        (*r).selected_target_score = other.selected_target_score;
         return true;
     } else {
         return false;
     }
+}
+fn update_reservoir(r: ptr<function, LiveReservoir>, ls: LightSample, random: f32) -> bool {
+    let other = make_reservoir(ls);
+    return merge_reservoir(r, other, random);
+}
+fn unpack_reservoir(f: StoredReservoir, max_count: u32) -> LiveReservoir {
+    var r: LiveReservoir;
+    r.selected_dir = f.light_dir;
+    r.selected_target_score = f.target_score;
+    let count = min(u32(f.confidence), max_count);
+    r.weight_sum = f.contribution_weight * f.target_score * f32(count);
+    r.count = count;
+    return r;
+}
+fn pack_reservoir(r: LiveReservoir) -> StoredReservoir {
+    var f: StoredReservoir;
+    f.light_dir = r.selected_dir;
+    f.target_score = r.selected_target_score;
+    f.confidence = f32(r.count);
+    let denom = f.target_score * f.confidence;
+    f.contribution_weight = select(0.0, r.weight_sum / denom, denom > 0.0);
+    return f;
 }
 
 var in_depth: texture_2d<f32>;
@@ -341,13 +374,13 @@ struct Surface {
     albedo: vec3<f32>,
 }
 
-fn evaluate_color(surface: Surface, ls: LightSample) -> vec3<f32> {
+fn evaluate_color(surface: Surface, dir: vec3<f32>) -> vec3<f32> {
     let lambert_brdf = 1.0 / PI;
-    let lambert_term = qrot(qinv(surface.basis), ls.dir).z;
+    let lambert_term = qrot(qinv(surface.basis), dir).z;
     if (lambert_term <= 0.0) {
         return vec3<f32>(0.0);
     }
-    return surface.albedo * ls.radiance * lambert_brdf;
+    return surface.albedo * lambert_brdf;
 }
 
 fn compute_restir(ray_dir: vec3<f32>, depth: f32, surface: Surface, pixel_index: u32, rng: ptr<function, RandomState>) -> vec3<f32> {
@@ -367,7 +400,7 @@ fn compute_restir(ray_dir: vec3<f32>, depth: f32, surface: Surface, pixel_index:
     let start_t = 0.5; // some offset required to avoid self-shadowing
 
     var reservoir = LiveReservoir();
-    var color = vec3<f32>(0.0);
+    var radiance = vec3<f32>(0.0);
     var rq: ray_query;
     for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
         var ls = LightSample();
@@ -390,11 +423,20 @@ fn compute_restir(ray_dir: vec3<f32>, depth: f32, surface: Surface, pixel_index:
             continue;
         }
 
-        update_reservoir(&reservoir, ls, random_gen(rng));
+        if (update_reservoir(&reservoir, ls, random_gen(rng))) {
+            radiance = ls.radiance;
+        }
     }
 
-    let contribution_weight = reservoir.weight_sum / (compute_target_score(reservoir.selected.radiance) * f32(reservoir.count));
-    return contribution_weight * evaluate_color(surface, reservoir.selected);
+    if (parameters.temporal_history != 0u) {
+        let prev = unpack_reservoir(reservoirs[pixel_index], parameters.temporal_history);
+        if (merge_reservoir(&reservoir, prev, random_gen(rng))) {
+            radiance = evaluate_environment(prev.selected_dir);
+        }
+    }
+    let stored = pack_reservoir(reservoir);
+    reservoirs[pixel_index] = stored;
+    return stored.contribution_weight * radiance * evaluate_color(surface, stored.light_dir);
 }
 
 @compute @workgroup_size(8, 8)
