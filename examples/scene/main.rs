@@ -72,6 +72,7 @@ impl Example {
             debug_mode: blade_render::DebugMode::None,
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
+                temporal_history: 10,
             },
             mouse_pos: None,
         }
@@ -183,6 +184,10 @@ impl Example {
                     egui::Slider::new(&mut self.ray_config.num_environment_samples, 1..=100u32)
                         .text("Num env samples")
                         .logarithmic(true),
+                );
+                ui.add(
+                    egui::widgets::Slider::new(&mut self.ray_config.temporal_history, 0..=50)
+                        .text("Temporal reuse"),
                 );
             });
     }

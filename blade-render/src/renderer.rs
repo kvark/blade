@@ -30,6 +30,7 @@ pub enum DebugMode {
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct RayConfig {
     pub num_environment_samples: u32,
+    pub temporal_history: u32,
 }
 
 struct DebugRender {
@@ -151,6 +152,7 @@ struct MainParams {
     frame_index: u32,
     debug_mode: u32,
     num_environment_samples: u32,
+    temporal_history: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -261,7 +263,7 @@ impl ShaderPipelines {
             }),
             debug_line_size: shader.get_struct_size("DebugLine"),
             debug_buffer_size: shader.get_struct_size("DebugBuffer"),
-            reservoir_size: shader.get_struct_size("FinalReservoir"),
+            reservoir_size: shader.get_struct_size("StoredReservoir"),
         })
     }
 }
@@ -643,6 +645,7 @@ impl Renderer {
                         frame_index: self.frame_index,
                         debug_mode: debug_mode as u32,
                         num_environment_samples: ray_config.num_environment_samples,
+                        temporal_history: ray_config.temporal_history,
                     },
                     acc_struct: self.acceleration_structure,
                     in_depth: self.targets.depth_view,
