@@ -33,9 +33,20 @@ pub struct RayConfig {
     pub temporal_history: u32,
 }
 
+// Has to match the shader!
+#[repr(C)]
+#[derive(Debug)]
+struct DebugVariance {
+    color_sum: [f32; 3],
+    pad: u32,
+    color2_sum: [f32; 3],
+    count: u32,
+}
+
 struct DebugRender {
     capacity: u32,
     buffer: blade::Buffer,
+    variance_buffer: blade::Buffer,
     pipeline: blade::RenderPipeline,
 }
 
@@ -287,6 +298,15 @@ impl Renderer {
             size: (sp.debug_buffer_size + (config.max_debug_lines - 1) * sp.debug_line_size) as u64,
             memory: blade::Memory::Device,
         });
+        let variance_buffer = gpu.create_buffer(blade::BufferDesc {
+            name: "variance",
+            size: mem::size_of::<DebugVariance>() as u64,
+            memory: blade::Memory::Shared,
+        });
+        unsafe {
+            ptr::write_bytes(variance_buffer.data(), 0, mem::size_of::<DebugVariance>());
+        }
+
         let total_reservoirs =
             config.screen_size.width as usize * config.screen_size.height as usize;
         let reservoir_buffer = gpu.create_buffer(blade::BufferDesc {
@@ -357,6 +377,7 @@ impl Renderer {
             debug: DebugRender {
                 capacity: config.max_debug_lines,
                 buffer: debug_buffer,
+                variance_buffer,
                 pipeline: sp.debug,
             },
             is_tlas_dirty: true,
@@ -394,6 +415,7 @@ impl Renderer {
         gpu.destroy_sampler(self.samplers.linear);
         // buffers
         gpu.destroy_buffer(self.debug.buffer);
+        gpu.destroy_buffer(self.debug.variance_buffer);
         gpu.destroy_buffer(self.reservoir_buffer);
     }
 
@@ -562,8 +584,15 @@ impl Renderer {
             // reset the debug line count
             transfer.fill_buffer(self.debug.buffer.at(4), 4, 0);
             transfer.fill_buffer(self.debug.buffer.at(20), 4, 1);
+            // copy the previous frame variance
+            transfer.copy_buffer_to_buffer(
+                self.debug.buffer.at(32),
+                self.debug.variance_buffer.into(),
+                mem::size_of::<DebugVariance>() as u64,
+            );
         } else {
-            transfer.fill_buffer(self.debug.buffer.at(20), 4, 0);
+            // reset the open bit, variance accumulator
+            transfer.fill_buffer(self.debug.buffer.at(20), 12 + 32, 0);
         }
         if self.are_reservoirs_dirty {
             self.are_reservoirs_dirty = false;
@@ -680,5 +709,20 @@ impl Renderer {
             );
             pc.draw_indirect(self.debug.buffer.at(0));
         }
+    }
+
+    pub fn read_debug_std_deviation(&self) -> Option<mint::Vector3<f32>> {
+        let dv = unsafe { &*(self.debug.variance_buffer.data() as *const DebugVariance) };
+        if dv.count == 0 {
+            return None;
+        }
+        let sum_avg = glam::Vec3::from(dv.color_sum) / (dv.count as f32);
+        let sum2_avg = glam::Vec3::from(dv.color2_sum) / (dv.count as f32);
+        let variance = sum2_avg - sum_avg * sum_avg;
+        Some(mint::Vector3 {
+            x: variance.x.sqrt(),
+            y: variance.y.sqrt(),
+            z: variance.z.sqrt(),
+        })
     }
 }
