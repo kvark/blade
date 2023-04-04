@@ -14,7 +14,7 @@ struct Example {
     camera: blade_render::Camera,
     debug_mode: blade_render::DebugMode,
     ray_config: blade_render::RayConfig,
-    mouse_pos: Option<[i32; 2]>,
+    debug_mouse_pos: Option<glam::IVec2>,
 }
 
 impl Example {
@@ -74,7 +74,7 @@ impl Example {
                 num_environment_samples: 1,
                 temporal_history: 10,
             },
-            mouse_pos: None,
+            debug_mouse_pos: None,
         }
     }
 
@@ -108,13 +108,13 @@ impl Example {
             &mut self.command_encoder,
             &self.context,
             &mut temp_buffers,
-            self.mouse_pos.is_some(),
+            self.debug_mouse_pos.is_some(),
         );
         self.renderer.ray_trace(
             &mut self.command_encoder,
             &self.camera,
             self.debug_mode,
-            self.mouse_pos,
+            self.debug_mouse_pos.map(|p| p.into()),
             self.ray_config,
         );
 
@@ -176,6 +176,18 @@ impl Example {
                             ui.selectable_value(&mut self.debug_mode, value, format!("{value:?}"));
                         }
                     });
+                if self.debug_mouse_pos.is_some() {
+                    let sd = self
+                        .renderer
+                        .read_debug_std_deviation()
+                        .unwrap_or([0.0; 3].into());
+                    ui.horizontal(|ui| {
+                        ui.label("Std Deviation:");
+                        ui.label(format!("{:.2}", sd.x));
+                        ui.label(format!("{:.2}", sd.y));
+                        ui.label(format!("{:.2}", sd.z));
+                    });
+                }
             });
         egui::CollapsingHeader::new("Ray Trace")
             .default_open(true)
@@ -230,11 +242,12 @@ fn main() {
     let mut example = Example::new(&window, &path_to_scene, camera);
 
     struct Drag {
-        screen_pos: Option<winit::dpi::PhysicalPosition<f64>>,
+        screen_pos: glam::IVec2,
         rotation: glam::Quat,
     }
     let mut drag_start = None;
     let mut last_event = time::Instant::now();
+    let mut last_mouse_pos = glam::IVec2::new(0, 0);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = winit::event_loop::ControlFlow::Poll;
@@ -306,7 +319,7 @@ fn main() {
                     } => {
                         drag_start = match state {
                             winit::event::ElementState::Pressed => Some(Drag {
-                                screen_pos: None,
+                                screen_pos: last_mouse_pos,
                                 rotation: example.camera.rot.into(),
                             }),
                             winit::event::ElementState::Released => None,
@@ -317,27 +330,24 @@ fn main() {
                         button: winit::event::MouseButton::Left,
                         ..
                     } => {
-                        example.mouse_pos = match state {
-                            winit::event::ElementState::Pressed => Some([0; 2]),
+                        example.debug_mouse_pos = match state {
+                            winit::event::ElementState::Pressed => Some(last_mouse_pos),
                             winit::event::ElementState::Released => None,
                         };
                     }
                     winit::event::WindowEvent::CursorMoved { position, .. } => {
+                        last_mouse_pos = glam::IVec2::new(position.x as i32, position.y as i32);
                         if let Some(ref mut drag) = drag_start {
-                            if let Some(ref screen_pos) = drag.screen_pos {
-                                let qx = glam::Quat::from_rotation_y(
-                                    (position.x - screen_pos.x) as f32 * rotate_speed,
-                                );
-                                let qy = glam::Quat::from_rotation_x(
-                                    (position.y - screen_pos.y) as f32 * rotate_speed,
-                                );
-                                example.camera.rot = (qx * drag.rotation * qy).into();
-                            } else {
-                                drag.screen_pos = Some(position);
-                            }
+                            let qx = glam::Quat::from_rotation_y(
+                                (last_mouse_pos.x - drag.screen_pos.x) as f32 * rotate_speed,
+                            );
+                            let qy = glam::Quat::from_rotation_x(
+                                (last_mouse_pos.y - drag.screen_pos.y) as f32 * rotate_speed,
+                            );
+                            example.camera.rot = (qx * drag.rotation * qy).into();
                         }
-                        if let Some(ref mut pos) = example.mouse_pos {
-                            *pos = [position.x as i32, position.y as i32];
+                        if let Some(ref mut pos) = example.debug_mouse_pos {
+                            *pos = last_mouse_pos;
                         }
                     }
                     _ => {}

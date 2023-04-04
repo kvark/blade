@@ -74,6 +74,11 @@ struct DebugLine {
     a: DebugPoint,
     b: DebugPoint,
 }
+struct DebugVariance {
+    color_sum: vec3<f32>,
+    color2_sum: vec3<f32>,
+    count: u32,
+}
 struct DebugBuffer {
     vertex_count: u32,
     instance_count: atomic<u32>,
@@ -81,6 +86,7 @@ struct DebugBuffer {
     first_instance: u32,
     capacity: u32,
     open: u32,
+    variance: DebugVariance,
     lines: array<DebugLine>,
 }
 var<storage, read_write> debug_buf: DebugBuffer;
@@ -455,6 +461,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     surface.basis = normalize(textureLoad(in_basis, global_id.xy, 0));
     surface.albedo = textureLoad(in_albedo, global_id.xy, 0).xyz;
     let color = compute_restir(ray_dir, depth, surface, global_index, &rng);
+    if (all(global_id.xy == camera.mouse_pos)) {
+        debug_buf.variance.color_sum += color;
+        debug_buf.variance.color2_sum += color * color;
+        debug_buf.variance.count += 1u;
+    }
     textureStore(output, global_id.xy, vec4<f32>(color, 1.0));
 }
 
