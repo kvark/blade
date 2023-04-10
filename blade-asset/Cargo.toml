@@ -1,0 +1,14 @@
+[package]
+name = "blade-asset"
+version = "0.1.0"
+edition = "2021"
+description = "Asset manager for Blade"
+keywords = ["asset"]
+license = "MIT"
+repository = "https://github.com/kvark/blade"
+
+[lib]
+
+[dependencies]
+choir = { version = "0.5", git = "https://github.com/kvark/choir" }
+log = { workspace = true }
