@@ -84,6 +84,16 @@ impl<T: Default> Arena<T> {
         }
         Handle(address, PhantomData)
     }
+
+    pub fn alloc_default(&self) -> (Handle<T>, *mut T) {
+        let handle = self.alloc(T::default());
+        (handle, self.get_mut_ptr(handle))
+    }
+
+    pub fn get_mut_ptr(&self, handle: Handle<T>) -> *mut T {
+        let first_ptr = &self.chunks[handle.0.chunk.get() as usize].load(Ordering::Acquire);
+        unsafe { first_ptr.add(handle.0.index as usize) }
+    }
 }
 
 impl<T> Drop for FreeManager<T> {

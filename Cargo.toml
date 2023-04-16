@@ -35,6 +35,7 @@ readme = "docs/README.md"
 [features]
 
 [dependencies]
+blade-asset = { version = "0.1.0", path = "blade-asset" }
 blade-macros = { version = "0.2.0", path = "blade-macros" }
 blade-graphics = { version = "0.2.0", path = "blade-graphics" }
 blade-render = { version = "0.1.0", path = "blade-render" }
