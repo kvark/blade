@@ -35,7 +35,7 @@ naga = { workspace = true, features = ["spv-out"] }
 slab = "0.4"
 
 [target.'cfg(any(gles, target_arch = "wasm32"))'.dependencies]
-glow = { git = "https://github.com/kvark/glow", branch = "get-program-resource" }
+glow = { git = "https://github.com/grovesNL/glow", rev = "ee22f3e920e0ccd1752a9ecb80f86a495ca48708" }
 naga = { workspace = true, features = ["glsl-out"] }
 
 [target.'cfg(all(gles, not(target_arch = "wasm32")))'.dependencies]
