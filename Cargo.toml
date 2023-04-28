@@ -16,7 +16,7 @@ egui = "0.20"
 glam = { version = "0.23", features = ["mint"] }
 log = "0.4"
 mint = "0.5"
-naga = { git = "https://github.com/kvark/naga", branch = "storage-array", features = ["wgsl-in", "span", "validate"] }
+naga = { git = "https://github.com/gfx-rs/naga", rev = "9befaed7e985fb9a23322e9f19baf2a95bfd8b9c", features = ["wgsl-in", "span", "validate"] }
 web-sys = "0.3.60"
 
 [lib]
