@@ -1,11 +1,16 @@
 use std::{
     collections::hash_map::{DefaultHasher, Entry, HashMap},
-    fs, ops,
+    fs,
+    io::Read,
+    ops,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 mod arena;
+mod flat;
+
+pub use flat::{round_up, Flat};
 
 type Version = u32;
 
@@ -35,7 +40,7 @@ struct Slot<T> {
 
 pub trait Baker: Send + Sync + 'static {
     type Meal: Default + Send;
-    fn cook(&self, input: &[u8]) -> Box<[u8]>;
+    fn cook(&self, input: impl Read, path: &Path) -> Box<[u8]>;
     fn serve(&self, cooked: &[u8]) -> Self::Meal;
 }
 
@@ -123,8 +128,8 @@ impl<B: Baker> AssetManager<B> {
                 .choir
                 .spawn(&format!("cook {}", relative_path.display()))
                 .init(move |_| {
-                    let source = fs::read(source_path).unwrap();
-                    let dish = baker.cook(&source);
+                    let source = fs::File::open(&source_path).unwrap();
+                    let dish = baker.cook(&source, &source_path);
                     fs::write(target_path, &dish).unwrap();
                 });
             load_task.depend_on(&bake_task);
