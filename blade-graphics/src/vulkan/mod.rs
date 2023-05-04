@@ -433,6 +433,16 @@ fn map_texture_format(format: crate::TextureFormat) -> vk::Format {
         Tf::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
         Tf::R32Float => vk::Format::R32_SFLOAT,
         Tf::Depth32Float => vk::Format::D32_SFLOAT,
+        Tf::Bc1Unorm => vk::Format::BC1_RGBA_SRGB_BLOCK,
+        Tf::Bc1UnormSrgb => vk::Format::BC1_RGBA_UNORM_BLOCK,
+        Tf::Bc2Unorm => vk::Format::BC2_UNORM_BLOCK,
+        Tf::Bc2UnormSrgb => vk::Format::BC2_SRGB_BLOCK,
+        Tf::Bc3Unorm => vk::Format::BC3_UNORM_BLOCK,
+        Tf::Bc3UnormSrgb => vk::Format::BC3_SRGB_BLOCK,
+        Tf::Bc4Unorm => vk::Format::BC4_UNORM_BLOCK,
+        Tf::Bc4Snorm => vk::Format::BC4_SNORM_BLOCK,
+        Tf::Bc5Unorm => vk::Format::BC5_UNORM_BLOCK,
+        Tf::Bc5Snorm => vk::Format::BC5_SNORM_BLOCK,
     }
 }
 

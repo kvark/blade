@@ -6,7 +6,7 @@ struct LoadContext<'a> {
     gpu: &'a blade::Context,
     encoder: blade::TransferCommandEncoder<'a>,
     temp_buffers: Vec<blade::Buffer>,
-    scene: &'a mut super::Scene,
+    scene: &'a mut crate::Scene,
 }
 
 impl LoadContext<'_> {
@@ -21,7 +21,7 @@ impl LoadContext<'_> {
                 z: transform.z_axis.truncate().into(),
                 w: transform.w_axis.truncate().into(),
             };
-            let mut object = super::Object {
+            let mut object = crate::Object {
                 name: g_node.name().map_or(String::new(), str::to_string),
                 geometries: Vec::new(),
                 transform: mint::RowMatrix3x4::from(col_matrix).into(),
@@ -44,7 +44,7 @@ impl LoadContext<'_> {
                     }
                 };
 
-                let mut geometry = super::Geometry {
+                let mut geometry = crate::Geometry {
                     vertex_buf: blade::Buffer::default(),
                     vertex_count: 0,
                     index_buf: blade::Buffer::default(),
@@ -53,7 +53,7 @@ impl LoadContext<'_> {
                     material_index,
                 };
                 let vertex_count = g_primitive.get(&gltf::Semantic::Positions).unwrap().count();
-                let vertex_buf_size = mem::size_of::<super::Vertex>() * vertex_count;
+                let vertex_buf_size = mem::size_of::<crate::Vertex>() * vertex_count;
                 geometry.vertex_count = vertex_count as u32;
                 geometry.vertex_buf = self.gpu.create_buffer(blade::BufferDesc {
                     name: "vertex",
@@ -87,13 +87,13 @@ impl LoadContext<'_> {
                 }
                 for (i, pos) in reader.read_positions().unwrap().enumerate() {
                     unsafe {
-                        (*(staging_buf.data() as *mut super::Vertex).add(i)).position = pos;
+                        (*(staging_buf.data() as *mut crate::Vertex).add(i)).position = pos;
                     }
                 }
                 if let Some(iter) = reader.read_tex_coords(0) {
                     for (i, tc) in iter.into_f32().enumerate() {
                         unsafe {
-                            (*(staging_buf.data() as *mut super::Vertex).add(i)).tex_coords = tc;
+                            (*(staging_buf.data() as *mut crate::Vertex).add(i)).tex_coords = tc;
                         }
                     }
                 }
@@ -105,7 +105,7 @@ impl LoadContext<'_> {
                             (normal[1] * i16::MAX as f32) as i16,
                         ];
                         unsafe {
-                            (*(staging_buf.data() as *mut super::Vertex).add(i)).normal = nu;
+                            (*(staging_buf.data() as *mut crate::Vertex).add(i)).normal = nu;
                         }
                     }
                 }
@@ -143,14 +143,14 @@ impl LoadContext<'_> {
     }
 }
 
-impl super::Scene {
+impl crate::Scene {
     pub fn load_gltf(
         path: &Path,
         encoder: &mut blade::CommandEncoder,
         gpu: &blade::Context,
     ) -> (Self, Vec<blade::Buffer>) {
         let (doc, buffers, images) = gltf::import(path).unwrap();
-        let mut scene = super::Scene::default();
+        let mut scene = crate::Scene::default();
         let g_scene = doc.scenes().next().unwrap();
         let mut temp_buffers = Vec::new();
 
@@ -210,12 +210,12 @@ impl super::Scene {
                 size,
             );
             temp_buffers.push(staging);
-            scene.textures.push(super::Texture { texture, view });
+            scene.textures.push(crate::Texture { texture, view });
         }
 
         for g_material in doc.materials() {
             let pbr = g_material.pbr_metallic_roughness();
-            scene.materials.push(super::Material {
+            scene.materials.push(crate::Material {
                 base_color_texture_index: match pbr.base_color_texture() {
                     Some(info) => info.texture().index(),
                     None => !0,

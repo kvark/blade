@@ -1,11 +1,12 @@
 #![allow(irrefutable_let_patterns)]
 
 #[cfg(not(target_arch = "wasm32"))]
-mod gltf_loader;
+mod model;
 #[cfg(not(target_arch = "wasm32"))]
 mod renderer;
 #[cfg(not(target_arch = "wasm32"))]
 mod scene;
+mod texture;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use renderer::*;

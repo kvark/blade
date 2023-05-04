@@ -192,13 +192,26 @@ impl From<Texture> for TexturePiece {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
 pub enum TextureFormat {
+    // color
     Rgba8Unorm,
     Rgba8UnormSrgb,
     Bgra8UnormSrgb,
     Rgba8Snorm,
     Rgba16Float,
     R32Float,
+    // depth and stencil
     Depth32Float,
+    // S3TC block compression
+    Bc1Unorm,
+    Bc1UnormSrgb,
+    Bc2Unorm,
+    Bc2UnormSrgb,
+    Bc3Unorm,
+    Bc3UnormSrgb,
+    Bc4Unorm,
+    Bc4Snorm,
+    Bc5Unorm,
+    Bc5Snorm,
 }
 
 #[derive(Clone, Copy, Debug)]

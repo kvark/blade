@@ -12,5 +12,5 @@ repository = "https://github.com/kvark/blade"
 [dependencies]
 base64 = "0.21"
 bytemuck = { workspace = true }
-choir = { version = "0.5", git = "https://github.com/kvark/choir" }
+choir = { workspace = true }
 log = { workspace = true }
