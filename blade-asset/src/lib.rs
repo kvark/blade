@@ -1,7 +1,7 @@
 use std::{
     collections::hash_map::{DefaultHasher, Entry, HashMap},
-    fs,
-    io::Read,
+    fmt, fs,
+    hash::Hash,
     ops,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -39,23 +39,30 @@ struct Slot<T> {
 }
 
 pub trait Baker: Send + Sync + 'static {
-    type Meal: Default + Send;
-    fn cook(&self, input: impl Read, path: &Path) -> Box<[u8]>;
-    fn serve(&self, cooked: &[u8]) -> Self::Meal;
+    type Meta: Clone + Eq + fmt::Debug + Hash + Send;
+    type Output: Default + Send;
+    fn cook(
+        &self,
+        src_path: &Path,
+        meta: Self::Meta,
+        dst_path: &Path,
+        exe_context: choir::ExecutionContext,
+    );
+    fn serve(&self, data: &[u8]) -> Self::Output;
 }
 
 pub struct AssetManager<B: Baker> {
     root: PathBuf,
     target: PathBuf,
-    slots: arena::Arena<Slot<B::Meal>>,
-    paths: Mutex<HashMap<PathBuf, Handle<B::Meal>>>,
+    slots: arena::Arena<Slot<B::Output>>,
+    paths: Mutex<HashMap<(PathBuf, B::Meta), Handle<B::Output>>>,
     choir: Arc<choir::Choir>,
     baker: Arc<B>,
 }
 
-impl<B: Baker> ops::Index<Handle<B::Meal>> for AssetManager<B> {
-    type Output = B::Meal;
-    fn index(&self, handle: Handle<B::Meal>) -> &Self::Output {
+impl<B: Baker> ops::Index<Handle<B::Output>> for AssetManager<B> {
+    type Output = B::Output;
+    fn index(&self, handle: Handle<B::Output>) -> &Self::Output {
         let slot = &self.slots[handle.inner];
         assert_eq!(handle.version, slot.version);
         &slot.data
@@ -78,9 +85,9 @@ impl<B: Baker> AssetManager<B> {
         }
     }
 
-    fn create(&self, relative_path: &Path) -> Handle<B::Meal> {
+    fn create(&self, relative_path: &Path, meta: B::Meta) -> Handle<B::Output> {
         use base64::engine::{general_purpose::URL_SAFE as ENCODING_ENGINE, Engine as _};
-        use std::hash::{Hash as _, Hasher as _};
+        use std::hash::Hasher as _;
 
         let source_path = self.root.join(relative_path);
         let metadata = fs::metadata(&source_path).unwrap();
@@ -109,7 +116,7 @@ impl<B: Baker> AssetManager<B> {
             let baker = Arc::clone(&self.baker);
             let target_path = target_path.clone();
             self.choir
-                .spawn(&format!("load {}", relative_path.display()))
+                .spawn(&format!("load {} with {:?}", relative_path.display(), meta))
                 .init(move |_| {
                     let cooked = fs::read(target_path).unwrap();
                     let target = baker.serve(&cooked);
@@ -122,17 +129,14 @@ impl<B: Baker> AssetManager<B> {
         };
 
         if !target_path.is_file() {
-            log::info!("Cooking {}", relative_path.display());
             let baker = Arc::clone(&self.baker);
-            let bake_task = self
+            let cook_task = self
                 .choir
-                .spawn(&format!("cook {}", relative_path.display()))
-                .init(move |_| {
-                    let source = fs::File::open(&source_path).unwrap();
-                    let dish = baker.cook(&source, &source_path);
-                    fs::write(target_path, &dish).unwrap();
+                .spawn(&format!("cook {} with {:?}", relative_path.display(), meta))
+                .init(move |exe_context| {
+                    baker.cook(&source_path, meta, &target_path, exe_context);
                 });
-            load_task.depend_on(&bake_task);
+            load_task.depend_on(&cook_task);
         };
 
         *task_option = Some(load_task.run());
@@ -142,12 +146,12 @@ impl<B: Baker> AssetManager<B> {
         }
     }
 
-    pub fn load(&self, path: &Path) -> (Handle<B::Meal>, &choir::RunningTask) {
+    pub fn load(&self, path: &Path, meta: B::Meta) -> (Handle<B::Output>, &choir::RunningTask) {
         let mut paths = self.paths.lock().unwrap();
-        let handle = match paths.entry(path.to_path_buf()) {
+        let handle = match paths.entry((path.to_path_buf(), meta)) {
             Entry::Occupied(e) => *e.get(),
             Entry::Vacant(e) => {
-                let handle = self.create(e.key());
+                let handle = self.create(&e.key().0, e.key().1.clone());
                 *e.insert(handle)
             }
         };

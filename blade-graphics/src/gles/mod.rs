@@ -455,6 +455,16 @@ fn describe_texture_format(format: crate::TextureFormat) -> FormatInfo {
         Tf::Rgba16Float => (glow::RGBA16F, glow::RGBA, glow::FLOAT),
         Tf::R32Float => (glow::R32F, glow::RED, glow::FLOAT),
         Tf::Depth32Float => (glow::DEPTH_COMPONENT32F, glow::DEPTH_COMPONENT, glow::FLOAT),
+        Tf::Bc1Unorm => (glow::COMPRESSED_RGBA_S3TC_DXT1_EXT, glow::RGBA, 0),
+        Tf::Bc1UnormSrgb => (glow::COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT, glow::RGBA, 0),
+        Tf::Bc2Unorm => (glow::COMPRESSED_RGBA_S3TC_DXT3_EXT, glow::RGBA, 0),
+        Tf::Bc2UnormSrgb => (glow::COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT, glow::RGBA, 0),
+        Tf::Bc3Unorm => (glow::COMPRESSED_RGBA_S3TC_DXT5_EXT, glow::RGBA, 0),
+        Tf::Bc3UnormSrgb => (glow::COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT, glow::RGBA, 0),
+        Tf::Bc4Unorm => (glow::COMPRESSED_RED_RGTC1, glow::RED, 0),
+        Tf::Bc4Snorm => (glow::COMPRESSED_SIGNED_RED_RGTC1, glow::RED, 0),
+        Tf::Bc5Unorm => (glow::COMPRESSED_RG_RGTC2, glow::RG, 0),
+        Tf::Bc5Snorm => (glow::COMPRESSED_SIGNED_RG_RGTC2, glow::RG, 0),
     };
     FormatInfo {
         internal,

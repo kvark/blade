@@ -49,6 +49,12 @@ impl super::TextureFormat {
                 size,
             }
         }
+        fn cx_bc(size: u8) -> super::TexelBlockInfo {
+            super::TexelBlockInfo {
+                dimensions: (4, 4),
+                size,
+            }
+        }
         match *self {
             Self::Rgba8Unorm => uncompressed(4),
             Self::Rgba8UnormSrgb => uncompressed(4),
@@ -57,6 +63,16 @@ impl super::TextureFormat {
             Self::Rgba16Float => uncompressed(8),
             Self::R32Float => uncompressed(4),
             Self::Depth32Float => uncompressed(4),
+            Self::Bc1Unorm => cx_bc(8),
+            Self::Bc1UnormSrgb => cx_bc(8),
+            Self::Bc2Unorm => cx_bc(16),
+            Self::Bc2UnormSrgb => cx_bc(16),
+            Self::Bc3Unorm => cx_bc(16),
+            Self::Bc3UnormSrgb => cx_bc(16),
+            Self::Bc4Unorm => cx_bc(8),
+            Self::Bc4Snorm => cx_bc(8),
+            Self::Bc5Unorm => cx_bc(16),
+            Self::Bc5Snorm => cx_bc(16),
         }
     }
 

@@ -1,14 +1,20 @@
 use std::{
-    fmt,
-    io::Read,
+    fmt, fs,
     path::{Path, PathBuf},
 };
 
 struct Baker;
 impl blade_asset::Baker for Baker {
-    type Meal = usize;
-    fn cook(&self, _input: impl Read, _path: &Path) -> Box<[u8]> {
-        (0..1).map(|_| 2u8).collect()
+    type Meta = ();
+    type Output = usize;
+    fn cook(
+        &self,
+        _src_path: &Path,
+        _meta: (),
+        dst_path: &Path,
+        _exe_context: choir::ExecutionContext,
+    ) {
+        fs::write(dst_path, &[1, 2, 3]).unwrap();
     }
     fn serve(&self, cooked: &[u8]) -> usize {
         cooked.len()
@@ -21,9 +27,9 @@ fn test_asset() {
     let _w1 = choir.add_worker("main");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let am = blade_asset::AssetManager::<Baker>::new(&root, &root.join("cooked"), &choir, Baker);
-    let (handle, task) = am.load(Path::new("Cargo.toml"));
+    let (handle, task) = am.load(Path::new("Cargo.toml"), ());
     task.clone().join();
-    assert_eq!(am[handle], 1);
+    assert_eq!(am[handle], 3);
 }
 
 fn flat_roundtrip<F: blade_asset::Flat + PartialEq + fmt::Debug>(data: F) {
