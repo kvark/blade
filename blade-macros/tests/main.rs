@@ -32,3 +32,27 @@ fn test_flat_struct() {
     let other = unsafe { Flat::read(vec.as_ptr()) };
     assert_eq!(data, other);
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
+#[non_exhaustive]
+enum Foo {
+    #[allow(dead_code)]
+    A,
+    B,
+}
+
+#[derive(blade_macros::Flat, Clone, Copy, Debug, PartialEq)]
+#[repr(transparent)]
+struct FooWrap(Foo);
+
+#[test]
+fn test_flat_wrap() {
+    use blade_asset::Flat;
+
+    let foo = FooWrap(Foo::B);
+    let mut vec = vec![0u8; foo.size()];
+    unsafe { foo.write(vec.as_mut_ptr()) };
+    let other = unsafe { Flat::read(vec.as_ptr()) };
+    assert_eq!(foo, other);
+}

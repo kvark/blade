@@ -28,19 +28,28 @@ impl<T> Clone for Handle<T> {
 }
 impl<T> Copy for Handle<T> {}
 
-struct DataRef<T>(*mut T, *mut Version);
+struct DataRef<T>(*mut Option<T>, *mut Version);
 unsafe impl<T> Send for DataRef<T> {}
 
-#[derive(Default)]
 struct Slot<T> {
     load_task: Option<choir::RunningTask>,
     version: Version,
-    data: T,
+    data: Option<T>,
+}
+
+impl<T> Default for Slot<T> {
+    fn default() -> Self {
+        Self {
+            load_task: None,
+            version: 0,
+            data: None,
+        }
+    }
 }
 
 pub trait Baker: Send + Sync + 'static {
     type Meta: Clone + Eq + fmt::Debug + Hash + Send;
-    type Output: Default + Send;
+    type Output: Send;
     fn cook(
         &self,
         src_path: &Path,
@@ -65,7 +74,7 @@ impl<B: Baker> ops::Index<Handle<B::Output>> for AssetManager<B> {
     fn index(&self, handle: Handle<B::Output>) -> &Self::Output {
         let slot = &self.slots[handle.inner];
         assert_eq!(handle.version, slot.version);
-        &slot.data
+        slot.data.as_ref().unwrap()
     }
 }
 
@@ -122,7 +131,7 @@ impl<B: Baker> AssetManager<B> {
                     let target = baker.serve(&cooked);
                     let dr = data_ref;
                     unsafe {
-                        *dr.0 = target;
+                        *dr.0 = Some(target);
                         *dr.1 = version;
                     }
                 })
