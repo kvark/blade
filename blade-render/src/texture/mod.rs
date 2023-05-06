@@ -1,9 +1,15 @@
 use blade_asset::Flat as _;
-use std::{fs, io, path::Path};
+use std::{fs, io, path::Path, str, sync::Arc};
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, blade_macros::Flat)]
+struct TextureFormatWrap(blade::TextureFormat);
 
 #[derive(blade_macros::Flat)]
 struct Image<'a> {
-    extent: [u32; 2],
+    name: &'a [u8],
+    extent: [u32; 3],
+    format: TextureFormatWrap,
     data: &'a [u8],
 }
 
@@ -66,10 +72,17 @@ impl RawImage {
     }
 }
 
-pub struct Baker;
+pub struct Texture {
+    gpu: blade::Texture,
+}
+
+pub struct Baker {
+    gpu: Arc<blade::Context>,
+}
+
 impl blade_asset::Baker for Baker {
     type Meta = Meta;
-    type Output = usize;
+    type Output = Texture;
     fn cook(
         &self,
         src_path: &Path,
@@ -87,6 +100,7 @@ impl blade_asset::Baker for Baker {
             other => panic!("Unsupported destination format {:?}", other),
         };
 
+        let file_name = src_path.file_name().unwrap().to_str().unwrap();
         let input = fs::File::open(src_path).unwrap();
         match src_path.extension().unwrap().to_str().unwrap() {
             #[cfg(feature = "asset")]
@@ -98,7 +112,9 @@ impl blade_asset::Baker for Baker {
                 dst_format.compress(&src.data, src.width, src.height, params, &mut buf);
 
                 let image = Image {
-                    extent: [src.width as u32, src.height as u32],
+                    name: file_name.as_bytes(),
+                    extent: [src.width as u32, src.height as u32, 1],
+                    format: TextureFormatWrap(meta.format),
                     data: &buf,
                 };
                 let mut dst_raw = vec![0u8; image.size()];
@@ -108,7 +124,22 @@ impl blade_asset::Baker for Baker {
             other => panic!("Unknown texture extension: {}", other),
         }
     }
-    fn serve(&self, _cooked: &[u8]) -> Self::Output {
-        unimplemented!()
+
+    fn serve(&self, cooked: &[u8]) -> Self::Output {
+        let image = unsafe { Image::read(cooked.as_ptr()) };
+        let texture = self.gpu.create_texture(blade::TextureDesc {
+            name: str::from_utf8(image.name).unwrap(),
+            format: image.format.0,
+            size: blade::Extent {
+                width: image.extent[0],
+                height: image.extent[1],
+                depth: image.extent[2],
+            },
+            array_layer_count: 1,
+            mip_level_count: 1, // TODO
+            dimension: blade::TextureDimension::D2,
+            usage: blade::TextureUsage::COPY | blade::TextureUsage::RESOURCE,
+        });
+        Texture { gpu: texture }
     }
 }

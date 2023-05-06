@@ -6,7 +6,6 @@ members = [
     "blade-graphics",
     "blade-macros",
     "blade-render",
-    "run-wasm",
 ]
 exclude = []
 

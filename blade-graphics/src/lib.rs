@@ -250,6 +250,7 @@ pub enum ViewDimension {
     D3,
 }
 
+#[repr(C)]
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub struct Extent {
     pub width: u32,
