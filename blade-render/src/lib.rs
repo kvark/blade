@@ -1,13 +1,18 @@
 #![allow(irrefutable_let_patterns)]
 
 #[cfg(not(target_arch = "wasm32"))]
+mod asset_hub;
+#[cfg(not(target_arch = "wasm32"))]
 mod model;
 #[cfg(not(target_arch = "wasm32"))]
 mod renderer;
 #[cfg(not(target_arch = "wasm32"))]
 mod scene;
+#[cfg(not(target_arch = "wasm32"))]
 mod texture;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use asset_hub::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use renderer::*;
 

@@ -18,6 +18,9 @@ struct Surface {
     format: crate::TextureFormat,
 }
 
+unsafe impl Send for Surface {}
+unsafe impl Sync for Surface {}
+
 pub struct Frame {
     drawable: metal::MetalDrawable,
     texture: metal::Texture,
@@ -54,6 +57,9 @@ pub struct Buffer {
     raw: *mut metal::MTLBuffer,
 }
 
+unsafe impl Send for Buffer {}
+unsafe impl Sync for Buffer {}
+
 impl Default for Buffer {
     fn default() -> Self {
         Self {
@@ -77,6 +83,9 @@ pub struct Texture {
     raw: *mut metal::MTLTexture,
 }
 
+unsafe impl Send for Texture {}
+unsafe impl Sync for Texture {}
+
 impl Default for Texture {
     fn default() -> Self {
         Self {
@@ -95,6 +104,9 @@ impl Texture {
 pub struct TextureView {
     raw: *mut metal::MTLTexture,
 }
+
+unsafe impl Send for TextureView {}
+unsafe impl Sync for TextureView {}
 
 impl Default for TextureView {
     fn default() -> Self {
@@ -115,6 +127,9 @@ pub struct Sampler {
     raw: *mut metal::MTLSamplerState,
 }
 
+unsafe impl Send for Sampler {}
+unsafe impl Sync for Sampler {}
+
 impl Default for Sampler {
     fn default() -> Self {
         Self {
@@ -133,6 +148,9 @@ impl Sampler {
 pub struct AccelerationStructure {
     raw: *mut metal::MTLAccelerationStructure,
 }
+
+unsafe impl Send for AccelerationStructure {}
+unsafe impl Sync for AccelerationStructure {}
 
 impl Default for AccelerationStructure {
     fn default() -> Self {

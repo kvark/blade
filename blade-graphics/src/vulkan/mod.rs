@@ -121,6 +121,9 @@ impl Buffer {
     }
 }
 
+unsafe impl Send for Buffer {}
+unsafe impl Sync for Buffer {}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct BlockInfo {
     bytes: u8,

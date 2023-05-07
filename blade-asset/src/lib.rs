@@ -61,12 +61,12 @@ pub trait Baker: Send + Sync + 'static {
 }
 
 pub struct AssetManager<B: Baker> {
-    root: PathBuf,
+    pub root: PathBuf,
     target: PathBuf,
     slots: arena::Arena<Slot<B::Output>>,
     paths: Mutex<HashMap<(PathBuf, B::Meta), Handle<B::Output>>>,
     choir: Arc<choir::Choir>,
-    baker: Arc<B>,
+    pub baker: Arc<B>,
 }
 
 impl<B: Baker> ops::Index<Handle<B::Output>> for AssetManager<B> {

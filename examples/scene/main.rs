@@ -1,8 +1,8 @@
 #![allow(irrefutable_let_patterns)]
 #![cfg(not(target_arch = "wasm32"))]
 
-use blade_render::{Camera, RenderConfig, Renderer};
-use std::time;
+use blade_render::{AssetHub, Camera, RenderConfig, Renderer};
+use std::{path::Path, sync::Arc, time};
 
 struct Example {
     prev_temp_buffers: Vec<blade::Buffer>,
@@ -10,7 +10,8 @@ struct Example {
     renderer: Renderer,
     gui_painter: blade_egui::GuiPainter,
     command_encoder: blade::CommandEncoder,
-    context: blade::Context,
+    asset_hub: AssetHub,
+    context: Arc<blade::Context>,
     camera: blade_render::Camera,
     debug_mode: blade_render::DebugMode,
     ray_config: blade_render::RayConfig,
@@ -20,7 +21,7 @@ struct Example {
 impl Example {
     fn new(window: &winit::window::Window, gltf_path: &str, camera: Camera) -> Self {
         let window_size = window.inner_size();
-        let context = unsafe {
+        let context = Arc::new(unsafe {
             blade::Context::init_windowed(
                 window,
                 blade::ContextDesc {
@@ -29,7 +30,7 @@ impl Example {
                 },
             )
             .unwrap()
-        };
+        });
 
         let screen_size = blade::Extent {
             width: window_size.width,
@@ -61,12 +62,20 @@ impl Example {
         renderer.merge_scene(scene);
         let sync_point = context.submit(&mut command_encoder);
 
+        let choir = Arc::new(choir::Choir::new());
+
         Self {
             prev_temp_buffers,
             prev_sync_point: Some(sync_point),
             renderer,
             gui_painter,
             command_encoder,
+            asset_hub: AssetHub::new(
+                &Path::new("examples/scene/data"),
+                &Path::new("asset-cache"),
+                &choir,
+                &context,
+            ),
             context,
             camera,
             debug_mode: blade_render::DebugMode::None,
@@ -104,6 +113,8 @@ impl Example {
             .update_textures(&mut self.command_encoder, gui_textures, &self.context);
 
         let mut temp_buffers = Vec::new();
+        self.asset_hub
+            .flush(&mut self.command_encoder, &mut temp_buffers);
         self.renderer.prepare(
             &mut self.command_encoder,
             &self.context,

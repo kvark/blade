@@ -1,12 +1,17 @@
 use blade_asset::Flat as _;
-use std::{fs, io, path::Path, str, sync::Arc};
+use std::{
+    fs, io,
+    path::Path,
+    ptr, str,
+    sync::{Arc, Mutex},
+};
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, blade_macros::Flat)]
 struct TextureFormatWrap(blade::TextureFormat);
 
 #[derive(blade_macros::Flat)]
-struct Image<'a> {
+struct CompressedImage<'a> {
     name: &'a [u8],
     extent: [u32; 3],
     format: TextureFormatWrap,
@@ -19,14 +24,14 @@ pub struct Meta {
 }
 
 #[cfg(feature = "asset")]
-struct RawImage {
+struct PlainImage {
     width: usize,
     height: usize,
     data: Box<[u8]>,
 }
 
 #[cfg(feature = "asset")]
-impl RawImage {
+impl PlainImage {
     fn from_png(input: impl io::Read) -> Self {
         let mut decoder = png::Decoder::new(input);
         decoder.set_transformations(png::Transformations::EXPAND);
@@ -73,11 +78,44 @@ impl RawImage {
 }
 
 pub struct Texture {
-    gpu: blade::Texture,
+    _gpu: blade::Texture,
+}
+
+struct Transfer {
+    stage: blade::Buffer,
+    bytes_per_row: u32,
+    dst: blade::Texture,
+    extent: blade::Extent,
 }
 
 pub struct Baker {
-    gpu: Arc<blade::Context>,
+    gpu_context: Arc<blade::Context>,
+    pending_transfers: Mutex<Vec<Transfer>>,
+}
+
+impl Baker {
+    pub fn new(gpu_context: &Arc<blade::Context>) -> Self {
+        Self {
+            gpu_context: Arc::clone(gpu_context),
+            pending_transfers: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn flush(
+        &self,
+        encoder: &mut blade::TransferCommandEncoder,
+        temp_buffers: &mut Vec<blade::Buffer>,
+    ) {
+        for transfer in self.pending_transfers.lock().unwrap().drain(..) {
+            encoder.copy_buffer_to_texture(
+                transfer.stage.into(),
+                transfer.bytes_per_row,
+                transfer.dst.into(),
+                transfer.extent,
+            );
+            temp_buffers.push(transfer.stage);
+        }
+    }
 }
 
 impl blade_asset::Baker for Baker {
@@ -105,13 +143,13 @@ impl blade_asset::Baker for Baker {
         match src_path.extension().unwrap().to_str().unwrap() {
             #[cfg(feature = "asset")]
             "png" => {
-                let src = RawImage::from_png(input);
+                let src = PlainImage::from_png(input);
                 let dst_size = dst_format.compressed_size(src.width, src.height);
                 let mut buf = vec![0u8; dst_size];
                 let params = texpresso::Params::default();
                 dst_format.compress(&src.data, src.width, src.height, params, &mut buf);
 
-                let image = Image {
+                let image = CompressedImage {
                     name: file_name.as_bytes(),
                     extent: [src.width as u32, src.height as u32, 1],
                     format: TextureFormatWrap(meta.format),
@@ -126,20 +164,39 @@ impl blade_asset::Baker for Baker {
     }
 
     fn serve(&self, cooked: &[u8]) -> Self::Output {
-        let image = unsafe { Image::read(cooked.as_ptr()) };
-        let texture = self.gpu.create_texture(blade::TextureDesc {
-            name: str::from_utf8(image.name).unwrap(),
+        let image = unsafe { CompressedImage::read(cooked.as_ptr()) };
+        let name = str::from_utf8(image.name).unwrap();
+        let extent = blade::Extent {
+            width: image.extent[0],
+            height: image.extent[1],
+            depth: image.extent[2],
+        };
+        let texture = self.gpu_context.create_texture(blade::TextureDesc {
+            name,
             format: image.format.0,
-            size: blade::Extent {
-                width: image.extent[0],
-                height: image.extent[1],
-                depth: image.extent[2],
-            },
+            size: extent,
             array_layer_count: 1,
             mip_level_count: 1, // TODO
             dimension: blade::TextureDimension::D2,
             usage: blade::TextureUsage::COPY | blade::TextureUsage::RESOURCE,
         });
-        Texture { gpu: texture }
+        let stage = self.gpu_context.create_buffer(blade::BufferDesc {
+            name: &format!("{name}/stage"),
+            size: image.data.len() as u64,
+            memory: blade::Memory::Upload,
+        });
+        unsafe {
+            ptr::copy_nonoverlapping(image.data.as_ptr(), stage.data(), image.data.len());
+        }
+
+        let block_info = image.format.0.block_info();
+        self.pending_transfers.lock().unwrap().push(Transfer {
+            stage,
+            bytes_per_row: (image.extent[0] / block_info.dimensions.0 as u32)
+                * block_info.size as u32,
+            dst: texture,
+            extent,
+        });
+        Texture { _gpu: texture }
     }
 }

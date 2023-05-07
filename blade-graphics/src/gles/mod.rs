@@ -30,6 +30,9 @@ pub struct Buffer {
     data: *mut u8,
 }
 
+unsafe impl Send for Buffer {}
+unsafe impl Sync for Buffer {}
+
 impl Buffer {
     pub fn data(&self) -> *mut u8 {
         self.data
