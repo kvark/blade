@@ -1,10 +1,10 @@
 use std::{fmt::Debug, hash::Hash};
 pub trait ResourceDevice {
-    type Buffer: Clone + Copy + Debug + Hash + PartialEq;
-    type Texture: Clone + Copy + Debug + Hash + PartialEq;
-    type TextureView: Clone + Copy + Debug + Hash + PartialEq;
-    type Sampler: Clone + Copy + Debug + Hash + PartialEq;
-    type AccelerationStructure: Clone + Copy + Debug + Hash + PartialEq;
+    type Buffer: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
+    type Texture: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
+    type TextureView: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
+    type Sampler: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
+    type AccelerationStructure: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
 
     fn create_buffer(&self, desc: super::BufferDesc) -> Self::Buffer;
     fn sync_buffer(&self, buffer: Self::Buffer);
