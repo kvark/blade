@@ -1,20 +1,24 @@
 use std::{
-    fmt, fs,
+    fmt,
     path::{Path, PathBuf},
+    sync::Arc,
 };
+use syncell::SynCell;
 
 struct Baker;
 impl blade_asset::Baker for Baker {
     type Meta = ();
+    type Format = ();
     type Output = usize;
     fn cook(
         &self,
-        _src_path: &Path,
+        _source: &[u8],
+        _extension: &str,
         _meta: (),
-        dst_path: &Path,
+        result: Arc<SynCell<Vec<u8>>>,
         _exe_context: choir::ExecutionContext,
     ) {
-        fs::write(dst_path, &[1, 2, 3]).unwrap();
+        *result.borrow_mut() = vec![1, 2, 3];
     }
     fn serve(&self, cooked: &[u8]) -> usize {
         cooked.len()

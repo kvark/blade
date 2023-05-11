@@ -1,16 +1,18 @@
-mod gltf_loader;
+use std::sync::Arc;
 
-use std::path::Path;
+mod gltf_loader;
 
 pub struct Baker;
 impl blade_asset::Baker for Baker {
     type Meta = ();
+    type Format = ();
     type Output = usize;
     fn cook(
         &self,
-        _src_path: &Path,
+        _source: &[u8],
+        _extension: &str,
         _meta: (),
-        _dst_path: &Path,
+        _result: Arc<blade_asset::SynCell<Vec<u8>>>,
         _exe_context: choir::ExecutionContext,
     ) {
         unimplemented!()

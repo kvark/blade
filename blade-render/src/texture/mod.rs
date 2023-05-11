@@ -1,8 +1,6 @@
 use blade_asset::Flat as _;
 use std::{
-    fs, io,
-    path::Path,
-    ptr, str,
+    io, ptr, str,
     sync::{Arc, Mutex},
 };
 
@@ -11,7 +9,7 @@ use std::{
 struct TextureFormatWrap(blade::TextureFormat);
 
 #[derive(blade_macros::Flat)]
-struct CompressedImage<'a> {
+pub struct CompressedImage<'a> {
     name: &'a [u8],
     extent: [u32; 3],
     format: TextureFormatWrap,
@@ -32,8 +30,8 @@ struct PlainImage {
 
 #[cfg(feature = "asset")]
 impl PlainImage {
-    fn from_png(input: impl io::Read) -> Self {
-        let mut decoder = png::Decoder::new(input);
+    fn from_png(input: &[u8]) -> Self {
+        let mut decoder = png::Decoder::new(io::Cursor::new(input));
         decoder.set_transformations(png::Transformations::EXPAND);
 
         let mut reader = decoder
@@ -120,12 +118,14 @@ impl Baker {
 
 impl blade_asset::Baker for Baker {
     type Meta = Meta;
+    type Format = CompressedImage<'static>;
     type Output = Texture;
     fn cook(
         &self,
-        src_path: &Path,
+        source: &[u8],
+        extension: &str,
         meta: Meta,
-        dst_path: &Path,
+        result: Arc<blade_asset::SynCell<Vec<u8>>>,
         _exe_context: choir::ExecutionContext,
     ) {
         use blade::TextureFormat as Tf;
@@ -138,26 +138,24 @@ impl blade_asset::Baker for Baker {
             other => panic!("Unsupported destination format {:?}", other),
         };
 
-        let file_name = src_path.file_name().unwrap().to_str().unwrap();
-        let input = fs::File::open(src_path).unwrap();
-        match src_path.extension().unwrap().to_str().unwrap() {
+        match extension {
             #[cfg(feature = "asset")]
             "png" => {
-                let src = PlainImage::from_png(input);
+                let src = PlainImage::from_png(source);
                 let dst_size = dst_format.compressed_size(src.width, src.height);
                 let mut buf = vec![0u8; dst_size];
                 let params = texpresso::Params::default();
                 dst_format.compress(&src.data, src.width, src.height, params, &mut buf);
 
                 let image = CompressedImage {
-                    name: file_name.as_bytes(),
+                    name: &[],
                     extent: [src.width as u32, src.height as u32, 1],
                     format: TextureFormatWrap(meta.format),
                     data: &buf,
                 };
                 let mut dst_raw = vec![0u8; image.size()];
                 unsafe { image.write(dst_raw.as_mut_ptr()) };
-                fs::write(dst_path, &dst_raw).unwrap();
+                *result.borrow_mut() = dst_raw;
             }
             other => panic!("Unknown texture extension: {}", other),
         }

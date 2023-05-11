@@ -1,7 +1,9 @@
 use std::{
+    any::TypeId,
     collections::hash_map::{DefaultHasher, Entry, HashMap},
     fmt, fs,
     hash::Hash,
+    io::Read,
     ops,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -11,6 +13,7 @@ mod arena;
 mod flat;
 
 pub use flat::{round_up, Flat};
+pub use syncell::SynCell;
 
 type Version = u32;
 
@@ -49,15 +52,19 @@ impl<T> Default for Slot<T> {
 
 pub trait Baker: Send + Sync + 'static {
     type Meta: Clone + Eq + fmt::Debug + Hash + Send;
+    type Format;
     type Output: Send;
     fn cook(
         &self,
-        src_path: &Path,
+        source: &[u8],
+        extension: &str,
         meta: Self::Meta,
-        dst_path: &Path,
+        //Note: this could be expressed better. It's basically a `Future<Vec<u8>>`,
+        // which needs to be guaranteed to resolve once the dependents are reached.
+        result: Arc<SynCell<Vec<u8>>>,
         exe_context: choir::ExecutionContext,
     );
-    fn serve(&self, data: &[u8]) -> Self::Output;
+    fn serve(&self, cooked: &[u8]) -> Self::Output;
 }
 
 pub struct AssetManager<B: Baker> {
@@ -96,14 +103,14 @@ impl<B: Baker> AssetManager<B> {
 
     fn create(&self, relative_path: &Path, meta: B::Meta) -> Handle<B::Output> {
         use base64::engine::{general_purpose::URL_SAFE as ENCODING_ENGINE, Engine as _};
-        use std::hash::Hasher as _;
+        use std::{hash::Hasher as _, io::Write as _};
 
         let source_path = self.root.join(relative_path);
         let metadata = fs::metadata(&source_path).unwrap();
         assert!(metadata.is_file());
-        let mut hasher = DefaultHasher::new();
-        metadata.modified().unwrap().hash(&mut hasher);
         let target_path = {
+            let mut hasher = DefaultHasher::new();
+            metadata.modified().unwrap().hash(&mut hasher);
             let hash = hasher.finish().to_le_bytes();
             let mut file_name = format!("{}-", relative_path.display());
             ENCODING_ENGINE.encode_string(hash, &mut file_name);
@@ -120,6 +127,11 @@ impl<B: Baker> AssetManager<B> {
             )
         };
         let version = 1;
+        let expected_hash = {
+            let mut hasher = DefaultHasher::new();
+            TypeId::of::<B::Format>().hash(&mut hasher);
+            hasher.finish()
+        };
 
         let mut load_task = {
             let baker = Arc::clone(&self.baker);
@@ -127,8 +139,13 @@ impl<B: Baker> AssetManager<B> {
             self.choir
                 .spawn(&format!("load {} with {:?}", relative_path.display(), meta))
                 .init(move |_| {
-                    let cooked = fs::read(target_path).unwrap();
-                    let target = baker.serve(&cooked);
+                    let mut file = fs::File::open(target_path).unwrap();
+                    let mut bytes = [0u8; 8];
+                    file.read_exact(&mut bytes).unwrap();
+                    assert_eq!(u64::from_le_bytes(bytes), expected_hash);
+                    let mut data = Vec::new();
+                    file.read_to_end(&mut data).unwrap();
+                    let target = baker.serve(&data);
                     let dr = data_ref;
                     unsafe {
                         *dr.0 = Some(target);
@@ -137,15 +154,42 @@ impl<B: Baker> AssetManager<B> {
                 })
         };
 
-        if !target_path.is_file() {
+        let current_hash = match fs::File::open(&target_path) {
+            Ok(mut file) => {
+                let mut bytes = [0u8; 8];
+                match file.read_exact(&mut bytes) {
+                    Ok(()) => u64::from_le_bytes(bytes),
+                    Err(_) => 0,
+                }
+            }
+            Err(_) => 0,
+        };
+
+        if current_hash != expected_hash {
+            log::info!("Recooking {}", relative_path.display());
+            let result = Arc::new(SynCell::new(Vec::new()));
+            let result_finish = Arc::clone(&result);
+            let mut cook_finish_task = self
+                .choir
+                .spawn(&format!("cook finish for {}", relative_path.display()))
+                .init(move |_| {
+                    let mut file = fs::File::create(&target_path).unwrap();
+                    file.write(&expected_hash.to_le_bytes()).unwrap();
+                    file.write(&*result_finish.borrow()).unwrap();
+                });
+
             let baker = Arc::clone(&self.baker);
             let cook_task = self
                 .choir
                 .spawn(&format!("cook {} with {:?}", relative_path.display(), meta))
                 .init(move |exe_context| {
-                    baker.cook(&source_path, meta, &target_path, exe_context);
+                    let source = fs::read(&source_path).unwrap();
+                    let extension = source_path.extension().unwrap().to_str().unwrap();
+                    baker.cook(&source, extension, meta, result, exe_context);
                 });
-            load_task.depend_on(&cook_task);
+
+            cook_finish_task.depend_on(&cook_task);
+            load_task.depend_on(&cook_finish_task);
         };
 
         *task_option = Some(load_task.run());
