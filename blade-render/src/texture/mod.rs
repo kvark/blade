@@ -1,4 +1,3 @@
-use blade_asset::Flat as _;
 use std::{
     io, ptr, str,
     sync::{Arc, Mutex},
@@ -9,7 +8,7 @@ use std::{
 struct TextureFormatWrap(blade::TextureFormat);
 
 #[derive(blade_macros::Flat)]
-pub struct CompressedImage<'a> {
+pub struct CookedImage<'a> {
     name: &'a [u8],
     extent: [u32; 3],
     format: TextureFormatWrap,
@@ -118,14 +117,14 @@ impl Baker {
 
 impl blade_asset::Baker for Baker {
     type Meta = Meta;
-    type Format = CompressedImage<'static>;
+    type Data<'a> = CookedImage<'a>;
     type Output = Texture;
     fn cook(
         &self,
         source: &[u8],
         extension: &str,
         meta: Meta,
-        result: Arc<blade_asset::SynCell<Vec<u8>>>,
+        result: Arc<blade_asset::Cooked<CookedImage<'_>>>,
         _exe_context: choir::ExecutionContext,
     ) {
         use blade::TextureFormat as Tf;
@@ -147,22 +146,18 @@ impl blade_asset::Baker for Baker {
                 let params = texpresso::Params::default();
                 dst_format.compress(&src.data, src.width, src.height, params, &mut buf);
 
-                let image = CompressedImage {
+                result.put(CookedImage {
                     name: &[],
                     extent: [src.width as u32, src.height as u32, 1],
                     format: TextureFormatWrap(meta.format),
                     data: &buf,
-                };
-                let mut dst_raw = vec![0u8; image.size()];
-                unsafe { image.write(dst_raw.as_mut_ptr()) };
-                *result.borrow_mut() = dst_raw;
+                });
             }
             other => panic!("Unknown texture extension: {}", other),
         }
     }
 
-    fn serve(&self, cooked: &[u8]) -> Self::Output {
-        let image = unsafe { CompressedImage::read(cooked.as_ptr()) };
+    fn serve(&self, image: CookedImage<'_>) -> Self::Output {
         let name = str::from_utf8(image.name).unwrap();
         let extent = blade::Extent {
             width: image.extent[0],

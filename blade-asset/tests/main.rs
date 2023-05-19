@@ -3,25 +3,24 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use syncell::SynCell;
 
 struct Baker;
 impl blade_asset::Baker for Baker {
-    type Meta = ();
-    type Format = ();
+    type Meta = u32;
+    type Data<'a> = u32;
     type Output = usize;
     fn cook(
         &self,
         _source: &[u8],
         _extension: &str,
-        _meta: (),
-        result: Arc<SynCell<Vec<u8>>>,
+        meta: u32,
+        result: Arc<blade_asset::Cooked<u32>>,
         _exe_context: choir::ExecutionContext,
     ) {
-        *result.borrow_mut() = vec![1, 2, 3];
+        result.put(meta);
     }
-    fn serve(&self, cooked: &[u8]) -> usize {
-        cooked.len()
+    fn serve(&self, cooked: u32) -> usize {
+        cooked as usize
     }
 }
 
@@ -31,9 +30,10 @@ fn test_asset() {
     let _w1 = choir.add_worker("main");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let am = blade_asset::AssetManager::<Baker>::new(&root, &root.join("cooked"), &choir, Baker);
-    let (handle, task) = am.load(Path::new("Cargo.toml"), ());
+    let value = 5;
+    let (handle, task) = am.load(Path::new("Cargo.toml"), value);
     task.clone().join();
-    assert_eq!(am[handle], 3);
+    assert_eq!(am[handle], value as usize);
 }
 
 fn flat_roundtrip<F: blade_asset::Flat + PartialEq + fmt::Debug>(data: F) {
