@@ -133,18 +133,18 @@ impl blade_asset::Baker for Baker {
         _exe_context: choir::ExecutionContext,
     ) {
         use blade::TextureFormat as Tf;
-        let dst_format = match meta.format {
-            Tf::Bc1Unorm | Tf::Bc1UnormSrgb => texpresso::Format::Bc1,
-            Tf::Bc2Unorm | Tf::Bc2UnormSrgb => texpresso::Format::Bc2,
-            Tf::Bc3Unorm | Tf::Bc3UnormSrgb => texpresso::Format::Bc3,
-            Tf::Bc4Unorm | Tf::Bc4Snorm => texpresso::Format::Bc4,
-            Tf::Bc5Unorm | Tf::Bc5Snorm => texpresso::Format::Bc5,
-            other => panic!("Unsupported destination format {:?}", other),
-        };
-
         match extension {
             #[cfg(feature = "asset")]
             "png" => {
+                let dst_format = match meta.format {
+                    Tf::Bc1Unorm | Tf::Bc1UnormSrgb => texpresso::Format::Bc1,
+                    Tf::Bc2Unorm | Tf::Bc2UnormSrgb => texpresso::Format::Bc2,
+                    Tf::Bc3Unorm | Tf::Bc3UnormSrgb => texpresso::Format::Bc3,
+                    Tf::Bc4Unorm | Tf::Bc4Snorm => texpresso::Format::Bc4,
+                    Tf::Bc5Unorm | Tf::Bc5Snorm => texpresso::Format::Bc5,
+                    other => panic!("Unsupported destination format {:?}", other),
+                };
+
                 let src = PlainImage::from_png(source);
                 let dst_size = dst_format.compressed_size(src.width, src.height);
                 let mut buf = vec![0u8; dst_size];
