@@ -10,7 +10,7 @@ repository = "https://github.com/kvark/blade"
 [lib]
 
 [dependencies]
-base64 = "0.21"
+base64 = { workspace = true }
 bytemuck = { workspace = true }
 choir = { workspace = true }
 log = { workspace = true }

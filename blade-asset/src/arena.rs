@@ -1,5 +1,7 @@
 use std::{
+    hash,
     marker::PhantomData,
+    mem,
     num::NonZeroU8,
     ops, ptr,
     sync::{
@@ -22,6 +24,17 @@ impl<T> Clone for Handle<T> {
     }
 }
 impl<T> Copy for Handle<T> {}
+impl<T> PartialEq for Handle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl<T> hash::Hash for Handle<T> {
+    fn hash<H: hash::Hasher>(&self, hasher: &mut H) {
+        self.0.hash(hasher);
+        self.1.hash(hasher);
+    }
+}
 
 const MAX_CHUNKS: usize = 30;
 
@@ -30,6 +43,10 @@ struct FreeManager<T> {
     chunk_bases: Vec<*mut [T]>,
     free_list: Vec<Address>,
 }
+
+// These are safe beacuse members aren't exposed
+unsafe impl<T> Send for FreeManager<T> {}
+unsafe impl<T> Sync for FreeManager<T> {}
 
 pub struct Arena<T> {
     min_size: usize,
@@ -93,6 +110,13 @@ impl<T: Default> Arena<T> {
     pub fn get_mut_ptr(&self, handle: Handle<T>) -> *mut T {
         let first_ptr = &self.chunks[handle.0.chunk.get() as usize].load(Ordering::Acquire);
         unsafe { first_ptr.add(handle.0.index as usize) }
+    }
+
+    pub fn dealloc(&self, handle: Handle<T>) -> T {
+        let mut freeman = self.freeman.lock().unwrap();
+        freeman.free_list.push(handle.0);
+        let ptr = self.get_mut_ptr(handle);
+        unsafe { mem::take(&mut *ptr) }
     }
 }
 

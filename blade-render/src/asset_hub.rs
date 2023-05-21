@@ -2,7 +2,8 @@ use blade_asset::AssetManager;
 use std::{path::Path, sync::Arc};
 
 pub struct AssetHub {
-    pub textures: AssetManager<crate::texture::Baker>,
+    pub textures: Arc<AssetManager<crate::texture::Baker>>,
+    pub models: Arc<AssetManager<crate::model::Baker>>,
 }
 
 impl AssetHub {
@@ -13,14 +14,19 @@ impl AssetHub {
         gpu_context: &Arc<blade::Context>,
     ) -> Self {
         let _ = std::fs::create_dir_all(target);
-        Self {
-            textures: AssetManager::new(
-                root,
-                target,
-                choir,
-                crate::texture::Baker::new(gpu_context),
-            ),
-        }
+        let textures = Arc::new(AssetManager::new(
+            root,
+            target,
+            choir,
+            crate::texture::Baker::new(gpu_context),
+        ));
+        let models = Arc::new(AssetManager::new(
+            root,
+            target,
+            choir,
+            crate::model::Baker::new(gpu_context, &textures),
+        ));
+        Self { textures, models }
     }
 
     pub fn flush(
@@ -28,7 +34,12 @@ impl AssetHub {
         command_encoder: &mut blade::CommandEncoder,
         temp_buffers: &mut Vec<blade::Buffer>,
     ) {
-        let mut transfers = command_encoder.transfer();
-        self.textures.baker.flush(&mut transfers, temp_buffers);
+        self.textures.baker.flush(command_encoder, temp_buffers);
+        self.models.baker.flush(command_encoder, temp_buffers);
+    }
+
+    pub fn destroy(&mut self) {
+        self.textures.clear();
+        self.models.clear();
     }
 }

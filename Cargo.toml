@@ -10,8 +10,9 @@ members = [
 exclude = []
 
 [workspace.dependencies]
+base64 = "0.21"
 bytemuck = { version = "1", features = ["derive"] }
-choir = { version = "0.5", git = "https://github.com/kvark/choir", rev = "1625c12c0c7e4d365592c7079bc806979809a232" }
+choir = { version = "0.5", git = "https://github.com/kvark/choir", rev = "faa9661c554a31f5384ef01ec8b6cb8f3fd3bfea" }
 egui = "0.20"
 glam = { version = "0.23", features = ["mint"] }
 log = "0.4"
@@ -47,8 +48,10 @@ choir = { workspace = true }
 egui = { workspace = true }
 del-msh = "0.1"
 glam = { workspace = true }
+log = { workspace = true }
 naga = { workspace = true }
 nanorand = { version = "0.7", default-features = false, features = ["wyrand"] }
+num_cpus = "1"
 winit = "0.27"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

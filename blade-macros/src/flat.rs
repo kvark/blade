@@ -75,7 +75,7 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
                     #name: {
                         ptr = ptr.add(ptr.align_offset(#align));
                         let value = <#ty as blade_asset::Flat>::read(ptr);
-                        ptr = ptr.add(blade_asset::Flat::size(&value));
+                        ptr = ptr.add(value.size());
                         value
                     },
                 });

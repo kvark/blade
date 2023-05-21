@@ -19,9 +19,10 @@ impl blade_asset::Baker for Baker {
     ) {
         result.put(meta);
     }
-    fn serve(&self, cooked: u32) -> usize {
+    fn serve(&self, cooked: u32, _exe_context: choir::ExecutionContext) -> usize {
         cooked as usize
     }
+    fn delete(&self, _output: usize) {}
 }
 
 #[test]
@@ -47,4 +48,5 @@ fn flat_roundtrip<F: blade_asset::Flat + PartialEq + fmt::Debug>(data: F) {
 fn test_flatten() {
     flat_roundtrip([0u32, 1u32, 2u32]);
     flat_roundtrip(&[2u32, 4u32, 6u32][..]);
+    flat_roundtrip(vec![1u32, 2, 3]);
 }

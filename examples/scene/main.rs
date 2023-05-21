@@ -15,11 +15,13 @@ struct Example {
     camera: blade_render::Camera,
     debug_mode: blade_render::DebugMode,
     ray_config: blade_render::RayConfig,
+    workers: Vec<choir::WorkerHandle>,
     debug_mouse_pos: Option<glam::IVec2>,
 }
 
 impl Example {
     fn new(window: &winit::window::Window, gltf_path: &str, camera: Camera) -> Self {
+        log::info!("Initializing");
         let window_size = window.inner_size();
         let context = Arc::new(unsafe {
             blade::Context::init_windowed(
@@ -42,11 +44,47 @@ impl Example {
             usage: blade::TextureUsage::TARGET,
             frame_count: 3,
         });
+
+        let choir = Arc::new(choir::Choir::new());
+        let num_workers = match num_cpus::get() {
+            num @ 0..=2 => num,
+            num @ 3..=4 => num - 1,
+            num => num - 2,
+        };
+        let workers = (0..num_workers)
+            .map(|i| choir.add_worker(&format!("Worker-{}", i)))
+            .collect();
+
+        let asset_hub = AssetHub::new(
+            &Path::new("examples/scene/data"),
+            &Path::new("asset-cache"),
+            &choir,
+            &context,
+        );
+
+        let mut scene = blade_render::Scene::default();
+        let time_start = time::Instant::now();
+        let (model, model_task) = asset_hub.models.load(gltf_path.as_ref(), ());
+        log::info!("Waiting for scene to load");
+        model_task.clone().join();
+        println!("Scene loaded in {} ms", time_start.elapsed().as_millis());
+        scene.objects.push(blade_render::Object {
+            model,
+            transform: blade::Transform {
+                x: [1.0, 0.0, 0.0, 0.0].into(),
+                y: [0.0, 1.0, 0.0, 0.0].into(),
+                z: [0.0, 0.0, 1.0, 0.0].into(),
+            },
+        });
+
+        log::info!("Spinning up the renderer");
+        let mut prev_temp_buffers = Vec::new();
         let mut command_encoder = context.create_command_encoder(blade::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
         });
         command_encoder.start();
+        asset_hub.flush(&mut command_encoder, &mut prev_temp_buffers);
 
         let render_config = RenderConfig {
             screen_size,
@@ -54,15 +92,10 @@ impl Example {
             max_debug_lines: 1000,
         };
         let mut renderer = Renderer::new(&mut command_encoder, &context, &render_config);
-
-        let gui_painter = blade_egui::GuiPainter::new(&context, surface_format);
-
-        let (scene, prev_temp_buffers) =
-            blade_render::Scene::load_gltf(gltf_path.as_ref(), &mut command_encoder, &context);
         renderer.merge_scene(scene);
         let sync_point = context.submit(&mut command_encoder);
 
-        let choir = Arc::new(choir::Choir::new());
+        let gui_painter = blade_egui::GuiPainter::new(&context, surface_format);
 
         Self {
             prev_temp_buffers,
@@ -70,12 +103,7 @@ impl Example {
             renderer,
             gui_painter,
             command_encoder,
-            asset_hub: AssetHub::new(
-                &Path::new("examples/scene/data"),
-                &Path::new("asset-cache"),
-                &choir,
-                &context,
-            ),
+            asset_hub,
             context,
             camera,
             debug_mode: blade_render::DebugMode::None,
@@ -83,11 +111,13 @@ impl Example {
                 num_environment_samples: 1,
                 temporal_history: 10,
             },
+            workers,
             debug_mouse_pos: None,
         }
     }
 
     fn destroy(&mut self) {
+        self.workers.clear();
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);
         }
@@ -96,6 +126,7 @@ impl Example {
         }
         self.gui_painter.destroy(&self.context);
         self.renderer.destroy(&self.context);
+        self.asset_hub.destroy();
     }
 
     fn render(
@@ -117,6 +148,7 @@ impl Example {
             .flush(&mut self.command_encoder, &mut temp_buffers);
         self.renderer.prepare(
             &mut self.command_encoder,
+            &self.asset_hub,
             &self.context,
             &mut temp_buffers,
             self.debug_mouse_pos.is_some(),
@@ -238,9 +270,7 @@ fn main() {
     let mut egui_winit = egui_winit::State::new(&event_loop);
 
     let mut args = std::env::args();
-    let path_to_scene = args
-        .nth(1)
-        .unwrap_or("examples/scene/data/monkey.gltf".to_string());
+    let path_to_scene = args.nth(1).unwrap_or("monkey.gltf".to_string());
 
     let camera = Camera {
         pos: [2.7, 1.6, 2.1].into(),

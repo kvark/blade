@@ -1,4 +1,4 @@
-use std::{fs, mem, ptr, time};
+use std::{collections::HashMap, fs, mem, ptr, time};
 
 const MAX_RESOURCES: u32 = 1000;
 
@@ -388,20 +388,6 @@ impl Renderer {
     }
 
     pub fn destroy(&mut self, gpu: &blade::Context) {
-        // scene
-        for texture in self.scene.textures.drain(..) {
-            gpu.destroy_texture_view(texture.view);
-            gpu.destroy_texture(texture.texture);
-        }
-        for mut object in self.scene.objects.drain(..) {
-            for geometry in object.geometries.drain(..) {
-                gpu.destroy_buffer(geometry.vertex_buf);
-                if geometry.index_type.is_some() {
-                    gpu.destroy_buffer(geometry.index_buf);
-                }
-            }
-            gpu.destroy_acceleration_structure(object.acceleration_structure);
-        }
         // internal resources
         self.targets.destroy(gpu);
         if self.hit_buffer != blade::Buffer::default() {
@@ -445,6 +431,7 @@ impl Renderer {
     pub fn prepare(
         &mut self,
         command_encoder: &mut blade::CommandEncoder,
+        asset_hub: &crate::AssetHub,
         gpu: &blade::Context,
         temp_buffers: &mut Vec<blade::Buffer>,
         enable_debug: bool,
@@ -459,6 +446,7 @@ impl Renderer {
 
             let (tlas, geometry_count) = self.scene.build_top_level_acceleration_structure(
                 command_encoder,
+                &asset_hub.models,
                 gpu,
                 temp_buffers,
             );
@@ -520,15 +508,16 @@ impl Renderer {
 
             self.textures.clear();
             let dummy_white = self.textures.alloc(self.dummy.white_view);
-            let mut texture_indices = Vec::with_capacity(self.scene.textures.len());
-            for texture in self.scene.textures.iter() {
+            let mut texture_indices = HashMap::new();
+            /*for texture in self.scene.textures.iter() {
                 texture_indices.push(self.textures.alloc(texture.view));
-            }
+            }*/
 
             self.vertex_buffers.clear();
             self.index_buffers.clear();
             let mut geometry_index = 0;
             for object in self.scene.objects.iter() {
+                let model = &asset_hub.models[object.model];
                 let rotation = {
                     let col_matrix = mint::ColumnMatrix3x4::from(object.transform);
                     let m3 = glam::Mat3::from_cols(
@@ -541,19 +530,27 @@ impl Renderer {
                     let qv = glam::Vec4::from(quat) * 127.0;
                     [qv.x as i8, qv.y as i8, qv.z as i8, qv.w as i8]
                 };
-                for geometry in object.geometries.iter() {
-                    let material = &self.scene.materials[geometry.material_index];
+                for geometry in model.geometries.iter() {
+                    let material = &model.materials[geometry.material_index];
+                    let vertex_offset =
+                        geometry.vertex_range.start as u64 * mem::size_of::<crate::Vertex>() as u64;
                     let hit_entry = HitEntry {
                         index_buf: match geometry.index_type {
-                            Some(_) => self.index_buffers.alloc(geometry.index_buf.at(0)),
+                            Some(_) => self
+                                .index_buffers
+                                .alloc(model.index_buffer.at(geometry.index_offset)),
                             None => !0,
                         },
-                        vertex_buf: self.vertex_buffers.alloc(geometry.vertex_buf.at(0)),
+                        vertex_buf: self
+                            .vertex_buffers
+                            .alloc(model.vertex_buffer.at(vertex_offset)),
                         rotation,
-                        base_color_texture: if material.base_color_texture_index == !0 {
-                            dummy_white
-                        } else {
-                            texture_indices[material.base_color_texture_index]
+                        base_color_texture: match material.base_color_texture {
+                            Some(handle) => *texture_indices.entry(handle).or_insert_with(|| {
+                                let texture = &asset_hub.textures[handle];
+                                self.textures.alloc(texture.view)
+                            }),
+                            None => dummy_white,
                         },
                         base_color_factor: {
                             let c = material.base_color_factor;

@@ -1,4 +1,4 @@
-use std::{mem, num::NonZeroUsize, ptr, slice};
+use std::{borrow::Cow, mem, num::NonZeroUsize, ptr, slice};
 
 pub trait Flat {
     /// Type alignment, must be a power of two.
@@ -52,6 +52,37 @@ pub fn round_up(size: usize, alignment: usize) -> usize {
     (size + alignment - 1) & !(alignment - 1)
 }
 
+impl<T: Flat> Flat for Vec<T> {
+    const ALIGNMENT: usize = T::ALIGNMENT;
+    const FIXED_SIZE: Option<NonZeroUsize> = None;
+    fn size(&self) -> usize {
+        self.iter().fold(mem::size_of::<usize>(), |offset, item| {
+            round_up(offset, T::ALIGNMENT) + item.size()
+        })
+    }
+    unsafe fn write(&self, ptr: *mut u8) {
+        ptr::write(ptr as *mut usize, self.len());
+        let mut offset = mem::size_of::<usize>();
+        for item in self.iter() {
+            offset = round_up(offset, T::ALIGNMENT);
+            item.write(ptr.add(offset));
+            offset += item.size();
+        }
+    }
+    unsafe fn read(ptr: *const u8) -> Self {
+        let counter = ptr::read(ptr as *const usize);
+        let mut offset = mem::size_of::<usize>();
+        (0..counter)
+            .map(|_| {
+                offset = round_up(offset, T::ALIGNMENT);
+                let value = T::read(ptr.add(offset));
+                offset += value.size();
+                value
+            })
+            .collect()
+    }
+}
+
 impl<T: bytemuck::Pod, const C: usize> Flat for [T; C] {
     const ALIGNMENT: usize = mem::align_of::<T>();
     const FIXED_SIZE: Option<NonZeroUsize> = NonZeroUsize::new(mem::size_of::<Self>());
@@ -85,5 +116,19 @@ impl<'a, T: bytemuck::Pod> Flat for &'a [T] {
         } else {
             &[]
         }
+    }
+}
+
+impl<'a, T: bytemuck::Pod> Flat for Cow<'a, [T]> {
+    const ALIGNMENT: usize = mem::align_of::<T>();
+    const FIXED_SIZE: Option<NonZeroUsize> = None;
+    fn size(&self) -> usize {
+        self.as_ref().size()
+    }
+    unsafe fn write(&self, ptr: *mut u8) {
+        self.as_ref().write(ptr)
+    }
+    unsafe fn read(ptr: *const u8) -> Self {
+        Cow::Borrowed(<&'a [T] as Flat>::read(ptr))
     }
 }

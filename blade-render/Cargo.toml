@@ -11,9 +11,10 @@ repository = "https://github.com/kvark/blade"
 
 [features]
 default = ["asset"]
-asset = ["gltf" , "png", "texpresso"]
+asset = ["gltf" , "base64", "png", "texpresso"]
 
 [dependencies]
+base64 = { workspace = true, optional = true }
 blade = { package = "blade-graphics", version = "0.2", path = "../blade-graphics" }
 blade-asset = { version = "0.1", path = "../blade-asset" }
 blade-macros = { version = "0.2", path = "../blade-macros" }
