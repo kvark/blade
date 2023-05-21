@@ -1,4 +1,11 @@
 /target
+/target-gl
+/target-vk
 /Cargo.lock
+
+/asset-cache
+/blade-asset/cooked
+
 .DS_Store
-cooked
+/.vs
+/.vscode

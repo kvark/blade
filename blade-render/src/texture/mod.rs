@@ -75,7 +75,8 @@ impl PlainImage {
 }
 
 pub struct Texture {
-    _gpu: blade::Texture,
+    pub object: blade::Texture,
+    pub view: blade::TextureView,
 }
 
 struct Transfer {
@@ -100,17 +101,21 @@ impl Baker {
 
     pub fn flush(
         &self,
-        encoder: &mut blade::TransferCommandEncoder,
+        encoder: &mut blade::CommandEncoder,
         temp_buffers: &mut Vec<blade::Buffer>,
     ) {
-        for transfer in self.pending_transfers.lock().unwrap().drain(..) {
-            encoder.copy_buffer_to_texture(
-                transfer.stage.into(),
-                transfer.bytes_per_row,
-                transfer.dst.into(),
-                transfer.extent,
-            );
-            temp_buffers.push(transfer.stage);
+        let mut transfers = self.pending_transfers.lock().unwrap();
+        if !transfers.is_empty() {
+            let mut pass = encoder.transfer();
+            for transfer in transfers.drain(..) {
+                pass.copy_buffer_to_texture(
+                    transfer.stage.into(),
+                    transfer.bytes_per_row,
+                    transfer.dst.into(),
+                    transfer.extent,
+                );
+                temp_buffers.push(transfer.stage);
+            }
         }
     }
 }
@@ -157,7 +162,7 @@ impl blade_asset::Baker for Baker {
         }
     }
 
-    fn serve(&self, image: CookedImage<'_>) -> Self::Output {
+    fn serve(&self, image: CookedImage<'_>, _exe_context: choir::ExecutionContext) -> Self::Output {
         let name = str::from_utf8(image.name).unwrap();
         let extent = blade::Extent {
             width: image.extent[0],
@@ -190,6 +195,24 @@ impl blade_asset::Baker for Baker {
             dst: texture,
             extent,
         });
-        Texture { _gpu: texture }
+
+        let view = self
+            .gpu_context
+            .create_texture_view(blade::TextureViewDesc {
+                name,
+                texture,
+                format: image.format.0,
+                dimension: blade::ViewDimension::D2,
+                subresources: &Default::default(),
+            });
+        Texture {
+            object: texture,
+            view,
+        }
+    }
+
+    fn delete(&self, texture: Self::Output) {
+        self.gpu_context.destroy_texture_view(texture.view);
+        self.gpu_context.destroy_texture(texture.object);
     }
 }

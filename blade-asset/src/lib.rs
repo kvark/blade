@@ -2,8 +2,8 @@ use std::{
     any::TypeId,
     collections::hash_map::{DefaultHasher, Entry, HashMap},
     fmt, fs,
-    hash::Hash,
-    io::Read,
+    hash::{Hash, Hasher},
+    io::{Read, Seek as _, SeekFrom},
     marker::PhantomData,
     ops,
     path::{Path, PathBuf},
@@ -31,6 +31,17 @@ impl<T> Clone for Handle<T> {
     }
 }
 impl<T> Copy for Handle<T> {}
+impl<T> PartialEq for Handle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner && self.version == other.version
+    }
+}
+impl<T> Eq for Handle<T> {}
+impl<T> Hash for Handle<T> {
+    fn hash<H: Hasher>(&self, hasher: &mut H) {
+        self.inner.hash(hasher);
+    }
+}
 
 struct DataRef<T>(*mut Option<T>, *mut Version);
 unsafe impl<T> Send for DataRef<T> {}
@@ -86,7 +97,8 @@ pub trait Baker: Send + Sync + 'static {
         result: Arc<Cooked<Self::Data<'_>>>,
         exe_context: choir::ExecutionContext,
     );
-    fn serve(&self, cooked: Self::Data<'_>) -> Self::Output;
+    fn serve(&self, cooked: Self::Data<'_>, exe_context: choir::ExecutionContext) -> Self::Output;
+    fn delete(&self, output: Self::Output);
 }
 
 pub struct AssetManager<B: Baker> {
@@ -128,8 +140,21 @@ impl<B: Baker> AssetManager<B> {
         use std::{hash::Hasher as _, io::Write as _};
 
         let source_path = self.root.join(relative_path);
-        let metadata = fs::metadata(&source_path).unwrap();
-        assert!(metadata.is_file());
+        let metadata = match fs::metadata(&source_path) {
+            Ok(metadata) => {
+                assert!(
+                    metadata.is_file(),
+                    "Source '{}' is not a file",
+                    source_path.display()
+                );
+                metadata
+            }
+            Err(e) => panic!(
+                "Unable to get metadata for '{}': {}",
+                source_path.display(),
+                e
+            ),
+        };
         let target_path = {
             let mut hasher = DefaultHasher::new();
             metadata.modified().unwrap().hash(&mut hasher);
@@ -160,7 +185,7 @@ impl<B: Baker> AssetManager<B> {
             let target_path = target_path.clone();
             self.choir
                 .spawn(format!("load {} with {:?}", relative_path.display(), meta))
-                .init(move |_| {
+                .init(move |exe_context| {
                     let mut file = fs::File::open(target_path).unwrap();
                     let mut bytes = [0u8; 8];
                     file.read_exact(&mut bytes).unwrap();
@@ -168,7 +193,7 @@ impl<B: Baker> AssetManager<B> {
                     let mut data = Vec::new();
                     file.read_to_end(&mut data).unwrap();
                     let cooked = unsafe { <B::Data<'_> as flat::Flat>::read(data.as_ptr()) };
-                    let target = baker.serve(cooked);
+                    let target = baker.serve(cooked, exe_context);
                     let or = output_ref;
                     unsafe {
                         *or.0 = Some(target);
@@ -197,9 +222,13 @@ impl<B: Baker> AssetManager<B> {
                 .spawn(format!("cook finish for {}", relative_path.display()))
                 .init(move |_| {
                     let mut file = fs::File::create(&target_path).unwrap();
-                    file.write(&expected_hash.to_le_bytes()).unwrap();
+                    file.write(&[0; 8]).unwrap(); // write zero hash first
                     let data_ref = result_finish.cell.borrow();
                     file.write(&*data_ref).unwrap();
+                    file.seek(SeekFrom::Start(0)).unwrap();
+                    // Write the real hash last, so that the cached file is not valid
+                    // unless everything went smooth.
+                    file.write(&expected_hash.to_le_bytes()).unwrap();
                 });
 
             let baker = Arc::clone(&self.baker);
@@ -234,5 +263,14 @@ impl<B: Baker> AssetManager<B> {
         };
         let task = self.slots[handle.inner].load_task.as_ref().unwrap();
         (handle, task)
+    }
+
+    pub fn clear(&self) {
+        for (_key, handle) in self.paths.lock().unwrap().drain() {
+            let slot = self.slots.dealloc(handle.inner);
+            if let Some(data) = slot.data {
+                self.baker.delete(data);
+            }
+        }
     }
 }
