@@ -222,11 +222,13 @@ impl<B: Baker> AssetManager<B> {
         };
 
         if current_hash != expected_hash {
-            log::info!(
-                "Recooking {}, old hash is {}",
-                relative_path.display(),
-                current_hash
-            );
+            let op_str = if current_hash == 0 {
+                "Cooking"
+            } else {
+                "Recooking"
+            };
+            log::info!("{} {}", op_str, relative_path.display());
+
             let result = Arc::new(Cooked::new());
             let result_finish = Arc::clone(&result);
             let mut cook_finish_task = self
