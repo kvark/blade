@@ -98,6 +98,9 @@ impl<T: Default> Arena<T> {
                 let chunk_start = data.first_mut().unwrap() as *mut T;
                 self.chunks[address.chunk.get() as usize].store(chunk_start, Ordering::Release);
                 freeman.chunk_bases.push(Box::into_raw(data));
+                freeman
+                    .free_list
+                    .extend((1..size as u32).map(|index| Address { index, ..address }));
                 (address, chunk_start)
             }
         };
