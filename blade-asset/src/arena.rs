@@ -1,5 +1,5 @@
 use std::{
-    hash,
+    fmt, hash,
     marker::PhantomData,
     mem,
     num::NonZeroU8,
@@ -33,6 +33,11 @@ impl<T> hash::Hash for Handle<T> {
     fn hash<H: hash::Hasher>(&self, hasher: &mut H) {
         self.0.hash(hasher);
         self.1.hash(hasher);
+    }
+}
+impl<T> fmt::Debug for Handle<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 

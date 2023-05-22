@@ -42,6 +42,14 @@ impl<T> Hash for Handle<T> {
         self.inner.hash(hasher);
     }
 }
+impl<T> fmt::Debug for Handle<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Handle")
+            .field("inner", &self.inner)
+            .field("version", &self.version)
+            .finish()
+    }
+}
 
 struct DataRef<T>(*mut Option<T>, *mut Version);
 unsafe impl<T> Send for DataRef<T> {}
@@ -114,7 +122,7 @@ impl<B: Baker> ops::Index<Handle<B::Output>> for AssetManager<B> {
     type Output = B::Output;
     fn index(&self, handle: Handle<B::Output>) -> &Self::Output {
         let slot = &self.slots[handle.inner];
-        assert_eq!(handle.version, slot.version);
+        assert_eq!(handle.version, slot.version, "Outdated {:?}", handle);
         slot.data.as_ref().unwrap()
     }
 }
@@ -214,7 +222,11 @@ impl<B: Baker> AssetManager<B> {
         };
 
         if current_hash != expected_hash {
-            log::info!("Recooking {}", relative_path.display());
+            log::info!(
+                "Recooking {}, old hash is {}",
+                relative_path.display(),
+                current_hash
+            );
             let result = Arc::new(Cooked::new());
             let result_finish = Arc::clone(&result);
             let mut cook_finish_task = self

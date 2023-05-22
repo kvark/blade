@@ -20,7 +20,7 @@ struct Example {
 }
 
 impl Example {
-    fn new(window: &winit::window::Window, gltf_path: &str, camera: Camera) -> Self {
+    fn new(window: &winit::window::Window, gltf_path: &Path, camera: Camera) -> Self {
         log::info!("Initializing");
         let window_size = window.inner_size();
         let context = Arc::new(unsafe {
@@ -45,26 +45,24 @@ impl Example {
             frame_count: 3,
         });
 
+        let num_workers = num_cpus::get_physical().max((num_cpus::get() * 3 + 2) / 4);
+        log::info!("Initializing Choir with {} workers", num_workers);
         let choir = Arc::new(choir::Choir::new());
-        let num_workers = match num_cpus::get() {
-            num @ 0..=2 => num,
-            num @ 3..=4 => num - 1,
-            num => num - 2,
-        };
         let workers = (0..num_workers)
             .map(|i| choir.add_worker(&format!("Worker-{}", i)))
             .collect();
 
         let asset_hub = AssetHub::new(
-            &Path::new("examples/scene/data"),
-            &Path::new("asset-cache"),
+            gltf_path.parent().unwrap(),
+            Path::new("asset-cache"),
             &choir,
             &context,
         );
 
         let mut scene = blade_render::Scene::default();
         let time_start = time::Instant::now();
-        let (model, model_task) = asset_hub.models.load(gltf_path.as_ref(), ());
+        let relative_path = gltf_path.file_name().unwrap();
+        let (model, model_task) = asset_hub.models.load(relative_path.as_ref(), ());
         log::info!("Waiting for scene to load");
         model_task.clone().join();
         println!("Scene loaded in {} ms", time_start.elapsed().as_millis());
@@ -270,7 +268,9 @@ fn main() {
     let mut egui_winit = egui_winit::State::new(&event_loop);
 
     let mut args = std::env::args();
-    let path_to_scene = args.nth(1).unwrap_or("monkey.gltf".to_string());
+    let path_to_scene = args
+        .nth(1)
+        .unwrap_or("examples/scene/data/monkey.gltf".to_string());
 
     let camera = Camera {
         pos: [2.7, 1.6, 2.1].into(),
@@ -280,7 +280,7 @@ fn main() {
         fov_y: 0.8,
         depth: 100.0,
     };
-    let mut example = Example::new(&window, &path_to_scene, camera);
+    let mut example = Example::new(&window, Path::new(&path_to_scene), camera);
 
     struct Drag {
         screen_pos: glam::IVec2,
