@@ -12,7 +12,7 @@ exclude = []
 [workspace.dependencies]
 base64 = "0.21"
 bytemuck = { version = "1", features = ["derive"] }
-choir = { version = "0.5", git = "https://github.com/kvark/choir", rev = "faa9661c554a31f5384ef01ec8b6cb8f3fd3bfea" }
+choir = { version = "0.5", git = "https://github.com/kvark/choir", rev = "f85bcd100636cc3d52e64265764e653bb2626daa" }
 egui = "0.20"
 glam = { version = "0.23", features = ["mint"] }
 log = "0.4"

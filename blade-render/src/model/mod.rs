@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     mem,
     ops::Range,
+    path::PathBuf,
     ptr, str,
     sync::{Arc, Mutex},
 };
@@ -97,7 +98,7 @@ impl Baker {
         model: &mut CookedModel,
         g_node: gltf::Node,
         parent_transform: glam::Mat4,
-        data_buffers: &[gltf::buffer::Data],
+        data_buffers: &[Vec<u8>],
     ) {
         let local_transform = glam::Mat4::from_cols_array_2d(&g_node.transform().matrix());
         let global_transform = parent_transform * local_transform;
@@ -192,6 +193,12 @@ impl Baker {
             }
         }
     }
+
+    fn get_full_path(&self, relative: &str) -> PathBuf {
+        //HACK: using textures' root. Instead, need a mechanism
+        // for tracking source dependencies, which are relative.
+        self.asset_textures.root.join(relative)
+    }
 }
 
 impl blade_asset::Baker for Baker {
@@ -226,9 +233,7 @@ impl blade_asset::Baker for Baker {
                             } else if let Some(rest) = uri.strip_prefix("file:") {
                                 std::fs::read(rest).unwrap()
                             } else {
-                                //HACK: using textures' root. Instead, need a mechanism
-                                // for tracking source dependencies, which are relative.
-                                let path = self.asset_textures.root.join(uri);
+                                let path = self.get_full_path(uri);
                                 std::fs::read(path).unwrap()
                             }
                         }
@@ -238,7 +243,7 @@ impl blade_asset::Baker for Baker {
                     while data.len() % 4 != 0 {
                         data.push(0);
                     }
-                    buffers.push(gltf::buffer::Data(data));
+                    buffers.push(data);
                 }
                 let mut texture_paths = Vec::new();
                 for texture in document.textures() {
@@ -253,7 +258,7 @@ impl blade_asset::Baker for Baker {
                             } else if let Some(rest) = uri.strip_prefix("file:") {
                                 rest
                             } else {
-                                panic!("Unknown uri: {}", uri);
+                                uri
                             }
                         }
                         gltf::image::Source::View { .. } => {
