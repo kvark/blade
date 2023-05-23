@@ -12,6 +12,7 @@ It's unsafe, it's incomprehensive, but it's small, fast, and actually fun to pro
 
 See [motivation](motivation.md), [FAQ](FAQ.md), and [performance](performance.md) for more info.
 
+![sponza scene](sponza.jpg)
 ![ray-query example](ray-query.gif)
 ![particles example](particles.png)
 
