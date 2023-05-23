@@ -2,13 +2,13 @@
 #![allow(irrefutable_let_patterns)]
 
 mod asset_hub;
-mod model;
+pub mod model;
 mod renderer;
 mod scene;
-mod texture;
+pub mod texture;
 
 pub use asset_hub::*;
-pub use model::{Geometry, Material, Model};
+pub use model::Model;
 pub use renderer::*;
 pub use texture::Texture;
 

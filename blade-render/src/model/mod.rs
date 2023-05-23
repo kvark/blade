@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    mem,
+    fmt, mem,
     ops::Range,
     path::PathBuf,
     ptr, str,
@@ -53,6 +53,15 @@ pub struct CookedModel<'a> {
     name: &'a [u8],
     materials: Vec<CookedMaterial<'a>>,
     geometries: Vec<CookedGeometry<'a>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Meta;
+
+impl fmt::Display for Meta {
+    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(())
+    }
 }
 
 struct Transfer {
@@ -202,7 +211,7 @@ impl Baker {
 }
 
 impl blade_asset::Baker for Baker {
-    type Meta = ();
+    type Meta = Meta;
     type Data<'a> = CookedModel<'a>;
     type Output = Model;
 
@@ -210,7 +219,7 @@ impl blade_asset::Baker for Baker {
         &self,
         source: &[u8],
         extension: &str,
-        _meta: (),
+        _meta: Meta,
         result: Arc<blade_asset::Cooked<CookedModel<'_>>>,
         _exe_context: choir::ExecutionContext,
     ) {

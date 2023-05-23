@@ -22,6 +22,8 @@ struct Example {
 impl Example {
     fn new(window: &winit::window::Window, gltf_path: &Path, camera: Camera) -> Self {
         log::info!("Initializing");
+        //let _ = profiling::tracy_client::Client::start();
+
         let window_size = window.inner_size();
         let context = Arc::new(unsafe {
             blade::Context::init_windowed(
@@ -62,7 +64,9 @@ impl Example {
         let mut scene = blade_render::Scene::default();
         let time_start = time::Instant::now();
         let relative_path = gltf_path.file_name().unwrap();
-        let (model, model_task) = asset_hub.models.load(relative_path.as_ref(), ());
+        let (model, model_task) = asset_hub
+            .models
+            .load(relative_path.as_ref(), blade_render::model::Meta);
         log::info!("Waiting for scene to load");
         model_task.clone().join();
         println!("Scene loaded in {} ms", time_start.elapsed().as_millis());
