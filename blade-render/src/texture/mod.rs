@@ -1,5 +1,5 @@
 use std::{
-    ptr, str,
+    fmt, ptr, str,
     sync::{Arc, Mutex},
 };
 
@@ -18,6 +18,12 @@ pub struct CookedImage<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Meta {
     pub format: blade::TextureFormat,
+}
+
+impl fmt::Display for Meta {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.format, f)
+    }
 }
 
 pub struct Texture {
@@ -135,6 +141,7 @@ impl blade_asset::Baker for Baker {
         let mut buf = Vec::new();
         #[cfg(feature = "asset")]
         {
+            profiling::scope!("compress");
             let dst_format = match meta.format {
                 Tf::Bc1Unorm | Tf::Bc1UnormSrgb => texpresso::Format::Bc1,
                 Tf::Bc2Unorm | Tf::Bc2UnormSrgb => texpresso::Format::Bc2,

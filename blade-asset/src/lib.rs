@@ -94,7 +94,7 @@ impl<T: flat::Flat> Cooked<T> {
 }
 
 pub trait Baker: Send + Sync + 'static {
-    type Meta: Clone + Eq + fmt::Debug + Hash + Send;
+    type Meta: Clone + Eq + Hash + Send + fmt::Display;
     type Data<'a>: flat::Flat;
     type Output: Send;
     fn cook(
@@ -192,7 +192,7 @@ impl<B: Baker> AssetManager<B> {
             let baker = Arc::clone(&self.baker);
             let target_path = target_path.clone();
             self.choir
-                .spawn(format!("load {} with {:?}", relative_path.display(), meta))
+                .spawn(format!("load {} with {}", relative_path.display(), meta))
                 .init(move |exe_context| {
                     let mut file = fs::File::open(target_path).unwrap();
                     let mut bytes = [0u8; 8];
@@ -248,7 +248,7 @@ impl<B: Baker> AssetManager<B> {
             let baker = Arc::clone(&self.baker);
             let cook_task = self
                 .choir
-                .spawn(format!("cook {} with {:?}", relative_path.display(), meta))
+                .spawn(format!("cook {} as {}", relative_path.display(), meta))
                 .init(move |exe_context| {
                     let source = fs::read(&source_path).unwrap();
                     let extension = source_path.extension().unwrap().to_str().unwrap();
