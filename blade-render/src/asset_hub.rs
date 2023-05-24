@@ -1,12 +1,14 @@
 use blade_asset::AssetManager;
 use std::{path::Path, sync::Arc};
 
+/// A single hub to manage all assets.
 pub struct AssetHub {
     pub textures: Arc<AssetManager<crate::texture::Baker>>,
     pub models: Arc<AssetManager<crate::model::Baker>>,
 }
 
 impl AssetHub {
+    /// Create a new hub.
     pub fn new(
         root: &Path,
         target: &Path,
@@ -29,6 +31,10 @@ impl AssetHub {
         Self { textures, models }
     }
 
+    /// Flush the GPU state updates into the specified command encoder.
+    ///
+    /// Populates the list of temporary buffers that can be freed when the
+    /// relevant submission is completely retired.
     pub fn flush(
         &self,
         command_encoder: &mut blade::CommandEncoder,
@@ -38,6 +44,7 @@ impl AssetHub {
         self.models.baker.flush(command_encoder, temp_buffers);
     }
 
+    /// Destroy the hub contents.
     pub fn destroy(&mut self) {
         self.textures.clear();
         self.models.clear();

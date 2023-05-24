@@ -56,7 +56,7 @@ impl super::Shader {
             .module
             .types
             .iter()
-            .find(|(_, ty)| ty.name.as_ref().map(|s| s.as_str()) == Some(struct_name))
+            .find(|&(_, ty)| ty.name.as_deref() == Some(struct_name))
             .expect("Struct type not found");
         match ty.inner {
             naga::TypeInner::Struct { members: _, span } => span,

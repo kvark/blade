@@ -335,7 +335,7 @@ impl crate::traits::CommandDevice for Context {
     }
 
     fn destroy_command_encoder(&self, command_encoder: CommandEncoder) {
-        for cmd_buf in command_encoder.buffers.into_iter() {
+        for cmd_buf in command_encoder.buffers.iter() {
             let raw_cmd_buffers = [cmd_buf.raw];
             unsafe {
                 self.device

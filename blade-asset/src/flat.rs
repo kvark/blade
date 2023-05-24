@@ -11,9 +11,16 @@ pub trait Flat {
     }
     /// Write self at the specified pointer.
     /// The pointer is guaranteed to be valid and aligned accordingly.
+    ///
+    /// # Safety
+    /// Only safe if the available space in `ptr` is at least `self.size()`
     unsafe fn write(&self, ptr: *mut u8);
     /// Read self from the specified pointer.
     /// The pointer is guaranteed to be valid and aligned accordingly.
+    ///
+    /// # Safety
+    /// Only safe when the `ptr` points to the same data as previously
+    /// was written with [`Flat::write`].
     unsafe fn read(ptr: *const u8) -> Self;
 }
 

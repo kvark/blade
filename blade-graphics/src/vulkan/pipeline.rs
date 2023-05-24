@@ -30,8 +30,8 @@ impl super::Context {
         // collect all the array bindings into overrides
         let mut binding_map = spv::BindingMap::default();
         for (group_index, layout) in data_layouts.iter().enumerate() {
-            for (binding_index, (_, binding)) in layout.bindings.iter().enumerate() {
-                match *binding {
+            for (binding_index, &(_, binding)) in layout.bindings.iter().enumerate() {
+                match binding {
                     crate::ShaderBinding::TextureArray { count }
                     | crate::ShaderBinding::BufferArray { count } => {
                         let rb = naga::ResourceBinding {
@@ -100,7 +100,7 @@ impl super::Context {
                     .bindings
                     .iter()
                     .enumerate()
-                    .find(|(_, &(name, _))| name == var_name)
+                    .find(|&(_, &(name, _))| name == var_name)
                 {
                     let res_binding = naga::ResourceBinding {
                         group: group_index as u32,

@@ -127,7 +127,7 @@ fn make_buffer_image_copy(
         buffer_image_height: 0,
         image_subresource: texture.subresource_layers(texture.texture.format.aspects()),
         image_offset: map_origin(&texture.origin),
-        image_extent: super::map_extent_3d(&size),
+        image_extent: super::map_extent_3d(size),
     }
 }
 

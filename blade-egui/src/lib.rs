@@ -1,4 +1,17 @@
-#![allow(irrefutable_let_patterns)]
+#![allow(
+    irrefutable_let_patterns,
+    clippy::new_without_default,
+    // Conflicts with `pattern_type_mismatch`
+    clippy::needless_borrowed_reference,
+)]
+#![warn(
+    trivial_casts,
+    trivial_numeric_casts,
+    unused_extern_crates,
+    unused_qualifications,
+    // We don't match on a reference, unless required.
+    clippy::pattern_type_mismatch,
+)]
 
 mod belt;
 
@@ -73,9 +86,11 @@ impl GuiTexture {
     }
 }
 
-//TODO: resource deletion
 //TODO: scissor test
 
+/// GUI painter based on egui.
+///
+/// It can render egui primitives into a render pass.
 pub struct GuiPainter {
     pipeline: blade::RenderPipeline,
     //TODO: find a better way to allocate temporary buffers.
@@ -88,6 +103,7 @@ pub struct GuiPainter {
 }
 
 impl GuiPainter {
+    /// Destroy the contents of the painter.
     pub fn destroy(&mut self, context: &blade::Context) {
         self.belt.destroy(context);
         for (_, gui_texture) in self.textures.drain() {
@@ -96,6 +112,10 @@ impl GuiPainter {
         context.destroy_sampler(self.sampler);
     }
 
+    /// Create a new painter with a given GPU context.
+    ///
+    /// It supports renderpasses with only a color attachment,
+    /// and this attachment format must be The `output_format`.
     pub fn new(context: &blade::Context, output_format: blade::TextureFormat) -> Self {
         let shader_source = fs::read_to_string("blade-egui/shader.wgsl").unwrap();
         let shader = context.create_shader(blade::ShaderDesc {
@@ -170,7 +190,7 @@ impl GuiPainter {
         }
 
         let mut copies = Vec::new();
-        for (texture_id, image_delta) in textures_delta.set.iter() {
+        for &(texture_id, ref image_delta) in textures_delta.set.iter() {
             let src = match image_delta.image {
                 egui::ImageData::Color(ref c) => self.belt.alloc_data(c.pixels.as_slice(), context),
                 egui::ImageData::Font(ref a) => {
@@ -202,7 +222,7 @@ impl GuiPainter {
                 egui::TextureId::User(u) => format!("egui_user_image_{}", u),
             };
 
-            let texture = match self.textures.entry(*texture_id) {
+            let texture = match self.textures.entry(texture_id) {
                 Entry::Occupied(mut o) => {
                     if image_delta.pos.is_none() {
                         let texture = GuiTexture::create(context, &label, extent);
@@ -238,13 +258,15 @@ impl GuiPainter {
         }
 
         for texture_id in textures_delta.free.iter() {
-            let texture = self.textures.remove(&texture_id).unwrap();
+            let texture = self.textures.remove(texture_id).unwrap();
             self.textures_dropped.push(texture);
         }
 
         self.triage_deletions(context);
     }
 
+    /// Render the set of clipped primitives into a render pass.
+    /// The `sd` must contain dimensions of the render target.
     pub fn paint(
         &mut self,
         pass: &mut blade::RenderCommandEncoder,
@@ -318,6 +340,7 @@ impl GuiPainter {
         }
     }
 
+    /// Call this after submitting work at the given `sync_point`.
     pub fn after_submit(&mut self, sync_point: blade::SyncPoint) {
         self.textures_to_delete.extend(
             self.textures_dropped

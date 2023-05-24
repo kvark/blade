@@ -14,7 +14,7 @@ impl super::Scene {
             let model = &asset_models[object.model];
             instances.push(blade::AccelerationStructureInstance {
                 acceleration_structure_index: blases.len() as u32,
-                transform: object.transform.into(),
+                transform: object.transform,
                 mask: 0xFF,
                 custom_index,
             });

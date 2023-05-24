@@ -1,5 +1,12 @@
-#![cfg(not(target_arch = "wasm32"))]
-#![allow(irrefutable_let_patterns)]
+#![allow(irrefutable_let_patterns, clippy::new_without_default)]
+#![warn(
+    trivial_casts,
+    trivial_numeric_casts,
+    unused_extern_crates,
+    unused_qualifications,
+    // We don't match on a reference, unless required.
+    clippy::pattern_type_mismatch,
+)]
 
 mod asset_hub;
 pub mod model;

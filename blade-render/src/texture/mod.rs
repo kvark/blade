@@ -117,8 +117,8 @@ impl blade_asset::Baker for Baker {
                 };
                 let info = decoder.get_info().unwrap();
                 PlainImage {
-                    width: info.width as usize,
-                    height: info.height as usize,
+                    width: info.width,
+                    height: info.height,
                     data,
                 }
             }
