@@ -1,18 +1,18 @@
 impl super::Scene {
     pub(super) fn build_top_level_acceleration_structure(
         &self,
-        command_encoder: &mut blade::CommandEncoder,
+        command_encoder: &mut blade_graphics::CommandEncoder,
         asset_models: &blade_asset::AssetManager<crate::model::Baker>,
-        gpu: &blade::Context,
-        temp_buffers: &mut Vec<blade::Buffer>,
-    ) -> (blade::AccelerationStructure, u32) {
+        gpu: &blade_graphics::Context,
+        temp_buffers: &mut Vec<blade_graphics::Buffer>,
+    ) -> (blade_graphics::AccelerationStructure, u32) {
         let mut instances = Vec::with_capacity(self.objects.len());
         let mut blases = Vec::with_capacity(self.objects.len());
         let mut custom_index = 0;
 
         for object in self.objects.iter() {
             let model = &asset_models[object.model];
-            instances.push(blade::AccelerationStructureInstance {
+            instances.push(blade_graphics::AccelerationStructureInstance {
                 acceleration_structure_index: blases.len() as u32,
                 transform: object.transform,
                 mask: 0xFF,
@@ -25,16 +25,16 @@ impl super::Scene {
         // Needs to be a separate encoder in order to force synchronization
         let sizes = gpu.get_top_level_acceleration_structure_sizes(instances.len() as u32);
         let acceleration_structure =
-            gpu.create_acceleration_structure(blade::AccelerationStructureDesc {
+            gpu.create_acceleration_structure(blade_graphics::AccelerationStructureDesc {
                 name: "TLAS",
-                ty: blade::AccelerationStructureType::TopLevel,
+                ty: blade_graphics::AccelerationStructureType::TopLevel,
                 size: sizes.data,
             });
         let instance_buf = gpu.create_acceleration_structure_instance_buffer(&instances, &blases);
-        let scratch_buf = gpu.create_buffer(blade::BufferDesc {
+        let scratch_buf = gpu.create_buffer(blade_graphics::BufferDesc {
             name: "TLAS scratch",
             size: sizes.scratch,
-            memory: blade::Memory::Device,
+            memory: blade_graphics::Memory::Device,
         });
 
         let mut tlas_encoder = command_encoder.acceleration_structure();

@@ -1,17 +1,18 @@
 #![allow(irrefutable_let_patterns)]
 #![cfg(not(target_arch = "wasm32"))]
 
+use blade_graphics as gpu;
 use blade_render::{AssetHub, Camera, RenderConfig, Renderer};
 use std::{path::Path, sync::Arc, time};
 
 struct Example {
-    prev_temp_buffers: Vec<blade::Buffer>,
-    prev_sync_point: Option<blade::SyncPoint>,
+    prev_temp_buffers: Vec<gpu::Buffer>,
+    prev_sync_point: Option<gpu::SyncPoint>,
     renderer: Renderer,
     gui_painter: blade_egui::GuiPainter,
-    command_encoder: blade::CommandEncoder,
+    command_encoder: gpu::CommandEncoder,
     asset_hub: AssetHub,
-    context: Arc<blade::Context>,
+    context: Arc<gpu::Context>,
     camera: blade_render::Camera,
     debug_mode: blade_render::DebugMode,
     ray_config: blade_render::RayConfig,
@@ -26,9 +27,9 @@ impl Example {
 
         let window_size = window.inner_size();
         let context = Arc::new(unsafe {
-            blade::Context::init_windowed(
+            gpu::Context::init_windowed(
                 window,
-                blade::ContextDesc {
+                gpu::ContextDesc {
                     validation: cfg!(debug_assertions),
                     capture: false,
                 },
@@ -36,14 +37,14 @@ impl Example {
             .unwrap()
         });
 
-        let screen_size = blade::Extent {
+        let screen_size = gpu::Extent {
             width: window_size.width,
             height: window_size.height,
             depth: 1,
         };
-        let surface_format = context.resize(blade::SurfaceConfig {
+        let surface_format = context.resize(gpu::SurfaceConfig {
             size: screen_size,
-            usage: blade::TextureUsage::TARGET,
+            usage: gpu::TextureUsage::TARGET,
             frame_count: 3,
         });
 
@@ -72,7 +73,7 @@ impl Example {
         println!("Scene loaded in {} ms", time_start.elapsed().as_millis());
         scene.objects.push(blade_render::Object {
             model,
-            transform: blade::Transform {
+            transform: gpu::Transform {
                 x: [1.0, 0.0, 0.0, 0.0].into(),
                 y: [0.0, 1.0, 0.0, 0.0].into(),
                 z: [0.0, 0.0, 1.0, 0.0].into(),
@@ -81,7 +82,7 @@ impl Example {
 
         log::info!("Spinning up the renderer");
         let mut prev_temp_buffers = Vec::new();
-        let mut command_encoder = context.create_command_encoder(blade::CommandEncoderDesc {
+        let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
         });
@@ -166,11 +167,11 @@ impl Example {
         let frame = self.context.acquire_frame();
         self.command_encoder.init_texture(frame.texture());
 
-        if let mut pass = self.command_encoder.render(blade::RenderTargetSet {
-            colors: &[blade::RenderTarget {
+        if let mut pass = self.command_encoder.render(gpu::RenderTargetSet {
+            colors: &[gpu::RenderTarget {
                 view: frame.texture_view(),
-                init_op: blade::InitOp::Clear(blade::TextureColor::TransparentBlack),
-                finish_op: blade::FinishOp::Store,
+                init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
+                finish_op: gpu::FinishOp::Store,
             }],
             depth_stencil: None,
         }) {

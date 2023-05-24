@@ -1,11 +1,13 @@
 #![allow(irrefutable_let_patterns)]
 
+use blade_graphics as gpu;
+
 mod particle;
 
 struct Example {
-    command_encoder: blade::CommandEncoder,
-    prev_sync_point: Option<blade::SyncPoint>,
-    context: blade::Context,
+    command_encoder: gpu::CommandEncoder,
+    prev_sync_point: Option<gpu::SyncPoint>,
+    context: gpu::Context,
     gui_painter: blade_egui::GuiPainter,
     particle_system: particle::System,
 }
@@ -14,9 +16,9 @@ impl Example {
     fn new(window: &winit::window::Window) -> Self {
         let window_size = window.inner_size();
         let context = unsafe {
-            blade::Context::init_windowed(
+            gpu::Context::init_windowed(
                 window,
-                blade::ContextDesc {
+                gpu::ContextDesc {
                     validation: cfg!(debug_assertions),
                     capture: false,
                 },
@@ -24,13 +26,13 @@ impl Example {
             .unwrap()
         };
 
-        let surface_format = context.resize(blade::SurfaceConfig {
-            size: blade::Extent {
+        let surface_format = context.resize(gpu::SurfaceConfig {
+            size: gpu::Extent {
                 width: window_size.width,
                 height: window_size.height,
                 depth: 1,
             },
-            usage: blade::TextureUsage::TARGET,
+            usage: gpu::TextureUsage::TARGET,
             frame_count: 3,
         });
         let gui_painter = blade_egui::GuiPainter::new(&context, surface_format);
@@ -43,7 +45,7 @@ impl Example {
             },
         );
 
-        let mut command_encoder = context.create_command_encoder(blade::CommandEncoderDesc {
+        let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
         });
@@ -84,11 +86,11 @@ impl Example {
 
         self.particle_system.update(&mut self.command_encoder);
 
-        if let mut pass = self.command_encoder.render(blade::RenderTargetSet {
-            colors: &[blade::RenderTarget {
+        if let mut pass = self.command_encoder.render(gpu::RenderTargetSet {
+            colors: &[gpu::RenderTarget {
                 view: frame.texture_view(),
-                init_op: blade::InitOp::Clear(blade::TextureColor::TransparentBlack),
-                finish_op: blade::FinishOp::Store,
+                init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
+                finish_op: gpu::FinishOp::Store,
             }],
             depth_stencil: None,
         }) {

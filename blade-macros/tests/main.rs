@@ -7,8 +7,8 @@ struct Globals {
 #[derive(blade_macros::ShaderData)]
 struct ShaderParams {
     globals: Globals,
-    sprite_texture: blade::TextureView,
-    sprite_sampler: blade::Sampler,
+    sprite_texture: blade_graphics::TextureView,
+    sprite_sampler: blade_graphics::Sampler,
 }
 
 #[derive(blade_macros::Flat, PartialEq, Debug)]

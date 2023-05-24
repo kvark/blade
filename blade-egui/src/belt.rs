@@ -1,10 +1,10 @@
 struct ReusableBuffer {
-    raw: blade::Buffer,
+    raw: blade_graphics::Buffer,
     size: u64,
 }
 
 pub struct BeltDescriptor {
-    pub memory: blade::Memory,
+    pub memory: blade_graphics::Memory,
     pub min_chunk_size: u64,
 }
 
@@ -12,7 +12,7 @@ pub struct BeltDescriptor {
 /// find staging space for uploads.
 pub struct BufferBelt {
     desc: BeltDescriptor,
-    buffers: Vec<(ReusableBuffer, blade::SyncPoint)>,
+    buffers: Vec<(ReusableBuffer, blade_graphics::SyncPoint)>,
     active: Vec<(ReusableBuffer, u64)>,
 }
 
@@ -25,7 +25,7 @@ impl BufferBelt {
         }
     }
 
-    pub fn destroy(&mut self, context: &blade::Context) {
+    pub fn destroy(&mut self, context: &blade_graphics::Context) {
         for (buffer, _) in self.buffers.drain(..) {
             context.destroy_buffer(buffer.raw);
         }
@@ -34,7 +34,11 @@ impl BufferBelt {
         }
     }
 
-    pub fn alloc(&mut self, size: u64, context: &blade::Context) -> blade::BufferPiece {
+    pub fn alloc(
+        &mut self,
+        size: u64,
+        context: &blade_graphics::Context,
+    ) -> blade_graphics::BufferPiece {
         for &mut (ref rb, ref mut offset) in self.active.iter_mut() {
             if *offset + size <= rb.size {
                 let piece = rb.raw.at(*offset);
@@ -56,7 +60,7 @@ impl BufferBelt {
 
         let chunk_index = self.buffers.len() + self.active.len();
         let chunk_size = size.max(self.desc.min_chunk_size);
-        let chunk = context.create_buffer(blade::BufferDesc {
+        let chunk = context.create_buffer(blade_graphics::BufferDesc {
             name: &format!("chunk-{}", chunk_index),
             size: chunk_size,
             memory: self.desc.memory,
@@ -72,8 +76,8 @@ impl BufferBelt {
     pub fn alloc_data<T: bytemuck::Pod>(
         &mut self,
         data: &[T],
-        context: &blade::Context,
-    ) -> blade::BufferPiece {
+        context: &blade_graphics::Context,
+    ) -> blade_graphics::BufferPiece {
         let bp = self.alloc((data.len() * std::mem::size_of::<T>()) as u64, context);
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), bp.data() as *mut T, data.len());
@@ -81,7 +85,7 @@ impl BufferBelt {
         bp
     }
 
-    pub fn flush(&mut self, sp: blade::SyncPoint) {
+    pub fn flush(&mut self, sp: blade_graphics::SyncPoint) {
         self.buffers
             .extend(self.active.drain(..).map(|(rb, _)| (rb, sp.clone())));
     }

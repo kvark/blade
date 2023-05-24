@@ -1,5 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
+use blade::graphics as gpu;
 use bytemuck::{Pod, Zeroable};
 use std::ptr;
 
@@ -15,11 +16,11 @@ struct Globals {
     pad: [f32; 2],
 }
 
-#[derive(blade::ShaderData)]
+#[derive(blade::macros::ShaderData)]
 struct Params {
     globals: Globals,
-    sprite_texture: blade::TextureView,
-    sprite_sampler: blade::Sampler,
+    sprite_texture: gpu::TextureView,
+    sprite_sampler: gpu::Sampler,
 }
 
 #[repr(C)]
@@ -31,31 +32,31 @@ struct Locals {
     pad: u32,
 }
 
-#[derive(blade::ShaderData)]
+#[derive(blade::macros::ShaderData)]
 struct Sprite {
     locals: Locals,
 }
 
 struct Example {
-    pipeline: blade::RenderPipeline,
-    command_encoder: blade::CommandEncoder,
-    prev_sync_point: Option<blade::SyncPoint>,
-    texture: blade::Texture,
-    view: blade::TextureView,
-    sampler: blade::Sampler,
+    pipeline: gpu::RenderPipeline,
+    command_encoder: gpu::CommandEncoder,
+    prev_sync_point: Option<gpu::SyncPoint>,
+    texture: gpu::Texture,
+    view: gpu::TextureView,
+    sampler: gpu::Sampler,
     window_size: winit::dpi::PhysicalSize<u32>,
     bunnies: Vec<Sprite>,
     rng: nanorand::WyRand,
-    context: blade::Context,
+    context: gpu::Context,
 }
 
 impl Example {
     fn new(window: &winit::window::Window) -> Self {
         let window_size = window.inner_size();
         let context = unsafe {
-            blade::Context::init_windowed(
+            gpu::Context::init_windowed(
                 window,
-                blade::ContextDesc {
+                gpu::ContextDesc {
                     validation: cfg!(debug_assertions),
                     capture: false,
                 },
@@ -63,69 +64,69 @@ impl Example {
             .unwrap()
         };
 
-        let surface_format = context.resize(blade::SurfaceConfig {
-            size: blade::Extent {
+        let surface_format = context.resize(gpu::SurfaceConfig {
+            size: gpu::Extent {
                 width: window_size.width,
                 height: window_size.height,
                 depth: 1,
             },
-            usage: blade::TextureUsage::TARGET,
+            usage: gpu::TextureUsage::TARGET,
             frame_count: 3,
         });
 
-        let global_layout = <Params as blade::ShaderData>::layout();
-        let local_layout = <Sprite as blade::ShaderData>::layout();
+        let global_layout = <Params as gpu::ShaderData>::layout();
+        let local_layout = <Sprite as gpu::ShaderData>::layout();
         #[cfg(target_arch = "wasm32")]
         let shader_source = include_str!("shader.wgsl");
         #[cfg(not(target_arch = "wasm32"))]
         let shader_source = std::fs::read_to_string("examples/bunnymark/shader.wgsl").unwrap();
-        let shader = context.create_shader(blade::ShaderDesc {
+        let shader = context.create_shader(gpu::ShaderDesc {
             source: &shader_source,
         });
 
-        let pipeline = context.create_render_pipeline(blade::RenderPipelineDesc {
+        let pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
             name: "main",
             data_layouts: &[&global_layout, &local_layout],
             vertex: shader.at("vs_main"),
-            primitive: blade::PrimitiveState {
-                topology: blade::PrimitiveTopology::TriangleStrip,
+            primitive: gpu::PrimitiveState {
+                topology: gpu::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
             },
             depth_stencil: None,
             fragment: shader.at("fs_main"),
-            color_targets: &[blade::ColorTargetState {
+            color_targets: &[gpu::ColorTargetState {
                 format: surface_format,
-                blend: Some(blade::BlendState::ALPHA_BLENDING),
-                write_mask: blade::ColorWrites::default(),
+                blend: Some(gpu::BlendState::ALPHA_BLENDING),
+                write_mask: gpu::ColorWrites::default(),
             }],
         });
 
-        let extent = blade::Extent {
+        let extent = gpu::Extent {
             width: 1,
             height: 1,
             depth: 1,
         };
-        let texture = context.create_texture(blade::TextureDesc {
+        let texture = context.create_texture(gpu::TextureDesc {
             name: "texutre",
-            format: blade::TextureFormat::Rgba8Unorm,
+            format: gpu::TextureFormat::Rgba8Unorm,
             size: extent,
-            dimension: blade::TextureDimension::D2,
+            dimension: gpu::TextureDimension::D2,
             array_layer_count: 1,
             mip_level_count: 1,
-            usage: blade::TextureUsage::RESOURCE | blade::TextureUsage::COPY,
+            usage: gpu::TextureUsage::RESOURCE | gpu::TextureUsage::COPY,
         });
-        let view = context.create_texture_view(blade::TextureViewDesc {
+        let view = context.create_texture_view(gpu::TextureViewDesc {
             name: "view",
             texture,
-            format: blade::TextureFormat::Rgba8Unorm,
-            dimension: blade::ViewDimension::D2,
+            format: gpu::TextureFormat::Rgba8Unorm,
+            dimension: gpu::ViewDimension::D2,
             subresources: &Default::default(),
         });
 
-        let upload_buffer = context.create_buffer(blade::BufferDesc {
+        let upload_buffer = context.create_buffer(gpu::BufferDesc {
             name: "staging",
             size: (extent.width * extent.height) as u64 * 4,
-            memory: blade::Memory::Upload,
+            memory: gpu::Memory::Upload,
         });
         let texture_data = vec![0xFFu8; 4];
         unsafe {
@@ -137,7 +138,7 @@ impl Example {
         }
         context.sync_buffer(upload_buffer);
 
-        let sampler = context.create_sampler(blade::SamplerDesc {
+        let sampler = context.create_sampler(gpu::SamplerDesc {
             name: "main",
             ..Default::default()
         });
@@ -152,7 +153,7 @@ impl Example {
             },
         });
 
-        let mut command_encoder = context.create_command_encoder(blade::CommandEncoderDesc {
+        let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
         });
@@ -225,11 +226,11 @@ impl Example {
         self.command_encoder.start();
         self.command_encoder.init_texture(frame.texture());
 
-        if let mut pass = self.command_encoder.render(blade::RenderTargetSet {
-            colors: &[blade::RenderTarget {
+        if let mut pass = self.command_encoder.render(gpu::RenderTargetSet {
+            colors: &[gpu::RenderTarget {
                 view: frame.texture_view(),
-                init_op: blade::InitOp::Clear(blade::TextureColor::TransparentBlack),
-                finish_op: blade::FinishOp::Store,
+                init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
+                finish_op: gpu::FinishOp::Store,
             }],
             depth_stencil: None,
         }) {

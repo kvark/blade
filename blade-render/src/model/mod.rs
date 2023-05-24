@@ -11,9 +11,9 @@ pub struct Geometry {
     pub name: String,
     pub vertex_range: Range<u32>,
     pub index_offset: u64,
-    pub index_type: Option<blade::IndexType>,
+    pub index_type: Option<blade_graphics::IndexType>,
     pub triangle_count: u32,
-    pub transform: blade::Transform,
+    pub transform: blade_graphics::Transform,
     pub material_index: usize,
 }
 
@@ -27,10 +27,10 @@ pub struct Model {
     pub name: String,
     pub geometries: Vec<Geometry>,
     pub materials: Vec<Material>,
-    pub vertex_buffer: blade::Buffer,
-    pub index_buffer: blade::Buffer,
-    pub transform_buffer: blade::Buffer,
-    pub acceleration_structure: blade::AccelerationStructure,
+    pub vertex_buffer: blade_graphics::Buffer,
+    pub index_buffer: blade_graphics::Buffer,
+    pub transform_buffer: blade_graphics::Buffer,
+    pub acceleration_structure: blade_graphics::AccelerationStructure,
 }
 
 #[derive(blade_macros::Flat)]
@@ -142,15 +142,15 @@ impl fmt::Display for Meta {
 }
 
 struct Transfer {
-    stage: blade::Buffer,
-    dst: blade::Buffer,
+    stage: blade_graphics::Buffer,
+    dst: blade_graphics::Buffer,
     size: u64,
 }
 
 struct BlasConstruct {
-    meshes: Vec<blade::AccelerationStructureMesh>,
-    scratch: blade::Buffer,
-    dst: blade::AccelerationStructure,
+    meshes: Vec<blade_graphics::AccelerationStructureMesh>,
+    scratch: blade_graphics::Buffer,
+    dst: blade_graphics::AccelerationStructure,
 }
 
 #[derive(Default)]
@@ -160,7 +160,7 @@ struct PendingOperations {
 }
 
 pub struct Baker {
-    gpu_context: Arc<blade::Context>,
+    gpu_context: Arc<blade_graphics::Context>,
     pending_operations: Mutex<PendingOperations>,
     //TODO: change to asset materials
     asset_textures: Arc<blade_asset::AssetManager<crate::texture::Baker>>,
@@ -168,7 +168,7 @@ pub struct Baker {
 
 impl Baker {
     pub fn new(
-        gpu_context: &Arc<blade::Context>,
+        gpu_context: &Arc<blade_graphics::Context>,
         asset_textures: &Arc<blade_asset::AssetManager<crate::texture::Baker>>,
     ) -> Self {
         Self {
@@ -180,8 +180,8 @@ impl Baker {
 
     pub fn flush(
         &self,
-        encoder: &mut blade::CommandEncoder,
-        temp_buffers: &mut Vec<blade::Buffer>,
+        encoder: &mut blade_graphics::CommandEncoder,
+        temp_buffers: &mut Vec<blade_graphics::Buffer>,
     ) {
         let mut pending_ops = self.pending_operations.lock().unwrap();
         if !pending_ops.transfers.is_empty() {
@@ -313,7 +313,7 @@ impl blade_asset::Baker for Baker {
                 let (handle, task) = self.asset_textures.load(
                     path_str.as_ref(),
                     crate::texture::Meta {
-                        format: blade::TextureFormat::Bc1UnormSrgb,
+                        format: blade_graphics::TextureFormat::Bc1UnormSrgb,
                     },
                 );
                 exe_context.add_fork(&task);
@@ -331,15 +331,15 @@ impl blade_asset::Baker for Baker {
             .map(|geo| geo.vertices.len())
             .sum::<usize>();
         let total_vertex_size = (total_vertices * mem::size_of::<crate::Vertex>()) as u64;
-        let vertex_buffer = self.gpu_context.create_buffer(blade::BufferDesc {
+        let vertex_buffer = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
             name: "vertex",
             size: total_vertex_size,
-            memory: blade::Memory::Device,
+            memory: blade_graphics::Memory::Device,
         });
-        let vertex_stage = self.gpu_context.create_buffer(blade::BufferDesc {
+        let vertex_stage = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
             name: "vertex stage",
             size: total_vertex_size,
-            memory: blade::Memory::Upload,
+            memory: blade_graphics::Memory::Upload,
         });
 
         let total_indices = model
@@ -348,28 +348,28 @@ impl blade_asset::Baker for Baker {
             .map(|geo| geo.indices.len())
             .sum::<usize>();
         let total_index_size = total_indices as u64 * 4;
-        let index_buffer = self.gpu_context.create_buffer(blade::BufferDesc {
+        let index_buffer = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
             name: "index",
             size: total_index_size,
-            memory: blade::Memory::Device,
+            memory: blade_graphics::Memory::Device,
         });
-        let index_stage = self.gpu_context.create_buffer(blade::BufferDesc {
+        let index_stage = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
             name: "index stage",
             size: total_index_size,
-            memory: blade::Memory::Upload,
+            memory: blade_graphics::Memory::Upload,
         });
 
         let total_transform_size =
-            (model.geometries.len() * mem::size_of::<blade::Transform>()) as u64;
-        let transform_buffer = self.gpu_context.create_buffer(blade::BufferDesc {
+            (model.geometries.len() * mem::size_of::<blade_graphics::Transform>()) as u64;
+        let transform_buffer = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
             name: "transform",
             size: total_transform_size,
-            memory: blade::Memory::Device,
+            memory: blade_graphics::Memory::Device,
         });
-        let transform_stage = self.gpu_context.create_buffer(blade::BufferDesc {
+        let transform_stage = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
             name: "transform stage",
             size: total_transform_size,
-            memory: blade::Memory::Upload,
+            memory: blade_graphics::Memory::Upload,
         });
 
         let mut meshes = Vec::with_capacity(model.geometries.len());
@@ -393,22 +393,22 @@ impl blade_asset::Baker for Baker {
                 ptr::copy_nonoverlapping(
                     geometry.transform.as_ptr() as *const u8,
                     transform_stage.data().add(transform_offset as usize),
-                    mem::size_of::<blade::Transform>(),
+                    mem::size_of::<blade_graphics::Transform>(),
                 );
             }
             let index_type = if geometry.indices.is_empty() {
                 None
             } else {
-                Some(blade::IndexType::U32)
+                Some(blade_graphics::IndexType::U32)
             };
             let triangle_count = if geometry.indices.is_empty() {
                 geometry.vertices.len() as u32 / 3
             } else {
                 geometry.indices.len() as u32 / 3
             };
-            meshes.push(blade::AccelerationStructureMesh {
+            meshes.push(blade_graphics::AccelerationStructureMesh {
                 vertex_data: vertex_buffer.at(start_vertex as u64 * vertex_stride as u64),
-                vertex_format: blade::VertexFormat::F32Vec3,
+                vertex_format: blade_graphics::VertexFormat::F32Vec3,
                 vertex_stride,
                 vertex_count: geometry.vertices.len() as u32,
                 index_data: index_buffer.at(index_offset),
@@ -428,7 +428,7 @@ impl blade_asset::Baker for Baker {
             });
             start_vertex += geometry.vertices.len() as u32;
             index_offset += geometry.indices.len() as u64 * 4;
-            transform_offset += mem::size_of::<blade::Transform>() as u64;
+            transform_offset += mem::size_of::<blade_graphics::Transform>() as u64;
         }
         assert_eq!(start_vertex as usize, total_vertices);
         assert_eq!(index_offset, total_index_size);
@@ -437,17 +437,17 @@ impl blade_asset::Baker for Baker {
         let sizes = self
             .gpu_context
             .get_bottom_level_acceleration_structure_sizes(&meshes);
-        let acceleration_structure =
-            self.gpu_context
-                .create_acceleration_structure(blade::AccelerationStructureDesc {
-                    name: str::from_utf8(model.name).unwrap(),
-                    ty: blade::AccelerationStructureType::BottomLevel,
-                    size: sizes.data,
-                });
-        let scratch = self.gpu_context.create_buffer(blade::BufferDesc {
+        let acceleration_structure = self.gpu_context.create_acceleration_structure(
+            blade_graphics::AccelerationStructureDesc {
+                name: str::from_utf8(model.name).unwrap(),
+                ty: blade_graphics::AccelerationStructureType::BottomLevel,
+                size: sizes.data,
+            },
+        );
+        let scratch = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
             name: "BLAS scratch",
             size: sizes.scratch,
-            memory: blade::Memory::Device,
+            memory: blade_graphics::Memory::Device,
         });
 
         let mut pending_ops = self.pending_operations.lock().unwrap();

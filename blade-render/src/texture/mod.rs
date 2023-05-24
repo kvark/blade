@@ -5,7 +5,7 @@ use std::{
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, blade_macros::Flat)]
-struct TextureFormatWrap(blade::TextureFormat);
+struct TextureFormatWrap(blade_graphics::TextureFormat);
 
 #[derive(blade_macros::Flat)]
 pub struct CookedImage<'a> {
@@ -17,7 +17,7 @@ pub struct CookedImage<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Meta {
-    pub format: blade::TextureFormat,
+    pub format: blade_graphics::TextureFormat,
 }
 
 impl fmt::Display for Meta {
@@ -27,19 +27,19 @@ impl fmt::Display for Meta {
 }
 
 pub struct Texture {
-    pub object: blade::Texture,
-    pub view: blade::TextureView,
+    pub object: blade_graphics::Texture,
+    pub view: blade_graphics::TextureView,
 }
 
 struct Initialization {
-    dst: blade::Texture,
+    dst: blade_graphics::Texture,
 }
 
 struct Transfer {
-    stage: blade::Buffer,
+    stage: blade_graphics::Buffer,
     bytes_per_row: u32,
-    dst: blade::Texture,
-    extent: blade::Extent,
+    dst: blade_graphics::Texture,
+    extent: blade_graphics::Extent,
 }
 
 //TODO: consider this to be shared within the `AssetHub`?
@@ -50,12 +50,12 @@ struct PendingOperations {
 }
 
 pub struct Baker {
-    gpu_context: Arc<blade::Context>,
+    gpu_context: Arc<blade_graphics::Context>,
     pending_operations: Mutex<PendingOperations>,
 }
 
 impl Baker {
-    pub fn new(gpu_context: &Arc<blade::Context>) -> Self {
+    pub fn new(gpu_context: &Arc<blade_graphics::Context>) -> Self {
         Self {
             gpu_context: Arc::clone(gpu_context),
             pending_operations: Mutex::new(PendingOperations::default()),
@@ -64,8 +64,8 @@ impl Baker {
 
     pub fn flush(
         &self,
-        encoder: &mut blade::CommandEncoder,
-        temp_buffers: &mut Vec<blade::Buffer>,
+        encoder: &mut blade_graphics::CommandEncoder,
+        temp_buffers: &mut Vec<blade_graphics::Buffer>,
     ) {
         let mut pending_ops = self.pending_operations.lock().unwrap();
         for init in pending_ops.initializations.drain(..) {
@@ -98,7 +98,7 @@ impl blade_asset::Baker for Baker {
         result: Arc<blade_asset::Cooked<CookedImage<'_>>>,
         _exe_context: choir::ExecutionContext,
     ) {
-        use blade::TextureFormat as Tf;
+        use blade_graphics::TextureFormat as Tf;
         struct PlainImage {
             width: usize,
             height: usize,
@@ -166,24 +166,26 @@ impl blade_asset::Baker for Baker {
 
     fn serve(&self, image: CookedImage<'_>, _exe_context: choir::ExecutionContext) -> Self::Output {
         let name = str::from_utf8(image.name).unwrap();
-        let extent = blade::Extent {
+        let extent = blade_graphics::Extent {
             width: image.extent[0],
             height: image.extent[1],
             depth: image.extent[2],
         };
-        let texture = self.gpu_context.create_texture(blade::TextureDesc {
-            name,
-            format: image.format.0,
-            size: extent,
-            array_layer_count: 1,
-            mip_level_count: 1, // TODO
-            dimension: blade::TextureDimension::D2,
-            usage: blade::TextureUsage::COPY | blade::TextureUsage::RESOURCE,
-        });
-        let stage = self.gpu_context.create_buffer(blade::BufferDesc {
+        let texture = self
+            .gpu_context
+            .create_texture(blade_graphics::TextureDesc {
+                name,
+                format: image.format.0,
+                size: extent,
+                array_layer_count: 1,
+                mip_level_count: 1, // TODO
+                dimension: blade_graphics::TextureDimension::D2,
+                usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
+            });
+        let stage = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
             name: &format!("{name}/stage"),
             size: image.data.len() as u64,
-            memory: blade::Memory::Upload,
+            memory: blade_graphics::Memory::Upload,
         });
         unsafe {
             ptr::copy_nonoverlapping(image.data.as_ptr(), stage.data(), image.data.len());
@@ -204,11 +206,11 @@ impl blade_asset::Baker for Baker {
 
         let view = self
             .gpu_context
-            .create_texture_view(blade::TextureViewDesc {
+            .create_texture_view(blade_graphics::TextureViewDesc {
                 name,
                 texture,
                 format: image.format.0,
-                dimension: blade::ViewDimension::D2,
+                dimension: blade_graphics::ViewDimension::D2,
                 subresources: &Default::default(),
             });
         Texture {
