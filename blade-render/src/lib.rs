@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(irrefutable_let_patterns, clippy::new_without_default)]
 #![warn(
     trivial_casts,
