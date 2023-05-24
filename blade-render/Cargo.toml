@@ -15,7 +15,7 @@ asset = ["gltf" , "base64", "texpresso", "zune-core", "zune-jpeg", "zune-png"]
 
 [dependencies]
 base64 = { workspace = true, optional = true }
-blade = { package = "blade-graphics", version = "0.2", path = "../blade-graphics" }
+blade-graphics = { version = "0.2", path = "../blade-graphics" }
 blade-asset = { version = "0.1", path = "../blade-asset" }
 blade-macros = { version = "0.2", path = "../blade-macros" }
 bytemuck = { workspace = true }

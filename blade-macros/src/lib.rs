@@ -10,7 +10,7 @@ use proc_macro::TokenStream;
 /// ```rust
 /// #[derive(blade_macros::ShaderData)]
 /// struct Test {
-///   sm: blade::Sampler,
+///   sm: blade_graphics::Sampler,
 /// }
 /// ```
 #[proc_macro_derive(ShaderData)]

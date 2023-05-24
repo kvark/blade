@@ -20,7 +20,7 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
         let name = field.ident.as_ref().unwrap();
         let ty = &field.ty;
         bindings.push(quote! {
-            (stringify!(#name), <#ty as blade::HasShaderBinding>::TYPE)
+            (stringify!(#name), <#ty as blade_graphics::HasShaderBinding>::TYPE)
         });
         assignments.push(quote! {
             self.#name.bind_to(&mut ctx, #index);
@@ -44,14 +44,14 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
 
     let struct_name = item_struct.ident;
     Ok(quote! {
-        impl<#(#generics),*> blade::ShaderData for #struct_name<#(#generics),*> {
-            fn layout() -> blade::ShaderDataLayout {
-                blade::ShaderDataLayout {
+        impl<#(#generics),*> blade_graphics::ShaderData for #struct_name<#(#generics),*> {
+            fn layout() -> blade_graphics::ShaderDataLayout {
+                blade_graphics::ShaderDataLayout {
                     bindings: vec![#(#bindings),*],
                 }
             }
-            fn fill(&self, mut ctx: blade::PipelineContext) {
-                use blade::ShaderBindable as _;
+            fn fill(&self, mut ctx: blade_graphics::PipelineContext) {
+                use blade_graphics::ShaderBindable as _;
                 #(#assignments)*
             }
         }

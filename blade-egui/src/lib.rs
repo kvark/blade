@@ -31,13 +31,13 @@ struct Uniforms {
 #[derive(blade_macros::ShaderData)]
 struct Globals {
     r_uniforms: Uniforms,
-    r_sampler: blade::Sampler,
+    r_sampler: blade_graphics::Sampler,
 }
 
 #[derive(blade_macros::ShaderData)]
 struct Locals {
-    r_vertex_data: blade::BufferPiece,
-    r_texture: blade::TextureView,
+    r_vertex_data: blade_graphics::BufferPiece,
+    r_texture: blade_graphics::TextureView,
 }
 
 pub struct ScreenDescriptor {
@@ -54,33 +54,33 @@ impl ScreenDescriptor {
 }
 
 struct GuiTexture {
-    allocation: blade::Texture,
-    view: blade::TextureView,
+    allocation: blade_graphics::Texture,
+    view: blade_graphics::TextureView,
 }
 
 impl GuiTexture {
-    fn create(context: &blade::Context, name: &str, size: blade::Extent) -> Self {
-        let format = blade::TextureFormat::Rgba8UnormSrgb;
-        let allocation = context.create_texture(blade::TextureDesc {
+    fn create(context: &blade_graphics::Context, name: &str, size: blade_graphics::Extent) -> Self {
+        let format = blade_graphics::TextureFormat::Rgba8UnormSrgb;
+        let allocation = context.create_texture(blade_graphics::TextureDesc {
             name,
             format,
             size,
             array_layer_count: 1,
             mip_level_count: 1,
-            dimension: blade::TextureDimension::D2,
-            usage: blade::TextureUsage::COPY | blade::TextureUsage::RESOURCE,
+            dimension: blade_graphics::TextureDimension::D2,
+            usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
         });
-        let view = context.create_texture_view(blade::TextureViewDesc {
+        let view = context.create_texture_view(blade_graphics::TextureViewDesc {
             name,
             texture: allocation,
             format,
-            dimension: blade::ViewDimension::D2,
-            subresources: &blade::TextureSubresources::default(),
+            dimension: blade_graphics::ViewDimension::D2,
+            subresources: &blade_graphics::TextureSubresources::default(),
         });
         Self { allocation, view }
     }
 
-    fn delete(self, context: &blade::Context) {
+    fn delete(self, context: &blade_graphics::Context) {
         context.destroy_texture(self.allocation);
         context.destroy_texture_view(self.view);
     }
@@ -92,19 +92,19 @@ impl GuiTexture {
 ///
 /// It can render egui primitives into a render pass.
 pub struct GuiPainter {
-    pipeline: blade::RenderPipeline,
+    pipeline: blade_graphics::RenderPipeline,
     //TODO: find a better way to allocate temporary buffers.
     belt: BufferBelt,
     textures: HashMap<egui::TextureId, GuiTexture>,
     //TODO: this could also look better
     textures_dropped: Vec<GuiTexture>,
-    textures_to_delete: Vec<(GuiTexture, blade::SyncPoint)>,
-    sampler: blade::Sampler,
+    textures_to_delete: Vec<(GuiTexture, blade_graphics::SyncPoint)>,
+    sampler: blade_graphics::Sampler,
 }
 
 impl GuiPainter {
     /// Destroy the contents of the painter.
-    pub fn destroy(&mut self, context: &blade::Context) {
+    pub fn destroy(&mut self, context: &blade_graphics::Context) {
         self.belt.destroy(context);
         for (_, gui_texture) in self.textures.drain() {
             gui_texture.delete(context);
@@ -116,41 +116,44 @@ impl GuiPainter {
     ///
     /// It supports renderpasses with only a color attachment,
     /// and this attachment format must be The `output_format`.
-    pub fn new(context: &blade::Context, output_format: blade::TextureFormat) -> Self {
+    pub fn new(
+        context: &blade_graphics::Context,
+        output_format: blade_graphics::TextureFormat,
+    ) -> Self {
         let shader_source = fs::read_to_string("blade-egui/shader.wgsl").unwrap();
-        let shader = context.create_shader(blade::ShaderDesc {
+        let shader = context.create_shader(blade_graphics::ShaderDesc {
             source: &shader_source,
         });
 
-        let globals_layout = <Globals as blade::ShaderData>::layout();
-        let locals_layout = <Locals as blade::ShaderData>::layout();
-        let pipeline = context.create_render_pipeline(blade::RenderPipelineDesc {
+        let globals_layout = <Globals as blade_graphics::ShaderData>::layout();
+        let locals_layout = <Locals as blade_graphics::ShaderData>::layout();
+        let pipeline = context.create_render_pipeline(blade_graphics::RenderPipelineDesc {
             name: "gui",
             data_layouts: &[&globals_layout, &locals_layout],
             vertex: shader.at("vs_main"),
-            primitive: blade::PrimitiveState {
-                topology: blade::PrimitiveTopology::TriangleList,
+            primitive: blade_graphics::PrimitiveState {
+                topology: blade_graphics::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
             depth_stencil: None, //TODO?
             fragment: shader.at("fs_main"),
-            color_targets: &[blade::ColorTargetState {
+            color_targets: &[blade_graphics::ColorTargetState {
                 format: output_format,
-                blend: Some(blade::BlendState::ALPHA_BLENDING),
-                write_mask: blade::ColorWrites::all(),
+                blend: Some(blade_graphics::BlendState::ALPHA_BLENDING),
+                write_mask: blade_graphics::ColorWrites::all(),
             }],
         });
 
         let belt = BufferBelt::new(BeltDescriptor {
-            memory: blade::Memory::Shared,
+            memory: blade_graphics::Memory::Shared,
             min_chunk_size: 0x1000,
         });
 
-        let sampler = context.create_sampler(blade::SamplerDesc {
+        let sampler = context.create_sampler(blade_graphics::SamplerDesc {
             name: "gui",
-            address_modes: [blade::AddressMode::ClampToEdge; 3],
-            mag_filter: blade::FilterMode::Linear,
-            min_filter: blade::FilterMode::Linear,
+            address_modes: [blade_graphics::AddressMode::ClampToEdge; 3],
+            mag_filter: blade_graphics::FilterMode::Linear,
+            min_filter: blade_graphics::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -164,7 +167,7 @@ impl GuiPainter {
         }
     }
 
-    fn triage_deletions(&mut self, context: &blade::Context) {
+    fn triage_deletions(&mut self, context: &blade_graphics::Context) {
         let valid_pos = self
             .textures_to_delete
             .iter()
@@ -181,9 +184,9 @@ impl GuiPainter {
     /// and old textures should be removed after.
     pub fn update_textures(
         &mut self,
-        command_encoder: &mut blade::CommandEncoder,
+        command_encoder: &mut blade_graphics::CommandEncoder,
         textures_delta: &egui::TexturesDelta,
-        context: &blade::Context,
+        context: &blade_graphics::Context,
     ) {
         if textures_delta.set.is_empty() && textures_delta.free.is_empty() {
             return;
@@ -211,7 +214,7 @@ impl GuiPainter {
             };
 
             let image_size = image_delta.image.size();
-            let extent = blade::Extent {
+            let extent = blade_graphics::Extent {
                 width: image_size[0] as u32,
                 height: image_size[1] as u32,
                 depth: 1,
@@ -239,7 +242,7 @@ impl GuiPainter {
                 }
             };
 
-            let dst = blade::TexturePiece {
+            let dst = blade_graphics::TexturePiece {
                 texture: texture.allocation,
                 mip_level: 0,
                 array_layer: 0,
@@ -269,10 +272,10 @@ impl GuiPainter {
     /// The `sd` must contain dimensions of the render target.
     pub fn paint(
         &mut self,
-        pass: &mut blade::RenderCommandEncoder,
+        pass: &mut blade_graphics::RenderCommandEncoder,
         paint_jobs: &[egui::epaint::ClippedPrimitive],
         sd: &ScreenDescriptor,
-        context: &blade::Context,
+        context: &blade_graphics::Context,
     ) {
         let logical_size = sd.logical_size();
         let mut pc = pass.with(&self.pipeline);
@@ -308,7 +311,7 @@ impl GuiPainter {
                 continue;
             }
 
-            pc.set_scissor_rect(&blade::ScissorRect {
+            pc.set_scissor_rect(&blade_graphics::ScissorRect {
                 x: clip_min_x,
                 y: clip_min_y,
                 w: clip_max_x - clip_min_x,
@@ -330,7 +333,7 @@ impl GuiPainter {
 
                 pc.draw_indexed(
                     index_buf,
-                    blade::IndexType::U32,
+                    blade_graphics::IndexType::U32,
                     mesh.indices.len() as u32,
                     0,
                     0,
@@ -341,7 +344,7 @@ impl GuiPainter {
     }
 
     /// Call this after submitting work at the given `sync_point`.
-    pub fn after_submit(&mut self, sync_point: blade::SyncPoint) {
+    pub fn after_submit(&mut self, sync_point: blade_graphics::SyncPoint) {
         self.textures_to_delete.extend(
             self.textures_dropped
                 .drain(..)

@@ -45,8 +45,8 @@ fn parse_wgsl() {
             )
             .validate(&module)
             .unwrap_or_else(|e| {
-                blade::util::emit_annotated_error(&e, "", &shader);
-                blade::util::print_err(&e);
+                blade_graphics::util::emit_annotated_error(&e, "", &shader);
+                blade_graphics::util::print_err(&e);
                 panic!("Shader validation failed");
             });
         }

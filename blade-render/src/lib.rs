@@ -38,7 +38,7 @@ pub struct Camera {
 
 pub struct Object {
     pub model: blade_asset::Handle<Model>,
-    pub transform: blade::Transform,
+    pub transform: blade_graphics::Transform,
 }
 
 #[derive(Default)]

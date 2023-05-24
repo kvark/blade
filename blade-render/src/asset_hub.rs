@@ -13,7 +13,7 @@ impl AssetHub {
         root: &Path,
         target: &Path,
         choir: &Arc<choir::Choir>,
-        gpu_context: &Arc<blade::Context>,
+        gpu_context: &Arc<blade_graphics::Context>,
     ) -> Self {
         let _ = std::fs::create_dir_all(target);
         let textures = Arc::new(AssetManager::new(
@@ -37,8 +37,8 @@ impl AssetHub {
     /// relevant submission is completely retired.
     pub fn flush(
         &self,
-        command_encoder: &mut blade::CommandEncoder,
-        temp_buffers: &mut Vec<blade::Buffer>,
+        command_encoder: &mut blade_graphics::CommandEncoder,
+        temp_buffers: &mut Vec<blade_graphics::Buffer>,
     ) {
         self.textures.baker.flush(command_encoder, temp_buffers);
         self.models.baker.flush(command_encoder, temp_buffers);
