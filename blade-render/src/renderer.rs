@@ -124,6 +124,15 @@ impl Targets {
     }
 }
 
+/// Blade Renderer is a comprehensive rendering solution for
+/// end user applications.
+///
+/// It takes care of the shaders, geometry buffers, acceleration structures,
+/// dummy resources, and debug drawing.
+///
+/// It doesn't:
+///   - manage or submit any command encoders
+///   - know about the window to display on
 pub struct Renderer {
     config: RenderConfig,
     targets: Targets,
@@ -280,6 +289,10 @@ impl ShaderPipelines {
 }
 
 impl Renderer {
+    /// Create a new renderer with a given configuration.
+    ///
+    /// Panics if the system is not compatible.
+    /// Records initialization routines into the given command encoder.
     pub fn new(
         encoder: &mut blade::CommandEncoder,
         gpu: &blade::Context,
@@ -387,6 +400,7 @@ impl Renderer {
         }
     }
 
+    /// Destroy all internally managed GPU resources.
     pub fn destroy(&mut self, gpu: &blade::Context) {
         // internal resources
         self.targets.destroy(gpu);
@@ -409,6 +423,7 @@ impl Renderer {
         self.scene = scene;
     }
 
+    /// Check if any shaders need to be hot reloaded, and do it.
     pub fn hot_reload(&mut self, gpu: &blade::Context, sync_point: &blade::SyncPoint) -> bool {
         if let Some(ref mut last_mod_time) = self.shader_modified_time {
             let cur_mod_time = fs::metadata(SHADER_PATH).unwrap().modified().unwrap();
@@ -428,6 +443,7 @@ impl Renderer {
         false
     }
 
+    /// Prepare to render a frame.
     pub fn prepare(
         &mut self,
         command_encoder: &mut blade::CommandEncoder,
@@ -616,6 +632,9 @@ impl Renderer {
         }
     }
 
+    /// Ray trace the scene.
+    ///
+    /// The result is stored internally in an HDR render target.
     pub fn ray_trace(
         &self,
         command_encoder: &mut blade::CommandEncoder,
@@ -686,6 +705,7 @@ impl Renderer {
         }
     }
 
+    /// Blit the rendering result into a specified render pass.
     pub fn blit(&self, pass: &mut blade::RenderCommandEncoder, camera: &super::Camera) {
         if let mut pc = pass.with(&self.blit_pipeline) {
             pc.bind(

@@ -55,56 +55,10 @@ pub struct CookedModel<'a> {
     geometries: Vec<CookedGeometry<'a>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Meta;
-
-impl fmt::Display for Meta {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        Ok(())
-    }
-}
-
-struct Transfer {
-    stage: blade::Buffer,
-    dst: blade::Buffer,
-    size: u64,
-}
-
-struct BlasConstruct {
-    meshes: Vec<blade::AccelerationStructureMesh>,
-    scratch: blade::Buffer,
-    dst: blade::AccelerationStructure,
-}
-
-#[derive(Default)]
-struct PendingOperations {
-    transfers: Vec<Transfer>,
-    blas_constructs: Vec<BlasConstruct>,
-}
-
-pub struct Baker {
-    gpu_context: Arc<blade::Context>,
-    pending_operations: Mutex<PendingOperations>,
-    //TODO: change to asset materials
-    asset_textures: Arc<blade_asset::AssetManager<crate::texture::Baker>>,
-}
-
-impl Baker {
-    pub fn new(
-        gpu_context: &Arc<blade::Context>,
-        asset_textures: &Arc<blade_asset::AssetManager<crate::texture::Baker>>,
-    ) -> Self {
-        Self {
-            gpu_context: Arc::clone(gpu_context),
-            pending_operations: Mutex::new(PendingOperations::default()),
-            asset_textures: Arc::clone(asset_textures),
-        }
-    }
-
-    #[cfg(feature = "asset")]
+#[cfg(feature = "asset")]
+impl CookedModel<'_> {
     fn populate_gltf(
-        &self,
-        model: &mut CookedModel,
+        &mut self,
         g_node: gltf::Node,
         parent_transform: glam::Mat4,
         data_buffers: &[Vec<u8>],
@@ -162,7 +116,7 @@ impl Baker {
                         ];
                     }
                 }
-                model.geometries.push(CookedGeometry {
+                self.geometries.push(CookedGeometry {
                     name: Cow::Owned(name.as_bytes().to_owned()),
                     vertices: Cow::Owned(vertices),
                     indices: Cow::Owned(indices),
@@ -173,7 +127,54 @@ impl Baker {
         }
 
         for child in g_node.children() {
-            self.populate_gltf(model, child, global_transform, data_buffers);
+            self.populate_gltf(child, global_transform, data_buffers);
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Meta;
+
+impl fmt::Display for Meta {
+    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(())
+    }
+}
+
+struct Transfer {
+    stage: blade::Buffer,
+    dst: blade::Buffer,
+    size: u64,
+}
+
+struct BlasConstruct {
+    meshes: Vec<blade::AccelerationStructureMesh>,
+    scratch: blade::Buffer,
+    dst: blade::AccelerationStructure,
+}
+
+#[derive(Default)]
+struct PendingOperations {
+    transfers: Vec<Transfer>,
+    blas_constructs: Vec<BlasConstruct>,
+}
+
+pub struct Baker {
+    gpu_context: Arc<blade::Context>,
+    pending_operations: Mutex<PendingOperations>,
+    //TODO: change to asset materials
+    asset_textures: Arc<blade_asset::AssetManager<crate::texture::Baker>>,
+}
+
+impl Baker {
+    pub fn new(
+        gpu_context: &Arc<blade::Context>,
+        asset_textures: &Arc<blade_asset::AssetManager<crate::texture::Baker>>,
+    ) -> Self {
+        Self {
+            gpu_context: Arc::clone(gpu_context),
+            pending_operations: Mutex::new(PendingOperations::default()),
+            asset_textures: Arc::clone(asset_textures),
         }
     }
 
@@ -293,7 +294,7 @@ impl blade_asset::Baker for Baker {
                 }
                 for g_scene in document.scenes() {
                     for g_node in g_scene.nodes() {
-                        self.populate_gltf(&mut model, g_node, glam::Mat4::IDENTITY, &buffers);
+                        model.populate_gltf(g_node, glam::Mat4::IDENTITY, &buffers);
                     }
                 }
                 result.put(model);
@@ -472,7 +473,7 @@ impl blade_asset::Baker for Baker {
         });
 
         Model {
-            name: String::from_utf8_lossy(model.name.as_ref()).into_owned(),
+            name: String::from_utf8_lossy(model.name).into_owned(),
             geometries,
             materials,
             vertex_buffer,

@@ -95,7 +95,7 @@ impl<T: Default> Arena<T> {
                 };
                 let size = self.min_size << freeman.chunk_bases.len();
                 let mut data = (0..size).map(|_| T::default()).collect::<Box<[T]>>();
-                let chunk_start = data.first_mut().unwrap() as *mut T;
+                let chunk_start: *mut T = data.first_mut().unwrap();
                 self.chunks[address.chunk.get() as usize].store(chunk_start, Ordering::Release);
                 freeman.chunk_bases.push(Box::into_raw(data));
                 freeman

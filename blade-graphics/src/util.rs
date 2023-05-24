@@ -32,7 +32,7 @@ pub fn emit_annotated_error<E: Error>(ann_err: &naga::WithSpan<E>, filename: &st
     let diagnostic = Diagnostic::error().with_labels(
         ann_err
             .spans()
-            .map(|(span, desc)| {
+            .map(|&(span, ref desc)| {
                 Label::primary((), span.to_range().unwrap()).with_message(desc.to_owned())
             })
             .collect(),

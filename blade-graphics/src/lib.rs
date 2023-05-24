@@ -11,8 +11,8 @@
     clippy::single_match,
     // Push commands are more regular than macros.
     clippy::vec_init_then_push,
-    // "if panic" is a good uniform construct.
-    clippy::if_then_panic,
+    // This is the land of unsafe.
+    clippy::missing_safety_doc,
 )]
 #![warn(
     trivial_casts,

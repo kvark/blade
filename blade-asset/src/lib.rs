@@ -1,3 +1,13 @@
+#![allow(clippy::new_without_default)]
+#![warn(
+    trivial_casts,
+    trivial_numeric_casts,
+    unused_extern_crates,
+    unused_qualifications,
+    // We don't match on a reference, unless required.
+    clippy::pattern_type_mismatch,
+)]
+
 use std::{
     any::TypeId,
     collections::hash_map::{DefaultHasher, Entry, HashMap},
@@ -18,6 +28,7 @@ use syncell::SynCell;
 
 type Version = u32;
 
+/// Handle representing an asset.
 pub struct Handle<T> {
     inner: arena::Handle<Slot<T>>,
     version: Version,
@@ -70,6 +81,13 @@ impl<T> Default for Slot<T> {
     }
 }
 
+/// A container for storing the result of cooking.
+///
+/// It's meant to live only temporarily during an asset loading.
+/// It receives the result of cooking and then delivers it to
+/// a task that writes the data to disk.
+///
+/// Here `T` is the cooked asset type.
 pub struct Cooked<T> {
     //Note: we aren't using the full power of `SynCell` here.
     cell: SynCell<Vec<u8>>,
@@ -78,7 +96,8 @@ pub struct Cooked<T> {
 unsafe impl<T> Send for Cooked<T> {}
 unsafe impl<T> Sync for Cooked<T> {}
 
-impl<T: flat::Flat> Cooked<T> {
+impl<T: Flat> Cooked<T> {
+    /// Create a new container with no data.
     pub fn new() -> Self {
         Self {
             cell: SynCell::new(Vec::new()),
@@ -86,6 +105,7 @@ impl<T: flat::Flat> Cooked<T> {
         }
     }
 
+    /// Put the data into it.
     pub fn put(&self, value: T) {
         let mut data = vec![0u8; value.size()];
         unsafe { value.write(data.as_mut_ptr()) };
@@ -93,10 +113,19 @@ impl<T: flat::Flat> Cooked<T> {
     }
 }
 
+/// Baker class abstracts over asset-specific logic.
 pub trait Baker: Send + Sync + 'static {
+    /// Metadata used for loading assets.
     type Meta: Clone + Eq + Hash + Send + fmt::Display;
-    type Data<'a>: flat::Flat;
+    /// Intermediate data that is cached, which comes out as a result of cooking.
+    type Data<'a>: Flat;
+    /// Output type that is produced for the client.
     type Output: Send;
+    /// Cook an asset represented by a slice of bytes.
+    ///
+    /// This method is called within a task within the `exe_context` execution context.
+    /// It may fork out other tasks if necessary.
+    /// It must put the result into `result` at some point during execution.
     fn cook(
         &self,
         source: &[u8],
@@ -105,16 +134,28 @@ pub trait Baker: Send + Sync + 'static {
         result: Arc<Cooked<Self::Data<'_>>>,
         exe_context: choir::ExecutionContext,
     );
+    /// Produce the output bsed on a cooked asset.
+    ///
+    /// This method is also called within a task `exe_context`.
     fn serve(&self, cooked: Self::Data<'_>, exe_context: choir::ExecutionContext) -> Self::Output;
+    /// Delete the output of an asset.
     fn delete(&self, output: Self::Output);
 }
 
+/// Manager of assets.
+///
+/// Contains common logic for tracking the `Handle` associations,
+/// caching the results of cooking by the path,
+/// and scheduling tasks for cooking and serving assets.
 pub struct AssetManager<B: Baker> {
+    /// Root path where all assets are searched from.
     pub root: PathBuf,
     target: PathBuf,
     slots: arena::Arena<Slot<B::Output>>,
+    #[allow(clippy::type_complexity)]
     paths: Mutex<HashMap<(PathBuf, B::Meta), Handle<B::Output>>>,
     choir: Arc<choir::Choir>,
+    /// Asset-specific implementation.
     pub baker: Arc<B>,
 }
 
@@ -128,6 +169,10 @@ impl<B: Baker> ops::Index<Handle<B::Output>> for AssetManager<B> {
 }
 
 impl<B: Baker> AssetManager<B> {
+    /// Create a new asset manager.
+    ///
+    /// The `root` points to the base path for source data.
+    /// The `target` points to the folder to store cooked assets in.
     pub fn new(root: &Path, target: &Path, choir: &Arc<choir::Choir>, baker: B) -> Self {
         if !target.is_dir() {
             log::info!("Creating target {}", target.display());
@@ -200,7 +245,7 @@ impl<B: Baker> AssetManager<B> {
                     assert_eq!(u64::from_le_bytes(bytes), expected_hash);
                     let mut data = Vec::new();
                     file.read_to_end(&mut data).unwrap();
-                    let cooked = unsafe { <B::Data<'_> as flat::Flat>::read(data.as_ptr()) };
+                    let cooked = unsafe { <B::Data<'_> as Flat>::read(data.as_ptr()) };
                     let target = baker.serve(cooked, exe_context);
                     let or = output_ref;
                     unsafe {
@@ -236,13 +281,13 @@ impl<B: Baker> AssetManager<B> {
                 .spawn(format!("cook finish for {}", relative_path.display()))
                 .init(move |_| {
                     let mut file = fs::File::create(&target_path).unwrap();
-                    file.write(&[0; 8]).unwrap(); // write zero hash first
+                    file.write_all(&[0; 8]).unwrap(); // write zero hash first
                     let data_ref = result_finish.cell.borrow();
-                    file.write(&*data_ref).unwrap();
+                    file.write_all(&data_ref).unwrap();
                     file.seek(SeekFrom::Start(0)).unwrap();
                     // Write the real hash last, so that the cached file is not valid
                     // unless everything went smooth.
-                    file.write(&expected_hash.to_le_bytes()).unwrap();
+                    file.write_all(&expected_hash.to_le_bytes()).unwrap();
                 });
 
             let baker = Arc::clone(&self.baker);
@@ -266,6 +311,13 @@ impl<B: Baker> AssetManager<B> {
         }
     }
 
+    /// Load an asset given the relative path from `self.root`.
+    ///
+    /// Metadata is an asset-specific piece of information that determines how the asset is processed.
+    /// Each pair of (path, meta) is cached indepedently.
+    ///
+    /// This function produces a handle for the asset, and also returns the load task.
+    /// It's only valid to access the asset once the load task is completed.
     pub fn load(&self, path: &Path, meta: B::Meta) -> (Handle<B::Output>, &choir::RunningTask) {
         let mut paths = self.paths.lock().unwrap();
         let handle = match paths.entry((path.to_path_buf(), meta)) {
@@ -279,9 +331,15 @@ impl<B: Baker> AssetManager<B> {
         (handle, task)
     }
 
+    /// Clear the asset manager by deleting all the stored assets.
+    ///
+    /// Invalidates all handles produced from loading assets.
     pub fn clear(&self) {
         for (_key, handle) in self.paths.lock().unwrap().drain() {
             let slot = self.slots.dealloc(handle.inner);
+            if let Some(task) = slot.load_task {
+                task.join();
+            }
             if let Some(data) = slot.data {
                 self.baker.delete(data);
             }
