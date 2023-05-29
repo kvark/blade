@@ -212,10 +212,11 @@ impl<B: Baker> AssetManager<B> {
             let mut hasher = DefaultHasher::new();
             metadata.modified().unwrap().hash(&mut hasher);
             let hash = hasher.finish().to_le_bytes();
-            let mut file_name = format!("{}-", relative_path.display());
-            ENCODING_ENGINE.encode_string(hash, &mut file_name);
-            file_name += ".raw";
-            self.target.join(file_name)
+            let file_name = relative_path.file_name().unwrap().to_string_lossy();
+            let mut file_name_str = format!("{}-", file_name);
+            ENCODING_ENGINE.encode_string(hash, &mut file_name_str);
+            file_name_str += ".raw";
+            self.target.join(file_name_str)
         };
 
         let (handle, slot_ptr) = self.slots.alloc_default();
@@ -280,7 +281,9 @@ impl<B: Baker> AssetManager<B> {
                 .choir
                 .spawn(format!("cook finish for {}", relative_path.display()))
                 .init(move |_| {
-                    let mut file = fs::File::create(&target_path).unwrap();
+                    let mut file = fs::File::create(&target_path).unwrap_or_else(|e| {
+                        panic!("Unable to create {}: {}", target_path.display(), e)
+                    });
                     file.write_all(&[0; 8]).unwrap(); // write zero hash first
                     let data_ref = result_finish.cell.borrow();
                     file.write_all(&data_ref).unwrap();

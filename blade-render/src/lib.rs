@@ -45,4 +45,5 @@ pub struct Object {
 #[derive(Default)]
 pub struct Scene {
     pub objects: Vec<Object>,
+    pub environment_map: Option<blade_asset::Handle<Texture>>,
 }

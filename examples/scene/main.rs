@@ -3,7 +3,38 @@
 
 use blade_graphics as gpu;
 use blade_render::{AssetHub, Camera, RenderConfig, Renderer};
-use std::{path::Path, sync::Arc, time};
+use std::{fs, path::Path, sync::Arc, time};
+
+#[derive(serde::Deserialize)]
+struct ConfigCamera {
+    position: [f32; 3],
+    orientation: [f32; 4],
+    fov_y: f32,
+    max_depth: f32,
+}
+
+fn default_transform() -> [[f32; 4]; 3] {
+    [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+    ]
+}
+
+#[derive(serde::Deserialize)]
+struct ConfigModel {
+    path: String,
+    #[serde(default = "default_transform")]
+    transform: [[f32; 4]; 3],
+}
+
+#[derive(serde::Deserialize)]
+struct ConfigScene {
+    camera: ConfigCamera,
+    #[serde(default)]
+    environment_map: String,
+    models: Vec<ConfigModel>,
+}
 
 struct Example {
     prev_temp_buffers: Vec<gpu::Buffer>,
@@ -21,7 +52,7 @@ struct Example {
 }
 
 impl Example {
-    fn new(window: &winit::window::Window, gltf_path: &Path, camera: Camera) -> Self {
+    fn new(window: &winit::window::Window, scene_path: &Path) -> Self {
         log::info!("Initializing");
         //let _ = profiling::tracy_client::Client::start();
 
@@ -56,29 +87,52 @@ impl Example {
             .collect();
 
         let asset_hub = AssetHub::new(
-            gltf_path.parent().unwrap(),
+            scene_path.parent().unwrap(),
             Path::new("asset-cache"),
             &choir,
             &context,
         );
 
+        let config_scene: ConfigScene =
+            ron::de::from_bytes(&fs::read(scene_path).expect("Unable to open the scene file"))
+                .expect("Unable to parse the scene file");
+
+        let camera = Camera {
+            pos: config_scene.camera.position.into(),
+            rot: {
+                let [x, y, z, w] = config_scene.camera.orientation;
+                glam::Quat::from_xyzw(x, y, z, w).normalize().into()
+            },
+            fov_y: config_scene.camera.fov_y,
+            depth: config_scene.camera.max_depth,
+        };
+
         let mut scene = blade_render::Scene::default();
         let time_start = time::Instant::now();
-        let relative_path = gltf_path.file_name().unwrap();
-        let (model, model_task) = asset_hub
-            .models
-            .load(relative_path.as_ref(), blade_render::model::Meta);
+        let mut load_finish = choir.spawn("load finish").init_dummy();
+        if !config_scene.environment_map.is_empty() {
+            let meta = blade_render::texture::Meta {
+                format: blade_graphics::TextureFormat::Rgba32Float,
+            };
+            let (texture, texture_task) = asset_hub
+                .textures
+                .load(config_scene.environment_map.as_ref(), meta);
+            load_finish.depend_on(texture_task);
+            scene.environment_map = Some(texture);
+        }
+        for config_model in config_scene.models {
+            let (model, model_task) = asset_hub
+                .models
+                .load(config_model.path.as_ref(), blade_render::model::Meta);
+            load_finish.depend_on(model_task);
+            scene.objects.push(blade_render::Object {
+                model,
+                transform: config_model.transform.into(),
+            });
+        }
         log::info!("Waiting for scene to load");
-        model_task.clone().join();
+        let _ = load_finish.run().join();
         println!("Scene loaded in {} ms", time_start.elapsed().as_millis());
-        scene.objects.push(blade_render::Object {
-            model,
-            transform: gpu::Transform {
-                x: [1.0, 0.0, 0.0, 0.0].into(),
-                y: [0.0, 1.0, 0.0, 0.0].into(),
-                z: [0.0, 0.0, 1.0, 0.0].into(),
-            },
-        });
 
         log::info!("Spinning up the renderer");
         let mut prev_temp_buffers = Vec::new();
@@ -275,17 +329,9 @@ fn main() {
     let mut args = std::env::args();
     let path_to_scene = args
         .nth(1)
-        .unwrap_or("examples/scene/data/monkey.gltf".to_string());
+        .unwrap_or("examples/scene/data/scene.ron".to_string());
 
-    let camera = Camera {
-        pos: [2.7, 1.6, 2.1].into(),
-        rot: glam::Quat::from_xyzw(-0.04, 0.92, -0.05, -0.37)
-            .normalize()
-            .into(),
-        fov_y: 0.8,
-        depth: 100.0,
-    };
-    let mut example = Example::new(&window, Path::new(&path_to_scene), camera);
+    let mut example = Example::new(&window, Path::new(&path_to_scene));
 
     struct Drag {
         screen_pos: glam::IVec2,

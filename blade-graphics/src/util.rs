@@ -62,6 +62,7 @@ impl super::TextureFormat {
             Self::Rgba8Snorm => uncompressed(4),
             Self::Rgba16Float => uncompressed(8),
             Self::R32Float => uncompressed(4),
+            Self::Rgba32Float => uncompressed(32),
             Self::Depth32Float => uncompressed(4),
             Self::Bc1Unorm => cx_bc(8),
             Self::Bc1UnormSrgb => cx_bc(8),

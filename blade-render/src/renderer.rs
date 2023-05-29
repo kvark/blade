@@ -158,6 +158,7 @@ pub struct Renderer {
     blit_pipeline: blade_graphics::RenderPipeline,
     scene: super::Scene,
     acceleration_structure: blade_graphics::AccelerationStructure,
+    environment_view: blade_graphics::TextureView,
     dummy: DummyResources,
     hit_buffer: blade_graphics::Buffer,
     vertex_buffers: blade_graphics::BufferArray<MAX_RESOURCES>,
@@ -211,6 +212,7 @@ struct MainData {
     camera: CameraParams,
     parameters: MainParams,
     acc_struct: blade_graphics::AccelerationStructure,
+    env_map: blade_graphics::TextureView,
     in_depth: blade_graphics::TextureView,
     in_basis: blade_graphics::TextureView,
     in_albedo: blade_graphics::TextureView,
@@ -396,6 +398,7 @@ impl Renderer {
             main_pipeline: sp.main,
             blit_pipeline: sp.blit,
             acceleration_structure: blade_graphics::AccelerationStructure::default(),
+            environment_view: dummy.white_view,
             dummy,
             hit_buffer: blade_graphics::Buffer::default(),
             vertex_buffers: blade_graphics::BufferArray::new(),
@@ -545,9 +548,6 @@ impl Renderer {
             self.textures.clear();
             let dummy_white = self.textures.alloc(self.dummy.white_view);
             let mut texture_indices = HashMap::new();
-            /*for texture in self.scene.textures.iter() {
-                texture_indices.push(self.textures.alloc(texture.view));
-            }*/
 
             self.vertex_buffers.clear();
             self.index_buffers.clear();
@@ -612,6 +612,11 @@ impl Renderer {
         }
 
         self.frame_index += 1;
+        self.environment_view = match self.scene.environment_map {
+            Some(handle) => asset_hub.textures[handle].view,
+            None => self.dummy.white_view,
+        };
+
         let mut transfer = command_encoder.transfer();
         if enable_debug {
             // reset the debug line count
@@ -713,6 +718,7 @@ impl Renderer {
                         temporal_history: ray_config.temporal_history,
                     },
                     acc_struct: self.acceleration_structure,
+                    env_map: self.environment_view,
                     in_depth: self.targets.depth_view,
                     in_basis: self.targets.basis_view,
                     in_albedo: self.targets.albedo_view,

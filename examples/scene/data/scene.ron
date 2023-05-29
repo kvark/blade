@@ -1,0 +1,13 @@
+(
+    camera: (
+        position: (2.7, 1.6, 2.1),
+        orientation: (-0.04, 0.92, -0.05, -0.37),
+        fov_y: 0.8,
+        max_depth: 100.0,
+    ),
+    models: [
+        (
+            path: "monkey.gltf",
+        ),
+    ],
+)
