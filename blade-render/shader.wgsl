@@ -53,6 +53,7 @@ var<storage, read> hit_entries: array<HitEntry>;
 var<uniform> camera: CameraParams;
 var<uniform> parameters: MainParams;
 var acc_struct: acceleration_structure;
+var env_map: texture_2d<f32>;
 
 fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     return v + 2.0*cross(q.xyz, cross(q.xyz,v) + q.w*v);
@@ -116,7 +117,7 @@ fn debug_vs(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) inst
 
     let world_dir = point.pos - camera.position;
     let local_dir = qrot(qinv(camera.orientation), world_dir);
-    let ndc = local_dir.xy / tan(camera.fov);
+    let ndc = local_dir.xy / tan(0.5 * camera.fov);
 
     var out: DebugVarying;
     out.pos = vec4<f32>(ndc, 0.0, local_dir.z);
@@ -135,7 +136,7 @@ var out_albedo: texture_storage_2d<rgba8unorm, write>;
 fn get_ray_direction(global_id: vec2<u32>, target_size: vec2<u32>) -> vec3<f32> {
     let half_size = vec2<f32>(target_size >> vec2<u32>(1u));
     let ndc = (vec2<f32>(global_id) - half_size) / half_size;
-    let local_dir = vec3<f32>(ndc * tan(camera.fov), 1.0);
+    let local_dir = vec3<f32>(ndc * tan(0.5 * camera.fov), 1.0);
     return normalize(qrot(camera.orientation, local_dir));
 }
 
@@ -372,7 +373,9 @@ fn sample_uniform_hemisphere(rng: ptr<function, RandomState>) -> vec3<f32> {
 
 fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
     //Note: Y axis is up
-    return vec3<f32>(max(2.0 * dir.y, 0.0));
+    // Using equirectangular projection
+    let uv = vec2<f32>(atan2(dir.x, dir.z) + PI, -2.0 * asin(dir.y) + PI) / (2.0 * PI);
+    return textureSampleLevel(env_map, sampler_linear, uv, 0.0).xyz;
 }
 
 struct Surface {
@@ -469,7 +472,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     textureStore(output, global_id.xy, vec4<f32>(color, 1.0));
 }
 
+struct ToneMapParams {
+    average_lum: f32,
+    key_value: f32,
+    // minimum value of the pixels mapped to white brightness
+    white_level: f32,
+    unused: f32,
+};
+
 var input: texture_2d<f32>;
+var<uniform> tone_map_params: ToneMapParams;
+
 struct VertexOutput {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) @interpolate(flat) input_size: vec2<u32>,
@@ -486,5 +499,10 @@ fn blit_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
 @fragment
 fn blit_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
     let tc = vec2<i32>(i32(vo.clip_pos.x), i32(vo.input_size.y) - i32(vo.clip_pos.y));
-    return textureLoad(input, tc, 0);
+    // Following https://blog.en.uwa4d.com/2022/07/19/physically-based-renderingg-hdr-tone-mapping/
+    let l_hdr = textureLoad(input, tc, 0).xyz;
+    let l_adjusted = tone_map_params.key_value / tone_map_params.average_lum * l_hdr;
+    let l_white = tone_map_params.white_level;
+    let l_ldr = l_adjusted * (1.0 + l_adjusted / (l_white*l_white)) / (1.0 + l_adjusted);
+    return vec4<f32>(l_ldr, 1.0);
 }

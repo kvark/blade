@@ -42,8 +42,26 @@ pub struct Object {
     pub transform: blade_graphics::Transform,
 }
 
+#[derive(Clone, Debug)]
+pub struct PostProcessing {
+    //TODO: remove this, compute automatically
+    pub average_luminocity: f32,
+    pub exposure_key_value: f32,
+    pub white_level: f32,
+}
+impl Default for PostProcessing {
+    fn default() -> Self {
+        Self {
+            average_luminocity: 1.0,
+            exposure_key_value: 1.0,
+            white_level: 1.0,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Scene {
     pub objects: Vec<Object>,
     pub environment_map: Option<blade_asset::Handle<Texture>>,
+    pub post_processing: PostProcessing,
 }
