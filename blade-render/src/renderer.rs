@@ -212,6 +212,7 @@ struct MainData {
     camera: CameraParams,
     parameters: MainParams,
     acc_struct: blade_graphics::AccelerationStructure,
+    sampler_linear: blade_graphics::Sampler,
     env_map: blade_graphics::TextureView,
     in_depth: blade_graphics::TextureView,
     in_basis: blade_graphics::TextureView,
@@ -221,9 +222,19 @@ struct MainData {
     output: blade_graphics::TextureView,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct ToneMapParams {
+    average_lum: f32,
+    key_value: f32,
+    white_level: f32,
+    unused: f32,
+}
+
 #[derive(blade_macros::ShaderData)]
 struct BlitData {
     input: blade_graphics::TextureView,
+    tone_map_params: ToneMapParams,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -718,6 +729,7 @@ impl Renderer {
                         temporal_history: ray_config.temporal_history,
                     },
                     acc_struct: self.acceleration_structure,
+                    sampler_linear: self.samplers.linear,
                     env_map: self.environment_view,
                     in_depth: self.targets.depth_view,
                     in_basis: self.targets.basis_view,
@@ -734,10 +746,17 @@ impl Renderer {
     /// Blit the rendering result into a specified render pass.
     pub fn blit(&self, pass: &mut blade_graphics::RenderCommandEncoder, camera: &super::Camera) {
         if let mut pc = pass.with(&self.blit_pipeline) {
+            let pp = &self.scene.post_processing;
             pc.bind(
                 0,
                 &BlitData {
                     input: self.targets.main_view,
+                    tone_map_params: ToneMapParams {
+                        average_lum: pp.average_luminocity,
+                        key_value: pp.exposure_key_value,
+                        white_level: pp.white_level,
+                        unused: 0.0,
+                    },
                 },
             );
             pc.draw(0, 3, 0, 1);
@@ -767,5 +786,9 @@ impl Renderer {
             y: variance.y.sqrt(),
             z: variance.z.sqrt(),
         })
+    }
+
+    pub fn configure_post_processing(&mut self) -> &mut crate::PostProcessing {
+        &mut self.scene.post_processing
     }
 }

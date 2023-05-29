@@ -20,6 +20,9 @@ fn default_transform() -> [[f32; 4]; 3] {
         [0.0, 0.0, 1.0, 0.0],
     ]
 }
+fn default_luminocity() -> f32 {
+    1.0
+}
 
 #[derive(serde::Deserialize)]
 struct ConfigModel {
@@ -33,6 +36,8 @@ struct ConfigScene {
     camera: ConfigCamera,
     #[serde(default)]
     environment_map: String,
+    #[serde(default = "default_luminocity")]
+    average_luminocity: f32,
     models: Vec<ConfigModel>,
 }
 
@@ -109,6 +114,12 @@ impl Example {
 
         let mut scene = blade_render::Scene::default();
         let time_start = time::Instant::now();
+        scene.post_processing = blade_render::PostProcessing {
+            average_luminocity: config_scene.average_luminocity,
+            exposure_key_value: 1.0 / 9.6,
+            white_level: 1.0,
+        };
+
         let mut load_finish = choir.spawn("load finish").init_dummy();
         if !config_scene.environment_map.is_empty() {
             let meta = blade_render::texture::Meta {
@@ -249,7 +260,7 @@ impl Example {
     }
 
     fn add_gui(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Eye").show(ui, |ui| {
+        egui::CollapsingHeader::new("Camera").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Position:");
                 ui.add(egui::DragValue::new(&mut self.camera.pos.x));
@@ -263,7 +274,12 @@ impl Example {
                 ui.add(egui::DragValue::new(&mut self.camera.rot.v.z));
                 ui.add(egui::DragValue::new(&mut self.camera.rot.s));
             });
-            ui.add(egui::DragValue::new(&mut self.camera.depth));
+            ui.add(egui::Slider::new(&mut self.camera.fov_y, 0.5f32..=2.0f32).text("FOV"));
+            ui.add(
+                egui::Slider::new(&mut self.camera.depth, 1f32..=1_000_000f32)
+                    .text("depth")
+                    .logarithmic(true),
+            );
         });
         egui::CollapsingHeader::new("Debug")
             .default_open(true)
@@ -302,6 +318,20 @@ impl Example {
                         .text("Temporal reuse"),
                 );
             });
+        egui::CollapsingHeader::new("Tone Map").show(ui, |ui| {
+            let pp = self.renderer.configure_post_processing();
+            ui.add(
+                egui::Slider::new(&mut pp.average_luminocity, 0.1f32..=1_000f32)
+                    .text("Average luminocity")
+                    .logarithmic(true),
+            );
+            ui.add(
+                egui::Slider::new(&mut pp.exposure_key_value, 0.01f32..=10f32)
+                    .text("Key value")
+                    .logarithmic(true),
+            );
+            ui.add(egui::Slider::new(&mut pp.white_level, 0.1f32..=2f32).text("White level"));
+        });
     }
 
     fn move_camera_by(&mut self, offset: glam::Vec3) {

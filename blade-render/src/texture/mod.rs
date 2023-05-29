@@ -1,5 +1,5 @@
 use std::{
-    fmt, io, ptr, slice, str,
+    fmt, io, mem, ptr, slice, str,
     sync::{Arc, Mutex},
 };
 
@@ -101,7 +101,7 @@ impl blade_asset::Baker for Baker {
         use blade_graphics::TextureFormat as Tf;
         enum PlainData {
             Ldr(Vec<[u8; 4]>),
-            Hdr(Vec<[f32; 3]>),
+            Hdr(Vec<[f32; 4]>),
         }
         struct PlainImage {
             width: usize,
@@ -153,18 +153,18 @@ impl blade_asset::Baker for Baker {
                 use exr::prelude::{ReadChannels as _, ReadLayers as _};
                 struct RawImage {
                     width: usize,
-                    data: Vec<[f32; 3]>,
+                    data: Vec<[f32; 4]>,
                 }
                 let image = exr::image::read::read()
                     .no_deep_data()
                     .largest_resolution_level()
-                    .rgb_channels(
+                    .rgba_channels(
                         |size, _| RawImage {
                             width: size.width(),
-                            data: vec![[0f32; 3]; size.width() * size.height()],
+                            data: vec![[0f32; 4]; size.width() * size.height()],
                         },
-                        |image, position, (r, g, b): (f32, f32, f32)| {
-                            image.data[position.y() * image.width + position.x()] = [r, g, b];
+                        |image, position, (r, g, b, a): (f32, f32, f32, f32)| {
+                            image.data[position.y() * image.width + position.x()] = [r, g, b, a];
                         },
                     )
                     .first_valid_layer()
@@ -201,11 +201,14 @@ impl blade_asset::Baker for Baker {
                 dst_format.compress(data_raw, src.width, src.height, params, &mut buf);
             }
             PlainData::Hdr(data) => {
+                //TODO: compress as BC6E
                 assert_eq!(meta.format, blade_graphics::TextureFormat::Rgba32Float);
                 let data_raw = unsafe {
-                    slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 3 * 4)
+                    slice::from_raw_parts(
+                        data.as_ptr() as *const u8,
+                        data.len() * data[0].len() * mem::size_of::<f32>(),
+                    )
                 };
-                //TODO: compress as BC6E
                 buf.resize(data_raw.len(), 0);
                 buf.copy_from_slice(data_raw);
             }
