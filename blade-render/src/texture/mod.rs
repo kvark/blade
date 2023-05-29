@@ -1,5 +1,5 @@
 use std::{
-    fmt, ptr, str,
+    fmt, io, ptr, slice, str,
     sync::{Arc, Mutex},
 };
 
@@ -99,10 +99,14 @@ impl blade_asset::Baker for Baker {
         _exe_context: choir::ExecutionContext,
     ) {
         use blade_graphics::TextureFormat as Tf;
+        enum PlainData {
+            Ldr(Vec<[u8; 4]>),
+            Hdr(Vec<[f32; 3]>),
+        }
         struct PlainImage {
             width: usize,
             height: usize,
-            data: Box<[u8]>,
+            data: PlainData,
         }
 
         let src: PlainImage = match extension {
@@ -111,15 +115,18 @@ impl blade_asset::Baker for Baker {
                 let options =
                     zune_core::options::DecoderOptions::default().png_set_add_alpha_channel(true);
                 let mut decoder = zune_png::PngDecoder::new_with_options(source, options);
-                let data = match decoder.decode().unwrap() {
-                    zune_core::result::DecodingResult::U8(px) => px.into_boxed_slice(),
-                    _ => panic!("Unsupported image"),
-                };
-                let info = decoder.get_info().unwrap();
+                decoder.decode_headers().unwrap();
+                let info = decoder.get_info().unwrap().clone();
+                let mut data = vec![[0u8; 4]; info.width * info.height];
+                decoder
+                    .decode_into(unsafe {
+                        slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, data.len() * 4)
+                    })
+                    .unwrap();
                 PlainImage {
                     width: info.width,
                     height: info.height,
-                    data,
+                    data: PlainData::Ldr(data),
                 }
             }
             #[cfg(feature = "asset")]
@@ -127,12 +134,47 @@ impl blade_asset::Baker for Baker {
                 let options = zune_core::options::DecoderOptions::default()
                     .jpeg_set_out_colorspace(zune_core::colorspace::ColorSpace::RGBA);
                 let mut decoder = zune_jpeg::JpegDecoder::new_with_options(options, source);
-                let data = decoder.decode().unwrap().into_boxed_slice();
+                decoder.decode_headers().unwrap();
                 let info = decoder.info().unwrap();
+                let mut data = vec![[0u8; 4]; info.width as usize * info.height as usize];
+                decoder
+                    .decode_into(unsafe {
+                        slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, data.len() * 4)
+                    })
+                    .unwrap();
                 PlainImage {
                     width: info.width as usize,
                     height: info.height as usize,
-                    data,
+                    data: PlainData::Ldr(data),
+                }
+            }
+            #[cfg(feature = "asset")]
+            "exr" => {
+                use exr::prelude::{ReadChannels as _, ReadLayers as _};
+                struct RawImage {
+                    width: usize,
+                    data: Vec<[f32; 3]>,
+                }
+                let image = exr::image::read::read()
+                    .no_deep_data()
+                    .largest_resolution_level()
+                    .rgb_channels(
+                        |size, _| RawImage {
+                            width: size.width(),
+                            data: vec![[0f32; 3]; size.width() * size.height()],
+                        },
+                        |image, position, (r, g, b): (f32, f32, f32)| {
+                            image.data[position.y() * image.width + position.x()] = [r, g, b];
+                        },
+                    )
+                    .first_valid_layer()
+                    .all_attributes()
+                    .from_buffered(io::Cursor::new(source))
+                    .unwrap();
+                PlainImage {
+                    width: image.layer_data.size.width(),
+                    height: image.layer_data.size.height(),
+                    data: PlainData::Hdr(image.layer_data.channel_data.pixels.data),
                 }
             }
             other => panic!("Unknown texture extension: {}", other),
@@ -140,20 +182,33 @@ impl blade_asset::Baker for Baker {
 
         let mut buf = Vec::new();
         #[cfg(feature = "asset")]
-        {
-            profiling::scope!("compress");
-            let dst_format = match meta.format {
-                Tf::Bc1Unorm | Tf::Bc1UnormSrgb => texpresso::Format::Bc1,
-                Tf::Bc2Unorm | Tf::Bc2UnormSrgb => texpresso::Format::Bc2,
-                Tf::Bc3Unorm | Tf::Bc3UnormSrgb => texpresso::Format::Bc3,
-                Tf::Bc4Unorm | Tf::Bc4Snorm => texpresso::Format::Bc4,
-                Tf::Bc5Unorm | Tf::Bc5Snorm => texpresso::Format::Bc5,
-                other => panic!("Unsupported destination format {:?}", other),
-            };
-            let dst_size = dst_format.compressed_size(src.width, src.height);
-            buf.resize(dst_size, 0);
-            let params = texpresso::Params::default();
-            dst_format.compress(&src.data, src.width, src.height, params, &mut buf);
+        match src.data {
+            PlainData::Ldr(data) => {
+                profiling::scope!("compress");
+                let dst_format = match meta.format {
+                    Tf::Bc1Unorm | Tf::Bc1UnormSrgb => texpresso::Format::Bc1,
+                    Tf::Bc2Unorm | Tf::Bc2UnormSrgb => texpresso::Format::Bc2,
+                    Tf::Bc3Unorm | Tf::Bc3UnormSrgb => texpresso::Format::Bc3,
+                    Tf::Bc4Unorm | Tf::Bc4Snorm => texpresso::Format::Bc4,
+                    Tf::Bc5Unorm | Tf::Bc5Snorm => texpresso::Format::Bc5,
+                    other => panic!("Unsupported destination format {:?}", other),
+                };
+                let dst_size = dst_format.compressed_size(src.width, src.height);
+                buf.resize(dst_size, 0);
+                let params = texpresso::Params::default();
+                let data_raw =
+                    unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4) };
+                dst_format.compress(data_raw, src.width, src.height, params, &mut buf);
+            }
+            PlainData::Hdr(data) => {
+                assert_eq!(meta.format, blade_graphics::TextureFormat::Rgba32Float);
+                let data_raw = unsafe {
+                    slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 3 * 4)
+                };
+                //TODO: compress as BC6E
+                buf.resize(data_raw.len(), 0);
+                buf.copy_from_slice(data_raw);
+            }
         }
 
         result.put(CookedImage {

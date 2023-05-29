@@ -457,6 +457,7 @@ fn describe_texture_format(format: crate::TextureFormat) -> FormatInfo {
         Tf::Rgba8Snorm => (glow::RGBA8, glow::RGBA, glow::BYTE),
         Tf::Rgba16Float => (glow::RGBA16F, glow::RGBA, glow::FLOAT),
         Tf::R32Float => (glow::R32F, glow::RED, glow::FLOAT),
+        Tf::Rgba32Float => (glow::RGBA32F, glow::RGBA, glow::FLOAT),
         Tf::Depth32Float => (glow::DEPTH_COMPONENT32F, glow::DEPTH_COMPONENT, glow::FLOAT),
         Tf::Bc1Unorm => (glow::COMPRESSED_RGBA_S3TC_DXT1_EXT, glow::RGBA, 0),
         Tf::Bc1UnormSrgb => (glow::COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT, glow::RGBA, 0),
