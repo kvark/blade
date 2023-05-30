@@ -222,6 +222,7 @@ pub struct TexelBlockInfo {
 }
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
     pub struct TexelAspects: u8 {
         const COLOR = 0x1;
         const DEPTH = 0x2;
@@ -287,6 +288,7 @@ impl Extent {
 }
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
     pub struct TextureUsage: u32 {
         const COPY = 1 << 0;
         const TARGET = 1 << 1;
@@ -324,7 +326,7 @@ pub struct TextureViewDesc<'a> {
 }
 
 bitflags::bitflags! {
-    #[derive(Default)]
+    #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
     pub struct ShaderVisibility: u32 {
         const COMPUTE = 1 << 0;
         const VERTEX = 1 << 1;
@@ -829,6 +831,7 @@ impl BlendState {
 bitflags::bitflags! {
     /// Color write mask. Disabled color channels will not be written to.
     #[repr(transparent)]
+    #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
     pub struct ColorWrites: u32 {
         /// Enable red channel writes
         const RED = 1 << 0;
@@ -839,9 +842,9 @@ bitflags::bitflags! {
         /// Enable alpha channel writes
         const ALPHA = 1 << 3;
         /// Enable red, green, and blue channel writes
-        const COLOR = Self::RED.bits | Self::GREEN.bits | Self::BLUE.bits;
+        const COLOR = Self::RED.bits() | Self::GREEN.bits() | Self::BLUE.bits();
         /// Enable writes to all channels.
-        const ALL = Self::RED.bits | Self::GREEN.bits | Self::BLUE.bits | Self::ALPHA.bits;
+        const ALL = Self::RED.bits() | Self::GREEN.bits() | Self::BLUE.bits() | Self::ALPHA.bits();
     }
 }
 

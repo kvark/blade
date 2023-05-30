@@ -10,7 +10,7 @@ repository = "https://github.com/kvark/blade"
 [lib]
 
 [dependencies]
-bitflags = "1"
+bitflags = "2"
 bytemuck = { workspace = true }
 codespan-reporting = "0.11"
 hidden-trait = "0.1"
@@ -22,25 +22,26 @@ raw-window-handle = "0.5"
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 block = "0.1"
 core-graphics-types = "0.1"
-metal = { git = "https://github.com/gfx-rs/metal-rs", rev = "64d98e700c301aee0a0855ae2f1008750ef33ca9" }
+metal = "0.25"
 objc = "0.2.5"
 naga = { workspace = true, features = ["msl-out"] }
 
 [target.'cfg(any(vulkan, windows, target_os = "linux", target_os = "android"))'.dependencies]
 ash = "0.37"
 ash-window = "0.12"
-gpu-alloc = "0.5"
-gpu-alloc-ash = "0.5"
+gpu-alloc = "0.6"
+gpu-alloc-ash = "0.6"
 naga = { workspace = true, features = ["spv-out"] }
 slab = "0.4"
 
 [target.'cfg(any(gles, target_arch = "wasm32"))'.dependencies]
-glow = { git = "https://github.com/grovesNL/glow", rev = "ee22f3e920e0ccd1752a9ecb80f86a495ca48708" }
+# Version contains `glGetProgramResource`
+glow = "0.12.2"
 naga = { workspace = true, features = ["glsl-out"] }
 
 [target.'cfg(all(gles, not(target_arch = "wasm32")))'.dependencies]
-egl = { package = "khronos-egl", version = "4.1", features = ["dynamic"] }
-libloading = { version = "0.7" }
+egl = { package = "khronos-egl", version = "5.0", features = ["dynamic"] }
+libloading = { version = "0.8" }
 
 [target.'cfg(all(target_arch = "wasm32"))'.dependencies]
 wasm-bindgen = "0.2.83"
