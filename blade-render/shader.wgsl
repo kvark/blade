@@ -41,9 +41,10 @@ var sampler_linear: sampler;
 struct HitEntry {
     index_buf: u32,
     vertex_buf: u32,
-    // packed object->world rotation quaternion
-    rotation: u32,
-    //geometry_to_object_rm: mat3x4<f32>,
+    // packed quaternion
+    geometry_to_world_rotation: u32,
+    pad: u32,
+    geometry_to_object: mat4x3<f32>,
     base_color_texture: u32,
     // packed color factor
     base_color_factor: u32,
@@ -177,14 +178,17 @@ fn fill_gbuf(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let barycentrics = vec3<f32>(1.0 - intersection.barycentrics.x - intersection.barycentrics.y, intersection.barycentrics);
         let tex_coords = mat3x2(vertices[0].tex_coords, vertices[1].tex_coords, vertices[2].tex_coords) * barycentrics;
         let normal_rough = mat3x2(unpack2x16snorm(vertices[0].normal), unpack2x16snorm(vertices[1].normal), unpack2x16snorm(vertices[2].normal)) * barycentrics;
-        let normal_object = vec3<f32>(normal_rough, sqrt(max(0.0, 1.0 - dot(normal_rough, normal_rough))));
-        let object_to_world_rot = normalize(unpack4x8snorm(entry.rotation));
-        let normal_world = qrot(object_to_world_rot, normal_object);
+        let normal_geo = vec3<f32>(normal_rough, sqrt(max(0.0, 1.0 - dot(normal_rough, normal_rough))));
+        let geo_to_world_rot = normalize(unpack4x8snorm(entry.geometry_to_world_rotation));
+        let normal_world = qrot(geo_to_world_rot, normal_geo);
 
         if (enable_debug) {
             let debug_len = intersection.t * 0.2;
-            let positions = intersection.object_to_world * mat3x4(
+            let pos_object = entry.geometry_to_object * mat3x4(
                 vec4<f32>(vertices[0].pos, 1.0), vec4<f32>(vertices[1].pos, 1.0), vec4<f32>(vertices[2].pos, 1.0)
+            );
+            let positions = intersection.object_to_world * mat3x4(
+                vec4<f32>(pos_object[0], 1.0), vec4<f32>(pos_object[1], 1.0), vec4<f32>(pos_object[2], 1.0)
             );
             debug_line(positions[0].xyz, positions[1].xyz, 0x00FF00u);
             debug_line(positions[1].xyz, positions[2].xyz, 0x00FF00u);
