@@ -248,10 +248,15 @@ struct DebugData {
 struct HitEntry {
     index_buf: u32,
     vertex_buf: u32,
-    rotation: [i8; 4],
-    //geometry_to_object: mint::RowMatrix3x4<f32>,
+    geometry_to_world_rotation: [i8; 4],
+    unused: u32,
+    //Note: it's technically `mat4x3` on WGSL side,
+    // but it's aligned and sized the same way as `mat4`.
+    geometry_to_object: mint::ColumnMatrix4<f32>,
     base_color_texture: u32,
     base_color_factor: [u8; 4],
+    // make sure the end of the struct is aligned
+    finish_pad: [u32; 2],
 }
 
 struct ShaderPipelines {
@@ -560,27 +565,37 @@ impl Renderer {
             let dummy_white = self.textures.alloc(self.dummy.white_view);
             let mut texture_indices = HashMap::new();
 
+            fn extract_matrix3(transform: blade_graphics::Transform) -> glam::Mat3 {
+                let col_mx = mint::ColumnMatrix3x4::from(transform);
+                glam::Mat3::from_cols(col_mx.x.into(), col_mx.y.into(), col_mx.z.into())
+            }
+
             self.vertex_buffers.clear();
             self.index_buffers.clear();
             let mut geometry_index = 0;
             for object in self.scene.objects.iter() {
+                let m3_object = extract_matrix3(object.transform);
                 let model = &asset_hub.models[object.model];
-                let rotation = {
-                    let col_matrix = mint::ColumnMatrix3x4::from(object.transform);
-                    let m3 = glam::Mat3::from_cols(
-                        col_matrix.x.into(),
-                        col_matrix.y.into(),
-                        col_matrix.z.into(),
-                    );
-                    let m3_normal = m3.inverse().transpose();
-                    let quat = glam::Quat::from_mat3(&m3_normal);
-                    let qv = glam::Vec4::from(quat) * 127.0;
-                    [qv.x as i8, qv.y as i8, qv.z as i8, qv.w as i8]
-                };
                 for geometry in model.geometries.iter() {
                     let material = &model.materials[geometry.material_index];
                     let vertex_offset =
                         geometry.vertex_range.start as u64 * mem::size_of::<crate::Vertex>() as u64;
+                    let geometry_to_world_rotation = {
+                        let m3_geo = extract_matrix3(geometry.transform);
+                        let m3_normal = (m3_object * m3_geo).inverse().transpose();
+                        let quat = glam::Quat::from_mat3(&m3_normal);
+                        let qv = glam::Vec4::from(quat) * 127.0;
+                        [qv.x as i8, qv.y as i8, qv.z as i8, qv.w as i8]
+                    };
+                    fn extend(v: mint::Vector3<f32>) -> mint::Vector4<f32> {
+                        mint::Vector4 {
+                            x: v.x,
+                            y: v.y,
+                            z: v.z,
+                            w: 0.0,
+                        }
+                    }
+
                     let hit_entry = HitEntry {
                         index_buf: match geometry.index_type {
                             Some(_) => self
@@ -591,7 +606,17 @@ impl Renderer {
                         vertex_buf: self
                             .vertex_buffers
                             .alloc(model.vertex_buffer.at(vertex_offset)),
-                        rotation,
+                        geometry_to_world_rotation,
+                        unused: 0,
+                        geometry_to_object: {
+                            let m = mint::ColumnMatrix3x4::from(geometry.transform);
+                            mint::ColumnMatrix4 {
+                                x: extend(m.x),
+                                y: extend(m.y),
+                                z: extend(m.z),
+                                w: extend(m.w),
+                            }
+                        },
                         base_color_texture: match material.base_color_texture {
                             Some(handle) => *texture_indices.entry(handle).or_insert_with(|| {
                                 let texture = &asset_hub.textures[handle];
@@ -608,7 +633,9 @@ impl Renderer {
                                 (c[3] * 255.0) as u8,
                             ]
                         },
+                        finish_pad: [0; 2],
                     };
+
                     log::debug!("Entry[{geometry_index}] = {hit_entry:?}");
                     unsafe {
                         ptr::write(
