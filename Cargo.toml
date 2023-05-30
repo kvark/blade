@@ -12,12 +12,13 @@ exclude = []
 [workspace.dependencies]
 base64 = "0.21"
 bytemuck = { version = "1", features = ["derive"] }
-choir = { version = "0.5", git = "https://github.com/kvark/choir", rev = "553c9c143aa56aeee8555c4f00923428063e9530" }
-egui = "0.20"
-glam = { version = "0.23", features = ["mint"] }
+choir = "0.6"
+egui = "0.22"
+glam = { version = "0.24", features = ["mint"] }
 log = "0.4"
 mint = "0.5"
-naga = { git = "https://github.com/gfx-rs/naga", rev = "9befaed7e985fb9a23322e9f19baf2a95bfd8b9c", features = ["wgsl-in", "span", "validate"] }
+# Need 0.12.2 since this is where buffer arrays are supported
+naga = { version = "0.12.2", features = ["wgsl-in", "span", "validate"] }
 profiling = "1"
 web-sys = "0.3.60"
 
@@ -56,13 +57,13 @@ num_cpus = "1"
 profiling = { workspace = true }
 ron = "0.8"
 serde = { version = "1", features = ["serde_derive"] }
-winit = "0.27"
+winit = "0.28"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-egui-winit = "0.20"
-env_logger = "0.9"
+egui-winit = "0.22"
+env_logger = "0.10"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 console_error_panic_hook = "0.1.7"
-console_log = "0.2"
+console_log = "1"
 web-sys = { workspace = true, features = ["Window"] }
