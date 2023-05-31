@@ -37,6 +37,7 @@ var<storage, read> vertex_buffers: binding_array<VertexBuffer, 1>;
 var<storage, read> index_buffers: binding_array<IndexBuffer, 1>;
 var textures: binding_array<texture_2d<f32>, 1>;
 var sampler_linear: sampler;
+var sampler_nearest: sampler;
 
 struct HitEntry {
     index_buf: u32,
@@ -55,6 +56,7 @@ var<uniform> camera: CameraParams;
 var<uniform> parameters: MainParams;
 var acc_struct: acceleration_structure;
 var env_map: texture_2d<f32>;
+var env_weights: texture_2d<f32>;
 
 fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     return v + 2.0*cross(q.xyz, cross(q.xyz,v) + q.w*v);
@@ -367,6 +369,17 @@ fn square(v: f32) -> f32 {
     return v * v;
 }
 
+fn map_equirect_dir_to_uv(dir: vec3<f32>) -> vec2<f32> {
+    //Note: Y axis is up
+    return vec2<f32>(atan2(dir.x, dir.z) + PI, -2.0 * asin(dir.y) + PI) / (2.0 * PI);
+}
+
+fn map_equirect_uv_to_dir(uv: vec2<f32>) -> vec3<f32> {
+    let yaw = PI * (0.5 - uv.y);
+    let pitch = PI * (2.0 * uv.x - 1.0);
+    return vec3<f32>(cos(yaw) * vec2<f32>(cos(pitch), sin(pitch)), sin(yaw));
+}
+
 fn sample_uniform_hemisphere(rng: ptr<function, RandomState>) -> vec3<f32> {
     // See (6-8) in https://mathworld.wolfram.com/SpherePointPicking.html
     let r = random_gen(rng);
@@ -375,10 +388,45 @@ fn sample_uniform_hemisphere(rng: ptr<function, RandomState>) -> vec3<f32> {
     return vec3<f32>(tangential.xy, h);
 }
 
+fn sample_important_environment(rng: ptr<function, RandomState>) -> LightSample {
+    var ls = LightSample();
+    let mip_count = textureNumLevels(env_weights);
+    var uv = vec2<f32>(0.5);
+    ls.pdf = 1.0;
+    for (var mip=mip_count; mip!=0u; mip -= 1u) {
+        let weights = textureSampleLevel(env_weights, sampler_nearest, uv, f32(mip - 1u));
+        let sum = dot(vec4<f32>(1.0), weights);
+        let r = random_gen(rng) * sum;
+        var weight = 0.0;
+        if (r >= weights.x+weights.y) {
+            uv.y *= 1.5;
+            if (r >= weights.x+weights.y+weights.z) {
+                weight = weights.w;
+                uv.x *= 1.5;
+            } else {
+                weight = weights.z;
+                uv.x *= 0.5;
+            }
+        } else {
+            uv.y *= 0.5;
+            if (r >= weights.x) {
+                weight = weights.y;
+                uv.x *= 1.5;
+            } else {
+                weight = weights.x;
+                uv.x *= 0.5;
+            }
+        }
+        ls.pdf *= weight / sum;
+    }
+
+    ls.radiance = textureSampleLevel(env_map, sampler_nearest, uv, 0.0).xyz;
+    ls.dir = map_equirect_uv_to_dir(uv);
+    return ls;
+}
+
 fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
-    //Note: Y axis is up
-    // Using equirectangular projection
-    let uv = vec2<f32>(atan2(dir.x, dir.z) + PI, -2.0 * asin(dir.y) + PI) / (2.0 * PI);
+    let uv = map_equirect_dir_to_uv(dir);
     return textureSampleLevel(env_map, sampler_linear, uv, 0.0).xyz;
 }
 
