@@ -29,6 +29,7 @@ impl fmt::Display for Meta {
 pub struct Texture {
     pub object: blade_graphics::Texture,
     pub view: blade_graphics::TextureView,
+    pub extent: blade_graphics::Extent,
 }
 
 struct Initialization {
@@ -274,6 +275,7 @@ impl blade_asset::Baker for Baker {
         Texture {
             object: texture,
             view,
+            extent,
         }
     }
 

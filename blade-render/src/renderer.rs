@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, mem, ptr, time};
+use std::{collections::HashMap, fs, mem, num::NonZeroU32, ptr, time};
 
 const MAX_RESOURCES: u32 = 1000;
 
@@ -16,6 +16,7 @@ struct DummyResources {
 }
 
 struct Samplers {
+    nearest: blade_graphics::Sampler,
     linear: blade_graphics::Sampler,
 }
 
@@ -140,6 +141,109 @@ impl Targets {
     }
 }
 
+struct EnvironmentMap {
+    main_view: blade_graphics::TextureView,
+    weight_texture: blade_graphics::Texture,
+    weight_view: blade_graphics::TextureView,
+    weight_mips: Vec<blade_graphics::TextureView>,
+    preproc_pipeline: blade_graphics::ComputePipeline,
+}
+
+impl EnvironmentMap {
+    fn destroy(&mut self, gpu: &blade_graphics::Context) {
+        if self.weight_texture != blade_graphics::Texture::default() {
+            gpu.destroy_texture(self.weight_texture);
+            gpu.destroy_texture_view(self.weight_view);
+        }
+        for view in self.weight_mips.drain(..) {
+            gpu.destroy_texture_view(view);
+        }
+    }
+
+    fn assign(
+        &mut self,
+        view: blade_graphics::TextureView,
+        extent: blade_graphics::Extent,
+        encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+    ) {
+        if self.main_view == view {
+            return;
+        }
+        self.main_view = view;
+        self.destroy(gpu);
+
+        let mip_level_count = extent
+            .width
+            .max(extent.height)
+            .next_power_of_two()
+            .trailing_zeros();
+        // The weight texture has to include all of the edge pixels, starting at mip 1
+        let weight_extent = blade_graphics::Extent {
+            width: extent.width.next_power_of_two() / 2,
+            height: extent.height.next_power_of_two() / 2,
+            depth: 1,
+        };
+        let format = blade_graphics::TextureFormat::Rgba16Float;
+        self.weight_texture = gpu.create_texture(blade_graphics::TextureDesc {
+            name: "env-weight",
+            format,
+            size: weight_extent,
+            dimension: blade_graphics::TextureDimension::D2,
+            array_layer_count: 1,
+            mip_level_count,
+            usage: blade_graphics::TextureUsage::RESOURCE | blade_graphics::TextureUsage::STORAGE,
+        });
+        self.weight_view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
+            name: "env-weight",
+            texture: self.weight_texture,
+            format,
+            dimension: blade_graphics::ViewDimension::D2,
+            subresources: &Default::default(),
+        });
+        for base_mip_level in 0..mip_level_count {
+            let view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
+                name: &format!("env-weight-mip{}", base_mip_level),
+                texture: self.weight_texture,
+                format,
+                dimension: blade_graphics::ViewDimension::D2,
+                subresources: &blade_graphics::TextureSubresources {
+                    base_mip_level,
+                    mip_level_count: NonZeroU32::new(1),
+                    ..Default::default()
+                },
+            });
+            self.weight_mips.push(view);
+        }
+
+        encoder.init_texture(self.weight_texture);
+        let mut compute = encoder.compute();
+        let wg_size = self.preproc_pipeline.get_workgroup_size();
+        for target_level in 0..mip_level_count {
+            let group_count = [
+                ((weight_extent.width >> target_level) + wg_size[0] - 1) / wg_size[0],
+                ((weight_extent.height >> target_level) + wg_size[1] - 1) / wg_size[1],
+                1,
+            ];
+            if let mut pass = compute.with(&self.preproc_pipeline) {
+                pass.bind(
+                    0,
+                    &EnvPreprocData {
+                        source: if target_level == 0 {
+                            view
+                        } else {
+                            self.weight_mips[target_level as usize - 1]
+                        },
+                        destination: self.weight_mips[target_level as usize],
+                        params: EnvPreprocParams { target_level },
+                    },
+                );
+                pass.dispatch(group_count);
+            }
+        }
+    }
+}
+
 /// Blade Renderer is a comprehensive rendering solution for
 /// end user applications.
 ///
@@ -158,7 +262,7 @@ pub struct Renderer {
     blit_pipeline: blade_graphics::RenderPipeline,
     scene: super::Scene,
     acceleration_structure: blade_graphics::AccelerationStructure,
-    environment_view: blade_graphics::TextureView,
+    env_map: EnvironmentMap,
     dummy: DummyResources,
     hit_buffer: blade_graphics::Buffer,
     vertex_buffers: blade_graphics::BufferArray<MAX_RESOURCES>,
@@ -213,7 +317,9 @@ struct MainData {
     parameters: MainParams,
     acc_struct: blade_graphics::AccelerationStructure,
     sampler_linear: blade_graphics::Sampler,
+    sampler_nearest: blade_graphics::Sampler,
     env_map: blade_graphics::TextureView,
+    env_weights: blade_graphics::TextureView,
     in_depth: blade_graphics::TextureView,
     in_basis: blade_graphics::TextureView,
     in_albedo: blade_graphics::TextureView,
@@ -244,6 +350,19 @@ struct DebugData {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct EnvPreprocParams {
+    target_level: u32,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct EnvPreprocData {
+    source: blade_graphics::TextureView,
+    destination: blade_graphics::TextureView,
+    params: EnvPreprocParams,
+}
+
+#[repr(C)]
 #[derive(Debug)]
 struct HitEntry {
     index_buf: u32,
@@ -264,6 +383,7 @@ struct ShaderPipelines {
     main: blade_graphics::ComputePipeline,
     blit: blade_graphics::RenderPipeline,
     debug: blade_graphics::RenderPipeline,
+    env_preproc: blade_graphics::ComputePipeline,
     debug_line_size: u32,
     debug_buffer_size: u32,
     reservoir_size: u32,
@@ -279,6 +399,12 @@ impl ShaderPipelines {
         let main_layout = <MainData as blade_graphics::ShaderData>::layout();
         let blit_layout = <BlitData as blade_graphics::ShaderData>::layout();
         let debug_layout = <DebugData as blade_graphics::ShaderData>::layout();
+
+        let env_preproc_source = fs::read_to_string("blade-render/env-preproc.wgsl").unwrap();
+        let env_preproc_shader = gpu.try_create_shader(blade_graphics::ShaderDesc {
+            source: &env_preproc_source,
+        })?;
+        let env_preproc_layout = <EnvPreprocData as blade_graphics::ShaderData>::layout();
 
         Ok(Self {
             fill: gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
@@ -314,6 +440,11 @@ impl ShaderPipelines {
                 depth_stencil: None,
                 fragment: shader.at("debug_fs"),
                 color_targets: &[config.surface_format.into()],
+            }),
+            env_preproc: gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+                name: "env-preproc",
+                data_layouts: &[&env_preproc_layout],
+                compute: env_preproc_shader.at("downsample"),
             }),
             debug_line_size: shader.get_struct_size("DebugLine"),
             debug_buffer_size: shader.get_struct_size("DebugBuffer"),
@@ -395,6 +526,14 @@ impl Renderer {
         };
 
         let samplers = Samplers {
+            nearest: gpu.create_sampler(blade_graphics::SamplerDesc {
+                name: "nearest",
+                address_modes: [blade_graphics::AddressMode::ClampToEdge; 3],
+                mag_filter: blade_graphics::FilterMode::Nearest,
+                min_filter: blade_graphics::FilterMode::Nearest,
+                mipmap_filter: blade_graphics::FilterMode::Nearest,
+                ..Default::default()
+            }),
             linear: gpu.create_sampler(blade_graphics::SamplerDesc {
                 name: "linear",
                 address_modes: [blade_graphics::AddressMode::ClampToEdge; 3],
@@ -414,7 +553,13 @@ impl Renderer {
             main_pipeline: sp.main,
             blit_pipeline: sp.blit,
             acceleration_structure: blade_graphics::AccelerationStructure::default(),
-            environment_view: dummy.white_view,
+            env_map: EnvironmentMap {
+                main_view: dummy.white_view,
+                weight_texture: blade_graphics::Texture::default(),
+                weight_view: dummy.white_view,
+                weight_mips: Vec::new(),
+                preproc_pipeline: sp.env_preproc,
+            },
             dummy,
             hit_buffer: blade_graphics::Buffer::default(),
             vertex_buffers: blade_graphics::BufferArray::new(),
@@ -443,10 +588,13 @@ impl Renderer {
             gpu.destroy_buffer(self.hit_buffer);
         }
         gpu.destroy_acceleration_structure(self.acceleration_structure);
+        // env map
+        self.env_map.destroy(gpu);
         // dummy resources
         gpu.destroy_texture_view(self.dummy.white_view);
         gpu.destroy_texture(self.dummy.white_texture);
         // samplers
+        gpu.destroy_sampler(self.samplers.nearest);
         gpu.destroy_sampler(self.samplers.linear);
         // buffers
         gpu.destroy_buffer(self.debug.buffer);
@@ -475,6 +623,7 @@ impl Renderer {
                     self.main_pipeline = sp.main;
                     self.blit_pipeline = sp.blit;
                     self.debug.pipeline = sp.debug;
+                    self.env_map.preproc_pipeline = sp.env_preproc;
                     return true;
                 }
             }
@@ -650,9 +799,10 @@ impl Renderer {
         }
 
         self.frame_index += 1;
-        self.environment_view = match self.scene.environment_map {
-            Some(handle) => asset_hub.textures[handle].view,
-            None => self.dummy.white_view,
+        if let Some(handle) = self.scene.environment_map {
+            let asset = &asset_hub.textures[handle];
+            self.env_map
+                .assign(asset.view, asset.extent, command_encoder, gpu);
         };
 
         let mut transfer = command_encoder.transfer();
@@ -757,7 +907,9 @@ impl Renderer {
                     },
                     acc_struct: self.acceleration_structure,
                     sampler_linear: self.samplers.linear,
-                    env_map: self.environment_view,
+                    sampler_nearest: self.samplers.nearest,
+                    env_map: self.env_map.main_view,
+                    env_weights: self.env_map.weight_view,
                     in_depth: self.targets.depth_view,
                     in_basis: self.targets.basis_view,
                     in_albedo: self.targets.albedo_view,

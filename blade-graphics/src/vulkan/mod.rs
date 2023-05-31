@@ -139,7 +139,18 @@ pub struct Texture {
     format: crate::TextureFormat,
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq)]
+impl Default for Texture {
+    fn default() -> Self {
+        Self {
+            raw: vk::Image::default(),
+            memory_handle: !0,
+            target_size: [0; 2],
+            format: crate::TextureFormat::Rgba8Unorm,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq)]
 pub struct TextureView {
     raw: vk::ImageView,
     target_size: [u16; 2],
