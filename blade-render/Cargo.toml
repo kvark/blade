@@ -15,6 +15,7 @@ asset = ["gltf" , "base64", "exr", "texpresso", "zune-core", "zune-jpeg", "zune-
 
 [dependencies]
 base64 = { workspace = true, optional = true }
+bitflags = { workspace = true }
 blade-graphics = { version = "0.2", path = "../blade-graphics" }
 blade-asset = { version = "0.1", path = "../blade-asset" }
 blade-macros = { version = "0.2", path = "../blade-macros" }
