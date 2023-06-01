@@ -50,10 +50,9 @@ struct Example {
     asset_hub: AssetHub,
     context: Arc<gpu::Context>,
     camera: blade_render::Camera,
-    debug_mode: blade_render::DebugMode,
+    debug: blade_render::DebugConfig,
     ray_config: blade_render::RayConfig,
     workers: Vec<choir::WorkerHandle>,
-    debug_mouse_pos: Option<glam::IVec2>,
 }
 
 impl Example {
@@ -174,13 +173,13 @@ impl Example {
             asset_hub,
             context,
             camera,
-            debug_mode: blade_render::DebugMode::None,
+            debug: blade_render::DebugConfig::default(),
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
+                environment_importance_sampling: true,
                 temporal_history: 10,
             },
             workers,
-            debug_mouse_pos: None,
         }
     }
 
@@ -219,13 +218,12 @@ impl Example {
             &self.asset_hub,
             &self.context,
             &mut temp_buffers,
-            self.debug_mouse_pos.is_some(),
+            self.debug.mouse_pos.is_some(),
         );
         self.renderer.ray_trace(
             &mut self.command_encoder,
             &self.camera,
-            self.debug_mode,
-            self.debug_mouse_pos.map(|p| p.into()),
+            self.debug,
             self.ray_config,
         );
 
@@ -284,15 +282,27 @@ impl Example {
         egui::CollapsingHeader::new("Debug")
             .default_open(true)
             .show(ui, |ui| {
+                // debug mode
                 egui::ComboBox::from_label("View mode")
-                    .selected_text(format!("{:?}", self.debug_mode))
+                    .selected_text(format!("{:?}", self.debug.view_mode))
                     .show_ui(ui, |ui| {
                         use blade_render::DebugMode as Dm;
                         for value in [Dm::None, Dm::Depth, Dm::Normal] {
-                            ui.selectable_value(&mut self.debug_mode, value, format!("{value:?}"));
+                            ui.selectable_value(
+                                &mut self.debug.view_mode,
+                                value,
+                                format!("{value:?}"),
+                            );
                         }
                     });
-                if self.debug_mouse_pos.is_some() {
+                // debug flags
+                for (name, bit) in blade_render::DebugFlags::all().iter_names() {
+                    let mut enabled = self.debug.flags.contains(bit);
+                    ui.checkbox(&mut enabled, name);
+                    self.debug.flags.set(bit, enabled);
+                }
+                // variance
+                if self.debug.mouse_pos.is_some() {
                     let sd = self
                         .renderer
                         .read_debug_std_deviation()
@@ -312,6 +322,10 @@ impl Example {
                     egui::Slider::new(&mut self.ray_config.num_environment_samples, 1..=100u32)
                         .text("Num env samples")
                         .logarithmic(true),
+                );
+                ui.checkbox(
+                    &mut self.ray_config.environment_importance_sampling,
+                    "Env importance sampling",
                 );
                 ui.add(
                     egui::widgets::Slider::new(&mut self.ray_config.temporal_history, 0..=50)
@@ -369,7 +383,7 @@ fn main() {
     }
     let mut drag_start = None;
     let mut last_event = time::Instant::now();
-    let mut last_mouse_pos = glam::IVec2::new(0, 0);
+    let mut last_mouse_pos = [0i32; 2];
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = winit::event_loop::ControlFlow::Poll;
@@ -441,7 +455,7 @@ fn main() {
                     } => {
                         drag_start = match state {
                             winit::event::ElementState::Pressed => Some(Drag {
-                                screen_pos: last_mouse_pos,
+                                screen_pos: last_mouse_pos.into(),
                                 rotation: example.camera.rot.into(),
                             }),
                             winit::event::ElementState::Released => None,
@@ -452,23 +466,23 @@ fn main() {
                         button: winit::event::MouseButton::Left,
                         ..
                     } => {
-                        example.debug_mouse_pos = match state {
+                        example.debug.mouse_pos = match state {
                             winit::event::ElementState::Pressed => Some(last_mouse_pos),
                             winit::event::ElementState::Released => None,
                         };
                     }
                     winit::event::WindowEvent::CursorMoved { position, .. } => {
-                        last_mouse_pos = glam::IVec2::new(position.x as i32, position.y as i32);
+                        last_mouse_pos = [position.x as i32, position.y as i32];
                         if let Some(ref mut drag) = drag_start {
                             let qx = glam::Quat::from_rotation_y(
-                                (last_mouse_pos.x - drag.screen_pos.x) as f32 * rotate_speed,
+                                (last_mouse_pos[0] - drag.screen_pos.x) as f32 * rotate_speed,
                             );
                             let qy = glam::Quat::from_rotation_x(
-                                (last_mouse_pos.y - drag.screen_pos.y) as f32 * rotate_speed,
+                                (last_mouse_pos[1] - drag.screen_pos.y) as f32 * rotate_speed,
                             );
                             example.camera.rot = (qx * drag.rotation * qy).into();
                         }
-                        if let Some(ref mut pos) = example.debug_mouse_pos {
+                        if let Some(ref mut pos) = example.debug.mouse_pos {
                             *pos = last_mouse_pos;
                         }
                     }

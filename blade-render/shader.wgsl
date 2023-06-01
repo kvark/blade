@@ -6,12 +6,16 @@ struct CameraParams {
     depth: f32,
     orientation: vec4<f32>,
     fov: vec2<f32>,
+};
+struct DebugParams {
+    view_mode: u32,
+    flags: u32,
     mouse_pos: vec2<u32>,
 };
 struct MainParams {
     frame_index: u32,
-    debug_mode: u32,
     num_environment_samples: u32,
+    environment_importance_sampling: u32,
     temporal_history: u32,
 };
 
@@ -19,6 +23,10 @@ struct MainParams {
 const DEBUG_MODE_NONE: u32 = 0u;
 const DEBUG_MODE_DEPTH: u32 = 1u;
 const DEBUG_MODE_NORMAL: u32 = 2u;
+
+//Must match host side `DebugFlags`
+const DEBUG_FLAGS_GEOMETRY: u32 = 1u;
+const DEBUG_FLAGS_RESTIR: u32 = 2u;
 
 // Has to match the host!
 struct Vertex {
@@ -53,6 +61,7 @@ struct HitEntry {
 var<storage, read> hit_entries: array<HitEntry>;
 
 var<uniform> camera: CameraParams;
+var<uniform> debug: DebugParams;
 var<uniform> parameters: MainParams;
 var acc_struct: acceleration_structure;
 var env_map: texture_2d<f32>;
@@ -160,7 +169,7 @@ fn fill_gbuf(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var basis = vec4<f32>(0.0);
     var albedo = vec3<f32>(0.0);
     if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
-        let enable_debug = all(global_id.xy == camera.mouse_pos);
+        let enable_debug = (debug.flags & DEBUG_FLAGS_GEOMETRY) != 0u && all(global_id.xy == debug.mouse_pos);
         let entry = hit_entries[intersection.instance_custom_index + intersection.geometry_index];
         depth = intersection.t;
 
@@ -388,7 +397,23 @@ fn sample_uniform_hemisphere(rng: ptr<function, RandomState>) -> vec3<f32> {
     return vec3<f32>(tangential.xy, h);
 }
 
-fn sample_important_environment(rng: ptr<function, RandomState>) -> LightSample {
+fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
+    let uv = map_equirect_dir_to_uv(dir);
+    return textureSampleLevel(env_map, sampler_linear, uv, 0.0).xyz;
+}
+
+fn sample_light_from_sphere(rng: ptr<function, RandomState>) -> LightSample {
+    var ls = LightSample();
+    ls.pdf = 1.0 / (4.0 * PI);
+    let r = random_gen(rng);
+    let h = 1.0 - 2.0 * random_gen(rng); // make sure to allow h==1
+    let tangential = sample_disk(vec2<f32>(r, 1.0 - square(h)));
+    ls.dir = vec3<f32>(tangential.xy, h);
+    ls.radiance = evaluate_environment(ls.dir);
+    return ls;
+}
+
+fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample {
     var ls = LightSample();
     let mip_count = textureNumLevels(env_weights);
     var uv = vec2<f32>(0.5);
@@ -425,11 +450,6 @@ fn sample_important_environment(rng: ptr<function, RandomState>) -> LightSample 
     return ls;
 }
 
-fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
-    let uv = map_equirect_dir_to_uv(dir);
-    return textureSampleLevel(env_map, sampler_linear, uv, 0.0).xyz;
-}
-
 struct Surface {
     basis: vec4<f32>,
     albedo: vec3<f32>,
@@ -444,8 +464,39 @@ fn evaluate_color(surface: Surface, dir: vec3<f32>) -> vec3<f32> {
     return surface.albedo * lambert_brdf;
 }
 
-fn compute_restir(ray_dir: vec3<f32>, depth: f32, surface: Surface, pixel_index: u32, rng: ptr<function, RandomState>) -> vec3<f32> {
-    if (parameters.debug_mode == DEBUG_MODE_DEPTH) {
+const REJECT_NO = 0u;
+const REJECT_BACKFACING = 1u;
+const REJECT_ZERO_TARGET_SCORE = 2u;
+const REJECT_OCCLUDED = 3u;
+
+fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>) -> u32 {
+    let up = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
+    if (dot(ls.dir, up) <= 0.0)
+    {
+        return REJECT_BACKFACING;
+    }
+
+    let target_score = compute_target_score(ls.radiance);
+    if (target_score < 0.01) {
+        return REJECT_ZERO_TARGET_SCORE;
+    }
+
+    let start_t = 0.5; // some offset required to avoid self-shadowing
+    var rq: ray_query;
+    rayQueryInitialize(&rq, acc_struct,
+        RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, 0xFFu, start_t, camera.depth, start_pos, ls.dir)
+    );
+    rayQueryProceed(&rq);
+    let intersection = rayQueryGetCommittedIntersection(&rq);
+    if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
+        return REJECT_OCCLUDED;
+    }
+
+    return REJECT_NO;
+}
+
+fn compute_restir(ray_dir: vec3<f32>, depth: f32, surface: Surface, pixel_index: u32, rng: ptr<function, RandomState>, enable_debug: bool) -> vec3<f32> {
+    if (debug.view_mode == DEBUG_MODE_DEPTH) {
         return vec3<f32>(depth / camera.depth);
     }
     if (depth == 0.0) {
@@ -454,38 +505,30 @@ fn compute_restir(ray_dir: vec3<f32>, depth: f32, surface: Surface, pixel_index:
 
     let position = camera.position + depth * ray_dir;
     let normal = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
-    if (parameters.debug_mode == DEBUG_MODE_NORMAL) {
+    if (debug.view_mode == DEBUG_MODE_NORMAL) {
         return normal;
     }
 
-    let start_t = 0.5; // some offset required to avoid self-shadowing
-
     var reservoir = LiveReservoir();
     var radiance = vec3<f32>(0.0);
-    var rq: ray_query;
     for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
-        var ls = LightSample();
-        ls.pdf = 1.0 / (2.0 * PI);
-        let light_dir_tbn = sample_uniform_hemisphere(rng);
-        ls.dir = qrot(surface.basis, light_dir_tbn);
-        ls.radiance = evaluate_environment(ls.dir);
-        let target_score = compute_target_score(ls.radiance);
-        if (target_score < 0.01) {
-            bump_reservoir(&reservoir);
-            continue;
-        }
+        let ls = sample_light_from_environment(rng);
+        //let ls = sample_light_from_sphere(rng);
 
-        rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, 0xFFu,
-            start_t, camera.depth, position, ls.dir));
-        rayQueryProceed(&rq);
-        let intersection = rayQueryGetCommittedIntersection(&rq);
-        if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
+        let reject = evaluate_sample(ls, surface, position);
+        let debug_len = depth * 0.2;
+        if (reject == 0u) {
+            if (enable_debug) {
+                debug_line(position, position + debug_len * ls.dir, 0xFFFFFFu);
+            }
+            if (update_reservoir(&reservoir, ls, random_gen(rng))) {
+                radiance = ls.radiance;
+            }
+        } else {
+            if (enable_debug) {
+                debug_line(position, position + debug_len * ls.dir, 0xFF0000u);
+            }
             bump_reservoir(&reservoir);
-            continue;
-        }
-
-        if (update_reservoir(&reservoir, ls, random_gen(rng))) {
-            radiance = ls.radiance;
         }
     }
 
@@ -515,8 +558,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let depth = textureLoad(in_depth, global_id.xy, 0).x;
     surface.basis = normalize(textureLoad(in_basis, global_id.xy, 0));
     surface.albedo = textureLoad(in_albedo, global_id.xy, 0).xyz;
-    let color = compute_restir(ray_dir, depth, surface, global_index, &rng);
-    if (all(global_id.xy == camera.mouse_pos)) {
+    let enable_debug = all(global_id.xy == debug.mouse_pos);
+    let enable_restir_debug = (debug.flags & DEBUG_FLAGS_RESTIR) != 0u && enable_debug;
+    let color = compute_restir(ray_dir, depth, surface, global_index, &rng, enable_restir_debug);
+    if (enable_debug) {
         debug_buf.variance.color_sum += color;
         debug_buf.variance.color2_sum += color * color;
         debug_buf.variance.count += 1u;

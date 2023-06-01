@@ -52,15 +52,27 @@ impl super::Shader {
     }
 
     pub fn get_struct_size(&self, struct_name: &str) -> u32 {
-        let (_, ty) = self
+        match self
             .module
             .types
             .iter()
             .find(|&(_, ty)| ty.name.as_deref() == Some(struct_name))
-            .expect("Struct type not found");
-        match ty.inner {
-            naga::TypeInner::Struct { members: _, span } => span,
-            _ => panic!("Type is not a struct"),
+        {
+            Some((_, ty)) => match ty.inner {
+                naga::TypeInner::Struct { members: _, span } => span,
+                _ => panic!("Type '{struct_name}' is not a struct in the shader"),
+            },
+            None => panic!("Struct '{struct_name}' is not found in the shader"),
         }
+    }
+
+    pub fn check_struct_size<T>(&self) {
+        use std::{any::type_name, mem::size_of};
+        let name = type_name::<T>().rsplit("::").next().unwrap();
+        assert_eq!(
+            size_of::<T>(),
+            self.get_struct_size(name) as usize,
+            "Host struct '{name}' size doesn't match the shader"
+        );
     }
 }

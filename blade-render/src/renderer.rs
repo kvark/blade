@@ -28,9 +28,31 @@ pub enum DebugMode {
     Normal = 2,
 }
 
+impl Default for DebugMode {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq, PartialOrd)]
+    pub struct DebugFlags: u32 {
+        const GEOMETRY = 1;
+        const RESTIR = 2;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+pub struct DebugConfig {
+    pub view_mode: DebugMode,
+    pub flags: DebugFlags,
+    pub mouse_pos: Option<[i32; 2]>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct RayConfig {
     pub num_environment_samples: u32,
+    pub environment_importance_sampling: bool,
     pub temporal_history: u32,
 }
 
@@ -284,6 +306,14 @@ struct CameraParams {
     depth: f32,
     orientation: [f32; 4],
     fov: [f32; 2],
+    unused: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct DebugParams {
+    view_mode: u32,
+    flags: u32,
     mouse_pos: [i32; 2],
 }
 
@@ -291,14 +321,15 @@ struct CameraParams {
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct MainParams {
     frame_index: u32,
-    debug_mode: u32,
     num_environment_samples: u32,
+    environment_importance_sampling: u32,
     temporal_history: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
 struct FillData<'a> {
     camera: CameraParams,
+    debug: DebugParams,
     acc_struct: blade_graphics::AccelerationStructure,
     hit_entries: blade_graphics::BufferPiece,
     index_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
@@ -314,6 +345,7 @@ struct FillData<'a> {
 #[derive(blade_macros::ShaderData)]
 struct MainData {
     camera: CameraParams,
+    debug: DebugParams,
     parameters: MainParams,
     acc_struct: blade_graphics::AccelerationStructure,
     sampler_linear: blade_graphics::Sampler,
@@ -395,6 +427,14 @@ impl ShaderPipelines {
     fn init(config: &RenderConfig, gpu: &blade_graphics::Context) -> Result<Self, &'static str> {
         let source = fs::read_to_string(SHADER_PATH).unwrap();
         let shader = gpu.try_create_shader(blade_graphics::ShaderDesc { source: &source })?;
+
+        shader.check_struct_size::<CameraParams>();
+        shader.check_struct_size::<DebugParams>();
+        shader.check_struct_size::<MainParams>();
+        shader.check_struct_size::<crate::Vertex>();
+        shader.check_struct_size::<HitEntry>();
+        shader.check_struct_size::<DebugVariance>();
+
         let fill_layout = <FillData as blade_graphics::ShaderData>::layout();
         let main_layout = <MainData as blade_graphics::ShaderData>::layout();
         let blit_layout = <BlitData as blade_graphics::ShaderData>::layout();
@@ -827,21 +867,14 @@ impl Renderer {
         }
     }
 
-    fn make_camera_params(
-        &self,
-        camera: &super::Camera,
-        mouse_pos: Option<[i32; 2]>,
-    ) -> CameraParams {
+    fn make_camera_params(&self, camera: &super::Camera) -> CameraParams {
         let fov_x = camera.fov_y * self.screen_size.width as f32 / self.screen_size.height as f32;
         CameraParams {
             position: camera.pos.into(),
             depth: camera.depth,
             orientation: camera.rot.into(),
             fov: [fov_x, camera.fov_y],
-            mouse_pos: match mouse_pos {
-                Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
-                None => [-1; 2],
-            },
+            unused: [0.0; 2],
         }
     }
 
@@ -852,11 +885,18 @@ impl Renderer {
         &self,
         command_encoder: &mut blade_graphics::CommandEncoder,
         camera: &super::Camera,
-        debug_mode: DebugMode,
-        mouse_pos: Option<[i32; 2]>,
+        debug_config: DebugConfig,
         ray_config: RayConfig,
     ) {
         assert!(!self.is_tlas_dirty);
+        let debug = DebugParams {
+            view_mode: debug_config.view_mode as u32,
+            flags: debug_config.flags.bits(),
+            mouse_pos: match debug_config.mouse_pos {
+                Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
+                None => [-1; 2],
+            },
+        };
 
         if let mut pass = command_encoder.compute() {
             let mut pc = pass.with(&self.fill_pipeline);
@@ -870,7 +910,8 @@ impl Renderer {
             pc.bind(
                 0,
                 &FillData {
-                    camera: self.make_camera_params(camera, mouse_pos),
+                    camera: self.make_camera_params(camera),
+                    debug,
                     acc_struct: self.acceleration_structure,
                     hit_entries: self.hit_buffer.into(),
                     index_buffers: &self.index_buffers,
@@ -898,11 +939,13 @@ impl Renderer {
             pc.bind(
                 0,
                 &MainData {
-                    camera: self.make_camera_params(camera, mouse_pos),
+                    camera: self.make_camera_params(camera),
+                    debug,
                     parameters: MainParams {
                         frame_index: self.frame_index,
-                        debug_mode: debug_mode as u32,
                         num_environment_samples: ray_config.num_environment_samples,
+                        environment_importance_sampling: ray_config.environment_importance_sampling
+                            as u32,
                         temporal_history: ray_config.temporal_history,
                     },
                     acc_struct: self.acceleration_structure,
@@ -944,7 +987,7 @@ impl Renderer {
             pc.bind(
                 0,
                 &DebugData {
-                    camera: self.make_camera_params(camera, None),
+                    camera: self.make_camera_params(camera),
                     debug_buf: self.debug.buffer.into(),
                 },
             );
