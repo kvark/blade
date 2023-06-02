@@ -447,11 +447,14 @@ fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample
         }
         ls.pdf *= weight / sum;
     }
-    // offset randomly within the pixel
-    uv += mip_factor * (vec2<f32>(random_gen(rng), random_gen(rng)) - vec2<f32>(0.5));
-    // done
+    // adjust for the texel's solid angle
+    let texel_solid_angle = 4.0 * PI * 4.0 * mip_factor * mip_factor;
+    ls.pdf /= texel_solid_angle;
+    // sample the incoming radiance
     ls.radiance = textureSampleLevel(env_map, sampler_nearest, uv, 0.0).xyz;
-    ls.dir = map_equirect_uv_to_dir(uv);
+    // for determining direction - offset randomly within the pixel
+    let uv_offset = mip_factor * (2.0 * vec2<f32>(random_gen(rng), random_gen(rng)) - vec2<f32>(1.0));
+    ls.dir = map_equirect_uv_to_dir(uv + uv_offset);
     return ls;
 }
 
@@ -517,8 +520,12 @@ fn compute_restir(ray_dir: vec3<f32>, depth: f32, surface: Surface, pixel_index:
     var reservoir = LiveReservoir();
     var radiance = vec3<f32>(0.0);
     for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
-        let ls = sample_light_from_environment(rng);
-        //let ls = sample_light_from_sphere(rng);
+        var ls: LightSample;
+        if (parameters.environment_importance_sampling != 0u) {
+            ls = sample_light_from_environment(rng);
+        } else {
+            ls = sample_light_from_sphere(rng);
+        }
 
         let reject = evaluate_sample(ls, surface, position);
         let debug_len = depth * 0.2;
