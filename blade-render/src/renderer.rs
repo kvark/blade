@@ -460,7 +460,7 @@ struct ShaderPipelines {
     reservoir_size: u32,
 }
 
-const SHADER_PATH: &str = "blade-render/shader.wgsl";
+const SHADER_PATH: &str = "blade-render/code/shader.wgsl";
 
 impl ShaderPipelines {
     fn init(config: &RenderConfig, gpu: &blade_graphics::Context) -> Result<Self, &'static str> {
@@ -479,14 +479,14 @@ impl ShaderPipelines {
         let blit_layout = <BlitData as blade_graphics::ShaderData>::layout();
         let debug_layout = <DebugData as blade_graphics::ShaderData>::layout();
 
-        let env_preproc_source = fs::read_to_string("blade-render/env-preproc.wgsl").unwrap();
+        let env_preproc_source = fs::read_to_string("blade-render/code/env-preproc.wgsl").unwrap();
         let env_preproc_shader = gpu.try_create_shader(blade_graphics::ShaderDesc {
             source: &env_preproc_source,
         })?;
         let env_preproc_layout = <EnvPreprocData as blade_graphics::ShaderData>::layout();
         env_preproc_shader.check_struct_size::<EnvPreprocParams>();
 
-        let debug_blit_source = fs::read_to_string("blade-render/debug-blit.wgsl").unwrap();
+        let debug_blit_source = fs::read_to_string("blade-render/code/debug-blit.wgsl").unwrap();
         let debug_blit_shader = gpu.try_create_shader(blade_graphics::ShaderDesc {
             source: &debug_blit_source,
         })?;
@@ -713,6 +713,7 @@ impl Renderer {
         gpu: &blade_graphics::Context,
         sync_point: &blade_graphics::SyncPoint,
     ) -> bool {
+        //TODO: support the other shaders too
         if let Some(ref mut last_mod_time) = self.shader_modified_time {
             let cur_mod_time = fs::metadata(SHADER_PATH).unwrap().modified().unwrap();
             if *last_mod_time != cur_mod_time {
