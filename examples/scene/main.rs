@@ -52,6 +52,7 @@ struct Example {
     camera: blade_render::Camera,
     debug: blade_render::DebugConfig,
     ray_config: blade_render::RayConfig,
+    debug_blits: Vec<blade_render::DebugBlit>,
     workers: Vec<choir::WorkerHandle>,
 }
 
@@ -179,6 +180,7 @@ impl Example {
                 environment_importance_sampling: true,
                 temporal_history: 10,
             },
+            debug_blits: Vec::new(),
             workers,
         }
     }
@@ -238,7 +240,8 @@ impl Example {
             }],
             depth_stencil: None,
         }) {
-            self.renderer.blit(&mut pass, &self.camera);
+            self.renderer
+                .blit(&mut pass, &self.camera, &self.debug_blits);
             self.gui_painter
                 .paint(&mut pass, gui_primitives, screen_desc, &self.context);
         }
@@ -300,6 +303,35 @@ impl Example {
                     let mut enabled = self.debug.flags.contains(bit);
                     ui.checkbox(&mut enabled, name);
                     self.debug.flags.set(bit, enabled);
+                }
+                // blits
+                let mut blits_to_remove = Vec::new();
+                for (i, db) in self.debug_blits.iter_mut().enumerate() {
+                    let style = ui.style();
+                    egui::Frame::group(style).show(ui, |ui| {
+                        if ui.button("-remove").clicked() {
+                            blits_to_remove.push(i);
+                        }
+                        egui::ComboBox::from_label("Input")
+                            .selected_text(format!("{:?}", db.input))
+                            .show_ui(ui, |ui| {
+                                use blade_render::DebugBlitInput as Dbi;
+                                for value in [Dbi::Dummy, Dbi::Environment, Dbi::EnvironmentWeight]
+                                {
+                                    ui.selectable_value(&mut db.input, value, format!("{value:?}"));
+                                }
+                            });
+                        ui.add(egui::Slider::new(&mut db.mip_level, 0u32..=10u32).text("Mip"));
+                        ui.add(
+                            egui::Slider::new(&mut db.scale_power, -5i32..=5i32).text("Scale Pow"),
+                        );
+                    });
+                }
+                for i in blits_to_remove.into_iter().rev() {
+                    self.debug_blits.remove(i);
+                }
+                if ui.button("+add blit").clicked() {
+                    self.debug_blits.push(blade_render::DebugBlit::default());
                 }
                 // variance
                 if self.debug.mouse_pos.is_some() {
@@ -493,7 +525,7 @@ fn main() {
                 let mut quit = false;
                 let raw_input = egui_winit.take_egui_input(&window);
                 let egui_output = egui_ctx.run(raw_input, |egui_ctx| {
-                    egui::SidePanel::left("my_side_panel").show(egui_ctx, |ui| {
+                    egui::SidePanel::right("control_panel").show(egui_ctx, |ui| {
                         example.add_gui(ui);
                         if ui.button("Quit").clicked() {
                             quit = true;
