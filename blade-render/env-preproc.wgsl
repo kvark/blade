@@ -1,9 +1,9 @@
 var source: texture_2d<f32>;
 var destination: texture_storage_2d<rgba16float, write>;
-struct Params {
+struct EnvPreprocParams {
     target_level: u32,
 }
-var<uniform> params: Params;
+var<uniform> params: EnvPreprocParams;
 
 const PI: f32 = 3.1415926;
 const LUMA: vec3<f32> = vec3<f32>(0.299, 0.587, 0.114);

@@ -42,7 +42,27 @@ bitflags::bitflags! {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DebugBlitInput {
+    Dummy,
+    Environment,
+    EnvironmentWeight,
+}
+impl Default for DebugBlitInput {
+    fn default() -> Self {
+        Self::Dummy
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DebugBlit {
+    pub input: DebugBlitInput,
+    pub offset: [i32; 2],
+    pub scale_power: i32,
+    pub mip_level: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 pub struct DebugConfig {
     pub view_mode: DebugMode,
     pub flags: DebugFlags,
@@ -70,7 +90,8 @@ struct DebugRender {
     capacity: u32,
     buffer: blade_graphics::Buffer,
     variance_buffer: blade_graphics::Buffer,
-    pipeline: blade_graphics::RenderPipeline,
+    draw_pipeline: blade_graphics::RenderPipeline,
+    blit_pipeline: blade_graphics::RenderPipeline,
 }
 
 struct Targets {
@@ -165,6 +186,7 @@ impl Targets {
 
 struct EnvironmentMap {
     main_view: blade_graphics::TextureView,
+    size: blade_graphics::Extent,
     weight_texture: blade_graphics::Texture,
     weight_view: blade_graphics::TextureView,
     weight_mips: Vec<blade_graphics::TextureView>,
@@ -193,6 +215,7 @@ impl EnvironmentMap {
             return;
         }
         self.main_view = view;
+        self.size = extent;
         self.destroy(gpu);
 
         let mip_level_count = extent
@@ -239,7 +262,6 @@ impl EnvironmentMap {
         }
 
         encoder.init_texture(self.weight_texture);
-        let mut compute = encoder.compute();
         let wg_size = self.preproc_pipeline.get_workgroup_size();
         for target_level in 0..mip_level_count {
             let group_count = [
@@ -247,21 +269,21 @@ impl EnvironmentMap {
                 ((weight_extent.height >> target_level) + wg_size[1] - 1) / wg_size[1],
                 1,
             ];
-            if let mut pass = compute.with(&self.preproc_pipeline) {
-                pass.bind(
-                    0,
-                    &EnvPreprocData {
-                        source: if target_level == 0 {
-                            view
-                        } else {
-                            self.weight_mips[target_level as usize - 1]
-                        },
-                        destination: self.weight_mips[target_level as usize],
-                        params: EnvPreprocParams { target_level },
+            let mut compute = encoder.compute();
+            let mut pass = compute.with(&self.preproc_pipeline);
+            pass.bind(
+                0,
+                &EnvPreprocData {
+                    source: if target_level == 0 {
+                        view
+                    } else {
+                        self.weight_mips[target_level as usize - 1]
                     },
-                );
-                pass.dispatch(group_count);
-            }
+                    destination: self.weight_mips[target_level as usize],
+                    params: EnvPreprocParams { target_level },
+                },
+            );
+            pass.dispatch(group_count);
         }
     }
 }
@@ -361,12 +383,12 @@ struct MainData {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 struct ToneMapParams {
+    enabled: u32,
     average_lum: f32,
     key_value: f32,
     white_level: f32,
-    unused: f32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -395,6 +417,22 @@ struct EnvPreprocData {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct DebugBlitParams {
+    target_offset: [f32; 2],
+    target_size: [f32; 2],
+    mip_level: f32,
+    unused: u32,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct DebugBlitData {
+    input: blade_graphics::TextureView,
+    samp: blade_graphics::Sampler,
+    params: DebugBlitParams,
+}
+
+#[repr(C)]
 #[derive(Debug)]
 struct HitEntry {
     index_buf: u32,
@@ -414,7 +452,8 @@ struct ShaderPipelines {
     fill: blade_graphics::ComputePipeline,
     main: blade_graphics::ComputePipeline,
     blit: blade_graphics::RenderPipeline,
-    debug: blade_graphics::RenderPipeline,
+    debug_draw: blade_graphics::RenderPipeline,
+    debug_blit: blade_graphics::RenderPipeline,
     env_preproc: blade_graphics::ComputePipeline,
     debug_line_size: u32,
     debug_buffer_size: u32,
@@ -445,6 +484,14 @@ impl ShaderPipelines {
             source: &env_preproc_source,
         })?;
         let env_preproc_layout = <EnvPreprocData as blade_graphics::ShaderData>::layout();
+        env_preproc_shader.check_struct_size::<EnvPreprocParams>();
+
+        let debug_blit_source = fs::read_to_string("blade-render/debug-blit.wgsl").unwrap();
+        let debug_blit_shader = gpu.try_create_shader(blade_graphics::ShaderDesc {
+            source: &debug_blit_source,
+        })?;
+        let debug_blit_layout = <DebugBlitData as blade_graphics::ShaderData>::layout();
+        debug_blit_shader.check_struct_size::<DebugBlitParams>();
 
         Ok(Self {
             fill: gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
@@ -469,8 +516,8 @@ impl ShaderPipelines {
                 color_targets: &[config.surface_format.into()],
                 depth_stencil: None,
             }),
-            debug: gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
-                name: "debug",
+            debug_draw: gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
+                name: "debug-draw",
                 data_layouts: &[&debug_layout],
                 vertex: shader.at("debug_vs"),
                 primitive: blade_graphics::PrimitiveState {
@@ -479,6 +526,18 @@ impl ShaderPipelines {
                 },
                 depth_stencil: None,
                 fragment: shader.at("debug_fs"),
+                color_targets: &[config.surface_format.into()],
+            }),
+            debug_blit: gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
+                name: "debug-blit",
+                data_layouts: &[&debug_blit_layout],
+                vertex: debug_blit_shader.at("blit_vs"),
+                primitive: blade_graphics::PrimitiveState {
+                    topology: blade_graphics::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                fragment: debug_blit_shader.at("blit_fs"),
                 color_targets: &[config.surface_format.into()],
             }),
             env_preproc: gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
@@ -595,6 +654,7 @@ impl Renderer {
             acceleration_structure: blade_graphics::AccelerationStructure::default(),
             env_map: EnvironmentMap {
                 main_view: dummy.white_view,
+                size: blade_graphics::Extent::default(),
                 weight_texture: blade_graphics::Texture::default(),
                 weight_view: dummy.white_view,
                 weight_mips: Vec::new(),
@@ -611,7 +671,8 @@ impl Renderer {
                 capacity: config.max_debug_lines,
                 buffer: debug_buffer,
                 variance_buffer,
-                pipeline: sp.debug,
+                draw_pipeline: sp.debug_draw,
+                blit_pipeline: sp.debug_blit,
             },
             is_tlas_dirty: true,
             are_reservoirs_dirty: true,
@@ -662,7 +723,8 @@ impl Renderer {
                     self.fill_pipeline = sp.fill;
                     self.main_pipeline = sp.main;
                     self.blit_pipeline = sp.blit;
-                    self.debug.pipeline = sp.debug;
+                    self.debug.draw_pipeline = sp.debug_draw;
+                    self.debug.blit_pipeline = sp.debug_blit;
                     self.env_map.preproc_pipeline = sp.env_preproc;
                     return true;
                 }
@@ -966,24 +1028,29 @@ impl Renderer {
     }
 
     /// Blit the rendering result into a specified render pass.
-    pub fn blit(&self, pass: &mut blade_graphics::RenderCommandEncoder, camera: &super::Camera) {
+    pub fn blit(
+        &self,
+        pass: &mut blade_graphics::RenderCommandEncoder,
+        camera: &super::Camera,
+        debug_blits: &[DebugBlit],
+    ) {
+        let pp = &self.scene.post_processing;
         if let mut pc = pass.with(&self.blit_pipeline) {
-            let pp = &self.scene.post_processing;
             pc.bind(
                 0,
                 &BlitData {
                     input: self.targets.main_view,
                     tone_map_params: ToneMapParams {
+                        enabled: 1,
                         average_lum: pp.average_luminocity,
                         key_value: pp.exposure_key_value,
                         white_level: pp.white_level,
-                        unused: 0.0,
                     },
                 },
             );
             pc.draw(0, 3, 0, 1);
         }
-        if let mut pc = pass.with(&self.debug.pipeline) {
+        if let mut pc = pass.with(&self.debug.draw_pipeline) {
             pc.bind(
                 0,
                 &DebugData {
@@ -992,6 +1059,53 @@ impl Renderer {
                 },
             );
             pc.draw_indirect(self.debug.buffer.at(0));
+        }
+        if let mut pc = pass.with(&self.debug.blit_pipeline) {
+            fn scale(dim: u32, power: i32) -> u32 {
+                if power >= 0 {
+                    dim << power
+                } else {
+                    dim >> -power
+                }
+            }
+            for db in debug_blits {
+                let (input, size) = match db.input {
+                    DebugBlitInput::Dummy => {
+                        (self.dummy.white_view, blade_graphics::Extent::default())
+                    }
+                    DebugBlitInput::Environment => (self.env_map.main_view, self.env_map.size),
+                    DebugBlitInput::EnvironmentWeight => (
+                        self.env_map.weight_view,
+                        blade_graphics::Extent {
+                            width: self.env_map.size.width.max(2) / 2,
+                            height: self.env_map.size.height.max(2) / 2,
+                            depth: 1,
+                        },
+                    ),
+                };
+                pc.bind(
+                    0,
+                    &DebugBlitData {
+                        input,
+                        samp: self.samplers.linear,
+                        params: DebugBlitParams {
+                            target_offset: [
+                                db.offset[0] as f32 / self.screen_size.width as f32,
+                                db.offset[1] as f32 / self.screen_size.height as f32,
+                            ],
+                            target_size: [
+                                scale(size.width >> db.mip_level, db.scale_power) as f32
+                                    / self.screen_size.width as f32,
+                                scale(size.height >> db.mip_level, db.scale_power) as f32
+                                    / self.screen_size.height as f32,
+                            ],
+                            mip_level: db.mip_level as f32,
+                            unused: 0,
+                        },
+                    },
+                );
+                pc.draw(0, 4, 0, 1);
+            }
         }
     }
 

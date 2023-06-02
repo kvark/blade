@@ -417,34 +417,39 @@ fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample
     var ls = LightSample();
     let mip_count = textureNumLevels(env_weights);
     var uv = vec2<f32>(0.5);
+    var mip_factor = 0.5;
     ls.pdf = 1.0;
+    // descend through the mip chain to find a concrete pixel
     for (var mip=mip_count; mip!=0u; mip -= 1u) {
         let weights = textureSampleLevel(env_weights, sampler_nearest, uv, f32(mip - 1u));
         let sum = dot(vec4<f32>(1.0), weights);
         let r = random_gen(rng) * sum;
         var weight = 0.0;
+        mip_factor *= 0.5;
         if (r >= weights.x+weights.y) {
-            uv.y *= 1.5;
+            uv.y += mip_factor;
             if (r >= weights.x+weights.y+weights.z) {
                 weight = weights.w;
-                uv.x *= 1.5;
+                uv.x += mip_factor;
             } else {
                 weight = weights.z;
-                uv.x *= 0.5;
+                uv.x -= mip_factor;
             }
         } else {
-            uv.y *= 0.5;
+            uv.y -= mip_factor;
             if (r >= weights.x) {
                 weight = weights.y;
-                uv.x *= 1.5;
+                uv.x += mip_factor;
             } else {
                 weight = weights.x;
-                uv.x *= 0.5;
+                uv.x -= mip_factor;
             }
         }
         ls.pdf *= weight / sum;
     }
-
+    // offset randomly within the pixel
+    uv += mip_factor * (vec2<f32>(random_gen(rng), random_gen(rng)) - vec2<f32>(0.5));
+    // done
     ls.radiance = textureSampleLevel(env_map, sampler_nearest, uv, 0.0).xyz;
     ls.dir = map_equirect_uv_to_dir(uv);
     return ls;
@@ -570,12 +575,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 struct ToneMapParams {
+    enabled: u32,
     average_lum: f32,
     key_value: f32,
     // minimum value of the pixels mapped to white brightness
     white_level: f32,
-    unused: f32,
-};
+}
 
 var input: texture_2d<f32>;
 var<uniform> tone_map_params: ToneMapParams;
@@ -596,10 +601,14 @@ fn blit_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
 @fragment
 fn blit_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
     let tc = vec2<i32>(i32(vo.clip_pos.x), i32(vo.input_size.y) - i32(vo.clip_pos.y));
-    // Following https://blog.en.uwa4d.com/2022/07/19/physically-based-renderingg-hdr-tone-mapping/
-    let l_hdr = textureLoad(input, tc, 0).xyz;
-    let l_adjusted = tone_map_params.key_value / tone_map_params.average_lum * l_hdr;
-    let l_white = tone_map_params.white_level;
-    let l_ldr = l_adjusted * (1.0 + l_adjusted / (l_white*l_white)) / (1.0 + l_adjusted);
-    return vec4<f32>(l_ldr, 1.0);
+    let color = textureLoad(input, tc, 0);
+    if (tone_map_params.enabled != 0u) {
+        // Following https://blog.en.uwa4d.com/2022/07/19/physically-based-renderingg-hdr-tone-mapping/
+        let l_adjusted = tone_map_params.key_value / tone_map_params.average_lum * color.xyz;
+        let l_white = tone_map_params.white_level;
+        let l_ldr = l_adjusted * (1.0 + l_adjusted / (l_white*l_white)) / (1.0 + l_adjusted);
+        return vec4<f32>(l_ldr, 1.0);
+    } else {
+        return color;
+    }
 }
