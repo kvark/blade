@@ -485,7 +485,7 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>) -> u
     }
 
     let target_score = compute_target_score(ls.radiance);
-    if (target_score < 0.01) {
+    if (target_score < 0.01 * ls.pdf) {
         return REJECT_ZERO_TARGET_SCORE;
     }
 
@@ -519,7 +519,8 @@ fn compute_restir(ray_dir: vec3<f32>, depth: f32, surface: Surface, pixel_index:
 
     var reservoir = LiveReservoir();
     var radiance = vec3<f32>(0.0);
-    for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
+    let num_env_samples = select(parameters.num_environment_samples, 100u, enable_debug);
+    for (var i = 0u; i < num_env_samples; i += 1u) {
         var ls: LightSample;
         if (parameters.environment_importance_sampling != 0u) {
             ls = sample_light_from_environment(rng);

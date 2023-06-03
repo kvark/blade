@@ -10,12 +10,14 @@
 )]
 
 mod asset_hub;
+mod env_map;
 pub mod model;
 mod renderer;
 mod scene;
 pub mod texture;
 
 pub use asset_hub::*;
+pub use env_map::EnvironmentMap;
 pub use model::Model;
 pub use renderer::*;
 pub use texture::Texture;
@@ -40,6 +42,20 @@ pub struct Camera {
 pub struct Object {
     pub model: blade_asset::Handle<Model>,
     pub transform: blade_graphics::Transform,
+}
+
+impl From<blade_asset::Handle<Model>> for Object {
+    fn from(model: blade_asset::Handle<Model>) -> Self {
+        Self {
+            model,
+            transform: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ]
+            .into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
