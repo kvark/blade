@@ -321,9 +321,9 @@ impl Example {
                                     ui.selectable_value(&mut db.input, value, format!("{value:?}"));
                                 }
                             });
-                        ui.add(egui::Slider::new(&mut db.mip_level, 0u32..=10u32).text("Mip"));
+                        ui.add(egui::Slider::new(&mut db.mip_level, 0u32..=15u32).text("Mip"));
                         ui.add(
-                            egui::Slider::new(&mut db.scale_power, -5i32..=5i32).text("Scale Pow"),
+                            egui::Slider::new(&mut db.scale_power, -5i32..=8i32).text("Scale Pow"),
                         );
                     });
                 }

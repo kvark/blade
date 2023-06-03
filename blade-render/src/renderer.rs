@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, mem, num::NonZeroU32, ptr, time};
+use std::{collections::HashMap, fs, mem, ptr, time};
 
 const MAX_RESOURCES: u32 = 1000;
 
@@ -184,110 +184,6 @@ impl Targets {
     }
 }
 
-struct EnvironmentMap {
-    main_view: blade_graphics::TextureView,
-    size: blade_graphics::Extent,
-    weight_texture: blade_graphics::Texture,
-    weight_view: blade_graphics::TextureView,
-    weight_mips: Vec<blade_graphics::TextureView>,
-    preproc_pipeline: blade_graphics::ComputePipeline,
-}
-
-impl EnvironmentMap {
-    fn destroy(&mut self, gpu: &blade_graphics::Context) {
-        if self.weight_texture != blade_graphics::Texture::default() {
-            gpu.destroy_texture(self.weight_texture);
-            gpu.destroy_texture_view(self.weight_view);
-        }
-        for view in self.weight_mips.drain(..) {
-            gpu.destroy_texture_view(view);
-        }
-    }
-
-    fn assign(
-        &mut self,
-        view: blade_graphics::TextureView,
-        extent: blade_graphics::Extent,
-        encoder: &mut blade_graphics::CommandEncoder,
-        gpu: &blade_graphics::Context,
-    ) {
-        if self.main_view == view {
-            return;
-        }
-        self.main_view = view;
-        self.size = extent;
-        self.destroy(gpu);
-
-        let mip_level_count = extent
-            .width
-            .max(extent.height)
-            .next_power_of_two()
-            .trailing_zeros();
-        // The weight texture has to include all of the edge pixels, starting at mip 1
-        let weight_extent = blade_graphics::Extent {
-            width: extent.width.next_power_of_two() / 2,
-            height: extent.height.next_power_of_two() / 2,
-            depth: 1,
-        };
-        let format = blade_graphics::TextureFormat::Rgba16Float;
-        self.weight_texture = gpu.create_texture(blade_graphics::TextureDesc {
-            name: "env-weight",
-            format,
-            size: weight_extent,
-            dimension: blade_graphics::TextureDimension::D2,
-            array_layer_count: 1,
-            mip_level_count,
-            usage: blade_graphics::TextureUsage::RESOURCE | blade_graphics::TextureUsage::STORAGE,
-        });
-        self.weight_view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
-            name: "env-weight",
-            texture: self.weight_texture,
-            format,
-            dimension: blade_graphics::ViewDimension::D2,
-            subresources: &Default::default(),
-        });
-        for base_mip_level in 0..mip_level_count {
-            let view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
-                name: &format!("env-weight-mip{}", base_mip_level),
-                texture: self.weight_texture,
-                format,
-                dimension: blade_graphics::ViewDimension::D2,
-                subresources: &blade_graphics::TextureSubresources {
-                    base_mip_level,
-                    mip_level_count: NonZeroU32::new(1),
-                    ..Default::default()
-                },
-            });
-            self.weight_mips.push(view);
-        }
-
-        encoder.init_texture(self.weight_texture);
-        let wg_size = self.preproc_pipeline.get_workgroup_size();
-        for target_level in 0..mip_level_count {
-            let group_count = [
-                ((weight_extent.width >> target_level) + wg_size[0] - 1) / wg_size[0],
-                ((weight_extent.height >> target_level) + wg_size[1] - 1) / wg_size[1],
-                1,
-            ];
-            let mut compute = encoder.compute();
-            let mut pass = compute.with(&self.preproc_pipeline);
-            pass.bind(
-                0,
-                &EnvPreprocData {
-                    source: if target_level == 0 {
-                        view
-                    } else {
-                        self.weight_mips[target_level as usize - 1]
-                    },
-                    destination: self.weight_mips[target_level as usize],
-                    params: EnvPreprocParams { target_level },
-                },
-            );
-            pass.dispatch(group_count);
-        }
-    }
-}
-
 /// Blade Renderer is a comprehensive rendering solution for
 /// end user applications.
 ///
@@ -306,7 +202,7 @@ pub struct Renderer {
     blit_pipeline: blade_graphics::RenderPipeline,
     scene: super::Scene,
     acceleration_structure: blade_graphics::AccelerationStructure,
-    env_map: EnvironmentMap,
+    env_map: crate::EnvironmentMap,
     dummy: DummyResources,
     hit_buffer: blade_graphics::Buffer,
     vertex_buffers: blade_graphics::BufferArray<MAX_RESOURCES>,
@@ -405,19 +301,6 @@ struct DebugData {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct EnvPreprocParams {
-    target_level: u32,
-}
-
-#[derive(blade_macros::ShaderData)]
-struct EnvPreprocData {
-    source: blade_graphics::TextureView,
-    destination: blade_graphics::TextureView,
-    params: EnvPreprocParams,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct DebugBlitParams {
     target_offset: [f32; 2],
     target_size: [f32; 2],
@@ -479,13 +362,6 @@ impl ShaderPipelines {
         let blit_layout = <BlitData as blade_graphics::ShaderData>::layout();
         let debug_layout = <DebugData as blade_graphics::ShaderData>::layout();
 
-        let env_preproc_source = fs::read_to_string("blade-render/code/env-preproc.wgsl").unwrap();
-        let env_preproc_shader = gpu.try_create_shader(blade_graphics::ShaderDesc {
-            source: &env_preproc_source,
-        })?;
-        let env_preproc_layout = <EnvPreprocData as blade_graphics::ShaderData>::layout();
-        env_preproc_shader.check_struct_size::<EnvPreprocParams>();
-
         let debug_blit_source = fs::read_to_string("blade-render/code/debug-blit.wgsl").unwrap();
         let debug_blit_shader = gpu.try_create_shader(blade_graphics::ShaderDesc {
             source: &debug_blit_source,
@@ -540,11 +416,7 @@ impl ShaderPipelines {
                 fragment: debug_blit_shader.at("blit_fs"),
                 color_targets: &[config.surface_format.into()],
             }),
-            env_preproc: gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
-                name: "env-preproc",
-                data_layouts: &[&env_preproc_layout],
-                compute: env_preproc_shader.at("downsample"),
-            }),
+            env_preproc: crate::EnvironmentMap::init_pipeline(gpu)?,
             debug_line_size: shader.get_struct_size("DebugLine"),
             debug_buffer_size: shader.get_struct_size("DebugBuffer"),
             reservoir_size: shader.get_struct_size("StoredReservoir"),
@@ -652,7 +524,7 @@ impl Renderer {
             main_pipeline: sp.main,
             blit_pipeline: sp.blit,
             acceleration_structure: blade_graphics::AccelerationStructure::default(),
-            env_map: EnvironmentMap {
+            env_map: crate::EnvironmentMap {
                 main_view: dummy.white_view,
                 size: blade_graphics::Extent::default(),
                 weight_texture: blade_graphics::Texture::default(),
@@ -1064,9 +936,9 @@ impl Renderer {
         if let mut pc = pass.with(&self.debug.blit_pipeline) {
             fn scale(dim: u32, power: i32) -> u32 {
                 if power >= 0 {
-                    dim << power
+                    dim.max(1) << power
                 } else {
-                    dim >> -power
+                    (dim >> -power).max(1)
                 }
             }
             for db in debug_blits {
@@ -1075,14 +947,9 @@ impl Renderer {
                         (self.dummy.white_view, blade_graphics::Extent::default())
                     }
                     DebugBlitInput::Environment => (self.env_map.main_view, self.env_map.size),
-                    DebugBlitInput::EnvironmentWeight => (
-                        self.env_map.weight_view,
-                        blade_graphics::Extent {
-                            width: self.env_map.size.width.max(2) / 2,
-                            height: self.env_map.size.height.max(2) / 2,
-                            depth: 1,
-                        },
-                    ),
+                    DebugBlitInput::EnvironmentWeight => {
+                        (self.env_map.weight_view, self.env_map.weight_size())
+                    }
                 };
                 pc.bind(
                     0,
