@@ -1,5 +1,6 @@
+const PI: f32 = 3.1415926;
+
 var env_weights: texture_2d<f32>;
-var sampler_nearest: sampler;
 
 struct RandomState {
     seed: u32,
@@ -67,7 +68,7 @@ fn random_gen(rng: ptr<function, RandomState>) -> f32 {
 }
 
 @vertex
-fn vs_accum(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+fn vs_importance(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     var rng = random_init(vi, 0u);
     var mip = i32(textureNumLevels(env_weights));
     var itc = vec2<i32>(0);
@@ -80,9 +81,9 @@ fn vs_accum(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
         itc *= 2;
         if (r >= weights.x+weights.y) {
             itc.y += 1;
-            itc.x += step(weights.x+weights.y+weights.z, r);
+            itc.x += i32(r >= weights.x+weights.y+weights.z);
         } else {
-            itc.x += step(weights.x, r);
+            itc.x += i32(r >= weights.x);
         }
     }
 
@@ -92,6 +93,40 @@ fn vs_accum(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
 }
 
 @fragment
-fn fs_accum() -> @location(0) vec4<f32> {
-    return vec4<f32>(1.0, 0.0, 0.0, 0.0);
+fn fs_importance() -> @location(0) vec4<f32> {
+    return vec4<f32>(1.0);
+}
+
+
+fn map_equirect_dir_to_uv(dir: vec3<f32>) -> vec2<f32> {
+    //Note: Y axis is up
+    let yaw = asin(dir.y);
+    let pitch = atan2(dir.x, dir.z);
+    return vec2<f32>(pitch + PI, -2.0 * yaw + PI) / (2.0 * PI);
+}
+fn map_equirect_uv_to_dir(uv: vec2<f32>) -> vec3<f32> {
+    let yaw = PI * (0.5 - uv.y);
+    let pitch = 2.0 * PI * (uv.x - 0.5);
+    return vec3<f32>(cos(yaw) * sin(pitch), sin(yaw), cos(yaw) * cos(pitch));
+}
+
+struct UvOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn vs_uv(@builtin(vertex_index) vi: u32) -> UvOutput {
+    var vo: UvOutput;
+    let uv = vec2<f32>(2.0 * f32(vi & 1u), f32(vi & 2u));
+    vo.position = vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
+    vo.uv = uv;
+    return vo;
+}
+
+@fragment
+fn fs_uv(input: UvOutput) -> @location(0) vec4<f32> {
+    let dir = map_equirect_uv_to_dir(input.uv);
+    let uv = map_equirect_dir_to_uv(dir);
+    return vec4<f32>(uv, length(uv - input.uv), 0.0);
 }
