@@ -7,23 +7,22 @@ use blade_graphics as gpu;
 #[derive(blade_macros::ShaderData)]
 struct EnvSampleData {
     env_weights: gpu::TextureView,
-    sampler_nearest: gpu::Sampler,
 }
 
 struct EnvMapSampler {
     sample_count: u32,
     accum_texture: gpu::Texture,
     accum_view: gpu::TextureView,
-    sampler: gpu::Sampler,
-    pipeline: gpu::RenderPipeline,
+    uv_pipeline: gpu::RenderPipeline,
+    importance_pipeline: gpu::RenderPipeline,
 }
 
 impl EnvMapSampler {
     fn new(size: gpu::Extent, context: &gpu::Context) -> Self {
-        let accum_format = gpu::TextureFormat::Rg32Float;
+        let format = gpu::TextureFormat::Rgba16Float;
         let accum_texture = context.create_texture(gpu::TextureDesc {
-            name: "sample-accum",
-            format: accum_format,
+            name: "env-test",
+            format,
             size,
             array_layer_count: 1,
             mip_level_count: 1,
@@ -32,42 +31,46 @@ impl EnvMapSampler {
         });
         let accum_view = context.create_texture_view(gpu::TextureViewDesc {
             texture: accum_texture,
-            name: "sample-accum",
-            format: accum_format,
+            name: "env-test",
+            format,
             dimension: gpu::ViewDimension::D2,
             subresources: &gpu::TextureSubresources::default(),
-        });
-        let sampler = context.create_sampler(gpu::SamplerDesc {
-            name: "nearest",
-            address_modes: [gpu::AddressMode::ClampToEdge; 3],
-            min_filter: gpu::FilterMode::Nearest,
-            mag_filter: gpu::FilterMode::Nearest,
-            mipmap_filter: gpu::FilterMode::Nearest,
-            lod_min_clamp: 0.0,
-            lod_max_clamp: None,
-            compare: None,
-            anisotropy_clamp: 0,
-            border_color: None,
         });
 
         let source = fs::read_to_string("examples/init/env-sample.wgsl").unwrap();
         let shader = context.create_shader(gpu::ShaderDesc { source: &source });
         let layout = <EnvSampleData as gpu::ShaderData>::layout();
 
-        let pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
-            name: "env-sample",
+        let uv_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
+            name: "env-uv",
+            data_layouts: &[],
+            vertex: shader.at("vs_uv"),
+            fragment: shader.at("fs_uv"),
+            primitive: gpu::PrimitiveState {
+                topology: gpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            color_targets: &[gpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: gpu::ColorWrites::ALL,
+            }],
+        });
+        let importance_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
+            name: "env-importance",
             data_layouts: &[&layout],
-            vertex: shader.at("vs_accum"),
-            fragment: shader.at("fs_accum"),
+            vertex: shader.at("vs_importance"),
+            fragment: shader.at("fs_importance"),
             primitive: gpu::PrimitiveState {
                 topology: gpu::PrimitiveTopology::PointList,
                 ..Default::default()
             },
             depth_stencil: None,
             color_targets: &[gpu::ColorTargetState {
-                format: accum_format,
+                format,
                 blend: Some(gpu::BlendState::ADDITIVE),
-                write_mask: gpu::ColorWrites::all(),
+                write_mask: gpu::ColorWrites::ALPHA,
             }],
         });
 
@@ -75,8 +78,8 @@ impl EnvMapSampler {
             sample_count: 1_000_000,
             accum_texture,
             accum_view,
-            sampler,
-            pipeline,
+            uv_pipeline,
+            importance_pipeline,
         }
     }
 
@@ -90,21 +93,18 @@ impl EnvMapSampler {
             }],
             depth_stencil: None,
         });
-        let mut encoder = pass.with(&self.pipeline);
-        encoder.bind(
-            0,
-            &EnvSampleData {
-                env_weights,
-                sampler_nearest: self.sampler,
-            },
-        );
-        encoder.draw(0, self.sample_count, 0, 1);
+        if let mut encoder = pass.with(&self.uv_pipeline) {
+            encoder.draw(0, 4, 0, 1);
+        }
+        if let mut encoder = pass.with(&self.importance_pipeline) {
+            encoder.bind(0, &EnvSampleData { env_weights });
+            encoder.draw(0, self.sample_count, 0, 1);
+        }
     }
 
     fn destroy(self, context: &gpu::Context) {
         context.destroy_texture_view(self.accum_view);
         context.destroy_texture(self.accum_texture);
-        context.destroy_sampler(self.sampler);
     }
 }
 

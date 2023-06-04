@@ -1,4 +1,3 @@
-const MAX_BOUNCES: i32 = 3;
 const PI: f32 = 3.1415926;
 
 struct CameraParams {
@@ -369,9 +368,9 @@ fn random_gen(rng: ptr<function, RandomState>) -> f32 {
     return bitcast<f32>((mask & v) | one) - 1.0;
 }
 
-fn sample_disk(rand: vec2<f32>) -> vec2<f32> {
-    let angle = 2.0 * PI * rand.x;
-    return vec2<f32>(cos(angle), sin(angle)) * sqrt(rand.y);
+fn sample_circle(random: f32) -> vec2<f32> {
+    let angle = 2.0 * PI * random;
+    return vec2<f32>(cos(angle), sin(angle));
 }
 
 fn square(v: f32) -> f32 {
@@ -380,21 +379,14 @@ fn square(v: f32) -> f32 {
 
 fn map_equirect_dir_to_uv(dir: vec3<f32>) -> vec2<f32> {
     //Note: Y axis is up
-    return vec2<f32>(atan2(dir.x, dir.z) + PI, -2.0 * asin(dir.y) + PI) / (2.0 * PI);
+    let yaw = asin(dir.y);
+    let pitch = atan2(dir.x, dir.z);
+    return vec2<f32>(pitch + PI, -2.0 * yaw + PI) / (2.0 * PI);
 }
-
 fn map_equirect_uv_to_dir(uv: vec2<f32>) -> vec3<f32> {
     let yaw = PI * (0.5 - uv.y);
-    let pitch = PI * (2.0 * uv.x - 1.0);
-    return vec3<f32>(cos(yaw) * vec2<f32>(cos(pitch), sin(pitch)), sin(yaw));
-}
-
-fn sample_uniform_hemisphere(rng: ptr<function, RandomState>) -> vec3<f32> {
-    // See (6-8) in https://mathworld.wolfram.com/SpherePointPicking.html
-    let r = random_gen(rng);
-    let h = random_gen(rng);
-    let tangential = sample_disk(vec2<f32>(r, 1.0 - square(h)));
-    return vec3<f32>(tangential.xy, h);
+    let pitch = 2.0 * PI * (uv.x - 0.5);
+    return vec3<f32>(cos(yaw) * sin(pitch), sin(yaw), cos(yaw) * cos(pitch));
 }
 
 fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
@@ -405,10 +397,10 @@ fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
 fn sample_light_from_sphere(rng: ptr<function, RandomState>) -> LightSample {
     var ls = LightSample();
     ls.pdf = 1.0 / (4.0 * PI);
-    let r = random_gen(rng);
+    let a = random_gen(rng);
     let h = 1.0 - 2.0 * random_gen(rng); // make sure to allow h==1
-    let tangential = sample_disk(vec2<f32>(r, 1.0 - square(h)));
-    ls.dir = vec3<f32>(tangential.xy, h);
+    let tangential = sqrt(1.0 - square(h)) * sample_circle(a);
+    ls.dir = vec3<f32>(tangential.x, h, tangential.y);
     ls.radiance = evaluate_environment(ls.dir);
     return ls;
 }
