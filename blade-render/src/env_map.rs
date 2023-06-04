@@ -112,13 +112,10 @@ impl EnvironmentMap {
         }
 
         encoder.init_texture(self.weight_texture);
-        let wg_size = self.preproc_pipeline.get_workgroup_size();
         for target_level in 0..mip_level_count {
-            let group_count = [
-                ((weight_extent.width >> target_level) + wg_size[0] - 1) / wg_size[0],
-                ((weight_extent.height >> target_level) + wg_size[1] - 1) / wg_size[1],
-                1,
-            ];
+            let groups = self
+                .preproc_pipeline
+                .get_dispatch_for(weight_extent.at_mip_level(target_level));
             let mut compute = encoder.compute();
             let mut pass = compute.with(&self.preproc_pipeline);
             pass.bind(
@@ -133,7 +130,7 @@ impl EnvironmentMap {
                     params: EnvPreprocParams { target_level },
                 },
             );
-            pass.dispatch(group_count);
+            pass.dispatch(groups);
         }
     }
 }

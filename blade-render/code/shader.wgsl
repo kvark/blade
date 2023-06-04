@@ -415,46 +415,47 @@ fn sample_light_from_sphere(rng: ptr<function, RandomState>) -> LightSample {
 
 fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample {
     var ls = LightSample();
-    let mip_count = textureNumLevels(env_weights);
-    var uv = vec2<f32>(0.5);
-    var mip_factor = 0.5;
     ls.pdf = 1.0;
+    var mip = i32(textureNumLevels(env_weights));
+    var itc = vec2<i32>(0);
     // descend through the mip chain to find a concrete pixel
-    for (var mip=mip_count; mip!=0u; mip -= 1u) {
-        let weights = textureSampleLevel(env_weights, sampler_nearest, uv, f32(mip - 1u));
+    while (mip != 0) {
+        mip -= 1;
+        let weights = textureLoad(env_weights, itc, mip);
         let sum = dot(vec4<f32>(1.0), weights);
         let r = random_gen(rng) * sum;
-        var weight = 0.0;
-        mip_factor *= 0.5;
+        var weight: f32;
+        itc *= 2;
         if (r >= weights.x+weights.y) {
-            uv.y += mip_factor;
+            itc.y += 1;
             if (r >= weights.x+weights.y+weights.z) {
                 weight = weights.w;
-                uv.x += mip_factor;
+                itc.x += 1;
             } else {
                 weight = weights.z;
-                uv.x -= mip_factor;
             }
         } else {
-            uv.y -= mip_factor;
             if (r >= weights.x) {
                 weight = weights.y;
-                uv.x += mip_factor;
+                itc.x += 1;
             } else {
                 weight = weights.x;
-                uv.x -= mip_factor;
             }
         }
         ls.pdf *= weight / sum;
     }
+
+    let dim = textureDimensions(env_map, 0);
     // adjust for the texel's solid angle
-    let texel_solid_angle = 4.0 * PI * 4.0 * mip_factor * mip_factor;
+    let meridian_solid_angle = 4.0 * PI / f32(dim.x);
+    let meridian_part = 0.5 * (cos(PI * f32(itc.y) / f32(dim.y)) - cos(PI * f32(itc.y + 1) / f32(dim.y)));
+    let texel_solid_angle = meridian_solid_angle * meridian_part;
     ls.pdf /= texel_solid_angle;
     // sample the incoming radiance
-    ls.radiance = textureSampleLevel(env_map, sampler_nearest, uv, 0.0).xyz;
+    ls.radiance = textureLoad(env_map, itc, 0).xyz;
     // for determining direction - offset randomly within the pixel
-    let uv_offset = mip_factor * (2.0 * vec2<f32>(random_gen(rng), random_gen(rng)) - vec2<f32>(1.0));
-    ls.dir = map_equirect_uv_to_dir(uv + uv_offset);
+    let uv = (vec2<f32>(itc) + vec2<f32>(random_gen(rng), random_gen(rng))) / vec2<f32>(dim);
+    ls.dir = map_equirect_uv_to_dir(uv);
     return ls;
 }
 

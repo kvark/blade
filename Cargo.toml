@@ -68,3 +68,6 @@ env_logger = "0.10"
 console_error_panic_hook = "0.1.7"
 console_log = "1"
 web-sys = { workspace = true, features = ["Window"] }
+
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dev-dependencies]
+renderdoc = "0.11"

@@ -327,11 +327,9 @@ impl crate::traits::ResourceDevice for super::Context {
             .address_mode_u(map_address_mode(desc.address_modes[0]))
             .address_mode_v(map_address_mode(desc.address_modes[1]))
             .address_mode_w(map_address_mode(desc.address_modes[2]))
-            .min_lod(desc.lod_min_clamp);
+            .min_lod(desc.lod_min_clamp)
+            .max_lod(desc.lod_max_clamp.unwrap_or(vk::LOD_CLAMP_NONE));
 
-        if let Some(lod) = desc.lod_max_clamp {
-            vk_info = vk_info.max_lod(lod);
-        }
         if let Some(fun) = desc.compare {
             vk_info = vk_info
                 .compare_enable(true)

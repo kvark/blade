@@ -62,7 +62,11 @@ impl super::TextureFormat {
             Self::Rgba8Snorm => uncompressed(4),
             Self::Rgba16Float => uncompressed(8),
             Self::R32Float => uncompressed(4),
-            Self::Rgba32Float => uncompressed(32),
+            Self::Rg32Float => uncompressed(8),
+            Self::Rgba32Float => uncompressed(16),
+            Self::R32Uint => uncompressed(4),
+            Self::Rg32Uint => uncompressed(8),
+            Self::Rgba32Uint => uncompressed(16),
             Self::Depth32Float => uncompressed(4),
             Self::Bc1Unorm => cx_bc(8),
             Self::Bc1UnormSrgb => cx_bc(8),
@@ -82,5 +86,17 @@ impl super::TextureFormat {
             Self::Depth32Float => super::TexelAspects::DEPTH,
             _ => super::TexelAspects::COLOR,
         }
+    }
+}
+
+impl super::ComputePipeline {
+    /// Return the dispatch group counts sufficient to cover the given extent.
+    pub fn get_dispatch_for(&self, extent: super::Extent) -> [u32; 3] {
+        let wg_size = self.get_workgroup_size();
+        [
+            (extent.width + wg_size[0] - 1) / wg_size[0],
+            (extent.height + wg_size[1] - 1) / wg_size[1],
+            (extent.depth + wg_size[2] - 1) / wg_size[2],
+        ]
     }
 }

@@ -13,6 +13,88 @@ struct DummyResources {
     size: blade_graphics::Extent,
     white_texture: blade_graphics::Texture,
     white_view: blade_graphics::TextureView,
+    red_texture: blade_graphics::Texture,
+    red_view: blade_graphics::TextureView,
+    staging_buf: blade_graphics::Buffer,
+}
+
+impl DummyResources {
+    fn new(
+        command_encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+    ) -> Self {
+        let size = blade_graphics::Extent {
+            width: 1,
+            height: 1,
+            depth: 1,
+        };
+        let white_texture = gpu.create_texture(blade_graphics::TextureDesc {
+            name: "dummy/white",
+            format: blade_graphics::TextureFormat::Rgba8Unorm,
+            size,
+            array_layer_count: 1,
+            mip_level_count: 1,
+            dimension: blade_graphics::TextureDimension::D2,
+            usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
+        });
+        let white_view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
+            name: "dummy/white",
+            texture: white_texture,
+            format: blade_graphics::TextureFormat::Rgba8Unorm,
+            dimension: blade_graphics::ViewDimension::D2,
+            subresources: &blade_graphics::TextureSubresources::default(),
+        });
+        let red_texture = gpu.create_texture(blade_graphics::TextureDesc {
+            name: "dummy/red",
+            format: blade_graphics::TextureFormat::Rgba8Unorm,
+            size,
+            array_layer_count: 1,
+            mip_level_count: 1,
+            dimension: blade_graphics::TextureDimension::D2,
+            usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
+        });
+        let red_view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
+            name: "dummy/red",
+            texture: red_texture,
+            format: blade_graphics::TextureFormat::Rgba8Unorm,
+            dimension: blade_graphics::ViewDimension::D2,
+            subresources: &blade_graphics::TextureSubresources::default(),
+        });
+
+        command_encoder.init_texture(white_texture);
+        command_encoder.init_texture(red_texture);
+        let mut transfers = command_encoder.transfer();
+        let staging_buf = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "dummy staging",
+            size: 8,
+            memory: blade_graphics::Memory::Upload,
+        });
+        unsafe {
+            ptr::write(
+                staging_buf.data() as *mut _,
+                [!0u8, !0, !0, !0, !0, 0, 0, 0],
+            );
+        }
+        transfers.copy_buffer_to_texture(staging_buf.at(0), 4, white_texture.into(), size);
+        transfers.copy_buffer_to_texture(staging_buf.at(4), 4, red_texture.into(), size);
+
+        Self {
+            size,
+            white_texture,
+            white_view,
+            red_texture,
+            red_view,
+            staging_buf,
+        }
+    }
+
+    fn destroy(&mut self, gpu: &blade_graphics::Context) {
+        gpu.destroy_texture_view(self.white_view);
+        gpu.destroy_texture(self.white_texture);
+        gpu.destroy_texture_view(self.red_view);
+        gpu.destroy_texture(self.red_texture);
+        gpu.destroy_buffer(self.staging_buf);
+    }
 }
 
 struct Samplers {
@@ -465,36 +547,7 @@ impl Renderer {
         });
 
         let targets = Targets::new(config.screen_size, encoder, gpu);
-
-        let dummy = {
-            let size = blade_graphics::Extent {
-                width: 1,
-                height: 1,
-                depth: 1,
-            };
-            let white_texture = gpu.create_texture(blade_graphics::TextureDesc {
-                name: "dummy/white",
-                format: blade_graphics::TextureFormat::Rgba8Unorm,
-                size,
-                array_layer_count: 1,
-                mip_level_count: 1,
-                dimension: blade_graphics::TextureDimension::D2,
-                usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
-            });
-            let white_view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
-                name: "dummy/white",
-                texture: white_texture,
-                format: blade_graphics::TextureFormat::Rgba8Unorm,
-                dimension: blade_graphics::ViewDimension::D2,
-                subresources: &blade_graphics::TextureSubresources::default(),
-            });
-            encoder.init_texture(white_texture);
-            DummyResources {
-                size,
-                white_texture,
-                white_view,
-            }
-        };
+        let dummy = DummyResources::new(encoder, gpu);
 
         let samplers = Samplers {
             nearest: gpu.create_sampler(blade_graphics::SamplerDesc {
@@ -528,7 +581,7 @@ impl Renderer {
                 main_view: dummy.white_view,
                 size: blade_graphics::Extent::default(),
                 weight_texture: blade_graphics::Texture::default(),
-                weight_view: dummy.white_view,
+                weight_view: dummy.red_view,
                 weight_mips: Vec::new(),
                 preproc_pipeline: sp.env_preproc,
             },
@@ -561,11 +614,9 @@ impl Renderer {
             gpu.destroy_buffer(self.hit_buffer);
         }
         gpu.destroy_acceleration_structure(self.acceleration_structure);
-        // env map
+        // env map, dummy
         self.env_map.destroy(gpu);
-        // dummy resources
-        gpu.destroy_texture_view(self.dummy.white_view);
-        gpu.destroy_texture(self.dummy.white_texture);
+        self.dummy.destroy(gpu);
         // samplers
         gpu.destroy_sampler(self.samplers.nearest);
         gpu.destroy_sampler(self.samplers.linear);
@@ -835,13 +886,7 @@ impl Renderer {
 
         if let mut pass = command_encoder.compute() {
             let mut pc = pass.with(&self.fill_pipeline);
-            let wg_size = self.fill_pipeline.get_workgroup_size();
-            let group_count = [
-                (self.screen_size.width + wg_size[0] - 1) / wg_size[0],
-                (self.screen_size.height + wg_size[1] - 1) / wg_size[1],
-                1,
-            ];
-
+            let groups = self.fill_pipeline.get_dispatch_for(self.screen_size);
             pc.bind(
                 0,
                 &FillData {
@@ -859,18 +904,12 @@ impl Renderer {
                     out_albedo: self.targets.albedo_view,
                 },
             );
-            pc.dispatch(group_count);
+            pc.dispatch(groups);
         }
 
         if let mut pass = command_encoder.compute() {
             let mut pc = pass.with(&self.main_pipeline);
-            let wg_size = self.main_pipeline.get_workgroup_size();
-            let group_count = [
-                (self.screen_size.width + wg_size[0] - 1) / wg_size[0],
-                (self.screen_size.height + wg_size[1] - 1) / wg_size[1],
-                1,
-            ];
-
+            let groups = self.main_pipeline.get_dispatch_for(self.screen_size);
             pc.bind(
                 0,
                 &MainData {
@@ -896,7 +935,7 @@ impl Renderer {
                     output: self.targets.main_view,
                 },
             );
-            pc.dispatch(group_count);
+            pc.dispatch(groups);
         }
     }
 
