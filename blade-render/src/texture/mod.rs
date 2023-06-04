@@ -251,14 +251,20 @@ impl blade_asset::Baker for Baker {
         }
 
         let block_info = image.format.0.block_info();
+        let bytes_per_row =
+            (image.extent[0] / block_info.dimensions.0 as u32) * block_info.size as u32;
+        let rows_per_image = image.extent[1] / block_info.dimensions.1 as u32;
+        assert!(image.data.len() >= rows_per_image as usize * bytes_per_row as usize,
+            "Image data of size {} is insufficient for {bytes_per_row} bytes per {rows_per_image} rows",
+            image.data.len());
+
         let mut pending_ops = self.pending_operations.lock().unwrap();
         pending_ops
             .initializations
             .push(Initialization { dst: texture });
         pending_ops.transfers.push(Transfer {
             stage,
-            bytes_per_row: (image.extent[0] / block_info.dimensions.0 as u32)
-                * block_info.size as u32,
+            bytes_per_row,
             dst: texture,
             extent,
         });

@@ -5,6 +5,14 @@ use ash::{
 use naga::back::spv;
 use std::{ffi, mem, sync::Mutex};
 
+const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
+    vk::ExtInlineUniformBlockFn::name(),
+    vk::KhrTimelineSemaphoreFn::name(),
+    vk::KhrDescriptorUpdateTemplateFn::name(),
+    vk::KhrDynamicRenderingFn::name(),
+];
+
+#[derive(Debug)]
 struct AdapterCapabilities {
     api_version: u32,
     properties: vk::PhysicalDeviceProperties,
@@ -17,6 +25,24 @@ unsafe fn inspect_adapter(
     instance: &super::Instance,
     driver_api_version: u32,
 ) -> Option<AdapterCapabilities> {
+    let supported_extension_properties = instance
+        .core
+        .enumerate_device_extension_properties(phd)
+        .unwrap();
+    let supported_extensions = supported_extension_properties
+        .iter()
+        .map(|ext_prop| ffi::CStr::from_ptr(ext_prop.extension_name.as_ptr()))
+        .collect::<Vec<_>>();
+    for extension in REQUIRED_DEVICE_EXTENSIONS {
+        if !supported_extensions.contains(extension) {
+            log::warn!(
+                "Rejected for device extension {:?} not supported",
+                extension
+            );
+            return None;
+        }
+    }
+
     let mut inline_uniform_block_properties =
         vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
     let mut timeline_semaphore_properties =
@@ -102,9 +128,12 @@ unsafe fn inspect_adapter(
         );
         return None;
     }
-
-    let ray_tracing = if descriptor_indexing_properties.max_per_stage_update_after_bind_resources
-        == vk::FALSE
+    let ray_tracing = if !supported_extensions.contains(&vk::KhrAccelerationStructureFn::name())
+        || !supported_extensions.contains(&vk::KhrRayQueryFn::name())
+    {
+        log::info!("No ray tracing extensions are supported");
+        false
+    } else if descriptor_indexing_properties.max_per_stage_update_after_bind_resources == vk::FALSE
         || descriptor_indexing_features.descriptor_binding_partially_bound == vk::FALSE
         || descriptor_indexing_features.shader_storage_buffer_array_non_uniform_indexing
             == vk::FALSE
@@ -216,7 +245,7 @@ impl super::Context {
 
             for inst_ext in instance_extensions.iter() {
                 if !supported_instance_extensions.contains(inst_ext) {
-                    log::error!("Extension {:?} is not supported", inst_ext);
+                    log::error!("Instance extension {:?} is not supported", inst_ext);
                     return Err(crate::NotSupportedError);
                 }
             }
@@ -260,6 +289,7 @@ impl super::Context {
             })
             .ok_or(crate::NotSupportedError)?;
 
+        log::debug!("Adapter {:#?}", capabilities);
         let queue_family_index = 0; //TODO
 
         let device_core = {
@@ -269,12 +299,7 @@ impl super::Context {
                 .build();
             let family_infos = [family_info];
 
-            let mut device_extensions = vec![
-                vk::ExtInlineUniformBlockFn::name(),
-                vk::KhrTimelineSemaphoreFn::name(),
-                vk::KhrDescriptorUpdateTemplateFn::name(),
-                vk::KhrDynamicRenderingFn::name(),
-            ];
+            let mut device_extensions = REQUIRED_DEVICE_EXTENSIONS.to_vec();
             if surface_handles.is_some() {
                 device_extensions.push(vk::KhrSwapchainFn::name());
             }

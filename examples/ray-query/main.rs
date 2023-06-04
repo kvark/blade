@@ -259,13 +259,8 @@ impl Example {
         self.command_encoder.start();
 
         if let mut pass = self.command_encoder.compute() {
+            let groups = self.rt_pipeline.get_dispatch_for(self.screen_size);
             if let mut pc = pass.with(&self.rt_pipeline) {
-                let wg_size = self.rt_pipeline.get_workgroup_size();
-                let group_count = [
-                    (self.screen_size.width + wg_size[0] - 1) / wg_size[0],
-                    (self.screen_size.height + wg_size[1] - 1) / wg_size[1],
-                    1,
-                ];
                 let fov_y = 0.3;
                 let fov_x = fov_y * self.screen_size.width as f32 / self.screen_size.height as f32;
                 let rotation_angle = self.start_time.elapsed().as_secs_f32() * 0.4;
@@ -285,7 +280,7 @@ impl Example {
                         output: self.target_view,
                     },
                 );
-                pc.dispatch(group_count);
+                pc.dispatch(groups);
             }
         }
 

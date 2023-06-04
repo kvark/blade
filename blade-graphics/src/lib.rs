@@ -199,7 +199,11 @@ pub enum TextureFormat {
     Rgba8Snorm,
     Rgba16Float,
     R32Float,
+    Rg32Float,
     Rgba32Float,
+    R32Uint,
+    Rg32Uint,
+    Rgba32Uint,
     // depth and stencil
     Depth32Float,
     // S3TC block compression
@@ -786,6 +790,13 @@ impl BlendComponent {
         dst_factor: BlendFactor::OneMinusSrcAlpha,
         operation: BlendOperation::Add,
     };
+
+    /// Blend state of src + dst
+    pub const ADDITIVE: Self = Self {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::One,
+        operation: BlendOperation::Add,
+    };
 }
 
 impl Default for BlendComponent {
@@ -825,6 +836,12 @@ impl BlendState {
     pub const PREMULTIPLIED_ALPHA_BLENDING: Self = Self {
         color: BlendComponent::OVER,
         alpha: BlendComponent::OVER,
+    };
+
+    /// Blend mode that just adds the value.
+    pub const ADDITIVE: Self = Self {
+        color: BlendComponent::ADDITIVE,
+        alpha: BlendComponent::ADDITIVE,
     };
 }
 

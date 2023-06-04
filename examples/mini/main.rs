@@ -50,7 +50,6 @@ fn main() {
         data_layouts: &[&global_layout],
         compute: shader.at("main"),
     });
-    let wg_size = pipeline.get_workgroup_size();
 
     let extent = gpu::Extent {
         width: 16,
@@ -127,7 +126,7 @@ fn main() {
     for i in 1..mip_level_count {
         if let mut compute = command_encoder.compute() {
             if let mut pc = compute.with(&pipeline) {
-                let dst_size = extent.at_mip_level(i);
+                let groups = pipeline.get_dispatch_for(extent.at_mip_level(i));
                 pc.bind(
                     0,
                     &Globals {
@@ -140,11 +139,7 @@ fn main() {
                         output: views[i as usize],
                     },
                 );
-                pc.dispatch([
-                    dst_size.width / wg_size[0] + 1,
-                    dst_size.height / wg_size[1] + 1,
-                    1,
-                ]);
+                pc.dispatch(groups);
             }
         }
     }
