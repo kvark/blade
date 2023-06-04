@@ -13,8 +13,8 @@ struct EnvMapSampler {
     sample_count: u32,
     accum_texture: gpu::Texture,
     accum_view: gpu::TextureView,
-    uv_pipeline: gpu::RenderPipeline,
-    importance_pipeline: gpu::RenderPipeline,
+    init_pipeline: gpu::RenderPipeline,
+    accum_pipeline: gpu::RenderPipeline,
 }
 
 impl EnvMapSampler {
@@ -41,11 +41,11 @@ impl EnvMapSampler {
         let shader = context.create_shader(gpu::ShaderDesc { source: &source });
         let layout = <EnvSampleData as gpu::ShaderData>::layout();
 
-        let uv_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
-            name: "env-uv",
-            data_layouts: &[],
-            vertex: shader.at("vs_uv"),
-            fragment: shader.at("fs_uv"),
+        let init_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
+            name: "env-init",
+            data_layouts: &[&layout],
+            vertex: shader.at("vs_init"),
+            fragment: shader.at("fs_init"),
             primitive: gpu::PrimitiveState {
                 topology: gpu::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
@@ -57,11 +57,11 @@ impl EnvMapSampler {
                 write_mask: gpu::ColorWrites::ALL,
             }],
         });
-        let importance_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
-            name: "env-importance",
+        let accum_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
+            name: "env-accum",
             data_layouts: &[&layout],
-            vertex: shader.at("vs_importance"),
-            fragment: shader.at("fs_importance"),
+            vertex: shader.at("vs_accum"),
+            fragment: shader.at("fs_accum"),
             primitive: gpu::PrimitiveState {
                 topology: gpu::PrimitiveTopology::PointList,
                 ..Default::default()
@@ -70,7 +70,7 @@ impl EnvMapSampler {
             color_targets: &[gpu::ColorTargetState {
                 format,
                 blend: Some(gpu::BlendState::ADDITIVE),
-                write_mask: gpu::ColorWrites::ALPHA,
+                write_mask: gpu::ColorWrites::RED,
             }],
         });
 
@@ -78,8 +78,8 @@ impl EnvMapSampler {
             sample_count: 1_000_000,
             accum_texture,
             accum_view,
-            uv_pipeline,
-            importance_pipeline,
+            init_pipeline,
+            accum_pipeline,
         }
     }
 
@@ -93,10 +93,11 @@ impl EnvMapSampler {
             }],
             depth_stencil: None,
         });
-        if let mut encoder = pass.with(&self.uv_pipeline) {
+        if let mut encoder = pass.with(&self.init_pipeline) {
+            encoder.bind(0, &EnvSampleData { env_weights });
             encoder.draw(0, 4, 0, 1);
         }
-        if let mut encoder = pass.with(&self.importance_pipeline) {
+        if let mut encoder = pass.with(&self.accum_pipeline) {
             encoder.bind(0, &EnvSampleData { env_weights });
             encoder.draw(0, self.sample_count, 0, 1);
         }
