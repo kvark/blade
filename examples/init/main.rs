@@ -96,11 +96,11 @@ impl EnvMapSampler {
         if let mut encoder = pass.with(&self.init_pipeline) {
             encoder.bind(0, &EnvSampleData { env_weights });
             encoder.draw(0, 4, 0, 1);
-        }
+        };
         if let mut encoder = pass.with(&self.accum_pipeline) {
             encoder.bind(0, &EnvSampleData { env_weights });
             encoder.draw(0, self.sample_count, 0, 1);
-        }
+        };
     }
 
     fn destroy(self, context: &gpu::Context) {
