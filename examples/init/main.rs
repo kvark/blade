@@ -6,6 +6,7 @@ use blade_graphics as gpu;
 
 #[derive(blade_macros::ShaderData)]
 struct EnvSampleData {
+    env_main: gpu::TextureView,
     env_weights: gpu::TextureView,
 }
 
@@ -75,7 +76,7 @@ impl EnvMapSampler {
         });
 
         Self {
-            sample_count: 1_000_000,
+            sample_count: size.width * size.height * 2,
             accum_texture,
             accum_view,
             init_pipeline,
@@ -83,7 +84,12 @@ impl EnvMapSampler {
         }
     }
 
-    fn accumulate(&self, command_encoder: &mut gpu::CommandEncoder, env_weights: gpu::TextureView) {
+    fn accumulate(
+        &self,
+        command_encoder: &mut gpu::CommandEncoder,
+        env_main: gpu::TextureView,
+        env_weights: gpu::TextureView,
+    ) {
         command_encoder.init_texture(self.accum_texture);
         let mut pass = command_encoder.render(gpu::RenderTargetSet {
             colors: &[gpu::RenderTarget {
@@ -94,11 +100,23 @@ impl EnvMapSampler {
             depth_stencil: None,
         });
         if let mut encoder = pass.with(&self.init_pipeline) {
-            encoder.bind(0, &EnvSampleData { env_weights });
+            encoder.bind(
+                0,
+                &EnvSampleData {
+                    env_main,
+                    env_weights,
+                },
+            );
             encoder.draw(0, 4, 0, 1);
         };
         if let mut encoder = pass.with(&self.accum_pipeline) {
-            encoder.bind(0, &EnvSampleData { env_weights });
+            encoder.bind(
+                0,
+                &EnvSampleData {
+                    env_main,
+                    env_weights,
+                },
+            );
             encoder.draw(0, self.sample_count, 0, 1);
         };
     }
@@ -139,14 +157,6 @@ fn main() {
         blade_render::AssetHub::new(".".as_ref(), Path::new("asset-cache"), &choir, &context);
 
     let mut scene = blade_render::Scene::default();
-    let mut env_map = blade_render::EnvironmentMap {
-        main_view: blade_graphics::TextureView::default(),
-        size: blade_graphics::Extent::default(),
-        weight_texture: blade_graphics::Texture::default(),
-        weight_view: blade_graphics::TextureView::default(),
-        weight_mips: Vec::new(),
-        preproc_pipeline: blade_render::EnvironmentMap::init_pipeline(&context).unwrap(),
-    };
     println!("Populating the scene");
     let mut load_finish = choir.spawn("load finish").init_dummy();
     for arg in env::args().skip(1) {
@@ -178,17 +188,28 @@ fn main() {
         buffer_count: 1,
     });
     command_encoder.start();
+    let mut dummy = blade_render::DummyResources::new(&mut command_encoder, &context);
     let mut temp_buffers = Vec::new();
     asset_hub.flush(&mut command_encoder, &mut temp_buffers);
 
-    let mut env_sampler = None;
-    if let Some(handle) = scene.environment_map {
-        let texture = &asset_hub.textures[handle];
-        env_map.assign(texture.view, texture.extent, &mut command_encoder, &context);
-        let es = EnvMapSampler::new(texture.extent, &context);
-        es.accumulate(&mut command_encoder, env_map.weight_view);
-        env_sampler = Some(es);
-    }
+    let mut env_map = blade_render::EnvironmentMap {
+        main_view: dummy.white_view,
+        size: blade_graphics::Extent::default(),
+        weight_texture: blade_graphics::Texture::default(),
+        weight_view: dummy.red_view,
+        weight_mips: Vec::new(),
+        preproc_pipeline: blade_render::EnvironmentMap::init_pipeline(&context).unwrap(),
+    };
+    let env_size = match scene.environment_map {
+        Some(handle) => {
+            let texture = &asset_hub.textures[handle];
+            env_map.assign(texture.view, texture.extent, &mut command_encoder, &context);
+            texture.extent
+        }
+        None => dummy.size,
+    };
+    let env_sampler = EnvMapSampler::new(env_size, &context);
+    env_sampler.accumulate(&mut command_encoder, env_map.main_view, env_map.weight_view);
     let sync_point = context.submit(&mut command_encoder);
 
     context.wait_for(&sync_point, !0);
@@ -198,9 +219,8 @@ fn main() {
     if scene.environment_map.is_some() {
         env_map.destroy(&context);
     }
-    if let Some(env_sampler) = env_sampler {
-        env_sampler.destroy(&context);
-    }
+    env_sampler.destroy(&context);
+    dummy.destroy(&context);
     asset_hub.destroy();
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]

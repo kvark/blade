@@ -420,7 +420,8 @@ fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample
     ls.pdf /= texel_solid_angle;
     // sample the incoming radiance
     ls.radiance = textureLoad(env_map, itc, 0).xyz;
-    // for determining direction - offset randomly within the pixel
+    // for determining direction - offset randomly within the texel
+    // Note: this only works if the texels are sufficiently small
     let uv = (vec2<f32>(itc) + vec2<f32>(random_gen(rng), random_gen(rng))) / vec2<f32>(dim);
     ls.dir = map_equirect_uv_to_dir(uv);
     return ls;
