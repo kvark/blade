@@ -380,6 +380,7 @@ struct BlitData {
 struct DebugData {
     camera: CameraParams,
     debug_buf: blade_graphics::BufferPiece,
+    in_depth: blade_graphics::TextureView,
 }
 
 #[repr(C)]
@@ -485,7 +486,11 @@ impl ShaderPipelines {
                 },
                 depth_stencil: None,
                 fragment: shader.at("debug_fs"),
-                color_targets: &[config.surface_format.into()],
+                color_targets: &[blade_graphics::ColorTargetState {
+                    format: config.surface_format,
+                    blend: Some(blade_graphics::BlendState::ALPHA_BLENDING),
+                    write_mask: blade_graphics::ColorWrites::all(),
+                }],
             }),
             debug_blit: gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
                 name: "debug-blit",
@@ -981,6 +986,7 @@ impl Renderer {
                 &DebugData {
                     camera: self.make_camera_params(camera),
                     debug_buf: self.debug.buffer.into(),
+                    in_depth: self.targets.depth_view,
                 },
             );
             pc.draw_indirect(self.debug.buffer.at(0));
