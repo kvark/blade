@@ -51,6 +51,7 @@ struct Example {
     context: Arc<gpu::Context>,
     camera: blade_render::Camera,
     debug: blade_render::DebugConfig,
+    need_accumulation_reset: bool,
     ray_config: blade_render::RayConfig,
     debug_blits: Vec<blade_render::DebugBlit>,
     workers: Vec<choir::WorkerHandle>,
@@ -175,6 +176,7 @@ impl Example {
             context,
             camera,
             debug: blade_render::DebugConfig::default(),
+            need_accumulation_reset: true,
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
                 environment_importance_sampling: true,
@@ -221,7 +223,9 @@ impl Example {
             &self.context,
             &mut temp_buffers,
             self.debug.mouse_pos.is_some(),
+            self.need_accumulation_reset,
         );
+        self.need_accumulation_reset = false;
         self.renderer.ray_trace(
             &mut self.command_encoder,
             &self.camera,
@@ -333,20 +337,28 @@ impl Example {
                 if ui.button("+add blit").clicked() {
                     self.debug_blits.push(blade_render::DebugBlit::default());
                 }
-                // variance
-                if self.debug.mouse_pos.is_some() {
+                // selection info
+                if let Some(screen_pos) = self.debug.mouse_pos {
                     let sd = self
                         .renderer
                         .read_debug_std_deviation()
                         .unwrap_or([0.0; 3].into());
-                    ui.horizontal(|ui| {
-                        ui.label("Std Deviation:");
-                        ui.label(format!("{:.2}", sd.x));
-                        ui.label(format!("{:.2}", sd.y));
-                        ui.label(format!("{:.2}", sd.z));
+                    let style = ui.style();
+                    egui::Frame::group(style).show(ui, |ui| {
+                        ui.label(format!("Selected: {screen_pos:?}"));
+                        ui.horizontal(|ui| {
+                            ui.label("Std Deviation:");
+                            ui.label(format!("{:.2}", sd.x));
+                            ui.label(format!("{:.2}", sd.y));
+                            ui.label(format!("{:.2}", sd.z));
+                        });
+                        if ui.button("Unselect").clicked() {
+                            self.debug.mouse_pos = None;
+                        }
                     });
                 }
             });
+        let old_config = self.ray_config;
         egui::CollapsingHeader::new("Ray Trace")
             .default_open(true)
             .show(ui, |ui| {
@@ -364,6 +376,7 @@ impl Example {
                         .text("Temporal reuse"),
                 );
             });
+        self.need_accumulation_reset |= self.ray_config != old_config;
         egui::CollapsingHeader::new("Tone Map").show(ui, |ui| {
             let pp = self.renderer.configure_post_processing();
             ui.add(
@@ -383,10 +396,12 @@ impl Example {
     fn move_camera_by(&mut self, offset: glam::Vec3) {
         let dir = glam::Quat::from(self.camera.rot) * offset;
         self.camera.pos = (glam::Vec3::from(self.camera.pos) + dir).into();
+        self.need_accumulation_reset = true;
     }
     fn rotate_camera_z_by(&mut self, angle: f32) {
         let quat = glam::Quat::from(self.camera.rot);
         self.camera.rot = (quat * glam::Quat::from_rotation_z(angle)).into();
+        self.need_accumulation_reset = true;
     }
 }
 
@@ -482,7 +497,7 @@ fn main() {
                     }
                     winit::event::WindowEvent::MouseInput {
                         state,
-                        button: winit::event::MouseButton::Right,
+                        button: winit::event::MouseButton::Left,
                         ..
                     } => {
                         drag_start = match state {
@@ -494,14 +509,12 @@ fn main() {
                         };
                     }
                     winit::event::WindowEvent::MouseInput {
-                        state,
-                        button: winit::event::MouseButton::Left,
+                        state: winit::event::ElementState::Pressed,
+                        button: winit::event::MouseButton::Right,
                         ..
                     } => {
-                        example.debug.mouse_pos = match state {
-                            winit::event::ElementState::Pressed => Some(last_mouse_pos),
-                            winit::event::ElementState::Released => None,
-                        };
+                        example.debug.mouse_pos = Some(last_mouse_pos);
+                        example.need_accumulation_reset = true;
                     }
                     winit::event::WindowEvent::CursorMoved { position, .. } => {
                         last_mouse_pos = [position.x as i32, position.y as i32];
@@ -513,9 +526,7 @@ fn main() {
                                 (last_mouse_pos[1] - drag.screen_pos.y) as f32 * rotate_speed,
                             );
                             example.camera.rot = (qx * drag.rotation * qy).into();
-                        }
-                        if let Some(ref mut pos) = example.debug.mouse_pos {
-                            *pos = last_mouse_pos;
+                            example.need_accumulation_reset = true;
                         }
                     }
                     _ => {}

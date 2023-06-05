@@ -292,9 +292,10 @@ pub struct Renderer {
     textures: blade_graphics::TextureArray<MAX_RESOURCES>,
     samplers: Samplers,
     reservoir_buffer: blade_graphics::Buffer,
+    reservoir_size: u32,
     debug: DebugRender,
     is_tlas_dirty: bool,
-    are_reservoirs_dirty: bool,
+
     screen_size: blade_graphics::Extent,
     frame_index: u32,
 }
@@ -592,6 +593,7 @@ impl Renderer {
             textures: blade_graphics::TextureArray::new(),
             samplers,
             reservoir_buffer,
+            reservoir_size: sp.reservoir_size,
             debug: DebugRender {
                 capacity: config.max_debug_lines,
                 buffer: debug_buffer,
@@ -600,7 +602,6 @@ impl Renderer {
                 blit_pipeline: sp.debug_blit,
             },
             is_tlas_dirty: true,
-            are_reservoirs_dirty: true,
             screen_size: config.screen_size,
             frame_index: 0,
         }
@@ -665,6 +666,7 @@ impl Renderer {
         gpu: &blade_graphics::Context,
         temp_buffers: &mut Vec<blade_graphics::Buffer>,
         enable_debug: bool,
+        reset_accumulation: bool,
     ) {
         if self.is_tlas_dirty {
             self.is_tlas_dirty = false;
@@ -836,20 +838,31 @@ impl Renderer {
             // reset the debug line count
             transfer.fill_buffer(self.debug.buffer.at(4), 4, 0);
             transfer.fill_buffer(self.debug.buffer.at(20), 4, 1);
-            // copy the previous frame variance
-            transfer.copy_buffer_to_buffer(
-                self.debug.buffer.at(32),
-                self.debug.variance_buffer.into(),
-                mem::size_of::<DebugVariance>() as u64,
-            );
+            if !reset_accumulation {
+                // copy the previous frame variance
+                transfer.copy_buffer_to_buffer(
+                    self.debug.buffer.at(32),
+                    self.debug.variance_buffer.into(),
+                    mem::size_of::<DebugVariance>() as u64,
+                );
+            }
         } else {
-            // reset the open bit, variance accumulator
-            transfer.fill_buffer(self.debug.buffer.at(20), 12 + 32, 0);
+            // reset the open bit
+            transfer.fill_buffer(self.debug.buffer.at(20), 12, 0);
         }
-        if self.are_reservoirs_dirty {
-            self.are_reservoirs_dirty = false;
+        if reset_accumulation {
+            // reset the open bit, variance accumulator
+            transfer.fill_buffer(
+                self.debug.buffer.at(32),
+                mem::size_of::<DebugVariance>() as u64,
+                0,
+            );
             let total_reservoirs = self.screen_size.width as u64 * self.screen_size.height as u64;
-            transfer.fill_buffer(self.reservoir_buffer.into(), total_reservoirs, 0);
+            transfer.fill_buffer(
+                self.reservoir_buffer.into(),
+                total_reservoirs * self.reservoir_size as u64,
+                0,
+            );
         }
     }
 
