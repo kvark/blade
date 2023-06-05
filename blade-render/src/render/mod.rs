@@ -1,3 +1,10 @@
+mod dummy;
+mod env_map;
+mod scene;
+
+pub use dummy::DummyResources;
+pub use env_map::EnvironmentMap;
+
 use std::{collections::HashMap, fs, mem, ptr, time};
 
 const MAX_RESOURCES: u32 = 1000;
@@ -7,94 +14,6 @@ pub struct RenderConfig {
     pub screen_size: blade_graphics::Extent,
     pub surface_format: blade_graphics::TextureFormat,
     pub max_debug_lines: u32,
-}
-
-struct DummyResources {
-    size: blade_graphics::Extent,
-    white_texture: blade_graphics::Texture,
-    white_view: blade_graphics::TextureView,
-    red_texture: blade_graphics::Texture,
-    red_view: blade_graphics::TextureView,
-    staging_buf: blade_graphics::Buffer,
-}
-
-impl DummyResources {
-    fn new(
-        command_encoder: &mut blade_graphics::CommandEncoder,
-        gpu: &blade_graphics::Context,
-    ) -> Self {
-        let size = blade_graphics::Extent {
-            width: 1,
-            height: 1,
-            depth: 1,
-        };
-        let white_texture = gpu.create_texture(blade_graphics::TextureDesc {
-            name: "dummy/white",
-            format: blade_graphics::TextureFormat::Rgba8Unorm,
-            size,
-            array_layer_count: 1,
-            mip_level_count: 1,
-            dimension: blade_graphics::TextureDimension::D2,
-            usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
-        });
-        let white_view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
-            name: "dummy/white",
-            texture: white_texture,
-            format: blade_graphics::TextureFormat::Rgba8Unorm,
-            dimension: blade_graphics::ViewDimension::D2,
-            subresources: &blade_graphics::TextureSubresources::default(),
-        });
-        let red_texture = gpu.create_texture(blade_graphics::TextureDesc {
-            name: "dummy/red",
-            format: blade_graphics::TextureFormat::Rgba8Unorm,
-            size,
-            array_layer_count: 1,
-            mip_level_count: 1,
-            dimension: blade_graphics::TextureDimension::D2,
-            usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
-        });
-        let red_view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
-            name: "dummy/red",
-            texture: red_texture,
-            format: blade_graphics::TextureFormat::Rgba8Unorm,
-            dimension: blade_graphics::ViewDimension::D2,
-            subresources: &blade_graphics::TextureSubresources::default(),
-        });
-
-        command_encoder.init_texture(white_texture);
-        command_encoder.init_texture(red_texture);
-        let mut transfers = command_encoder.transfer();
-        let staging_buf = gpu.create_buffer(blade_graphics::BufferDesc {
-            name: "dummy staging",
-            size: 8,
-            memory: blade_graphics::Memory::Upload,
-        });
-        unsafe {
-            ptr::write(
-                staging_buf.data() as *mut _,
-                [!0u8, !0, !0, !0, !0, 0, 0, 0],
-            );
-        }
-        transfers.copy_buffer_to_texture(staging_buf.at(0), 4, white_texture.into(), size);
-        transfers.copy_buffer_to_texture(staging_buf.at(4), 4, red_texture.into(), size);
-
-        Self {
-            size,
-            white_texture,
-            white_view,
-            red_texture,
-            red_view,
-            staging_buf,
-        }
-    }
-
-    fn destroy(&mut self, gpu: &blade_graphics::Context) {
-        gpu.destroy_texture_view(self.white_view);
-        gpu.destroy_texture(self.white_texture);
-        gpu.destroy_texture_view(self.red_view);
-        gpu.destroy_texture(self.red_texture);
-        gpu.destroy_buffer(self.staging_buf);
-    }
 }
 
 struct Samplers {
@@ -284,7 +203,7 @@ pub struct Renderer {
     blit_pipeline: blade_graphics::RenderPipeline,
     scene: super::Scene,
     acceleration_structure: blade_graphics::AccelerationStructure,
-    env_map: crate::EnvironmentMap,
+    env_map: EnvironmentMap,
     dummy: DummyResources,
     hit_buffer: blade_graphics::Buffer,
     vertex_buffers: blade_graphics::BufferArray<MAX_RESOURCES>,
@@ -504,7 +423,7 @@ impl ShaderPipelines {
                 fragment: debug_blit_shader.at("blit_fs"),
                 color_targets: &[config.surface_format.into()],
             }),
-            env_preproc: crate::EnvironmentMap::init_pipeline(gpu)?,
+            env_preproc: EnvironmentMap::init_pipeline(gpu)?,
             debug_line_size: shader.get_struct_size("DebugLine"),
             debug_buffer_size: shader.get_struct_size("DebugBuffer"),
             reservoir_size: shader.get_struct_size("StoredReservoir"),
@@ -583,7 +502,7 @@ impl Renderer {
             main_pipeline: sp.main,
             blit_pipeline: sp.blit,
             acceleration_structure: blade_graphics::AccelerationStructure::default(),
-            env_map: crate::EnvironmentMap {
+            env_map: EnvironmentMap {
                 main_view: dummy.white_view,
                 size: blade_graphics::Extent::default(),
                 weight_texture: blade_graphics::Texture::default(),

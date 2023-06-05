@@ -10,16 +10,13 @@
 )]
 
 mod asset_hub;
-mod env_map;
 pub mod model;
-mod renderer;
-mod scene;
+mod render;
 pub mod texture;
 
 pub use asset_hub::*;
-pub use env_map::EnvironmentMap;
 pub use model::Model;
-pub use renderer::*;
+pub use render::*;
 pub use texture::Texture;
 
 #[repr(C)]

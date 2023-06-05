@@ -1,6 +1,7 @@
 const PI: f32 = 3.1415926;
 const BUMP: f32 = 0.025;
 
+var env_main: texture_2d<f32>;
 var env_weights: texture_2d<f32>;
 
 struct RandomState {
@@ -111,8 +112,8 @@ fn sample_light_from_environment(rng: ptr<function, RandomState>) -> EnvSample {
         es.pdf *= weight / sum;
     }
 
-    let dim = 2u * textureDimensions(env_weights, 0);
     // adjust for the texel's solid angle
+    let dim = textureDimensions(env_main, 0);
     es.pdf /= compute_texel_solid_angle(itc, dim);
     es.pixel = itc;
     return es;
@@ -120,7 +121,7 @@ fn sample_light_from_environment(rng: ptr<function, RandomState>) -> EnvSample {
 
 fn compute_environment_sample_pdf(pixel: vec2<i32>) -> f32 {
     var itc = pixel;
-    let dim = 2u * textureDimensions(env_weights, 0);
+    let dim = textureDimensions(env_main, 0);
     var pdf = 1.0 / compute_texel_solid_angle(itc, dim);
     let mip_count = i32(textureNumLevels(env_weights));
     for (var mip = 0; mip < mip_count; mip += 1) {
@@ -148,7 +149,6 @@ fn vs_accum(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
 fn fs_accum() -> @location(0) vec4<f32> {
     return vec4<f32>(BUMP);
 }
-
 
 fn map_equirect_dir_to_uv(dir: vec3<f32>) -> vec2<f32> {
     //Note: Y axis is up
@@ -180,7 +180,7 @@ fn vs_init(@builtin(vertex_index) vi: u32) -> UvOutput {
 fn fs_init(input: UvOutput) -> @location(0) vec4<f32> {
     let dir = map_equirect_uv_to_dir(input.uv);
     let uv = map_equirect_dir_to_uv(dir);
-    let dim = 2u * textureDimensions(env_weights);
+    let dim = textureDimensions(env_main);
     let pixel = vec2<i32>(uv * vec2<f32>(dim));
     let pdf = compute_environment_sample_pdf(pixel);
     return vec4<f32>(0.0, pdf, length(uv - input.uv), 0.0);

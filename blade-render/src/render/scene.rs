@@ -1,4 +1,4 @@
-impl super::Scene {
+impl crate::Scene {
     pub(super) fn build_top_level_acceleration_structure(
         &self,
         command_encoder: &mut blade_graphics::CommandEncoder,

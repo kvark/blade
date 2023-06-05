@@ -161,6 +161,7 @@ impl Example {
             max_debug_lines: 1000,
         };
         let mut renderer = Renderer::new(&mut command_encoder, &context, &render_config);
+        let environment_importance_sampling = scene.environment_map.is_some();
         renderer.merge_scene(scene);
         let sync_point = context.submit(&mut command_encoder);
 
@@ -179,7 +180,7 @@ impl Example {
             need_accumulation_reset: true,
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
-                environment_importance_sampling: true,
+                environment_importance_sampling,
                 temporal_history: 10,
             },
             debug_blits: Vec::new(),
