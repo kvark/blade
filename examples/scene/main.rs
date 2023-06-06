@@ -58,11 +58,24 @@ struct Example {
 }
 
 impl Example {
+    fn make_surface_config(
+        physical_size: winit::dpi::PhysicalSize<u32>,
+    ) -> blade_graphics::SurfaceConfig {
+        blade_graphics::SurfaceConfig {
+            size: blade_graphics::Extent {
+                width: physical_size.width,
+                height: physical_size.height,
+                depth: 1,
+            },
+            usage: gpu::TextureUsage::TARGET,
+            frame_count: 3,
+        }
+    }
+
     fn new(window: &winit::window::Window, scene_path: &Path) -> Self {
         log::info!("Initializing");
         //let _ = profiling::tracy_client::Client::start();
 
-        let window_size = window.inner_size();
         let context = Arc::new(unsafe {
             gpu::Context::init_windowed(
                 window,
@@ -74,16 +87,9 @@ impl Example {
             .unwrap()
         });
 
-        let screen_size = gpu::Extent {
-            width: window_size.width,
-            height: window_size.height,
-            depth: 1,
-        };
-        let surface_format = context.resize(gpu::SurfaceConfig {
-            size: screen_size,
-            usage: gpu::TextureUsage::TARGET,
-            frame_count: 3,
-        });
+        let surface_config = Self::make_surface_config(window.inner_size());
+        let screen_size = surface_config.size;
+        let surface_format = context.resize(surface_config);
 
         let num_workers = num_cpus::get_physical().max((num_cpus::get() * 3 + 2) / 4);
         log::info!("Initializing Choir with {} workers", num_workers);
@@ -201,16 +207,37 @@ impl Example {
         self.asset_hub.destroy();
     }
 
+    fn wait_for_previous_frame(&mut self) {
+        if let Some(sp) = self.prev_sync_point.take() {
+            self.context.wait_for(&sp, !0);
+            for buffer in self.prev_temp_buffers.drain(..) {
+                self.context.destroy_buffer(buffer);
+            }
+        }
+    }
+
     fn render(
         &mut self,
         gui_primitives: &[egui::ClippedPrimitive],
         gui_textures: &egui::TexturesDelta,
-        screen_desc: &blade_egui::ScreenDescriptor,
+        physical_size: winit::dpi::PhysicalSize<u32>,
+        scale_factor: f32,
     ) {
         self.renderer
             .hot_reload(&self.context, self.prev_sync_point.as_ref().unwrap());
 
         self.command_encoder.start();
+        let surface_config = Self::make_surface_config(physical_size);
+        if surface_config.size != self.renderer.get_screen_size() {
+            self.wait_for_previous_frame();
+            self.renderer.resize_screen(
+                surface_config.size,
+                &mut self.command_encoder,
+                &self.context,
+            );
+            self.context.resize(surface_config);
+            self.need_accumulation_reset = true;
+        }
 
         self.gui_painter
             .update_textures(&mut self.command_encoder, gui_textures, &self.context);
@@ -245,22 +272,21 @@ impl Example {
             }],
             depth_stencil: None,
         }) {
+            let screen_desc = blade_egui::ScreenDescriptor {
+                physical_size: (physical_size.width, physical_size.height),
+                scale_factor,
+            };
             self.renderer
                 .blit(&mut pass, &self.camera, &self.debug_blits);
             self.gui_painter
-                .paint(&mut pass, gui_primitives, screen_desc, &self.context);
+                .paint(&mut pass, gui_primitives, &screen_desc, &self.context);
         }
 
         self.command_encoder.present(frame);
         let sync_point = self.context.submit(&mut self.command_encoder);
         self.gui_painter.after_submit(sync_point.clone());
 
-        if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(&sp, !0);
-            for buffer in self.prev_temp_buffers.drain(..) {
-                self.context.destroy_buffer(buffer);
-            }
-        }
+        self.wait_for_previous_frame();
         self.prev_sync_point = Some(sync_point);
         self.prev_temp_buffers.extend(temp_buffers);
     }
@@ -559,14 +585,12 @@ fn main() {
                     winit::event_loop::ControlFlow::Wait
                 };
 
-                //Note: this will probably look different with proper support for resizing
-                let window_size = window.inner_size();
-                let screen_desc = blade_egui::ScreenDescriptor {
-                    physical_size: (window_size.width, window_size.height),
-                    scale_factor: egui_ctx.pixels_per_point(),
-                };
-
-                example.render(&primitives, &egui_output.textures_delta, &screen_desc);
+                example.render(
+                    &primitives,
+                    &egui_output.textures_delta,
+                    window.inner_size(),
+                    egui_ctx.pixels_per_point(),
+                );
             }
             winit::event::Event::LoopDestroyed => {
                 example.destroy();

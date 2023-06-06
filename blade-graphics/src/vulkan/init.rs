@@ -564,13 +564,17 @@ impl super::Context {
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .present_mode(vk::PresentModeKHR::FIFO)
             .old_swapchain(surface.swapchain);
-        surface.swapchain = unsafe {
+        let new_swapchain = unsafe {
             surface
                 .extension
                 .create_swapchain(&create_info, None)
                 .unwrap()
         };
 
+        // destroy the old swapchain
+        unsafe {
+            surface.extension.destroy_swapchain(surface.swapchain, None);
+        }
         for frame in surface.frames.drain(..) {
             unsafe {
                 self.device.core.destroy_image_view(frame.view, None);
@@ -579,10 +583,11 @@ impl super::Context {
                     .destroy_semaphore(frame.acquire_semaphore, None);
             }
         }
+
         let images = unsafe {
             surface
                 .extension
-                .get_swapchain_images(surface.swapchain)
+                .get_swapchain_images(new_swapchain)
                 .unwrap()
         };
         let target_size = [config.size.width as u16, config.size.height as u16];
@@ -621,6 +626,7 @@ impl super::Context {
                 target_size,
             });
         }
+        surface.swapchain = new_swapchain;
         format
     }
 
