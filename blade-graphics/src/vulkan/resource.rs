@@ -208,8 +208,9 @@ impl crate::traits::ResourceDevice for super::Context {
         let allocation = self.allocate_memory(requirements, desc.memory);
 
         log::info!(
-            "Creating buffer {:?}, name '{}', handle {:?}",
+            "Creating buffer {:?} of size {}, name '{}', handle {:?}",
             raw,
+            desc.size,
             desc.name,
             allocation.handle
         );
@@ -268,6 +269,14 @@ impl crate::traits::ResourceDevice for super::Context {
         let requirements = unsafe { self.device.core.get_image_memory_requirements(raw) };
         let allocation = self.allocate_memory(requirements, crate::Memory::Device);
 
+        log::info!(
+            "Creating texture {:?} of size {} and format {:?}, name '{}', handle {:?}",
+            raw,
+            desc.size,
+            desc.format,
+            desc.name,
+            allocation.handle
+        );
         unsafe {
             self.device
                 .core
@@ -287,6 +296,11 @@ impl crate::traits::ResourceDevice for super::Context {
     }
 
     fn destroy_texture(&self, texture: super::Texture) {
+        log::info!(
+            "Destroying texture {:?}, handle {:?}",
+            texture.raw,
+            texture.memory_handle
+        );
         unsafe { self.device.core.destroy_image(texture.raw, None) };
         self.free_memory(texture.memory_handle);
     }

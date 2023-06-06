@@ -192,14 +192,7 @@ fn main() {
     let mut temp_buffers = Vec::new();
     asset_hub.flush(&mut command_encoder, &mut temp_buffers);
 
-    let mut env_map = blade_render::EnvironmentMap {
-        main_view: dummy.white_view,
-        size: blade_graphics::Extent::default(),
-        weight_texture: blade_graphics::Texture::default(),
-        weight_view: dummy.red_view,
-        weight_mips: Vec::new(),
-        preproc_pipeline: blade_render::EnvironmentMap::init_pipeline(&context).unwrap(),
-    };
+    let mut env_map = blade_render::EnvironmentMap::new(&dummy, &context);
     let env_size = match scene.environment_map {
         Some(handle) => {
             let texture = &asset_hub.textures[handle];

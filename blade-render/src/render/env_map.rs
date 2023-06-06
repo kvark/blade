@@ -1,5 +1,7 @@
 use std::{fs, num::NonZeroU32};
 
+use crate::DummyResources;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct EnvPreprocParams {
@@ -38,6 +40,24 @@ impl EnvironmentMap {
                 compute: shader.at("downsample"),
             }),
         )
+    }
+
+    pub fn with_pipeline(
+        dummy: &DummyResources,
+        preproc_pipeline: blade_graphics::ComputePipeline,
+    ) -> Self {
+        Self {
+            main_view: dummy.white_view,
+            size: blade_graphics::Extent::default(),
+            weight_texture: blade_graphics::Texture::default(),
+            weight_view: dummy.red_view,
+            weight_mips: Vec::new(),
+            preproc_pipeline,
+        }
+    }
+
+    pub fn new(dummy: &DummyResources, gpu: &blade_graphics::Context) -> Self {
+        Self::with_pipeline(dummy, Self::init_pipeline(gpu).unwrap())
     }
 
     pub fn weight_size(&self) -> blade_graphics::Extent {

@@ -214,7 +214,6 @@ pub struct Renderer {
     reservoir_size: u32,
     debug: DebugRender,
     is_tlas_dirty: bool,
-
     screen_size: blade_graphics::Extent,
     frame_index: u32,
 }
@@ -502,14 +501,7 @@ impl Renderer {
             main_pipeline: sp.main,
             blit_pipeline: sp.blit,
             acceleration_structure: blade_graphics::AccelerationStructure::default(),
-            env_map: EnvironmentMap {
-                main_view: dummy.white_view,
-                size: blade_graphics::Extent::default(),
-                weight_texture: blade_graphics::Texture::default(),
-                weight_view: dummy.red_view,
-                weight_mips: Vec::new(),
-                preproc_pipeline: sp.env_preproc,
-            },
+            env_map: EnvironmentMap::with_pipeline(&dummy, sp.env_preproc),
             dummy,
             hit_buffer: blade_graphics::Buffer::default(),
             vertex_buffers: blade_graphics::BufferArray::new(),
@@ -580,6 +572,28 @@ impl Renderer {
             }
         }
         false
+    }
+
+    pub fn get_screen_size(&self) -> blade_graphics::Extent {
+        self.screen_size
+    }
+
+    pub fn resize_screen(
+        &mut self,
+        size: blade_graphics::Extent,
+        encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+    ) {
+        self.screen_size = size;
+        gpu.destroy_buffer(self.reservoir_buffer);
+        let total_reservoirs = size.width as usize * size.height as usize;
+        self.reservoir_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "reservoirs",
+            size: self.reservoir_size as u64 * total_reservoirs as u64,
+            memory: blade_graphics::Memory::Device,
+        });
+        self.targets.destroy(gpu);
+        self.targets = Targets::new(size, encoder, gpu);
     }
 
     /// Prepare to render a frame.
@@ -791,7 +805,10 @@ impl Renderer {
     }
 
     fn make_camera_params(&self, camera: &super::Camera) -> CameraParams {
-        let fov_x = camera.fov_y * self.screen_size.width as f32 / self.screen_size.height as f32;
+        let fov_x = 2.0
+            * ((camera.fov_y * 0.5).tan() * self.screen_size.width as f32
+                / self.screen_size.height as f32)
+                .atan();
         CameraParams {
             position: camera.pos.into(),
             depth: camera.depth,
