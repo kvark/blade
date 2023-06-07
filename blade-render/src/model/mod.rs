@@ -21,6 +21,7 @@ pub struct Geometry {
 pub struct Material {
     pub base_color_texture: Option<blade_asset::Handle<crate::Texture>>,
     pub base_color_factor: [f32; 4],
+    pub transparent: bool,
 }
 
 pub struct Model {
@@ -37,6 +38,7 @@ pub struct Model {
 struct CookedMaterial<'a> {
     base_color_path: &'a [u8],
     base_color_factor: [f32; 4],
+    transparent: bool,
 }
 
 #[derive(blade_macros::Flat)]
@@ -290,6 +292,7 @@ impl blade_asset::Baker for Baker {
                             None => &[],
                         },
                         base_color_factor: pbr.base_color_factor(),
+                        transparent: g_material.alpha_mode() != gltf::material::AlphaMode::Opaque,
                     });
                 }
                 for g_scene in document.scenes() {
@@ -322,6 +325,7 @@ impl blade_asset::Baker for Baker {
             materials.push(Material {
                 base_color_texture,
                 base_color_factor: material.base_color_factor,
+                transparent: material.transparent,
             });
         }
 
@@ -379,6 +383,7 @@ impl blade_asset::Baker for Baker {
         let mut transform_offset = 0;
         let mut geometries = Vec::with_capacity(model.geometries.len());
         for geometry in model.geometries.iter() {
+            let material = &model.materials[geometry.material_index as usize];
             unsafe {
                 ptr::copy_nonoverlapping(
                     geometry.vertices.as_ptr(),
@@ -415,7 +420,7 @@ impl blade_asset::Baker for Baker {
                 index_type,
                 triangle_count,
                 transform_data: transform_buffer.at(transform_offset), //TODO
-                is_opaque: true,                                       //TODO
+                is_opaque: !material.transparent,
             });
             geometries.push(Geometry {
                 name: String::from_utf8_lossy(geometry.name.as_ref()).into_owned(),
