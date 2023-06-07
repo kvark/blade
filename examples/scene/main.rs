@@ -135,6 +135,7 @@ impl Example {
         if !config_scene.environment_map.is_empty() {
             let meta = blade_render::texture::Meta {
                 format: blade_graphics::TextureFormat::Rgba32Float,
+                y_flip: false,
             };
             let (texture, texture_task) = asset_hub
                 .textures

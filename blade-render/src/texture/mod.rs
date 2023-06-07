@@ -18,6 +18,7 @@ pub struct CookedImage<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Meta {
     pub format: blade_graphics::TextureFormat,
+    pub y_flip: bool,
 }
 
 impl fmt::Display for Meta {
@@ -184,7 +185,21 @@ impl blade_asset::Baker for Baker {
         let mut buf = Vec::new();
         #[cfg(feature = "asset")]
         match src.data {
-            PlainData::Ldr(data) => {
+            PlainData::Ldr(mut data) => {
+                if meta.y_flip {
+                    profiling::scope!("y-flip");
+                    let mut line = vec![[0u8; 4]; src.width];
+                    let (half0, half1) = data.split_at_mut((src.height / 2) * src.width);
+                    for (l0, l1) in half0
+                        .chunks_mut(src.width)
+                        .zip(half1.chunks_mut(src.width).rev())
+                    {
+                        line.copy_from_slice(l0);
+                        l0.copy_from_slice(l1);
+                        l1.copy_from_slice(&line);
+                    }
+                }
+
                 profiling::scope!("compress");
                 let dst_format = match meta.format {
                     Tf::Bc1Unorm | Tf::Bc1UnormSrgb => texpresso::Format::Bc1,
