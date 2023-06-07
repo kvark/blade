@@ -135,7 +135,7 @@ fn fill_gbuf(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var rq: ray_query;
     let ray_dir = get_ray_direction(global_id.xy, target_size);
-    rayQueryInitialize(&rq, acc_struct, RayDesc(0x10u, 0xFFu, 0.0, camera.depth, camera.position, ray_dir));
+    rayQueryInitialize(&rq, acc_struct, RayDesc(0x90u, 0xFFu, 0.0, camera.depth, camera.position, ray_dir));
     rayQueryProceed(&rq);
     let intersection = rayQueryGetCommittedIntersection(&rq);
 
@@ -461,7 +461,7 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>) -> u
     let start_t = 0.5; // some offset required to avoid self-shadowing
     var rq: ray_query;
     rayQueryInitialize(&rq, acc_struct,
-        RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, 0xFFu, start_t, camera.depth, start_pos, ls.dir)
+        RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT | 0x80u, 0xFFu, start_t, camera.depth, start_pos, ls.dir)
     );
     rayQueryProceed(&rq);
     let intersection = rayQueryGetCommittedIntersection(&rq);
