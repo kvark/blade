@@ -143,7 +143,8 @@ impl super::Context {
     ) -> super::Buffer {
         let buffer = self.create_buffer(crate::BufferDesc {
             name: "instance buffer",
-            size: (instances.len() * mem::size_of::<vk::AccelerationStructureInstanceKHR>()) as u64,
+            size: (instances.len().max(1) * mem::size_of::<vk::AccelerationStructureInstanceKHR>())
+                as u64,
             memory: crate::Memory::Shared,
         });
         let rt = self.device.ray_tracing.as_ref().unwrap();

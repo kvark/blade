@@ -40,9 +40,9 @@ struct VertexBuffer {
 struct IndexBuffer {
     data: array<u32>,
 }
-var<storage, read> vertex_buffers: binding_array<VertexBuffer, 1>;
-var<storage, read> index_buffers: binding_array<IndexBuffer, 1>;
-var textures: binding_array<texture_2d<f32>, 1>;
+var<storage, read> vertex_buffers: binding_array<VertexBuffer>;
+var<storage, read> index_buffers: binding_array<IndexBuffer>;
+var textures: binding_array<texture_2d<f32>>;
 var sampler_linear: sampler;
 var sampler_nearest: sampler;
 

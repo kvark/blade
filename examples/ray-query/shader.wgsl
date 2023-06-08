@@ -91,7 +91,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 struct VertexOutput {
-    
     @location(0) out_pos: vec2<f32>,
 }
 
