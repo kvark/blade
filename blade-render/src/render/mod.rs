@@ -484,7 +484,7 @@ impl Renderer {
             }),
             linear: gpu.create_sampler(blade_graphics::SamplerDesc {
                 name: "linear",
-                address_modes: [blade_graphics::AddressMode::ClampToEdge; 3],
+                address_modes: [blade_graphics::AddressMode::Repeat; 3],
                 mag_filter: blade_graphics::FilterMode::Linear,
                 min_filter: blade_graphics::FilterMode::Linear,
                 mipmap_filter: blade_graphics::FilterMode::Linear,
