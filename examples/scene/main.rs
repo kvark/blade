@@ -45,8 +45,10 @@ struct ConfigScene {
 
 struct Example {
     prev_temp_buffers: Vec<gpu::Buffer>,
+    prev_acceleration_structures: Vec<gpu::AccelerationStructure>,
     prev_sync_point: Option<gpu::SyncPoint>,
     renderer: Renderer,
+    pending_scene: Option<(choir::RunningTask, blade_render::Scene)>,
     gui_painter: blade_egui::GuiPainter,
     command_encoder: gpu::CommandEncoder,
     asset_hub: AssetHub,
@@ -124,7 +126,6 @@ impl Example {
         };
 
         let mut scene = blade_render::Scene::default();
-        let time_start = time::Instant::now();
         scene.post_processing = blade_render::PostProcessing {
             average_luminocity: config_scene.average_luminocity,
             exposure_key_value: 1.0 / 9.6,
@@ -153,35 +154,29 @@ impl Example {
                 transform: config_model.transform.into(),
             });
         }
-        log::info!("Waiting for scene to load");
-        let _ = load_finish.run().join();
-        println!("Scene loaded in {} ms", time_start.elapsed().as_millis());
 
         log::info!("Spinning up the renderer");
-        let mut prev_temp_buffers = Vec::new();
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
         });
         command_encoder.start();
-        asset_hub.flush(&mut command_encoder, &mut prev_temp_buffers);
-
         let render_config = RenderConfig {
             screen_size,
             surface_format,
             max_debug_lines: 1000,
         };
-        let mut renderer = Renderer::new(&mut command_encoder, &context, &render_config);
-        let environment_importance_sampling = scene.environment_map.is_some();
-        renderer.merge_scene(scene);
+        let renderer = Renderer::new(&mut command_encoder, &context, &render_config);
         let sync_point = context.submit(&mut command_encoder);
 
         let gui_painter = blade_egui::GuiPainter::new(&context, surface_format);
 
         Self {
-            prev_temp_buffers,
+            prev_temp_buffers: Vec::new(),
+            prev_acceleration_structures: Vec::new(),
             prev_sync_point: Some(sync_point),
             renderer,
+            pending_scene: Some((load_finish.run(), scene)),
             gui_painter,
             command_encoder,
             asset_hub,
@@ -193,7 +188,7 @@ impl Example {
             render_times: VecDeque::with_capacity(FRAME_TIME_HISTORY),
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
-                environment_importance_sampling,
+                environment_importance_sampling: !config_scene.environment_map.is_empty(),
                 temporal_history: 10,
             },
             debug_blits: Vec::new(),
@@ -203,12 +198,7 @@ impl Example {
 
     fn destroy(&mut self) {
         self.workers.clear();
-        if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(&sp, !0);
-        }
-        for buffer in self.prev_temp_buffers.drain(..) {
-            self.context.destroy_buffer(buffer);
-        }
+        self.wait_for_previous_frame();
         self.gui_painter.destroy(&self.context);
         self.renderer.destroy(&self.context);
         self.asset_hub.destroy();
@@ -217,9 +207,12 @@ impl Example {
     fn wait_for_previous_frame(&mut self) {
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);
-            for buffer in self.prev_temp_buffers.drain(..) {
-                self.context.destroy_buffer(buffer);
-            }
+        }
+        for buffer in self.prev_temp_buffers.drain(..) {
+            self.context.destroy_buffer(buffer);
+        }
+        for accel_structure in self.prev_acceleration_structures.drain(..) {
+            self.context.destroy_acceleration_structure(accel_structure);
         }
     }
 
@@ -230,6 +223,14 @@ impl Example {
         physical_size: winit::dpi::PhysicalSize<u32>,
         scale_factor: f32,
     ) {
+        if let Some((ref task, _)) = self.pending_scene {
+            if task.is_done() {
+                log::info!("Scene is loaded");
+                let (_, scene) = self.pending_scene.take().unwrap();
+                self.renderer.merge_scene(scene);
+            }
+        }
+
         self.renderer
             .hot_reload(&self.context, self.prev_sync_point.as_ref().unwrap());
 
@@ -250,23 +251,30 @@ impl Example {
             .update_textures(&mut self.command_encoder, gui_textures, &self.context);
 
         let mut temp_buffers = Vec::new();
+        let mut temp_acceleration_structures = Vec::new();
         self.asset_hub
             .flush(&mut self.command_encoder, &mut temp_buffers);
-        self.renderer.prepare(
-            &mut self.command_encoder,
-            &self.asset_hub,
-            &self.context,
-            &mut temp_buffers,
-            self.debug.mouse_pos.is_some(),
-            self.need_accumulation_reset,
-        );
-        self.need_accumulation_reset = false;
-        self.renderer.ray_trace(
-            &mut self.command_encoder,
-            &self.camera,
-            self.debug,
-            self.ray_config,
-        );
+        //TODO: remove these checks.
+        // We should be able to update TLAS and render content
+        // even while it's still being loaded.
+        if self.pending_scene.is_none() {
+            self.renderer.prepare(
+                &mut self.command_encoder,
+                &self.asset_hub,
+                &self.context,
+                &mut temp_buffers,
+                &mut temp_acceleration_structures,
+                self.debug.mouse_pos.is_some(),
+                self.need_accumulation_reset,
+            );
+            self.need_accumulation_reset = false;
+            self.renderer.ray_trace(
+                &mut self.command_encoder,
+                &self.camera,
+                self.debug,
+                self.ray_config,
+            );
+        }
 
         let frame = self.context.acquire_frame();
         self.command_encoder.init_texture(frame.texture());
@@ -283,8 +291,10 @@ impl Example {
                 physical_size: (physical_size.width, physical_size.height),
                 scale_factor,
             };
-            self.renderer
-                .blit(&mut pass, &self.camera, &self.debug_blits);
+            if self.pending_scene.is_none() {
+                self.renderer
+                    .blit(&mut pass, &self.camera, &self.debug_blits);
+            }
             self.gui_painter
                 .paint(&mut pass, gui_primitives, &screen_desc, &self.context);
         }
@@ -296,6 +306,8 @@ impl Example {
         self.wait_for_previous_frame();
         self.prev_sync_point = Some(sync_point);
         self.prev_temp_buffers.extend(temp_buffers);
+        self.prev_acceleration_structures
+            .extend(temp_acceleration_structures);
     }
 
     fn add_gui(&mut self, ui: &mut egui::Ui) {
@@ -305,6 +317,10 @@ impl Example {
             self.render_times.pop_back();
         }
         self.render_times.push_front(delta.as_millis() as u32);
+
+        if self.pending_scene.is_some() {
+            ui.spinner();
+        }
 
         egui::CollapsingHeader::new("Camera").show(ui, |ui| {
             ui.horizontal(|ui| {

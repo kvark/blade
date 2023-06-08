@@ -545,6 +545,7 @@ impl Renderer {
 
     pub fn merge_scene(&mut self, scene: super::Scene) {
         self.scene = scene;
+        self.is_tlas_dirty = true;
     }
 
     /// Check if any shaders need to be hot reloaded, and do it.
@@ -597,12 +598,14 @@ impl Renderer {
     }
 
     /// Prepare to render a frame.
+    #[warn(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
         command_encoder: &mut blade_graphics::CommandEncoder,
         asset_hub: &crate::AssetHub,
         gpu: &blade_graphics::Context,
         temp_buffers: &mut Vec<blade_graphics::Buffer>,
+        temp_acceleration_structures: &mut Vec<blade_graphics::AccelerationStructure>,
         enable_debug: bool,
         reset_accumulation: bool,
     ) {
@@ -610,8 +613,7 @@ impl Renderer {
             self.is_tlas_dirty = false;
             if self.acceleration_structure != blade_graphics::AccelerationStructure::default() {
                 temp_buffers.push(self.hit_buffer);
-                //TODO: delay this or stall the GPU
-                gpu.destroy_acceleration_structure(self.acceleration_structure);
+                temp_acceleration_structures.push(self.acceleration_structure);
             }
 
             let (tlas, geometry_count) = self.scene.build_top_level_acceleration_structure(
@@ -624,24 +626,6 @@ impl Renderer {
             log::info!("Preparing ray tracing with {geometry_count} geometries in total");
             let mut transfers = command_encoder.transfer();
 
-            {
-                // init the dummy
-                let staging = gpu.create_buffer(blade_graphics::BufferDesc {
-                    name: "dummy staging",
-                    size: 4,
-                    memory: blade_graphics::Memory::Upload,
-                });
-                unsafe {
-                    ptr::write(staging.data() as *mut _, [!0u8; 4]);
-                }
-                transfers.copy_buffer_to_texture(
-                    staging.into(),
-                    4,
-                    self.dummy.white_texture.into(),
-                    self.dummy.size,
-                );
-                temp_buffers.push(staging);
-            }
             {
                 // init the debug buffer
                 let data = [2, 0, 0, 0, self.debug.capacity, 0];
@@ -658,110 +642,120 @@ impl Renderer {
                 temp_buffers.push(staging);
             }
 
-            let hit_staging = {
-                // init the hit buffer
-                let hit_size = (geometry_count as usize * mem::size_of::<HitEntry>()) as u64;
-                self.hit_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
-                    name: "hit entries",
-                    size: hit_size,
-                    memory: blade_graphics::Memory::Device,
-                });
-                let staging = gpu.create_buffer(blade_graphics::BufferDesc {
-                    name: "hit staging",
-                    size: hit_size,
-                    memory: blade_graphics::Memory::Upload,
-                });
-                temp_buffers.push(staging);
-                transfers.copy_buffer_to_buffer(staging.at(0), self.hit_buffer.at(0), hit_size);
-                staging
-            };
-
-            self.textures.clear();
-            let dummy_white = self.textures.alloc(self.dummy.white_view);
-            let mut texture_indices = HashMap::new();
-
-            fn extract_matrix3(transform: blade_graphics::Transform) -> glam::Mat3 {
-                let col_mx = mint::ColumnMatrix3x4::from(transform);
-                glam::Mat3::from_cols(col_mx.x.into(), col_mx.y.into(), col_mx.z.into())
-            }
-
             self.vertex_buffers.clear();
             self.index_buffers.clear();
-            let mut geometry_index = 0;
-            for object in self.scene.objects.iter() {
-                let m3_object = extract_matrix3(object.transform);
-                let model = &asset_hub.models[object.model];
-                for geometry in model.geometries.iter() {
-                    let material = &model.materials[geometry.material_index];
-                    let vertex_offset =
-                        geometry.vertex_range.start as u64 * mem::size_of::<crate::Vertex>() as u64;
-                    let geometry_to_world_rotation = {
-                        let m3_geo = extract_matrix3(geometry.transform);
-                        let m3_normal = (m3_object * m3_geo).inverse().transpose();
-                        let quat = glam::Quat::from_mat3(&m3_normal);
-                        let qv = glam::Vec4::from(quat) * 127.0;
-                        [qv.x as i8, qv.y as i8, qv.z as i8, qv.w as i8]
-                    };
-                    fn extend(v: mint::Vector3<f32>) -> mint::Vector4<f32> {
-                        mint::Vector4 {
-                            x: v.x,
-                            y: v.y,
-                            z: v.z,
-                            w: 0.0,
-                        }
-                    }
+            self.textures.clear();
+            let dummy_white = self.textures.alloc(self.dummy.white_view);
 
-                    let hit_entry = HitEntry {
-                        index_buf: match geometry.index_type {
-                            Some(_) => self
-                                .index_buffers
-                                .alloc(model.index_buffer.at(geometry.index_offset)),
-                            None => !0,
-                        },
-                        vertex_buf: self
-                            .vertex_buffers
-                            .alloc(model.vertex_buffer.at(vertex_offset)),
-                        geometry_to_world_rotation,
-                        unused: 0,
-                        geometry_to_object: {
-                            let m = mint::ColumnMatrix3x4::from(geometry.transform);
-                            mint::ColumnMatrix4 {
-                                x: extend(m.x),
-                                y: extend(m.y),
-                                z: extend(m.z),
-                                w: extend(m.w),
-                            }
-                        },
-                        base_color_texture: match material.base_color_texture {
-                            Some(handle) => *texture_indices.entry(handle).or_insert_with(|| {
-                                let texture = &asset_hub.textures[handle];
-                                self.textures.alloc(texture.view)
-                            }),
-                            None => dummy_white,
-                        },
-                        base_color_factor: {
-                            let c = material.base_color_factor;
-                            [
-                                (c[0] * 255.0) as u8,
-                                (c[1] * 255.0) as u8,
-                                (c[2] * 255.0) as u8,
-                                (c[3] * 255.0) as u8,
-                            ]
-                        },
-                        finish_pad: [0; 2],
-                    };
+            if geometry_count != 0 {
+                let hit_staging = {
+                    // init the hit buffer
+                    let hit_size = (geometry_count as usize * mem::size_of::<HitEntry>()) as u64;
+                    self.hit_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
+                        name: "hit entries",
+                        size: hit_size,
+                        memory: blade_graphics::Memory::Device,
+                    });
+                    let staging = gpu.create_buffer(blade_graphics::BufferDesc {
+                        name: "hit staging",
+                        size: hit_size,
+                        memory: blade_graphics::Memory::Upload,
+                    });
+                    temp_buffers.push(staging);
+                    transfers.copy_buffer_to_buffer(staging.at(0), self.hit_buffer.at(0), hit_size);
+                    staging
+                };
 
-                    log::debug!("Entry[{geometry_index}] = {hit_entry:?}");
-                    unsafe {
-                        ptr::write(
-                            (hit_staging.data() as *mut HitEntry).add(geometry_index),
-                            hit_entry,
-                        );
-                    }
-                    geometry_index += 1;
+                fn extract_matrix3(transform: blade_graphics::Transform) -> glam::Mat3 {
+                    let col_mx = mint::ColumnMatrix3x4::from(transform);
+                    glam::Mat3::from_cols(col_mx.x.into(), col_mx.y.into(), col_mx.z.into())
                 }
+
+                let mut texture_indices = HashMap::new();
+                let mut geometry_index = 0;
+                for object in self.scene.objects.iter() {
+                    let m3_object = extract_matrix3(object.transform);
+                    let model = &asset_hub.models[object.model];
+                    for geometry in model.geometries.iter() {
+                        let material = &model.materials[geometry.material_index];
+                        let vertex_offset = geometry.vertex_range.start as u64
+                            * mem::size_of::<crate::Vertex>() as u64;
+                        let geometry_to_world_rotation = {
+                            let m3_geo = extract_matrix3(geometry.transform);
+                            let m3_normal = (m3_object * m3_geo).inverse().transpose();
+                            let quat = glam::Quat::from_mat3(&m3_normal);
+                            let qv = glam::Vec4::from(quat) * 127.0;
+                            [qv.x as i8, qv.y as i8, qv.z as i8, qv.w as i8]
+                        };
+                        fn extend(v: mint::Vector3<f32>) -> mint::Vector4<f32> {
+                            mint::Vector4 {
+                                x: v.x,
+                                y: v.y,
+                                z: v.z,
+                                w: 0.0,
+                            }
+                        }
+
+                        let hit_entry = HitEntry {
+                            index_buf: match geometry.index_type {
+                                Some(_) => self
+                                    .index_buffers
+                                    .alloc(model.index_buffer.at(geometry.index_offset)),
+                                None => !0,
+                            },
+                            vertex_buf: self
+                                .vertex_buffers
+                                .alloc(model.vertex_buffer.at(vertex_offset)),
+                            geometry_to_world_rotation,
+                            unused: 0,
+                            geometry_to_object: {
+                                let m = mint::ColumnMatrix3x4::from(geometry.transform);
+                                mint::ColumnMatrix4 {
+                                    x: extend(m.x),
+                                    y: extend(m.y),
+                                    z: extend(m.z),
+                                    w: extend(m.w),
+                                }
+                            },
+                            base_color_texture: match material.base_color_texture {
+                                Some(handle) => {
+                                    *texture_indices.entry(handle).or_insert_with(|| {
+                                        let texture = &asset_hub.textures[handle];
+                                        self.textures.alloc(texture.view)
+                                    })
+                                }
+                                None => dummy_white,
+                            },
+                            base_color_factor: {
+                                let c = material.base_color_factor;
+                                [
+                                    (c[0] * 255.0) as u8,
+                                    (c[1] * 255.0) as u8,
+                                    (c[2] * 255.0) as u8,
+                                    (c[3] * 255.0) as u8,
+                                ]
+                            },
+                            finish_pad: [0; 2],
+                        };
+
+                        log::debug!("Entry[{geometry_index}] = {hit_entry:?}");
+                        unsafe {
+                            ptr::write(
+                                (hit_staging.data() as *mut HitEntry).add(geometry_index),
+                                hit_entry,
+                            );
+                        }
+                        geometry_index += 1;
+                    }
+                }
+                assert_eq!(geometry_index, geometry_count as usize);
+            } else {
+                self.hit_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
+                    name: "hit entries",
+                    size: mem::size_of::<HitEntry>() as u64,
+                    memory: blade_graphics::Memory::Device,
+                });
             }
-            assert_eq!(geometry_index, geometry_count as usize);
         }
 
         self.frame_index += 1;
