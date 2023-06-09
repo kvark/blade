@@ -317,6 +317,7 @@ impl blade_asset::Baker for Baker {
                     path_str.as_ref(),
                     crate::texture::Meta {
                         format: blade_graphics::TextureFormat::Bc1UnormSrgb,
+                        generate_mips: true,
                         y_flip: true,
                     },
                 );

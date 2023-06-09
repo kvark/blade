@@ -164,6 +164,7 @@ fn main() {
             println!("\tenvironment map = {}", arg);
             let meta = blade_render::texture::Meta {
                 format: blade_graphics::TextureFormat::Rgba32Float,
+                generate_mips: false,
                 y_flip: false,
             };
             let (texture, texture_task) = asset_hub.textures.load(arg.as_ref(), meta);
