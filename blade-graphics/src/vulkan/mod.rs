@@ -21,11 +21,18 @@ struct RayTracingDevice {
 }
 
 #[derive(Clone)]
+struct Workarounds {
+    extra_sync_src_access: vk::AccessFlags,
+    extra_sync_dst_access: vk::AccessFlags,
+}
+
+#[derive(Clone)]
 struct Device {
     core: ash::Device,
     timeline_semaphore: khr::TimelineSemaphore,
     dynamic_rendering: khr::DynamicRendering,
     ray_tracing: Option<RayTracingDevice>,
+    workarounds: Workarounds,
 }
 
 struct MemoryManager {

@@ -199,13 +199,13 @@ impl super::CommandEncoder {
     }
 
     fn barrier(&mut self) {
-        //TODO: figure out why TRANSFER_WRITE is not covered by MEMORY_WRITE
+        let wa = &self.device.workarounds;
         let barrier = vk::MemoryBarrier::builder()
-            .src_access_mask(vk::AccessFlags::MEMORY_WRITE | vk::AccessFlags::TRANSFER_WRITE)
+            .src_access_mask(vk::AccessFlags::MEMORY_WRITE | wa.extra_sync_src_access)
             .dst_access_mask(
                 vk::AccessFlags::MEMORY_READ
                     | vk::AccessFlags::MEMORY_WRITE
-                    | vk::AccessFlags::TRANSFER_READ,
+                    | wa.extra_sync_dst_access,
             )
             .build();
         unsafe {

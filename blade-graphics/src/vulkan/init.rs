@@ -382,6 +382,12 @@ impl super::Context {
                 None
             },
             core: device_core,
+            //TODO: detect GPU family
+            workarounds: super::Workarounds {
+                extra_sync_src_access: vk::AccessFlags::TRANSFER_WRITE,
+                extra_sync_dst_access: vk::AccessFlags::TRANSFER_READ
+                    | vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR,
+            },
         };
 
         let memory_manager = {
