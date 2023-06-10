@@ -292,7 +292,11 @@ impl blade_asset::Baker for Baker {
                             let extent = base_extent.at_mip_level(i as u32);
                             let compressed_size =
                                 dst_format.compressed_size(extent.width as _, extent.height as _);
-                            let params = texpresso::Params::default();
+                            let params = texpresso::Params {
+                                //TODO: make this configurable
+                                algorithm: texpresso::Algorithm::RangeFit,
+                                ..Default::default()
+                            };
                             let dst =
                                 unsafe { slice::from_raw_parts_mut(task.dst_ptr, compressed_size) };
                             let raw = unsafe {
