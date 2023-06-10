@@ -238,6 +238,7 @@ impl Example {
         self.command_encoder.start();
         let surface_config = Self::make_surface_config(physical_size);
         if surface_config.size != self.renderer.get_screen_size() {
+            log::info!("Resizing to {}", surface_config.size);
             self.wait_for_previous_frame();
             self.renderer.resize_screen(
                 surface_config.size,
@@ -477,12 +478,10 @@ impl Example {
     fn move_camera_by(&mut self, offset: glam::Vec3) {
         let dir = glam::Quat::from(self.camera.rot) * offset;
         self.camera.pos = (glam::Vec3::from(self.camera.pos) + dir).into();
-        self.need_accumulation_reset = true;
     }
     fn rotate_camera_z_by(&mut self, angle: f32) {
         let quat = glam::Quat::from(self.camera.rot);
         self.camera.rot = (quat * glam::Quat::from_rotation_z(angle)).into();
-        self.need_accumulation_reset = true;
     }
 }
 
@@ -595,7 +594,6 @@ fn main() {
                         ..
                     } => {
                         example.debug.mouse_pos = Some(last_mouse_pos);
-                        example.need_accumulation_reset = true;
                     }
                     winit::event::WindowEvent::CursorMoved { position, .. } => {
                         last_mouse_pos = [position.x as i32, position.y as i32];
@@ -607,7 +605,6 @@ fn main() {
                                 (last_mouse_pos[1] - drag.screen_pos.y) as f32 * rotate_speed,
                             );
                             example.camera.rot = (qx * drag.rotation * qy).into();
-                            example.need_accumulation_reset = true;
                         }
                     }
                     _ => {}
