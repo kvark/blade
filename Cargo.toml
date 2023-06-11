@@ -13,7 +13,7 @@ exclude = []
 base64 = "0.21"
 bitflags = "2"
 bytemuck = { version = "1", features = ["derive"] }
-choir = "0.6"
+choir = { git = "https://github.com/kvark/choir", rev = "e9001db1d33ebe328579ec78456082036c96bbd8" }
 egui = "0.22"
 glam = { version = "0.24", features = ["mint"] }
 log = "0.4"

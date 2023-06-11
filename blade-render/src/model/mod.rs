@@ -314,7 +314,7 @@ impl blade_asset::Baker for Baker {
             } else {
                 let path_str = str::from_utf8(material.base_color_path).unwrap();
                 let (handle, task) = self.asset_textures.load(
-                    path_str.as_ref(),
+                    path_str,
                     crate::texture::Meta {
                         format: blade_graphics::TextureFormat::Bc1UnormSrgb,
                         generate_mips: true,

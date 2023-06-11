@@ -110,6 +110,9 @@ impl Example {
             &choir,
             &context,
         );
+        let (shader, shader_task) = asset_hub
+            .shaders
+            .load("shader.wgsl", blade_render::shader::Meta);
 
         let config_scene: ConfigScene =
             ron::de::from_bytes(&fs::read(scene_path).expect("Unable to open the scene file"))
@@ -139,16 +142,15 @@ impl Example {
                 generate_mips: false,
                 y_flip: false,
             };
-            let (texture, texture_task) = asset_hub
-                .textures
-                .load(config_scene.environment_map.as_ref(), meta);
+            let (texture, texture_task) =
+                asset_hub.textures.load(&config_scene.environment_map, meta);
             load_finish.depend_on(texture_task);
             scene.environment_map = Some(texture);
         }
         for config_model in config_scene.models {
             let (model, model_task) = asset_hub
                 .models
-                .load(config_model.path.as_ref(), blade_render::model::Meta);
+                .load(config_model.path, blade_render::model::Meta);
             load_finish.depend_on(model_task);
             scene.objects.push(blade_render::Object {
                 model,
@@ -157,6 +159,7 @@ impl Example {
         }
 
         log::info!("Spinning up the renderer");
+        shader_task.join();
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
@@ -167,7 +170,12 @@ impl Example {
             surface_format,
             max_debug_lines: 1000,
         };
-        let renderer = Renderer::new(&mut command_encoder, &context, &render_config);
+        let renderer = Renderer::new(
+            &mut command_encoder,
+            &context,
+            &asset_hub.shaders[shader],
+            &render_config,
+        );
         let sync_point = context.submit(&mut command_encoder);
 
         let gui_painter = blade_egui::GuiPainter::new(&context, surface_format);
@@ -516,7 +524,7 @@ fn main() {
         *control_flow = winit::event_loop::ControlFlow::Poll;
         let delta = last_event.elapsed().as_secs_f32();
         last_event = time::Instant::now();
-        let move_speed = 1000.0 * delta;
+        let move_speed = 2000.0 * delta;
         let rotate_speed = 0.01f32;
         let rotate_speed_z = 200.0 * delta;
 

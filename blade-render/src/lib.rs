@@ -12,11 +12,13 @@
 mod asset_hub;
 pub mod model;
 mod render;
+pub mod shader;
 pub mod texture;
 
 pub use asset_hub::*;
 pub use model::Model;
 pub use render::*;
+pub use shader::Shader;
 pub use texture::Texture;
 
 #[repr(C)]

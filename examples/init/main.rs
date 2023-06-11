@@ -154,7 +154,7 @@ fn main() {
         .collect::<Vec<_>>();
 
     let mut asset_hub =
-        blade_render::AssetHub::new(".".as_ref(), Path::new("asset-cache"), &choir, &context);
+        blade_render::AssetHub::new(Path::new("."), Path::new("asset-cache"), &choir, &context);
 
     let mut scene = blade_render::Scene::default();
     println!("Populating the scene");
@@ -167,14 +167,12 @@ fn main() {
                 generate_mips: false,
                 y_flip: false,
             };
-            let (texture, texture_task) = asset_hub.textures.load(arg.as_ref(), meta);
+            let (texture, texture_task) = asset_hub.textures.load(arg, meta);
             load_finish.depend_on(texture_task);
             scene.environment_map = Some(texture);
         } else if arg.ends_with(".gltf") {
             println!("\tmodels += {}", arg);
-            let (model, model_task) = asset_hub
-                .models
-                .load(arg.as_ref(), blade_render::model::Meta);
+            let (model, model_task) = asset_hub.models.load(arg, blade_render::model::Meta);
             load_finish.depend_on(model_task);
             scene.objects.push(model.into());
         } else {
