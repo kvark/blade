@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     fmt, mem,
     ops::Range,
-    path::PathBuf,
+    path::{Path, PathBuf},
     ptr, str,
     sync::{Arc, Mutex},
 };
@@ -221,6 +221,8 @@ impl blade_asset::Baker for Baker {
     fn cook(
         &self,
         source: &[u8],
+        //TODO: use for dependent textures
+        _base_path: &Path,
         extension: &str,
         _meta: Meta,
         result: Arc<blade_asset::Cooked<CookedModel<'_>>>,

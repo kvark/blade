@@ -129,6 +129,7 @@ pub trait Baker: Send + Sync + 'static {
     fn cook(
         &self,
         source: &[u8],
+        base_path: &Path,
         extension: &str,
         meta: Self::Meta,
         result: Arc<Cooked<Self::Data<'_>>>,
@@ -299,8 +300,9 @@ impl<B: Baker> AssetManager<B> {
                 .spawn(format!("cook {} as {}", relative_path.display(), meta))
                 .init(move |exe_context| {
                     let source = fs::read(&source_path).unwrap();
+                    let base_path = source_path.parent().unwrap();
                     let extension = source_path.extension().unwrap().to_str().unwrap();
-                    baker.cook(&source, extension, meta, result, exe_context);
+                    baker.cook(&source, base_path, extension, meta, result, exe_context);
                 });
 
             cook_finish_task.depend_on(&cook_task);

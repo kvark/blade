@@ -1,5 +1,7 @@
 use std::{
-    fmt, io, mem, ptr, slice, str,
+    fmt, io, mem,
+    path::Path,
+    ptr, slice, str,
     sync::{Arc, Mutex},
 };
 
@@ -108,6 +110,7 @@ impl blade_asset::Baker for Baker {
     fn cook(
         &self,
         source: &[u8],
+        _base_path: &Path,
         extension: &str,
         meta: Meta,
         result: Arc<blade_asset::Cooked<CookedImage<'_>>>,
