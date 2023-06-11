@@ -321,9 +321,14 @@ impl<B: Baker> AssetManager<B> {
     ///
     /// This function produces a handle for the asset, and also returns the load task.
     /// It's only valid to access the asset once the load task is completed.
-    pub fn load(&self, path: &Path, meta: B::Meta) -> (Handle<B::Output>, &choir::RunningTask) {
+    pub fn load(
+        &self,
+        path: impl AsRef<Path>,
+        meta: B::Meta,
+    ) -> (Handle<B::Output>, &choir::RunningTask) {
+        let path_buf = path.as_ref().to_path_buf();
         let mut paths = self.paths.lock().unwrap();
-        let handle = match paths.entry((path.to_path_buf(), meta)) {
+        let handle = match paths.entry((path_buf, meta)) {
             Entry::Occupied(e) => *e.get(),
             Entry::Vacant(e) => {
                 let handle = self.create(&e.key().0, e.key().1.clone());

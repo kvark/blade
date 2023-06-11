@@ -5,7 +5,7 @@ mod scene;
 pub use dummy::DummyResources;
 pub use env_map::EnvironmentMap;
 
-use std::{collections::HashMap, fs, mem, ptr, time};
+use std::{collections::HashMap, fs, mem, ptr};
 
 const MAX_RESOURCES: u32 = 1000;
 
@@ -195,9 +195,8 @@ impl Targets {
 ///   - manage or submit any command encoders
 ///   - know about the window to display on
 pub struct Renderer {
-    config: RenderConfig,
+    _config: RenderConfig,
     targets: Targets,
-    shader_modified_time: Option<time::SystemTime>,
     fill_pipeline: blade_graphics::ComputePipeline,
     main_pipeline: blade_graphics::ComputePipeline,
     blit_pipeline: blade_graphics::RenderPipeline,
@@ -345,13 +344,12 @@ struct ShaderPipelines {
     reservoir_size: u32,
 }
 
-const SHADER_PATH: &str = "blade-render/code/shader.wgsl";
-
 impl ShaderPipelines {
-    fn init(config: &RenderConfig, gpu: &blade_graphics::Context) -> Result<Self, &'static str> {
-        let source = fs::read_to_string(SHADER_PATH).unwrap();
-        let shader = gpu.try_create_shader(blade_graphics::ShaderDesc { source: &source })?;
-
+    fn init(
+        shader: &blade_graphics::Shader,
+        config: &RenderConfig,
+        gpu: &blade_graphics::Context,
+    ) -> Result<Self, &'static str> {
         shader.check_struct_size::<CameraParams>();
         shader.check_struct_size::<DebugParams>();
         shader.check_struct_size::<MainParams>();
@@ -438,6 +436,7 @@ impl Renderer {
     pub fn new(
         encoder: &mut blade_graphics::CommandEncoder,
         gpu: &blade_graphics::Context,
+        shader: &crate::Shader,
         config: &RenderConfig,
     ) -> Self {
         let capabilities = gpu.capabilities();
@@ -445,8 +444,7 @@ impl Renderer {
             .ray_query
             .contains(blade_graphics::ShaderVisibility::COMPUTE));
 
-        let shader_modified_time = fs::metadata(SHADER_PATH).and_then(|m| m.modified()).ok();
-        let sp = ShaderPipelines::init(config, gpu).unwrap();
+        let sp = ShaderPipelines::init(&shader.raw, config, gpu).unwrap();
 
         let debug_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
             name: "debug",
@@ -493,10 +491,9 @@ impl Renderer {
         };
 
         Self {
-            config: *config,
+            _config: *config,
             targets,
             scene: super::Scene::default(),
-            shader_modified_time,
             fill_pipeline: sp.fill,
             main_pipeline: sp.main,
             blit_pipeline: sp.blit,
@@ -551,27 +548,11 @@ impl Renderer {
     /// Check if any shaders need to be hot reloaded, and do it.
     pub fn hot_reload(
         &mut self,
-        gpu: &blade_graphics::Context,
-        sync_point: &blade_graphics::SyncPoint,
+        _gpu: &blade_graphics::Context,
+        _sync_point: &blade_graphics::SyncPoint,
     ) -> bool {
         //TODO: support the other shaders too
-        if let Some(ref mut last_mod_time) = self.shader_modified_time {
-            let cur_mod_time = fs::metadata(SHADER_PATH).unwrap().modified().unwrap();
-            if *last_mod_time != cur_mod_time {
-                log::info!("Hot-reloading shaders...");
-                *last_mod_time = cur_mod_time;
-                if let Ok(sp) = ShaderPipelines::init(&self.config, gpu) {
-                    gpu.wait_for(sync_point, !0);
-                    self.fill_pipeline = sp.fill;
-                    self.main_pipeline = sp.main;
-                    self.blit_pipeline = sp.blit;
-                    self.debug.draw_pipeline = sp.debug_draw;
-                    self.debug.blit_pipeline = sp.debug_blit;
-                    self.env_map.preproc_pipeline = sp.env_preproc;
-                    return true;
-                }
-            }
-        }
+        //TODO: rely on the asset hub for hot reloads
         false
     }
 

@@ -4,7 +4,8 @@ use std::{path::Path, sync::Arc};
 /// A single hub to manage all assets.
 pub struct AssetHub {
     pub textures: Arc<AssetManager<crate::texture::Baker>>,
-    pub models: Arc<AssetManager<crate::model::Baker>>,
+    pub models: AssetManager<crate::model::Baker>,
+    pub shaders: AssetManager<crate::shader::Baker>,
 }
 
 impl AssetHub {
@@ -22,13 +23,23 @@ impl AssetHub {
             choir,
             crate::texture::Baker::new(gpu_context),
         ));
-        let models = Arc::new(AssetManager::new(
+        let models = AssetManager::new(
             root,
             target,
             choir,
             crate::model::Baker::new(gpu_context, &textures),
-        ));
-        Self { textures, models }
+        );
+        let shaders = AssetManager::new(
+            "blade-render/code/".as_ref(),
+            target,
+            choir,
+            crate::shader::Baker::new(gpu_context),
+        );
+        Self {
+            textures,
+            models,
+            shaders,
+        }
     }
 
     /// Flush the GPU state updates into the specified command encoder.
@@ -48,5 +59,6 @@ impl AssetHub {
     pub fn destroy(&mut self) {
         self.textures.clear();
         self.models.clear();
+        self.shaders.clear();
     }
 }

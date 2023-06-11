@@ -33,7 +33,7 @@ fn test_asset() {
     let am = blade_asset::AssetManager::<Baker>::new(&root, &root.join("cooked"), &choir, Baker);
     let value = 5;
     let (handle, task) = am.load(Path::new("Cargo.toml"), value);
-    task.clone().join();
+    task.join();
     assert_eq!(am[handle], value as usize);
 }
 
