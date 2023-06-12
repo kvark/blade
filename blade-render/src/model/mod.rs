@@ -2,7 +2,6 @@ use std::{
     borrow::Cow,
     fmt, mem,
     ops::Range,
-    path::{Path, PathBuf},
     ptr, str,
     sync::{Arc, Mutex},
 };
@@ -205,12 +204,6 @@ impl Baker {
             }
         }
     }
-
-    fn get_full_path(&self, relative: &str) -> PathBuf {
-        //HACK: using textures' root. Instead, need a mechanism
-        // for tracking source dependencies, which are relative.
-        self.asset_textures.root.join(relative)
-    }
 }
 
 impl blade_asset::Baker for Baker {
@@ -221,11 +214,9 @@ impl blade_asset::Baker for Baker {
     fn cook(
         &self,
         source: &[u8],
-        //TODO: use for dependent textures
-        _base_path: &Path,
         extension: &str,
         _meta: Meta,
-        result: Arc<blade_asset::Cooked<CookedModel<'_>>>,
+        cooker: Arc<blade_asset::Cooker<CookedModel<'_>>>,
         _exe_context: choir::ExecutionContext,
     ) {
         match extension {
@@ -247,8 +238,7 @@ impl blade_asset::Baker for Baker {
                             } else if let Some(rest) = uri.strip_prefix("file:") {
                                 std::fs::read(rest).unwrap()
                             } else {
-                                let path = self.get_full_path(uri);
-                                std::fs::read(path).unwrap()
+                                cooker.add_dependency(uri.as_ref())
                             }
                         }
                         gltf::buffer::Source::Bin => blob.take().unwrap(),
@@ -302,7 +292,7 @@ impl blade_asset::Baker for Baker {
                         model.populate_gltf(g_node, glam::Mat4::IDENTITY, &buffers);
                     }
                 }
-                result.put(model);
+                cooker.finish(model);
             }
             other => panic!("Unknown model extension: {}", other),
         }

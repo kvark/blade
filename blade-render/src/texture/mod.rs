@@ -1,7 +1,5 @@
 use std::{
-    fmt, io, mem,
-    path::Path,
-    ptr, slice, str,
+    fmt, io, mem, ptr, slice, str,
     sync::{Arc, Mutex},
 };
 
@@ -110,10 +108,9 @@ impl blade_asset::Baker for Baker {
     fn cook(
         &self,
         source: &[u8],
-        _base_path: &Path,
         extension: &str,
         meta: Meta,
-        result: Arc<blade_asset::Cooked<CookedImage<'_>>>,
+        cooker: Arc<blade_asset::Cooker<CookedImage<'_>>>,
         exe_context: choir::ExecutionContext,
     ) {
         use blade_graphics::TextureFormat as Tf;
@@ -322,11 +319,11 @@ impl blade_asset::Baker for Baker {
                 exe_context
                     .fork("finish")
                     .init(move |_| {
-                        result.put(CookedImage {
+                        cooker.finish(CookedImage {
                             name: &[],
                             extent: [base_extent.width, base_extent.height, base_extent.depth],
                             format: TextureFormatWrap(meta.format),
-                            mips: mips.iter().map(|buf| CookedMip { data: &buf }).collect(),
+                            mips: mips.iter().map(|data| CookedMip { data }).collect(),
                         });
                     })
                     .depend_on(&compress_task);
@@ -342,7 +339,7 @@ impl blade_asset::Baker for Baker {
                 };
                 let mut buf = vec![0u8; data_raw.len()];
                 buf.copy_from_slice(data_raw);
-                result.put(CookedImage {
+                cooker.finish(CookedImage {
                     name: &[],
                     extent: [src.width as u32, src.height as u32, 1],
                     format: TextureFormatWrap(meta.format),

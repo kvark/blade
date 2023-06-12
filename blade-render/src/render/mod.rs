@@ -579,7 +579,7 @@ impl Renderer {
     }
 
     /// Prepare to render a frame.
-    #[warn(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
         command_encoder: &mut blade_graphics::CommandEncoder,

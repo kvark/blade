@@ -1,10 +1,15 @@
 use std::{
     fmt,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
-struct Baker;
+struct Baker {
+    allow_cooking: AtomicBool,
+}
 impl blade_asset::Baker for Baker {
     type Meta = u32;
     type Data<'a> = u32;
@@ -14,10 +19,12 @@ impl blade_asset::Baker for Baker {
         _source: &[u8],
         _extension: &str,
         meta: u32,
-        result: Arc<blade_asset::Cooked<u32>>,
+        cooker: Arc<blade_asset::Cooker<u32>>,
         _exe_context: choir::ExecutionContext,
     ) {
-        result.put(meta);
+        assert!(self.allow_cooking.load(Ordering::SeqCst));
+        let _ = cooker.add_dependency("README.md".as_ref());
+        cooker.finish(meta);
     }
     fn serve(&self, cooked: u32, _exe_context: choir::ExecutionContext) -> usize {
         cooked as usize
@@ -30,11 +37,25 @@ fn test_asset() {
     let choir = choir::Choir::new();
     let _w1 = choir.add_worker("main");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let am = blade_asset::AssetManager::<Baker>::new(&root, &root.join("cooked"), &choir, Baker);
-    let value = 5;
-    let (handle, task) = am.load(Path::new("Cargo.toml"), value);
+    let am = blade_asset::AssetManager::<Baker>::new(
+        &root,
+        &root.join("cooked"),
+        &choir,
+        Baker {
+            allow_cooking: AtomicBool::new(true),
+        },
+    );
+    let meta = 5;
+    let path = Path::new("Cargo.toml");
+    let (handle, task) = am.load(&path, meta);
     task.join();
-    assert_eq!(am[handle], value as usize);
+    assert_eq!(am[handle], meta as usize);
+
+    // now try to load it again and check that we aren't re-cooking
+    am.baker.allow_cooking.store(false, Ordering::SeqCst);
+    let (h, t) = am.load(&path, meta);
+    assert_eq!(h, handle);
+    t.join();
 }
 
 fn flat_roundtrip<F: blade_asset::Flat + PartialEq + fmt::Debug>(data: F) {
