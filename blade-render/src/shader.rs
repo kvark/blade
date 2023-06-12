@@ -1,4 +1,4 @@
-use std::{fmt, str, sync::Arc};
+use std::{fmt, path::Path, str, sync::Arc};
 
 #[derive(blade_macros::Flat)]
 pub struct CookedShader<'a> {
@@ -29,6 +29,37 @@ impl Baker {
     }
 }
 
+fn parse_impl(
+    text_raw: &[u8],
+    base_path: &Path,
+    text_out: &mut String,
+    cooker: &blade_asset::Cooker<CookedShader>,
+) {
+    let text_in = str::from_utf8(text_raw).unwrap();
+    for line in text_in.lines() {
+        if line.starts_with("#include") {
+            let include_path = match line.split('"').nth(1) {
+                Some(include) => base_path.join(include),
+                None => panic!("Unable to extract the include path from: {line}"),
+            };
+            let include = cooker.add_dependency(&include_path);
+            *text_out += "//";
+            *text_out += line;
+            *text_out += "\n";
+            parse_impl(&include, include_path.parent().unwrap(), text_out, cooker);
+        } else {
+            *text_out += line;
+        }
+        *text_out += "\n";
+    }
+}
+
+pub fn parse_shader(text_raw: &[u8], cooker: &blade_asset::Cooker<CookedShader>) -> String {
+    let mut text_out = String::new();
+    parse_impl(text_raw, ".".as_ref(), &mut text_out, cooker);
+    text_out
+}
+
 impl blade_asset::Baker for Baker {
     type Meta = Meta;
     type Data<'a> = CookedShader<'a>;
@@ -42,22 +73,7 @@ impl blade_asset::Baker for Baker {
         _exe_context: choir::ExecutionContext,
     ) {
         assert_eq!(extension, "wgsl");
-        let text_in = str::from_utf8(source).unwrap();
-
-        let mut text_out = String::new();
-        for line in text_in.lines() {
-            if line.starts_with("#include") {
-                let include = match line.split('"').nth(1) {
-                    Some(include) => cooker.add_dependency(include.as_ref()),
-                    None => panic!("Unable to extract the include path from: {line}"),
-                };
-                text_out += str::from_utf8(&include).unwrap();
-            } else {
-                text_out += line;
-            };
-            text_out += "\n";
-        }
-
+        let text_out = parse_shader(source, &cooker);
         cooker.finish(CookedShader {
             data: text_out.as_bytes(),
         });

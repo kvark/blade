@@ -140,7 +140,8 @@ impl<T: Flat> Cooker<T> {
     pub fn add_dependency(&self, relative_path: &Path) -> Vec<u8> {
         let mut inner = self.inner.lock().unwrap();
         inner.dependencies.push(relative_path.to_path_buf());
-        match fs::File::open(self.base_path.join(relative_path)) {
+        let full_path = self.base_path.join(relative_path);
+        match fs::File::open(&full_path) {
             Ok(mut file) => {
                 // Read the file at the same time as we include the hash
                 // of its modification time in the header.
@@ -153,7 +154,7 @@ impl<T: Flat> Cooker<T> {
                 file.read_to_end(&mut buf).unwrap();
                 buf
             }
-            Err(e) => panic!("Unable to read {}: {:?}", relative_path.display(), e),
+            Err(e) => panic!("Unable to read {}: {:?}", full_path.display(), e),
         }
     }
 }

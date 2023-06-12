@@ -30,7 +30,7 @@ impl AssetHub {
             crate::model::Baker::new(gpu_context, &textures),
         );
         let shaders = AssetManager::new(
-            "blade-render/code/".as_ref(),
+            ".".as_ref(),
             target,
             choir,
             crate::shader::Baker::new(gpu_context),

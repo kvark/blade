@@ -1,6 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
-use std::{env, fs, path::Path, ptr, sync::Arc};
+use std::{env, path::Path, ptr, sync::Arc};
 
 use blade_graphics as gpu;
 
@@ -19,7 +19,7 @@ struct EnvMapSampler {
 }
 
 impl EnvMapSampler {
-    fn new(size: gpu::Extent, context: &gpu::Context) -> Self {
+    fn new(size: gpu::Extent, shader: &blade_graphics::Shader, context: &gpu::Context) -> Self {
         let format = gpu::TextureFormat::Rgba16Float;
         let accum_texture = context.create_texture(gpu::TextureDesc {
             name: "env-test",
@@ -38,10 +38,7 @@ impl EnvMapSampler {
             subresources: &gpu::TextureSubresources::default(),
         });
 
-        let source = fs::read_to_string("examples/init/env-sample.wgsl").unwrap();
-        let shader = context.create_shader(gpu::ShaderDesc { source: &source });
         let layout = <EnvSampleData as gpu::ShaderData>::layout();
-
         let init_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
             name: "env-init",
             data_layouts: &[&layout],
@@ -159,6 +156,10 @@ fn main() {
     let mut scene = blade_render::Scene::default();
     println!("Populating the scene");
     let mut load_finish = choir.spawn("load finish").init_dummy();
+    let (shader_handle, shader_task) = asset_hub
+        .shaders
+        .load("examples/init/env-sample.wgsl", blade_render::shader::Meta);
+    load_finish.depend_on(shader_task);
     for arg in env::args().skip(1) {
         if arg.ends_with(".exr") {
             println!("\tenvironment map = {}", arg);
@@ -201,7 +202,8 @@ fn main() {
         }
         None => dummy.size,
     };
-    let env_sampler = EnvMapSampler::new(env_size, &context);
+    let env_shader = &asset_hub.shaders[shader_handle];
+    let env_sampler = EnvMapSampler::new(env_size, &env_shader.raw, &context);
     env_sampler.accumulate(&mut command_encoder, env_map.main_view, env_map.weight_view);
     let sync_point = context.submit(&mut command_encoder);
 

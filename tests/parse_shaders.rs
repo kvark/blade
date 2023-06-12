@@ -26,17 +26,20 @@ fn parse_wgsl() {
                     continue;
                 }
             };
-            let shader = match path.extension() {
+            let shader_raw = match path.extension() {
                 Some(ostr) if &*ostr == "wgsl" => {
                     println!("Validating {:?}", path);
-                    fs::read_to_string(path).unwrap_or_default()
+                    fs::read(path).unwrap_or_default()
                 }
                 _ => continue,
             };
 
-            let module = match wgsl::parse_str(&shader) {
+            let cooker = blade_asset::Cooker::new(&example, Default::default());
+            let text_out = blade_render::shader::parse_shader(&shader_raw, &cooker);
+
+            let module = match wgsl::parse_str(&text_out) {
                 Ok(module) => module,
-                Err(e) => panic!("{}", e.emit_to_string(&shader)),
+                Err(e) => panic!("{}", e.emit_to_string(&text_out)),
             };
             //TODO: re-use the validator
             Validator::new(
@@ -45,7 +48,7 @@ fn parse_wgsl() {
             )
             .validate(&module)
             .unwrap_or_else(|e| {
-                blade_graphics::util::emit_annotated_error(&e, "", &shader);
+                blade_graphics::util::emit_annotated_error(&e, "", &text_out);
                 blade_graphics::util::print_err(&e);
                 panic!("Shader validation failed");
             });
