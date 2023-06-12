@@ -150,8 +150,7 @@ fn main() {
         .map(|i| choir.add_worker(&format!("Worker-{}", i)))
         .collect::<Vec<_>>();
 
-    let mut asset_hub =
-        blade_render::AssetHub::new(Path::new("."), Path::new("asset-cache"), &choir, &context);
+    let mut asset_hub = blade_render::AssetHub::new(Path::new("asset-cache"), &choir, &context);
 
     let mut scene = blade_render::Scene::default();
     println!("Populating the scene");

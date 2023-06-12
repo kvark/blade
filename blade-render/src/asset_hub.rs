@@ -11,30 +11,22 @@ pub struct AssetHub {
 impl AssetHub {
     /// Create a new hub.
     pub fn new(
-        root: &Path,
         target: &Path,
         choir: &Arc<choir::Choir>,
         gpu_context: &Arc<blade_graphics::Context>,
     ) -> Self {
         let _ = std::fs::create_dir_all(target);
         let textures = Arc::new(AssetManager::new(
-            root,
             target,
             choir,
             crate::texture::Baker::new(gpu_context),
         ));
         let models = AssetManager::new(
-            root,
             target,
             choir,
             crate::model::Baker::new(gpu_context, &textures),
         );
-        let shaders = AssetManager::new(
-            ".".as_ref(),
-            target,
-            choir,
-            crate::shader::Baker::new(gpu_context),
-        );
+        let shaders = AssetManager::new(target, choir, crate::shader::Baker::new(gpu_context));
         Self {
             textures,
             models,

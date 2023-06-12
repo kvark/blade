@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -38,7 +38,6 @@ fn test_asset() {
     let _w1 = choir.add_worker("main");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let am = blade_asset::AssetManager::<Baker>::new(
-        &root,
         &root.join("cooked"),
         &choir,
         Baker {
@@ -46,7 +45,7 @@ fn test_asset() {
         },
     );
     let meta = 5;
-    let path = Path::new("Cargo.toml");
+    let path = root.join("Cargo.toml");
     let (handle, task) = am.load(&path, meta);
     task.join();
     assert_eq!(am[handle], meta as usize);
