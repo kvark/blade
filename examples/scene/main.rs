@@ -110,9 +110,9 @@ impl Example {
             &choir,
             &context,
         );
-        let (shader, shader_task) = asset_hub
+        let (shader_handle, shader_task) = asset_hub
             .shaders
-            .load("shader.wgsl", blade_render::shader::Meta);
+            .load("blade-render/code/shader.wgsl", blade_render::shader::Meta);
 
         let config_scene: ConfigScene =
             ron::de::from_bytes(&fs::read(scene_path).expect("Unable to open the scene file"))
@@ -173,7 +173,7 @@ impl Example {
         let renderer = Renderer::new(
             &mut command_encoder,
             &context,
-            &asset_hub.shaders[shader],
+            &asset_hub.shaders[shader_handle],
             &render_config,
         );
         let sync_point = context.submit(&mut command_encoder);
