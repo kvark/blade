@@ -385,7 +385,8 @@ impl super::Context {
             //TODO: detect GPU family
             workarounds: super::Workarounds {
                 extra_sync_src_access: vk::AccessFlags::TRANSFER_WRITE,
-                extra_sync_dst_access: vk::AccessFlags::TRANSFER_READ
+                extra_sync_dst_access: vk::AccessFlags::TRANSFER_WRITE
+                    | vk::AccessFlags::TRANSFER_READ
                     | vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR,
             },
         };
