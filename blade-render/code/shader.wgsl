@@ -1,5 +1,6 @@
 #include "quaternion.inc.wgsl"
 #include "random.inc.wgsl"
+#include "env-importance.inc.wgsl"
 
 const PI: f32 = 3.1415926;
 
@@ -67,7 +68,6 @@ var<uniform> debug: DebugParams;
 var<uniform> parameters: MainParams;
 var acc_struct: acceleration_structure;
 var env_map: texture_2d<f32>;
-var env_weights: texture_2d<f32>;
 
 struct DebugPoint {
     pos: vec3<f32>,
@@ -307,48 +307,15 @@ fn sample_light_from_sphere(rng: ptr<function, RandomState>) -> LightSample {
 }
 
 fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample {
-    var ls = LightSample();
-    ls.pdf = 1.0;
-    var mip = i32(textureNumLevels(env_weights));
-    var itc = vec2<i32>(0);
-    // descend through the mip chain to find a concrete pixel
-    while (mip != 0) {
-        mip -= 1;
-        let weights = textureLoad(env_weights, itc, mip);
-        let sum = dot(vec4<f32>(1.0), weights);
-        let r = random_gen(rng) * sum;
-        var weight: f32;
-        itc *= 2;
-        if (r >= weights.x+weights.y) {
-            itc.y += 1;
-            if (r >= weights.x+weights.y+weights.z) {
-                weight = weights.w;
-                itc.x += 1;
-            } else {
-                weight = weights.z;
-            }
-        } else {
-            if (r >= weights.x) {
-                weight = weights.y;
-                itc.x += 1;
-            } else {
-                weight = weights.x;
-            }
-        }
-        ls.pdf *= weight / sum;
-    }
-
     let dim = textureDimensions(env_map, 0);
-    // adjust for the texel's solid angle
-    let meridian_solid_angle = 4.0 * PI / f32(dim.x);
-    let meridian_part = 0.5 * (cos(PI * f32(itc.y) / f32(dim.y)) - cos(PI * f32(itc.y + 1) / f32(dim.y)));
-    let texel_solid_angle = meridian_solid_angle * meridian_part;
-    ls.pdf /= texel_solid_angle;
+    let es = generate_environment_sample(rng, dim);
+    var ls = LightSample();
+    ls.pdf = es.pdf;
     // sample the incoming radiance
-    ls.radiance = textureLoad(env_map, itc, 0).xyz;
+    ls.radiance = textureLoad(env_map, es.pixel, 0).xyz;
     // for determining direction - offset randomly within the texel
     // Note: this only works if the texels are sufficiently small
-    let uv = (vec2<f32>(itc) + vec2<f32>(random_gen(rng), random_gen(rng))) / vec2<f32>(dim);
+    let uv = (vec2<f32>(es.pixel) + vec2<f32>(random_gen(rng), random_gen(rng))) / vec2<f32>(dim);
     ls.dir = map_equirect_uv_to_dir(uv);
     return ls;
 }
