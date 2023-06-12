@@ -129,6 +129,11 @@ impl<T: Flat> Cooker<T> {
         }
     }
 
+    /// Return the base path of the asset.
+    pub fn base_path(&self) -> &Path {
+        &self.base_path
+    }
+
     /// Put the data into it.
     pub fn finish(&self, value: T) {
         let mut inner = self.inner.lock().unwrap();
@@ -262,8 +267,6 @@ fn check_target_relevancy(
 /// caching the results of cooking by the path,
 /// and scheduling tasks for cooking and serving assets.
 pub struct AssetManager<B: Baker> {
-    /// Root path where all assets are searched from.
-    pub root: PathBuf,
     target: PathBuf,
     slots: arena::Arena<Slot<B::Output>>,
     #[allow(clippy::type_complexity)]
@@ -285,15 +288,13 @@ impl<B: Baker> ops::Index<Handle<B::Output>> for AssetManager<B> {
 impl<B: Baker> AssetManager<B> {
     /// Create a new asset manager.
     ///
-    /// The `root` points to the base path for source data.
     /// The `target` points to the folder to store cooked assets in.
-    pub fn new(root: &Path, target: &Path, choir: &Arc<choir::Choir>, baker: B) -> Self {
+    pub fn new(target: &Path, choir: &Arc<choir::Choir>, baker: B) -> Self {
         if !target.is_dir() {
             log::info!("Creating target {}", target.display());
             fs::create_dir_all(target).unwrap();
         }
         Self {
-            root: root.to_path_buf(),
             target: target.to_path_buf(),
             slots: arena::Arena::new(64),
             paths: Mutex::default(),
@@ -302,17 +303,16 @@ impl<B: Baker> AssetManager<B> {
         }
     }
 
-    fn create(&self, relative_path: &Path, meta: B::Meta) -> Handle<B::Output> {
+    fn create(&self, source_path: &Path, meta: B::Meta) -> Handle<B::Output> {
         use base64::engine::{general_purpose::URL_SAFE as ENCODING_ENGINE, Engine as _};
         use std::{hash::Hasher as _, io::Write as _};
 
-        let file_name = Path::new(relative_path.file_name().unwrap());
+        let base_path = source_path.parent().unwrap_or_else(|| Path::new("."));
+        let file_name = Path::new(source_path.file_name().unwrap());
         let target_path = {
             // The name hash includes the parent path and the metadata.
             let mut hasher = DefaultHasher::new();
-            if let Some(parent) = relative_path.parent() {
-                parent.hash(&mut hasher);
-            }
+            base_path.hash(&mut hasher);
             meta.hash(&mut hasher);
             let hash = hasher.finish().to_le_bytes();
             let mut file_name_str = format!("{}-", file_name.display());
@@ -335,7 +335,7 @@ impl<B: Baker> AssetManager<B> {
             let baker = Arc::clone(&self.baker);
             let target_path = target_path.clone();
             self.choir
-                .spawn(format!("load {} with {}", relative_path.display(), meta))
+                .spawn(format!("load {} with {}", source_path.display(), meta))
                 .init(move |exe_context| {
                     let mut file = fs::File::open(target_path).unwrap();
                     let mut bytes = [0u8; 8];
@@ -356,18 +356,16 @@ impl<B: Baker> AssetManager<B> {
                 })
         };
 
-        let source_path = self.root.join(relative_path);
-        let base_path = source_path.parent().unwrap();
         let mut hasher = DefaultHasher::new();
         TypeId::of::<B::Data<'static>>().hash(&mut hasher);
 
         if let Err(reason) = check_target_relevancy(&target_path, base_path, hasher.clone()) {
-            log::info!("Cooking {:?}: {}", reason, relative_path.display());
+            log::info!("Cooking {:?}: {}", reason, source_path.display());
             let cooker = Arc::new(Cooker::new(base_path, hasher));
             let cooker_arg = Arc::clone(&cooker);
             let mut cook_finish_task = self
                 .choir
-                .spawn(format!("cook finish for {}", relative_path.display()))
+                .spawn(format!("cook finish for {}", source_path.display()))
                 .init(move |_| {
                     let mut inner = cooker.inner.lock().unwrap();
                     let mut file = fs::File::create(&target_path).unwrap_or_else(|e| {
@@ -397,7 +395,7 @@ impl<B: Baker> AssetManager<B> {
             let baker = Arc::clone(&self.baker);
             let cook_task = self
                 .choir
-                .spawn(format!("cook {} as {}", relative_path.display(), meta))
+                .spawn(format!("cook {} as {}", source_path.display(), meta))
                 .init(move |exe_context| {
                     // Read the source file through the same mechanism as the
                     // dependencies, so that its modified time makes it into the hash.
@@ -417,7 +415,7 @@ impl<B: Baker> AssetManager<B> {
         }
     }
 
-    /// Load an asset given the relative path from `self.root`.
+    /// Load an asset given the relative path.
     ///
     /// Metadata is an asset-specific piece of information that determines how the asset is processed.
     /// Each pair of (path, meta) is cached indepedently.

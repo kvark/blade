@@ -104,12 +104,7 @@ impl Example {
             .map(|i| choir.add_worker(&format!("Worker-{}", i)))
             .collect();
 
-        let asset_hub = AssetHub::new(
-            scene_path.parent().unwrap(),
-            Path::new("asset-cache"),
-            &choir,
-            &context,
-        );
+        let asset_hub = AssetHub::new(Path::new("asset-cache"), &choir, &context);
         let (shader_handle, shader_task) = asset_hub
             .shaders
             .load("blade-render/code/shader.wgsl", blade_render::shader::Meta);
@@ -135,6 +130,7 @@ impl Example {
             white_level: 1.0,
         };
 
+        let parent = scene_path.parent().unwrap();
         let mut load_finish = choir.spawn("load finish").init_dummy();
         if !config_scene.environment_map.is_empty() {
             let meta = blade_render::texture::Meta {
@@ -142,15 +138,16 @@ impl Example {
                 generate_mips: false,
                 y_flip: false,
             };
-            let (texture, texture_task) =
-                asset_hub.textures.load(&config_scene.environment_map, meta);
+            let (texture, texture_task) = asset_hub
+                .textures
+                .load(parent.join(&config_scene.environment_map), meta);
             load_finish.depend_on(texture_task);
             scene.environment_map = Some(texture);
         }
         for config_model in config_scene.models {
             let (model, model_task) = asset_hub
                 .models
-                .load(config_model.path, blade_render::model::Meta);
+                .load(parent.join(&config_model.path), blade_render::model::Meta);
             load_finish.depend_on(model_task);
             scene.objects.push(blade_render::Object {
                 model,

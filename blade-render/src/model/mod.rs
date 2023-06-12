@@ -234,9 +234,9 @@ impl blade_asset::Baker for Baker {
                                 let (_before, after) = rest.split_once(";base64,").unwrap();
                                 ENCODING_ENGINE.decode(after).unwrap()
                             } else if let Some(rest) = uri.strip_prefix("file://") {
-                                std::fs::read(rest).unwrap()
+                                cooker.add_dependency(rest.as_ref())
                             } else if let Some(rest) = uri.strip_prefix("file:") {
-                                std::fs::read(rest).unwrap()
+                                cooker.add_dependency(rest.as_ref())
                             } else {
                                 cooker.add_dependency(uri.as_ref())
                             }
@@ -251,7 +251,7 @@ impl blade_asset::Baker for Baker {
                 }
                 let mut texture_paths = Vec::new();
                 for texture in document.textures() {
-                    texture_paths.push(match texture.source().source() {
+                    let relative = match texture.source().source() {
                         gltf::image::Source::Uri { uri, .. } => {
                             if let Some(rest) = uri.strip_prefix("data:") {
                                 let (_before, after) = rest.split_once(";base64,").unwrap();
@@ -268,7 +268,9 @@ impl blade_asset::Baker for Baker {
                         gltf::image::Source::View { .. } => {
                             panic!("Embedded images are not supported yet")
                         }
-                    });
+                    };
+                    let full = cooker.base_path().join(relative);
+                    texture_paths.push(full.to_str().unwrap().to_string());
                 }
 
                 let mut model = CookedModel {
