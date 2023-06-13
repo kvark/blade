@@ -64,6 +64,7 @@ struct HitEntry {
 var<storage, read> hit_entries: array<HitEntry>;
 
 var<uniform> camera: CameraParams;
+var<uniform> prev_camera: CameraParams;
 var<uniform> debug: DebugParams;
 var<uniform> parameters: MainParams;
 var acc_struct: acceleration_structure;
@@ -112,9 +113,19 @@ var out_albedo: texture_storage_2d<rgba8unorm, write>;
 
 fn get_ray_direction(global_id: vec2<u32>, target_size: vec2<u32>) -> vec3<f32> {
     let half_size = vec2<f32>(target_size >> vec2<u32>(1u));
-    let ndc = (vec2<f32>(global_id) - half_size) / half_size;
+    let ndc = (vec2<f32>(global_id) + vec2<f32>(0.5) - half_size) / half_size;
     let local_dir = vec3<f32>(ndc * tan(0.5 * camera.fov), 1.0);
     return normalize(qrot(camera.orientation, local_dir));
+}
+
+fn get_prev_pixel(point: vec3<f32>, target_size: vec2<u32>) -> vec2<i32> {
+    let local_dir = qrot(qinv(prev_camera.orientation), point - prev_camera.position);
+    if local_dir.z <= 0.0 {
+        return vec2<i32>(-1);
+    }
+    let ndc = local_dir.xy / (local_dir.z * tan(0.5 * prev_camera.fov));
+    let half_size = vec2<f32>(target_size >> vec2<u32>(1u));
+    return vec2<i32>((ndc + vec2<f32>(1.0)) * half_size);
 }
 
 @compute @workgroup_size(8, 8)
@@ -201,6 +212,7 @@ struct StoredReservoir {
     confidence: f32,
 }
 var<storage, read_write> reservoirs: array<StoredReservoir>;
+var<storage, read> prev_reservoirs: array<StoredReservoir>;
 
 struct LightSample {
     dir: vec3<f32>,
@@ -365,11 +377,12 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>) -> u
     return REJECT_NO;
 }
 
-fn compute_restir(ray_dir: vec3<f32>, depth: f32, surface: Surface, pixel_index: u32, rng: ptr<function, RandomState>, enable_debug: bool) -> vec3<f32> {
+fn compute_restir(ray_dir: vec3<f32>, depth: f32, surface: Surface, pixel_index: u32, target_size: vec2<u32>, rng: ptr<function, RandomState>, enable_debug: bool) -> vec3<f32> {
     if (debug.view_mode == DEBUG_MODE_DEPTH) {
         return vec3<f32>(depth / camera.depth);
     }
     if (depth == 0.0) {
+        reservoirs[pixel_index] = StoredReservoir();
         return evaluate_environment(ray_dir);
     }
 
@@ -408,9 +421,13 @@ fn compute_restir(ray_dir: vec3<f32>, depth: f32, surface: Surface, pixel_index:
     }
 
     if (parameters.temporal_history != 0u) {
-        let prev = unpack_reservoir(reservoirs[pixel_index], parameters.temporal_history);
-        if (merge_reservoir(&reservoir, prev, random_gen(rng))) {
-            radiance = evaluate_environment(prev.selected_dir);
+        let prev_pixel = get_prev_pixel(position, target_size);
+        if (all(vec2<u32>(prev_pixel) < target_size)) {
+            let prev_pixel_index = prev_pixel.y * i32(target_size.x) + prev_pixel.x;
+            let prev = unpack_reservoir(prev_reservoirs[prev_pixel_index], parameters.temporal_history);
+            if (merge_reservoir(&reservoir, prev, random_gen(rng))) {
+                radiance = evaluate_environment(prev.selected_dir);
+            }
         }
     }
     let stored = pack_reservoir(reservoir);
@@ -435,7 +452,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     surface.albedo = textureLoad(in_albedo, global_id.xy, 0).xyz;
     let enable_debug = all(global_id.xy == debug.mouse_pos);
     let enable_restir_debug = (debug.flags & DEBUG_FLAGS_RESTIR) != 0u && enable_debug;
-    let color = compute_restir(ray_dir, depth, surface, global_index, &rng, enable_restir_debug);
+    let color = compute_restir(ray_dir, depth, surface, global_index, target_size, &rng, enable_restir_debug);
     if (enable_debug) {
         debug_buf.variance.color_sum += color;
         debug_buf.variance.color2_sum += color * color;
