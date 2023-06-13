@@ -209,16 +209,17 @@ pub struct Renderer {
     index_buffers: blade_graphics::BufferArray<MAX_RESOURCES>,
     textures: blade_graphics::TextureArray<MAX_RESOURCES>,
     samplers: Samplers,
-    reservoir_buffer: blade_graphics::Buffer,
+    reservoir_buffers: [blade_graphics::Buffer; 2],
     reservoir_size: u32,
     debug: DebugRender,
     is_tlas_dirty: bool,
     screen_size: blade_graphics::Extent,
     frame_index: u32,
+    camera_params: [CameraParams; 2],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 struct CameraParams {
     position: [f32; 3],
     depth: f32,
@@ -263,6 +264,7 @@ struct FillData<'a> {
 #[derive(blade_macros::ShaderData)]
 struct MainData {
     camera: CameraParams,
+    prev_camera: CameraParams,
     debug: DebugParams,
     parameters: MainParams,
     acc_struct: blade_graphics::AccelerationStructure,
@@ -275,6 +277,7 @@ struct MainData {
     in_albedo: blade_graphics::TextureView,
     debug_buf: blade_graphics::BufferPiece,
     reservoirs: blade_graphics::BufferPiece,
+    prev_reservoirs: blade_graphics::BufferPiece,
     output: blade_graphics::TextureView,
 }
 
@@ -462,11 +465,14 @@ impl Renderer {
 
         let total_reservoirs =
             config.screen_size.width as usize * config.screen_size.height as usize;
-        let reservoir_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
-            name: "reservoirs",
-            size: sp.reservoir_size as u64 * total_reservoirs as u64,
-            memory: blade_graphics::Memory::Device,
-        });
+        let mut reservoir_buffers = [blade_graphics::Buffer::default(); 2];
+        for (i, rb) in reservoir_buffers.iter_mut().enumerate() {
+            *rb = gpu.create_buffer(blade_graphics::BufferDesc {
+                name: &format!("reservoirs-{i}"),
+                size: sp.reservoir_size as u64 * total_reservoirs as u64,
+                memory: blade_graphics::Memory::Device,
+            });
+        }
 
         let targets = Targets::new(config.screen_size, encoder, gpu);
         let dummy = DummyResources::new(encoder, gpu);
@@ -505,7 +511,7 @@ impl Renderer {
             index_buffers: blade_graphics::BufferArray::new(),
             textures: blade_graphics::TextureArray::new(),
             samplers,
-            reservoir_buffer,
+            reservoir_buffers,
             reservoir_size: sp.reservoir_size,
             debug: DebugRender {
                 capacity: config.max_debug_lines,
@@ -517,6 +523,7 @@ impl Renderer {
             is_tlas_dirty: true,
             screen_size: config.screen_size,
             frame_index: 0,
+            camera_params: [CameraParams::default(); 2],
         }
     }
 
@@ -537,7 +544,9 @@ impl Renderer {
         // buffers
         gpu.destroy_buffer(self.debug.buffer);
         gpu.destroy_buffer(self.debug.variance_buffer);
-        gpu.destroy_buffer(self.reservoir_buffer);
+        for rb in self.reservoir_buffers.iter_mut() {
+            gpu.destroy_buffer(*rb);
+        }
     }
 
     pub fn merge_scene(&mut self, scene: super::Scene) {
@@ -567,13 +576,15 @@ impl Renderer {
         gpu: &blade_graphics::Context,
     ) {
         self.screen_size = size;
-        gpu.destroy_buffer(self.reservoir_buffer);
         let total_reservoirs = size.width as usize * size.height as usize;
-        self.reservoir_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
-            name: "reservoirs",
-            size: self.reservoir_size as u64 * total_reservoirs as u64,
-            memory: blade_graphics::Memory::Device,
-        });
+        for (i, rb) in self.reservoir_buffers.iter_mut().enumerate() {
+            gpu.destroy_buffer(*rb);
+            *rb = gpu.create_buffer(blade_graphics::BufferDesc {
+                name: &format!("reservoirs-{i}"),
+                size: self.reservoir_size as u64 * total_reservoirs as u64,
+                memory: blade_graphics::Memory::Device,
+            });
+        }
         self.targets.destroy(gpu);
         self.targets = Targets::new(size, encoder, gpu);
     }
@@ -583,6 +594,7 @@ impl Renderer {
     pub fn prepare(
         &mut self,
         command_encoder: &mut blade_graphics::CommandEncoder,
+        camera: &super::Camera,
         asset_hub: &crate::AssetHub,
         gpu: &blade_graphics::Context,
         temp_buffers: &mut Vec<blade_graphics::Buffer>,
@@ -739,7 +751,6 @@ impl Renderer {
             }
         }
 
-        self.frame_index += 1;
         if let Some(handle) = self.scene.environment_map {
             let asset = &asset_hub.textures[handle];
             self.env_map
@@ -772,11 +783,16 @@ impl Renderer {
             );
             let total_reservoirs = self.screen_size.width as u64 * self.screen_size.height as u64;
             transfer.fill_buffer(
-                self.reservoir_buffer.into(),
+                self.reservoir_buffers[0].into(),
                 total_reservoirs * self.reservoir_size as u64,
                 0,
             );
         }
+
+        self.frame_index += 1;
+        self.camera_params[1] = self.camera_params[0];
+        self.camera_params[0] = self.make_camera_params(camera);
+        self.reservoir_buffers.swap(0, 1);
     }
 
     fn make_camera_params(&self, camera: &super::Camera) -> CameraParams {
@@ -799,7 +815,6 @@ impl Renderer {
     pub fn ray_trace(
         &self,
         command_encoder: &mut blade_graphics::CommandEncoder,
-        camera: &super::Camera,
         debug_config: DebugConfig,
         ray_config: RayConfig,
     ) {
@@ -819,7 +834,7 @@ impl Renderer {
             pc.bind(
                 0,
                 &FillData {
-                    camera: self.make_camera_params(camera),
+                    camera: self.camera_params[0],
                     debug,
                     acc_struct: self.acceleration_structure,
                     hit_entries: self.hit_buffer.into(),
@@ -842,7 +857,8 @@ impl Renderer {
             pc.bind(
                 0,
                 &MainData {
-                    camera: self.make_camera_params(camera),
+                    camera: self.camera_params[0],
+                    prev_camera: self.camera_params[1],
                     debug,
                     parameters: MainParams {
                         frame_index: self.frame_index,
@@ -860,7 +876,8 @@ impl Renderer {
                     in_basis: self.targets.basis_view,
                     in_albedo: self.targets.albedo_view,
                     debug_buf: self.debug.buffer.into(),
-                    reservoirs: self.reservoir_buffer.into(),
+                    reservoirs: self.reservoir_buffers[0].into(),
+                    prev_reservoirs: self.reservoir_buffers[1].into(),
                     output: self.targets.main_view,
                 },
             );
@@ -869,12 +886,7 @@ impl Renderer {
     }
 
     /// Blit the rendering result into a specified render pass.
-    pub fn blit(
-        &self,
-        pass: &mut blade_graphics::RenderCommandEncoder,
-        camera: &super::Camera,
-        debug_blits: &[DebugBlit],
-    ) {
+    pub fn blit(&self, pass: &mut blade_graphics::RenderCommandEncoder, debug_blits: &[DebugBlit]) {
         let pp = &self.scene.post_processing;
         if let mut pc = pass.with(&self.blit_pipeline) {
             pc.bind(
@@ -895,7 +907,7 @@ impl Renderer {
             pc.bind(
                 0,
                 &DebugData {
-                    camera: self.make_camera_params(camera),
+                    camera: self.camera_params[0],
                     debug_buf: self.debug.buffer.into(),
                     in_depth: self.targets.depth_view,
                 },

@@ -267,6 +267,7 @@ impl Example {
         if self.pending_scene.is_none() {
             self.renderer.prepare(
                 &mut self.command_encoder,
+                &self.camera,
                 &self.asset_hub,
                 &self.context,
                 &mut temp_buffers,
@@ -275,12 +276,8 @@ impl Example {
                 self.need_accumulation_reset,
             );
             self.need_accumulation_reset = false;
-            self.renderer.ray_trace(
-                &mut self.command_encoder,
-                &self.camera,
-                self.debug,
-                self.ray_config,
-            );
+            self.renderer
+                .ray_trace(&mut self.command_encoder, self.debug, self.ray_config);
         }
 
         let frame = self.context.acquire_frame();
@@ -299,8 +296,7 @@ impl Example {
                 scale_factor,
             };
             if self.pending_scene.is_none() {
-                self.renderer
-                    .blit(&mut pass, &self.camera, &self.debug_blits);
+                self.renderer.blit(&mut pass, &self.debug_blits);
             }
             self.gui_painter
                 .paint(&mut pass, gui_primitives, &screen_desc, &self.context);
