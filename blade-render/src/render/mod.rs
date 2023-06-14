@@ -5,7 +5,7 @@ mod scene;
 pub use dummy::DummyResources;
 pub use env_map::EnvironmentMap;
 
-use std::{collections::HashMap, fs, mem, ptr};
+use std::{collections::HashMap, mem, path::Path, ptr};
 
 const MAX_RESOURCES: u32 = 1000;
 
@@ -225,7 +225,7 @@ struct CameraParams {
     depth: f32,
     orientation: [f32; 4],
     fov: [f32; 2],
-    unused: [f32; 2],
+    target_size: [u32; 2],
 }
 
 #[repr(C)]
@@ -297,10 +297,10 @@ struct BlitData {
 }
 
 #[derive(blade_macros::ShaderData)]
-struct DebugData {
+struct DebugDrawData {
     camera: CameraParams,
     debug_buf: blade_graphics::BufferPiece,
-    in_depth: blade_graphics::TextureView,
+    depth: blade_graphics::TextureView,
 }
 
 #[repr(C)]
@@ -335,6 +335,28 @@ struct HitEntry {
     finish_pad: [u32; 2],
 }
 
+pub struct Shaders {
+    fill_gbuf: blade_asset::Handle<crate::Shader>,
+    ray_trace: blade_asset::Handle<crate::Shader>,
+    post_proc: blade_asset::Handle<crate::Shader>,
+    debug_draw: blade_asset::Handle<crate::Shader>,
+    debug_blit: blade_asset::Handle<crate::Shader>,
+}
+
+impl Shaders {
+    pub fn load(path: &Path, asset_hub: &crate::AssetHub) -> (Self, choir::RunningTask) {
+        let mut ctx = asset_hub.open_context(path, "shader finish");
+        let shaders = Self {
+            fill_gbuf: ctx.load_shader("fill-gbuf.wgsl"),
+            ray_trace: ctx.load_shader("ray-trace.wgsl"),
+            post_proc: ctx.load_shader("post-proc.wgsl"),
+            debug_draw: ctx.load_shader("debug-draw.wgsl"),
+            debug_blit: ctx.load_shader("debug-blit.wgsl"),
+        };
+        (shaders, ctx.close())
+    }
+}
+
 struct ShaderPipelines {
     fill: blade_graphics::ComputePipeline,
     main: blade_graphics::ComputePipeline,
@@ -349,39 +371,41 @@ struct ShaderPipelines {
 
 impl ShaderPipelines {
     fn init(
-        shader: &blade_graphics::Shader,
+        shaders: &Shaders,
         config: &RenderConfig,
         gpu: &blade_graphics::Context,
+        shader_man: &blade_asset::AssetManager<crate::shader::Baker>,
     ) -> Result<Self, &'static str> {
-        shader.check_struct_size::<CameraParams>();
-        shader.check_struct_size::<DebugParams>();
-        shader.check_struct_size::<MainParams>();
-        shader.check_struct_size::<crate::Vertex>();
-        shader.check_struct_size::<HitEntry>();
-        shader.check_struct_size::<DebugVariance>();
+        let sh_fill_gbuf = &shader_man[shaders.fill_gbuf].raw;
+        let sh_ray_trace = &shader_man[shaders.ray_trace].raw;
+        let sh_post_proc = &shader_man[shaders.post_proc].raw;
+        let sh_debug_draw = &shader_man[shaders.debug_draw].raw;
+        let sh_debug_blit = &shader_man[shaders.debug_blit].raw;
+
+        sh_fill_gbuf.check_struct_size::<crate::Vertex>();
+        sh_fill_gbuf.check_struct_size::<HitEntry>();
+        sh_ray_trace.check_struct_size::<CameraParams>();
+        sh_ray_trace.check_struct_size::<DebugParams>();
+        sh_ray_trace.check_struct_size::<MainParams>();
+        sh_ray_trace.check_struct_size::<DebugVariance>();
+        sh_debug_blit.check_struct_size::<DebugBlitParams>();
 
         let fill_layout = <FillData as blade_graphics::ShaderData>::layout();
         let main_layout = <MainData as blade_graphics::ShaderData>::layout();
         let blit_layout = <BlitData as blade_graphics::ShaderData>::layout();
-        let debug_layout = <DebugData as blade_graphics::ShaderData>::layout();
-
-        let debug_blit_source = fs::read_to_string("blade-render/code/debug-blit.wgsl").unwrap();
-        let debug_blit_shader = gpu.try_create_shader(blade_graphics::ShaderDesc {
-            source: &debug_blit_source,
-        })?;
+        let debug_draw_layout = <DebugDrawData as blade_graphics::ShaderData>::layout();
         let debug_blit_layout = <DebugBlitData as blade_graphics::ShaderData>::layout();
-        debug_blit_shader.check_struct_size::<DebugBlitParams>();
 
         Ok(Self {
             fill: gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
                 name: "fill-gbuf",
                 data_layouts: &[&fill_layout],
-                compute: shader.at("fill_gbuf"),
+                compute: sh_fill_gbuf.at("main"),
             }),
             main: gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
                 name: "ray-trace",
                 data_layouts: &[&main_layout],
-                compute: shader.at("main"),
+                compute: sh_ray_trace.at("main"),
             }),
             blit: gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
                 name: "main",
@@ -390,21 +414,21 @@ impl ShaderPipelines {
                     topology: blade_graphics::PrimitiveTopology::TriangleStrip,
                     ..Default::default()
                 },
-                vertex: shader.at("blit_vs"),
-                fragment: shader.at("blit_fs"),
+                vertex: sh_post_proc.at("blit_vs"),
+                fragment: sh_post_proc.at("blit_fs"),
                 color_targets: &[config.surface_format.into()],
                 depth_stencil: None,
             }),
             debug_draw: gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
                 name: "debug-draw",
-                data_layouts: &[&debug_layout],
-                vertex: shader.at("debug_vs"),
+                data_layouts: &[&debug_draw_layout],
+                vertex: sh_debug_draw.at("debug_vs"),
                 primitive: blade_graphics::PrimitiveState {
                     topology: blade_graphics::PrimitiveTopology::LineList,
                     ..Default::default()
                 },
                 depth_stencil: None,
-                fragment: shader.at("debug_fs"),
+                fragment: sh_debug_draw.at("debug_fs"),
                 color_targets: &[blade_graphics::ColorTargetState {
                     format: config.surface_format,
                     blend: Some(blade_graphics::BlendState::ALPHA_BLENDING),
@@ -414,19 +438,19 @@ impl ShaderPipelines {
             debug_blit: gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
                 name: "debug-blit",
                 data_layouts: &[&debug_blit_layout],
-                vertex: debug_blit_shader.at("blit_vs"),
+                vertex: sh_debug_blit.at("blit_vs"),
                 primitive: blade_graphics::PrimitiveState {
                     topology: blade_graphics::PrimitiveTopology::TriangleStrip,
                     ..Default::default()
                 },
                 depth_stencil: None,
-                fragment: debug_blit_shader.at("blit_fs"),
+                fragment: sh_debug_blit.at("blit_fs"),
                 color_targets: &[config.surface_format.into()],
             }),
             env_preproc: EnvironmentMap::init_pipeline(gpu)?,
-            debug_line_size: shader.get_struct_size("DebugLine"),
-            debug_buffer_size: shader.get_struct_size("DebugBuffer"),
-            reservoir_size: shader.get_struct_size("StoredReservoir"),
+            debug_line_size: sh_ray_trace.get_struct_size("DebugLine"),
+            debug_buffer_size: sh_ray_trace.get_struct_size("DebugBuffer"),
+            reservoir_size: sh_ray_trace.get_struct_size("StoredReservoir"),
         })
     }
 }
@@ -439,7 +463,8 @@ impl Renderer {
     pub fn new(
         encoder: &mut blade_graphics::CommandEncoder,
         gpu: &blade_graphics::Context,
-        shader: &crate::Shader,
+        shaders: &Shaders,
+        shader_man: &blade_asset::AssetManager<crate::shader::Baker>,
         config: &RenderConfig,
     ) -> Self {
         let capabilities = gpu.capabilities();
@@ -447,7 +472,7 @@ impl Renderer {
             .ray_query
             .contains(blade_graphics::ShaderVisibility::COMPUTE));
 
-        let sp = ShaderPipelines::init(&shader.raw, config, gpu).unwrap();
+        let sp = ShaderPipelines::init(shaders, config, gpu, shader_man).unwrap();
 
         let debug_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
             name: "debug",
@@ -805,7 +830,7 @@ impl Renderer {
             depth: camera.depth,
             orientation: camera.rot.into(),
             fov: [fov_x, camera.fov_y],
-            unused: [0.0; 2],
+            target_size: [self.screen_size.width, self.screen_size.height],
         }
     }
 
@@ -906,10 +931,10 @@ impl Renderer {
         if let mut pc = pass.with(&self.debug.draw_pipeline) {
             pc.bind(
                 0,
-                &DebugData {
+                &DebugDrawData {
                     camera: self.camera_params[0],
                     debug_buf: self.debug.buffer.into(),
-                    in_depth: self.targets.depth_view,
+                    depth: self.targets.depth_view,
                 },
             );
             pc.draw_indirect(self.debug.buffer.at(0));
