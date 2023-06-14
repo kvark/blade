@@ -8,6 +8,12 @@ pub struct AssetHub {
     pub shaders: AssetManager<crate::shader::Baker>,
 }
 
+pub struct LoadContext<'a> {
+    asset_hub: &'a AssetHub,
+    base_path: &'a Path,
+    finish_task: choir::IdleTask<'static>,
+}
+
 impl AssetHub {
     /// Create a new hub.
     pub fn new(
@@ -52,5 +58,32 @@ impl AssetHub {
         self.textures.clear();
         self.models.clear();
         self.shaders.clear();
+    }
+
+    pub fn open_context<'a, N: Into<choir::Name>>(
+        &'a self,
+        base_path: &'a Path,
+        name: N,
+    ) -> LoadContext {
+        LoadContext {
+            asset_hub: self,
+            base_path,
+            finish_task: self.shaders.choir.spawn(name).init_dummy(),
+        }
+    }
+}
+
+impl LoadContext<'_> {
+    pub fn load_shader(&mut self, path: &str) -> blade_asset::Handle<crate::Shader> {
+        let (handle, task) = self
+            .asset_hub
+            .shaders
+            .load(self.base_path.join(path), crate::shader::Meta);
+        self.finish_task.depend_on(task);
+        handle
+    }
+
+    pub fn close(self) -> choir::RunningTask {
+        self.finish_task.run()
     }
 }

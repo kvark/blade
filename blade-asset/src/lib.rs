@@ -271,7 +271,7 @@ pub struct AssetManager<B: Baker> {
     slots: arena::Arena<Slot<B::Output>>,
     #[allow(clippy::type_complexity)]
     paths: Mutex<HashMap<(PathBuf, B::Meta), Handle<B::Output>>>,
-    choir: Arc<choir::Choir>,
+    pub choir: Arc<choir::Choir>,
     /// Asset-specific implementation.
     pub baker: Arc<B>,
 }
