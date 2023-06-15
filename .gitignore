@@ -5,6 +5,7 @@
 
 /asset-cache
 /blade-asset/cooked
+/_failure.wgsl
 
 .DS_Store
 /.vs

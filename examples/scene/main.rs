@@ -196,6 +196,9 @@ impl Example {
                 num_environment_samples: 1,
                 environment_importance_sampling: !config_scene.environment_map.is_empty(),
                 temporal_history: 10,
+                spatial_taps: 1,
+                spatial_tap_history: 5,
+                spatial_radius: 10,
             },
             debug_blits: Vec::new(),
             workers,
@@ -422,18 +425,30 @@ impl Example {
         egui::CollapsingHeader::new("Ray Trace")
             .default_open(true)
             .show(ui, |ui| {
+                let rc = &mut self.ray_config;
                 ui.add(
-                    egui::Slider::new(&mut self.ray_config.num_environment_samples, 1..=100u32)
+                    egui::Slider::new(&mut rc.num_environment_samples, 1..=100u32)
                         .text("Num env samples")
                         .logarithmic(true),
                 );
                 ui.checkbox(
-                    &mut self.ray_config.environment_importance_sampling,
+                    &mut rc.environment_importance_sampling,
                     "Env importance sampling",
                 );
                 ui.add(
-                    egui::widgets::Slider::new(&mut self.ray_config.temporal_history, 0..=50)
-                        .text("Temporal reuse"),
+                    egui::widgets::Slider::new(&mut rc.temporal_history, 0..=50)
+                        .text("Temporal history"),
+                );
+                ui.add(
+                    egui::widgets::Slider::new(&mut rc.spatial_taps, 0..=10).text("Spatial taps"),
+                );
+                ui.add(
+                    egui::widgets::Slider::new(&mut rc.spatial_tap_history, 0..=50)
+                        .text("Spatial tap history"),
+                );
+                ui.add(
+                    egui::widgets::Slider::new(&mut rc.spatial_radius, 1..=50)
+                        .text("Spatial radius (px)"),
                 );
             });
         self.need_accumulation_reset |= self.ray_config != old_config;

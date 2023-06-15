@@ -75,6 +75,9 @@ pub struct RayConfig {
     pub num_environment_samples: u32,
     pub environment_importance_sampling: bool,
     pub temporal_history: u32,
+    pub spatial_taps: u32,
+    pub spatial_tap_history: u32,
+    pub spatial_radius: u32,
 }
 
 // Has to match the shader!
@@ -243,6 +246,9 @@ struct MainParams {
     num_environment_samples: u32,
     environment_importance_sampling: u32,
     temporal_history: u32,
+    spatial_taps: u32,
+    spatial_tap_history: u32,
+    spatial_radius: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -891,6 +897,9 @@ impl Renderer {
                         environment_importance_sampling: ray_config.environment_importance_sampling
                             as u32,
                         temporal_history: ray_config.temporal_history,
+                        spatial_taps: ray_config.spatial_taps,
+                        spatial_tap_history: ray_config.spatial_tap_history,
+                        spatial_radius: ray_config.spatial_radius,
                     },
                     acc_struct: self.acceleration_structure,
                     sampler_linear: self.samplers.linear,

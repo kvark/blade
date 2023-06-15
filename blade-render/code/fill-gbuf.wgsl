@@ -49,7 +49,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     var rq: ray_query;
-    let ray_dir = get_ray_direction(camera, global_id.xy);
+    let ray_dir = get_ray_direction(camera, vec2<i32>(global_id.xy));
     rayQueryInitialize(&rq, acc_struct, RayDesc(0x90u, 0xFFu, 0.0, camera.depth, camera.position, ray_dir));
     rayQueryProceed(&rq);
     let intersection = rayQueryGetCommittedIntersection(&rq);
