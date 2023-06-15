@@ -1,4 +1,6 @@
-use std::{fmt, path::Path, str, sync::Arc};
+use std::{fmt, fs, path::Path, str, sync::Arc};
+
+const FAILURE_DUMP_NAME: &str = "_failure.wgsl";
 
 #[derive(blade_macros::Flat)]
 pub struct CookedShader<'a> {
@@ -80,10 +82,15 @@ impl blade_asset::Baker for Baker {
     }
     fn serve(&self, cooked: CookedShader, _exe_context: choir::ExecutionContext) -> Shader {
         let source = str::from_utf8(cooked.data).unwrap();
-        Shader {
-            raw: self
-                .gpu_context
-                .create_shader(blade_graphics::ShaderDesc { source }),
+        match self
+            .gpu_context
+            .try_create_shader(blade_graphics::ShaderDesc { source })
+        {
+            Ok(raw) => Shader { raw },
+            Err(e) => {
+                let _ = fs::write(FAILURE_DUMP_NAME, source);
+                panic!("Shader compilation failed: {e:?}, source dumped as '{FAILURE_DUMP_NAME}'.")
+            }
         }
     }
     fn delete(&self, _output: Shader) {}

@@ -6,9 +6,9 @@ struct CameraParams {
     target_size: vec2<u32>,
 }
 
-fn get_ray_direction(cp: CameraParams, global_id: vec2<u32>) -> vec3<f32> {
+fn get_ray_direction(cp: CameraParams, pixel: vec2<i32>) -> vec3<f32> {
     let half_size = vec2<f32>(cp.target_size >> vec2<u32>(1u));
-    let ndc = (vec2<f32>(global_id) + vec2<f32>(0.5) - half_size) / half_size;
+    let ndc = (vec2<f32>(pixel) + vec2<f32>(0.5) - half_size) / half_size;
     let local_dir = vec3<f32>(ndc * tan(0.5 * cp.fov), 1.0);
     return normalize(qrot(cp.orientation, local_dir));
 }
