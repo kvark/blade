@@ -6,6 +6,14 @@
 #include "camera.inc.wgsl"
 
 const PI: f32 = 3.1415926;
+const MAX_RESERVOIRS: u32 = 10u;
+// See "9.1 pairwise mis for robust reservoir reuse"
+// "Correlations and Reuse for Fast and Accurate Physically Based Light Transport"
+const PAIRWISE_MIS: bool = true;
+// Base MIS for canonical samples. The constant isolates a critical difference between
+// Bitterli's pseudocode (where it's 1) and NVidia's RTXDI implementation (where it's 0).
+// Arguably, 0 makes more sense, since otherwise the temporal history doesn't affect much.
+const BASE_CANONICAL_MIS: f32 = 0.0;
 
 struct MainParams {
     frame_index: u32,
@@ -43,7 +51,7 @@ struct LiveReservoir {
     selected_dir: vec3<f32>,
     selected_target_score: f32,
     weight_sum: f32,
-    count: u32,
+    history: f32,
 }
 
 fn compute_target_score(radiance: vec3<f32>) -> f32 {
@@ -58,20 +66,20 @@ fn get_reservoir_index(pixel: vec2<i32>, camera: CameraParams) -> i32 {
     }
 }
 
-fn bump_reservoir(r: ptr<function, LiveReservoir>, history: u32) {
-    (*r).count += history;
+fn bump_reservoir(r: ptr<function, LiveReservoir>, history: f32) {
+    (*r).history += history;
 }
-fn make_reservoir(ls: LightSample) -> LiveReservoir {
+fn make_reservoir(ls: LightSample, color: vec3<f32>) -> LiveReservoir {
     var r: LiveReservoir;
     r.selected_dir = ls.dir;
-    r.selected_target_score = compute_target_score(ls.radiance);
+    r.selected_target_score = compute_target_score(color);
     r.weight_sum = r.selected_target_score / ls.pdf;
-    r.count = 1u;
+    r.history = 1.0;
     return r;
 }
 fn merge_reservoir(r: ptr<function, LiveReservoir>, other: LiveReservoir, random: f32) -> bool {
     (*r).weight_sum += other.weight_sum;
-    (*r).count += other.count;
+    (*r).history += other.history;
     if ((*r).weight_sum * random < other.weight_sum) {
         (*r).selected_dir = other.selected_dir;
         (*r).selected_target_score = other.selected_target_score;
@@ -80,27 +88,26 @@ fn merge_reservoir(r: ptr<function, LiveReservoir>, other: LiveReservoir, random
         return false;
     }
 }
-fn update_reservoir(r: ptr<function, LiveReservoir>, ls: LightSample, random: f32) -> bool {
-    let other = make_reservoir(ls);
-    return merge_reservoir(r, other, random);
-}
-fn unpack_reservoir(f: StoredReservoir, max_count: u32) -> LiveReservoir {
+fn unpack_reservoir(f: StoredReservoir, max_history: u32) -> LiveReservoir {
     var r: LiveReservoir;
     r.selected_dir = f.light_dir;
     r.selected_target_score = f.target_score;
-    let count = min(u32(f.confidence), max_count);
-    r.weight_sum = f.contribution_weight * f.target_score * f32(count);
-    r.count = count;
+    let history = min(f.confidence, f32(max_history));
+    r.weight_sum = f.contribution_weight * f.target_score * history;
+    r.history = history;
     return r;
 }
-fn pack_reservoir(r: LiveReservoir) -> StoredReservoir {
+fn pack_reservoir_detail(r: LiveReservoir, denom_factor: f32) -> StoredReservoir {
     var f: StoredReservoir;
     f.light_dir = r.selected_dir;
     f.target_score = r.selected_target_score;
-    f.confidence = f32(r.count);
-    let denom = f.target_score * f.confidence;
+    f.confidence = r.history;
+    let denom = f.target_score * denom_factor;
     f.contribution_weight = select(0.0, r.weight_sum / denom, denom > 0.0);
     return f;
+}
+fn pack_reservoir(r: LiveReservoir) -> StoredReservoir {
+    return pack_reservoir_detail(r, r.history);
 }
 
 var in_depth: texture_2d<f32>;
@@ -173,6 +180,11 @@ fn read_surface(pixel: vec2<i32>) -> Surface {
     return surface;
 }
 
+fn read_prev_surface(pixel: vec2<i32>) -> Surface {
+    //TODO: expose the previous frame depth buffer and friends
+    return read_surface(pixel);
+}
+
 // Return the compatibility rating, where
 // 1.0 means fully compatible, and
 // 0.0 means totally incompatible.
@@ -182,7 +194,7 @@ fn compare_surfaces(a: Surface, b: Surface) -> f32 {
     return r_normal * r_depth;
 }
 
-fn evaluate_color(surface: Surface, dir: vec3<f32>) -> vec3<f32> {
+fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> vec3<f32> {
     let lambert_brdf = 1.0 / PI;
     let lambert_term = qrot(qinv(surface.basis), dir).z;
     if (lambert_term <= 0.0) {
@@ -206,6 +218,35 @@ fn check_ray_occluded(position: vec3<f32>, direction: vec3<f32>, debug_len: f32)
         debug_line(position, position + debug_len * direction, color);
     }
     return occluded;
+}
+
+fn evaluate_reflected_light(surface: Surface, direction: vec3<f32>) -> vec3<f32> {
+    let dim = textureDimensions(env_map);
+    let uv = map_equirect_dir_to_uv(direction);
+    let pixel = vec2<i32>(uv * vec2<f32>(dim));
+    let radiance = textureLoad(env_map, pixel, 0).xyz;
+    let color = evaluate_brdf(surface, direction);
+    return radiance * color;
+}
+
+struct TargetPdf {
+    color: vec3<f32>,
+    score: f32,
+}
+
+fn estimate_target_pdf(surface: Surface, position: vec3<f32>, direction: vec3<f32>) -> TargetPdf {
+    var t: TargetPdf;
+    t.color = evaluate_reflected_light(surface, direction);
+    t.score = compute_target_score(t.color);
+    return t;
+}
+
+fn estimate_target_pdf_with_occlusion(surface: Surface, position: vec3<f32>, direction: vec3<f32>, debug_len: f32) -> TargetPdf {
+    if (check_ray_occluded(position, direction, debug_len)) {
+        return TargetPdf();
+    } else {
+        return estimate_target_pdf(surface, position, direction);
+    }
 }
 
 const REJECT_NO = 0u;
@@ -232,6 +273,19 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debu
     return REJECT_NO;
 }
 
+struct HeuristicFactors {
+    weight: f32,
+    history: f32,
+}
+
+fn balance_heuristic(w0: f32, w1: f32, h0: f32, h1: f32) -> HeuristicFactors {
+    var hf: HeuristicFactors;
+    let balance_denom = h0 * w0 + h1 * w1;
+    hf.weight = select(h0 * w0 / balance_denom, 0.0, balance_denom <= 0.0);
+    hf.history = select(pow(clamp(w1 / w0, 0.0, 1.0), 8.0), 1.0, w0 <= 0.0);
+    return hf;
+}
+
 fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, enable_debug: bool) -> vec3<f32> {
     if (debug.view_mode == DEBUG_MODE_DEPTH) {
         return vec3<f32>(surface.depth / camera.depth);
@@ -243,15 +297,15 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         return evaluate_environment(ray_dir);
     }
 
+    let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
     let position = camera.position + surface.depth * ray_dir;
     let normal = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
     if (debug.view_mode == DEBUG_MODE_NORMAL) {
         return normal;
     }
 
-    var reservoir = LiveReservoir();
-    var radiance = vec3<f32>(0.0);
-    let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
+    var canonical = LiveReservoir();
+    var canonical_radiance = vec3<f32>(0.0);
     for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
         var ls: LightSample;
         if (parameters.environment_importance_sampling != 0u) {
@@ -262,60 +316,121 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
 
         let reject = evaluate_sample(ls, surface, position, debug_len);
         if (reject == 0u) {
-            if (update_reservoir(&reservoir, ls, random_gen(rng))) {
-                radiance = ls.radiance;
+            let radiance = ls.radiance * evaluate_brdf(surface, ls.dir);
+            let other = make_reservoir(ls, radiance);
+            if (merge_reservoir(&canonical, other, random_gen(rng))) {
+                canonical_radiance = radiance;
             }
         } else {
-            bump_reservoir(&reservoir, 1u);
+            bump_reservoir(&canonical, 1.0);
         }
     }
 
-    var radiance_dirty = false;
-    if (parameters.temporal_history != 0u) {
-        let prev_pixel = get_projected_pixel(prev_camera, position);
-        let prev_index = get_reservoir_index(prev_pixel, prev_camera);
-        if (prev_index >= 0) {
-            let prev = unpack_reservoir(prev_reservoirs[prev_index], parameters.temporal_history);
-            if (check_ray_occluded(position, prev.selected_dir, debug_len)) {
-                bump_reservoir(&reservoir, prev.count);
-            } else {
-                radiance_dirty |= merge_reservoir(&reservoir, prev, random_gen(rng));
-            }
+    // First, gather the list of reservoirs to merge with
+    //TODO: pixel coordinates could be compressed here, easily
+    var accepted_reservoir_pixels = array<vec2<i32>, MAX_RESERVOIRS>();
+    var accepted_count = 0u;
+    var temporal_index = ~0u;
+    for (var tap = 0u; tap <= parameters.spatial_taps; tap += 1u) {
+        var other_pixel = pixel;
+        if (tap != 0u) {
+            let r0 = max(pixel - vec2<i32>(parameters.spatial_radius), vec2<i32>(0));
+            let r1 = min(pixel + vec2<i32>(parameters.spatial_radius + 1), vec2<i32>(camera.target_size));
+            other_pixel = vec2<i32>(mix(vec2<f32>(r0), vec2<f32>(r1), vec2<f32>(random_gen(rng), random_gen(rng))));
+        } else if (parameters.temporal_history == 0u)
+        {
+            continue;
         }
-    }
-    for (var tap = 0u; tap < parameters.spatial_taps; tap += 1u) {
-        let r0 = max(pixel - vec2<i32>(parameters.spatial_radius), vec2<i32>(0));
-        let r1 = min(pixel + vec2<i32>(parameters.spatial_radius + 1), vec2<i32>(camera.target_size));
-        let other_pixel = vec2<i32>(mix(vec2<f32>(r0), vec2<f32>(r1), vec2<f32>(random_gen(rng), random_gen(rng))));
-        let other_surface = read_surface(other_pixel);
+
+        let other_index = get_reservoir_index(other_pixel, prev_camera);
+        if (other_index < 0) {
+            continue;
+        }
+        if (prev_reservoirs[other_index].confidence == 0.0) {
+            continue;
+        }
+
+        let other_surface = read_prev_surface(other_pixel);
         let compatibility = compare_surfaces(surface, other_surface);
-        let history = u32(f32(parameters.spatial_tap_history) * compatibility);
-        if (history == 0u) {
+        if (compatibility < 0.1) {
             // if the surfaces are too different, there is no trust in this sample
             continue;
         }
-        let other_dir = get_ray_direction(camera, other_pixel);
-        let other_position = camera.position + other_surface.depth * other_dir;
-        let prev_pixel = get_projected_pixel(prev_camera, other_position);
-        let prev_index = get_reservoir_index(prev_pixel, prev_camera);
-        if (prev_index < 0) {
-            continue;
+
+        if (tap == 0u) {
+            temporal_index = accepted_count;
         }
-        let prev = unpack_reservoir(prev_reservoirs[prev_index], history);
-        if (check_ray_occluded(position, prev.selected_dir, debug_len)) {
-            bump_reservoir(&reservoir, prev.count);
-        } else {
-            radiance_dirty |= merge_reservoir(&reservoir, prev, random_gen(rng));
+        accepted_reservoir_pixels[accepted_count] = other_pixel;
+        if (accepted_count < MAX_RESERVOIRS) {
+            accepted_count += 1u;
         }
     }
 
-    if (radiance_dirty) {
-        radiance = evaluate_environment(reservoir.selected_dir);
+    // Next, evaluate the MIS of each of the samples versus the canonical one.
+    var reservoir = LiveReservoir();
+    var shaded_color = vec3<f32>(0.0);
+    var mis_canonical = BASE_CANONICAL_MIS;
+    for (var rid = 0u; rid < accepted_count; rid += 1u) {
+        let neighbor_pixel = accepted_reservoir_pixels[rid];
+        let neighbor_index = get_reservoir_index(neighbor_pixel, prev_camera);
+        let neighbor = prev_reservoirs[neighbor_index];
+
+        let max_history = select(parameters.spatial_tap_history, parameters.temporal_history, rid == temporal_index);
+        var other: LiveReservoir;
+        var other_color: vec3<f32>;
+        if (PAIRWISE_MIS) {
+            let neighbor_history = min(neighbor.confidence, f32(max_history));
+            let neighbor_surface = read_prev_surface(neighbor_pixel);
+            let neighbor_dir = get_ray_direction(prev_camera, neighbor_pixel);
+            let neighbor_position = prev_camera.position + neighbor_surface.depth * neighbor_dir;
+
+            let t_neighbor_at_canonical = estimate_target_pdf_with_occlusion(surface, position, neighbor.light_dir, debug_len);
+            let t_canonical_at_neighbor = estimate_target_pdf_with_occlusion(neighbor_surface, neighbor_position, canonical.selected_dir, debug_len);
+            // Notes about t_neighbor_at_neighbor:
+            // 1. we assume lights aren't moving. Technically we should check if the
+            //   target light has moved, and re-evaluate the occlusion.
+            // 2. we can use the cached target score, and there is no use of the target color
+            //let t_neighbor_at_neighbor = estimate_target_pdf(neighbor_surface, neighbor_position, neighbor.selected_dir);
+
+            let mis_neighbor = balance_heuristic(
+                neighbor.target_score, t_neighbor_at_canonical.score,
+                neighbor_history * f32(accepted_count), canonical.history);
+            let mis_sub_canonical = balance_heuristic(
+                t_canonical_at_neighbor.score, canonical.selected_target_score,
+                neighbor_history * f32(accepted_count), canonical.history);
+            mis_canonical += 1.0 - mis_sub_canonical.weight;
+
+            other.history = neighbor_history;
+            other.selected_dir = neighbor.light_dir;
+            other.selected_target_score = t_neighbor_at_canonical.score;
+            other.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor.weight;
+            //Note: should be needed according to the paper
+            // other.history *= min(mis_neighbor.history, mis_sub_canonical.history);
+            other_color = t_neighbor_at_canonical.color;
+        } else {
+            other = unpack_reservoir(neighbor, max_history);
+            other_color = evaluate_reflected_light(surface, other.selected_dir);
+        }
+
+        if (other.weight_sum <= 0.0) {
+            bump_reservoir(&reservoir, other.history);
+        } else if (merge_reservoir(&reservoir, other, random_gen(rng))) {
+            shaded_color = other_color;
+        }
     }
-    let stored = pack_reservoir(reservoir);
+
+    // Finally, merge in the canonical sample
+    if (PAIRWISE_MIS) {
+        canonical.weight_sum *= mis_canonical / canonical.history;
+    }
+    if (merge_reservoir(&reservoir, canonical, random_gen(rng))) {
+        shaded_color = canonical_radiance;
+    }
+
+    let effective_history = select(reservoir.history, BASE_CANONICAL_MIS + f32(accepted_count), PAIRWISE_MIS);
+    let stored = pack_reservoir_detail(reservoir, effective_history);
     reservoirs[pixel_index] = stored;
-    let color = evaluate_color(surface, stored.light_dir);
-    return stored.contribution_weight * radiance * color;
+    return stored.contribution_weight * shaded_color;
 }
 
 @compute @workgroup_size(8, 8)
