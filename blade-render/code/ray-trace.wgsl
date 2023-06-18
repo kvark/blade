@@ -12,7 +12,7 @@ const MAX_RESERVOIRS: u32 = 10u;
 const PAIRWISE_MIS: bool = true;
 // Base MIS for canonical samples. The constant isolates a critical difference between
 // Bitterli's pseudocode (where it's 1) and NVidia's RTXDI implementation (where it's 0).
-// Arguably, 0 makes more sense, since otherwise the temporal history doesn't affect much.
+// With Bitterli's 1 we have MIS not respecting the prior history enough.
 const BASE_CANONICAL_MIS: f32 = 0.0;
 
 struct MainParams {
@@ -110,9 +110,12 @@ fn pack_reservoir(r: LiveReservoir) -> StoredReservoir {
     return pack_reservoir_detail(r, r.history);
 }
 
-var in_depth: texture_2d<f32>;
-var in_basis: texture_2d<f32>;
-var in_albedo: texture_2d<f32>;
+var t_depth: texture_2d<f32>;
+var t_prev_depth: texture_2d<f32>;
+var t_basis: texture_2d<f32>;
+var t_prev_basis: texture_2d<f32>;
+var t_albedo: texture_2d<f32>;
+var t_prev_albedo: texture_2d<f32>;
 var output: texture_storage_2d<rgba16float, write>;
 
 fn sample_circle(random: f32) -> vec2<f32> {
@@ -174,15 +177,18 @@ struct Surface {
 
 fn read_surface(pixel: vec2<i32>) -> Surface {
     var surface: Surface;
-    surface.basis = normalize(textureLoad(in_basis, pixel, 0));
-    surface.albedo = textureLoad(in_albedo, pixel, 0).xyz;
-    surface.depth = textureLoad(in_depth, pixel, 0).x;
+    surface.basis = normalize(textureLoad(t_basis, pixel, 0));
+    surface.albedo = textureLoad(t_albedo, pixel, 0).xyz;
+    surface.depth = textureLoad(t_depth, pixel, 0).x;
     return surface;
 }
 
 fn read_prev_surface(pixel: vec2<i32>) -> Surface {
-    //TODO: expose the previous frame depth buffer and friends
-    return read_surface(pixel);
+    var surface: Surface;
+    surface.basis = normalize(textureLoad(t_prev_basis, pixel, 0));
+    surface.albedo = textureLoad(t_prev_albedo, pixel, 0).xyz;
+    surface.depth = textureLoad(t_prev_depth, pixel, 0).x;
+    return surface;
 }
 
 // Return the compatibility rating, where
