@@ -98,18 +98,18 @@ struct DebugRender {
     blit_pipeline: blade_graphics::RenderPipeline,
 }
 
-struct Targets {
-    main: blade_graphics::Texture,
-    main_view: blade_graphics::TextureView,
+struct FrameData {
+    reservoir_buf: blade_graphics::Buffer,
     depth: blade_graphics::Texture,
     depth_view: blade_graphics::TextureView,
     basis: blade_graphics::Texture,
     basis_view: blade_graphics::TextureView,
     albedo: blade_graphics::Texture,
     albedo_view: blade_graphics::TextureView,
+    camera_params: CameraParams,
 }
 
-impl Targets {
+impl FrameData {
     fn create_target(
         name: &str,
         format: blade_graphics::TextureFormat,
@@ -137,16 +137,17 @@ impl Targets {
 
     fn new(
         size: blade_graphics::Extent,
+        reservoir_size: u32,
         encoder: &mut blade_graphics::CommandEncoder,
         gpu: &blade_graphics::Context,
     ) -> Self {
-        let (main, main_view) = Self::create_target(
-            "main",
-            blade_graphics::TextureFormat::Rgba16Float,
-            size,
-            gpu,
-        );
-        encoder.init_texture(main);
+        let total_reservoirs = size.width as usize * size.height as usize;
+        let reservoir_buf = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "reservoirs",
+            size: reservoir_size as u64 * total_reservoirs as u64,
+            memory: blade_graphics::Memory::Device,
+        });
+
         let (depth, depth_view) =
             Self::create_target("depth", blade_graphics::TextureFormat::R32Float, size, gpu);
         encoder.init_texture(depth);
@@ -165,20 +166,19 @@ impl Targets {
         );
         encoder.init_texture(albedo);
         Self {
-            main,
-            main_view,
+            reservoir_buf,
             depth,
             depth_view,
             basis,
             basis_view,
             albedo,
             albedo_view,
+            camera_params: CameraParams::default(),
         }
     }
 
     fn destroy(&self, gpu: &blade_graphics::Context) {
-        gpu.destroy_texture_view(self.main_view);
-        gpu.destroy_texture(self.main);
+        gpu.destroy_buffer(self.reservoir_buf);
         gpu.destroy_texture_view(self.depth_view);
         gpu.destroy_texture(self.depth);
         gpu.destroy_texture_view(self.basis_view);
@@ -199,7 +199,9 @@ impl Targets {
 ///   - know about the window to display on
 pub struct Renderer {
     _config: RenderConfig,
-    targets: Targets,
+    frame_data: [FrameData; 2],
+    main_texture: blade_graphics::Texture,
+    main_view: blade_graphics::TextureView,
     fill_pipeline: blade_graphics::ComputePipeline,
     main_pipeline: blade_graphics::ComputePipeline,
     blit_pipeline: blade_graphics::RenderPipeline,
@@ -212,13 +214,11 @@ pub struct Renderer {
     index_buffers: blade_graphics::BufferArray<MAX_RESOURCES>,
     textures: blade_graphics::TextureArray<MAX_RESOURCES>,
     samplers: Samplers,
-    reservoir_buffers: [blade_graphics::Buffer; 2],
     reservoir_size: u32,
     debug: DebugRender,
     is_tlas_dirty: bool,
     screen_size: blade_graphics::Extent,
     frame_index: u32,
-    camera_params: [CameraParams; 2],
 }
 
 #[repr(C)]
@@ -278,9 +278,12 @@ struct MainData {
     sampler_nearest: blade_graphics::Sampler,
     env_map: blade_graphics::TextureView,
     env_weights: blade_graphics::TextureView,
-    in_depth: blade_graphics::TextureView,
-    in_basis: blade_graphics::TextureView,
-    in_albedo: blade_graphics::TextureView,
+    t_depth: blade_graphics::TextureView,
+    t_prev_depth: blade_graphics::TextureView,
+    t_basis: blade_graphics::TextureView,
+    t_prev_basis: blade_graphics::TextureView,
+    t_albedo: blade_graphics::TextureView,
+    t_prev_albedo: blade_graphics::TextureView,
     debug_buf: blade_graphics::BufferPiece,
     reservoirs: blade_graphics::BufferPiece,
     prev_reservoirs: blade_graphics::BufferPiece,
@@ -494,18 +497,17 @@ impl Renderer {
             ptr::write_bytes(variance_buffer.data(), 0, mem::size_of::<DebugVariance>());
         }
 
-        let total_reservoirs =
-            config.screen_size.width as usize * config.screen_size.height as usize;
-        let mut reservoir_buffers = [blade_graphics::Buffer::default(); 2];
-        for (i, rb) in reservoir_buffers.iter_mut().enumerate() {
-            *rb = gpu.create_buffer(blade_graphics::BufferDesc {
-                name: &format!("reservoirs-{i}"),
-                size: sp.reservoir_size as u64 * total_reservoirs as u64,
-                memory: blade_graphics::Memory::Device,
-            });
-        }
-
-        let targets = Targets::new(config.screen_size, encoder, gpu);
+        let (main_texture, main_view) = FrameData::create_target(
+            "main",
+            blade_graphics::TextureFormat::Rgba16Float,
+            config.screen_size,
+            gpu,
+        );
+        encoder.init_texture(main_texture);
+        let frame_data = [
+            FrameData::new(config.screen_size, sp.reservoir_size, encoder, gpu),
+            FrameData::new(config.screen_size, sp.reservoir_size, encoder, gpu),
+        ];
         let dummy = DummyResources::new(encoder, gpu);
 
         let samplers = Samplers {
@@ -529,7 +531,9 @@ impl Renderer {
 
         Self {
             _config: *config,
-            targets,
+            frame_data,
+            main_texture,
+            main_view,
             scene: super::Scene::default(),
             fill_pipeline: sp.fill,
             main_pipeline: sp.main,
@@ -542,7 +546,6 @@ impl Renderer {
             index_buffers: blade_graphics::BufferArray::new(),
             textures: blade_graphics::TextureArray::new(),
             samplers,
-            reservoir_buffers,
             reservoir_size: sp.reservoir_size,
             debug: DebugRender {
                 capacity: config.max_debug_lines,
@@ -554,14 +557,17 @@ impl Renderer {
             is_tlas_dirty: true,
             screen_size: config.screen_size,
             frame_index: 0,
-            camera_params: [CameraParams::default(); 2],
         }
     }
 
     /// Destroy all internally managed GPU resources.
     pub fn destroy(&mut self, gpu: &blade_graphics::Context) {
         // internal resources
-        self.targets.destroy(gpu);
+        for frame_data in self.frame_data.iter_mut() {
+            frame_data.destroy(gpu);
+        }
+        gpu.destroy_texture_view(self.main_view);
+        gpu.destroy_texture(self.main_texture);
         if self.hit_buffer != blade_graphics::Buffer::default() {
             gpu.destroy_buffer(self.hit_buffer);
         }
@@ -575,9 +581,6 @@ impl Renderer {
         // buffers
         gpu.destroy_buffer(self.debug.buffer);
         gpu.destroy_buffer(self.debug.variance_buffer);
-        for rb in self.reservoir_buffers.iter_mut() {
-            gpu.destroy_buffer(*rb);
-        }
     }
 
     pub fn merge_scene(&mut self, scene: super::Scene) {
@@ -607,17 +610,22 @@ impl Renderer {
         gpu: &blade_graphics::Context,
     ) {
         self.screen_size = size;
-        let total_reservoirs = size.width as usize * size.height as usize;
-        for (i, rb) in self.reservoir_buffers.iter_mut().enumerate() {
-            gpu.destroy_buffer(*rb);
-            *rb = gpu.create_buffer(blade_graphics::BufferDesc {
-                name: &format!("reservoirs-{i}"),
-                size: self.reservoir_size as u64 * total_reservoirs as u64,
-                memory: blade_graphics::Memory::Device,
-            });
+        for frame_data in self.frame_data.iter_mut() {
+            frame_data.destroy(gpu);
+            *frame_data = FrameData::new(size, self.reservoir_size, encoder, gpu);
         }
-        self.targets.destroy(gpu);
-        self.targets = Targets::new(size, encoder, gpu);
+
+        gpu.destroy_texture(self.main_texture);
+        gpu.destroy_texture_view(self.main_view);
+        let (main_texture, main_view) = FrameData::create_target(
+            "main",
+            blade_graphics::TextureFormat::Rgba16Float,
+            size,
+            gpu,
+        );
+        encoder.init_texture(main_texture);
+        self.main_texture = main_texture;
+        self.main_view = main_view;
     }
 
     /// Prepare to render a frame.
@@ -814,16 +822,15 @@ impl Renderer {
             );
             let total_reservoirs = self.screen_size.width as u64 * self.screen_size.height as u64;
             transfer.fill_buffer(
-                self.reservoir_buffers[0].into(),
+                self.frame_data[0].reservoir_buf.into(),
                 total_reservoirs * self.reservoir_size as u64,
                 0,
             );
         }
 
         self.frame_index += 1;
-        self.camera_params[1] = self.camera_params[0];
-        self.camera_params[0] = self.make_camera_params(camera);
-        self.reservoir_buffers.swap(0, 1);
+        self.frame_data.swap(0, 1);
+        self.frame_data[0].camera_params = self.make_camera_params(camera);
     }
 
     fn make_camera_params(&self, camera: &super::Camera) -> CameraParams {
@@ -858,6 +865,8 @@ impl Renderer {
                 None => [-1; 2],
             },
         };
+        let cur = self.frame_data.first().unwrap();
+        let prev = self.frame_data.last().unwrap();
 
         if let mut pass = command_encoder.compute() {
             let mut pc = pass.with(&self.fill_pipeline);
@@ -865,7 +874,7 @@ impl Renderer {
             pc.bind(
                 0,
                 &FillData {
-                    camera: self.camera_params[0],
+                    camera: cur.camera_params,
                     debug,
                     acc_struct: self.acceleration_structure,
                     hit_entries: self.hit_buffer.into(),
@@ -874,9 +883,9 @@ impl Renderer {
                     textures: &self.textures,
                     sampler_linear: self.samplers.linear,
                     debug_buf: self.debug.buffer.into(),
-                    out_depth: self.targets.depth_view,
-                    out_basis: self.targets.basis_view,
-                    out_albedo: self.targets.albedo_view,
+                    out_depth: cur.depth_view,
+                    out_basis: cur.basis_view,
+                    out_albedo: cur.albedo_view,
                 },
             );
             pc.dispatch(groups);
@@ -888,8 +897,8 @@ impl Renderer {
             pc.bind(
                 0,
                 &MainData {
-                    camera: self.camera_params[0],
-                    prev_camera: self.camera_params[1],
+                    camera: cur.camera_params,
+                    prev_camera: prev.camera_params,
                     debug,
                     parameters: MainParams {
                         frame_index: self.frame_index,
@@ -906,13 +915,16 @@ impl Renderer {
                     sampler_nearest: self.samplers.nearest,
                     env_map: self.env_map.main_view,
                     env_weights: self.env_map.weight_view,
-                    in_depth: self.targets.depth_view,
-                    in_basis: self.targets.basis_view,
-                    in_albedo: self.targets.albedo_view,
+                    t_depth: cur.depth_view,
+                    t_prev_depth: prev.depth_view,
+                    t_basis: cur.basis_view,
+                    t_prev_basis: prev.basis_view,
+                    t_albedo: cur.albedo_view,
+                    t_prev_albedo: prev.albedo_view,
                     debug_buf: self.debug.buffer.into(),
-                    reservoirs: self.reservoir_buffers[0].into(),
-                    prev_reservoirs: self.reservoir_buffers[1].into(),
-                    output: self.targets.main_view,
+                    reservoirs: cur.reservoir_buf.into(),
+                    prev_reservoirs: prev.reservoir_buf.into(),
+                    output: self.main_view,
                 },
             );
             pc.dispatch(groups);
@@ -926,7 +938,7 @@ impl Renderer {
             pc.bind(
                 0,
                 &BlitData {
-                    input: self.targets.main_view,
+                    input: self.main_view,
                     tone_map_params: ToneMapParams {
                         enabled: 1,
                         average_lum: pp.average_luminocity,
@@ -938,12 +950,13 @@ impl Renderer {
             pc.draw(0, 3, 0, 1);
         }
         if let mut pc = pass.with(&self.debug.draw_pipeline) {
+            let cur = self.frame_data.first().unwrap();
             pc.bind(
                 0,
                 &DebugDrawData {
-                    camera: self.camera_params[0],
+                    camera: cur.camera_params,
                     debug_buf: self.debug.buffer.into(),
-                    depth: self.targets.depth_view,
+                    depth: cur.depth_view,
                 },
             );
             pc.draw_indirect(self.debug.buffer.at(0));
