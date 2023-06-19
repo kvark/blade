@@ -367,6 +367,11 @@ impl blade_asset::Baker for Baker {
                 dimension: blade_graphics::ViewDimension::D2,
                 subresources: &Default::default(),
             });
+        self.pending_operations
+            .lock()
+            .unwrap()
+            .initializations
+            .push(Initialization { dst: texture });
 
         for (i, mip) in image.mips.iter().enumerate() {
             let stage = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
@@ -390,9 +395,6 @@ impl blade_asset::Baker for Baker {
                 mip.data.len());
 
             let mut pending_ops = self.pending_operations.lock().unwrap();
-            pending_ops
-                .initializations
-                .push(Initialization { dst: texture });
             pending_ops.transfers.push(Transfer {
                 stage,
                 bytes_per_row,
