@@ -13,7 +13,7 @@ const PAIRWISE_MIS: bool = true;
 // Base MIS for canonical samples. The constant isolates a critical difference between
 // Bitterli's pseudocode (where it's 1) and NVidia's RTXDI implementation (where it's 0).
 // With Bitterli's 1 we have MIS not respecting the prior history enough.
-const BASE_CANONICAL_MIS: f32 = 0.0;
+const BASE_CANONICAL_MIS: f32 = 0.05;
 
 struct MainParams {
     frame_index: u32,
