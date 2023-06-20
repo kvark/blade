@@ -17,7 +17,7 @@ use std::{
     marker::PhantomData,
     mem, ops,
     path::{Path, PathBuf},
-    str,
+    ptr, str,
     sync::{Arc, Mutex},
 };
 
@@ -68,16 +68,23 @@ unsafe impl<T> Send for DataRef<T> {}
 struct Slot<T> {
     load_task: Option<choir::RunningTask>,
     version: Version,
-    source_dependencies: Vec<PathBuf>,
+    base_path: PathBuf,
+    sources: Vec<PathBuf>,
+    // Boxed erased type of metadata
+    meta: *const (),
     data: Option<T>,
 }
+unsafe impl<T> Send for Slot<T> {}
+unsafe impl<T> Sync for Slot<T> {}
 
 impl<T> Default for Slot<T> {
     fn default() -> Self {
         Self {
             load_task: None,
             version: 0,
-            source_dependencies: Vec::new(),
+            base_path: PathBuf::default(),
+            sources: Vec::new(),
+            meta: ptr::null(),
             data: None,
         }
     }
@@ -89,15 +96,18 @@ struct Inner {
     hasher: DefaultHasher,
 }
 
-/* Cached file structure {
-  hash: u64,
-  data_offset: u64,
-  source_dependency_count: usize,
-  source_depencies:
-    relative_path_length: usize
-    relative_path: [u8]
-  data: T,
-}*/
+#[allow(unused)]
+struct CachedSourceDependency {
+    relative_path_length: usize,
+    relative_path: *const u8,
+}
+#[allow(unused)]
+struct CachedAssetHeader {
+    hash: u64,
+    data_offset: u64,
+    source_dependency_count: usize,
+    source_dependencies: *const CachedSourceDependency,
+}
 
 /// A container for storing the result of cooking.
 ///
@@ -303,30 +313,33 @@ impl<B: Baker> AssetManager<B> {
         }
     }
 
-    fn create(&self, source_path: &Path, meta: B::Meta) -> Handle<B::Output> {
+    fn make_target_path(&self, base_path: &Path, file_name: &Path, meta: &B::Meta) -> PathBuf {
         use base64::engine::{general_purpose::URL_SAFE as ENCODING_ENGINE, Engine as _};
+        // The name hash includes the parent path and the metadata.
+        let mut hasher = DefaultHasher::new();
+        base_path.hash(&mut hasher);
+        meta.hash(&mut hasher);
+        let hash = hasher.finish().to_le_bytes();
+        let mut file_name_str = format!("{}-", file_name.display());
+        ENCODING_ENGINE.encode_string(hash, &mut file_name_str);
+        file_name_str += ".raw";
+        self.target.join(file_name_str)
+    }
+
+    fn create(&self, source_path: &Path, meta: B::Meta) -> Handle<B::Output> {
         use std::{hash::Hasher as _, io::Write as _};
 
         let base_path = source_path.parent().unwrap_or_else(|| Path::new("."));
         let file_name = Path::new(source_path.file_name().unwrap());
-        let target_path = {
-            // The name hash includes the parent path and the metadata.
-            let mut hasher = DefaultHasher::new();
-            base_path.hash(&mut hasher);
-            meta.hash(&mut hasher);
-            let hash = hasher.finish().to_le_bytes();
-            let mut file_name_str = format!("{}-", file_name.display());
-            ENCODING_ENGINE.encode_string(hash, &mut file_name_str);
-            file_name_str += ".raw";
-            self.target.join(file_name_str)
-        };
+        let target_path = self.make_target_path(&base_path, &file_name, &meta);
 
         let (handle, slot_ptr) = self.slots.alloc_default();
         let (task_option, dependencies_ref, output_ref) = unsafe {
             let slot = &mut *slot_ptr;
+            slot.meta = Box::into_raw(Box::new(meta.clone())) as *const _;
             (
                 &mut slot.load_task,
-                &mut slot.source_dependencies,
+                &mut slot.sources,
                 DataRef(&mut slot.data, &mut slot.version),
             )
         };
@@ -392,6 +405,7 @@ impl<B: Baker> AssetManager<B> {
                     file.write_all(&data_offset.to_le_bytes()).unwrap();
                 });
 
+            //TODO: merge with cook_finish_task?
             let baker = Arc::clone(&self.baker);
             let cook_task = self
                 .choir
@@ -452,6 +466,30 @@ impl<B: Baker> AssetManager<B> {
             if let Some(data) = slot.data {
                 self.baker.delete(data);
             }
+            if !slot.meta.is_null() {
+                unsafe {
+                    let _ = Box::from_raw(slot.meta as *mut B::Meta);
+                }
+            }
         }
+    }
+
+    /// Hot reload all changed assets.
+    pub fn hot_reload(&self, handles: &[Handle<B::Output>]) -> Option<choir::IdleTask<'static>> {
+        for &handle in handles {
+            let slot = &self.slots[handle.inner];
+            let file_name = slot.sources.first().unwrap();
+            let meta = unsafe { &*(slot.meta as *const B::Meta) };
+            let target_path = self.make_target_path(&slot.base_path, file_name, &meta);
+            let mut hasher = DefaultHasher::new();
+            TypeId::of::<B::Data<'static>>().hash(&mut hasher);
+
+            if let Err(_reason) =
+                check_target_relevancy(&target_path, &slot.base_path, hasher.clone())
+            {
+                //TODO: reload the asset
+            }
+        }
+        None
     }
 }
