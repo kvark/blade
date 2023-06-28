@@ -62,7 +62,11 @@ impl<T> fmt::Debug for Handle<T> {
     }
 }
 
-struct DataRef<T>(*mut Option<T>, *mut Version);
+struct DataRef<T> {
+    data: *mut Option<T>,
+    version: *mut Version,
+    sources: *mut Vec<PathBuf>,
+}
 unsafe impl<T> Send for DataRef<T> {}
 
 struct Slot<T> {
@@ -326,60 +330,45 @@ impl<B: Baker> AssetManager<B> {
         self.target.join(file_name_str)
     }
 
-    fn create(&self, source_path: &Path, meta: B::Meta) -> Handle<B::Output> {
+    fn create_impl<'a>(
+        &self,
+        slot: &'a mut Slot<B::Output>,
+        file_name: &Path,
+    ) -> Option<(u32, &'a choir::RunningTask)> {
         use std::{hash::Hasher as _, io::Write as _};
 
-        let base_path = source_path.parent().unwrap_or_else(|| Path::new("."));
-        let file_name = Path::new(source_path.file_name().unwrap());
-        let target_path = self.make_target_path(&base_path, &file_name, &meta);
+        let version = slot.version + 1;
+        let (task_option, meta, data_ref) = (
+            &mut slot.load_task,
+            unsafe { &*(slot.meta as *const B::Meta) },
+            DataRef {
+                data: &mut slot.data,
+                version: &mut slot.version,
+                sources: &mut slot.sources,
+            },
+        );
 
-        let (handle, slot_ptr) = self.slots.alloc_default();
-        let (task_option, dependencies_ref, output_ref) = unsafe {
-            let slot = &mut *slot_ptr;
-            slot.meta = Box::into_raw(Box::new(meta.clone())) as *const _;
-            (
-                &mut slot.load_task,
-                &mut slot.sources,
-                DataRef(&mut slot.data, &mut slot.version),
-            )
-        };
-        let version = 1;
-        let mut load_task = {
-            let baker = Arc::clone(&self.baker);
-            let target_path = target_path.clone();
-            self.choir
-                .spawn(format!("load {} with {}", source_path.display(), meta))
-                .init(move |exe_context| {
-                    let mut file = fs::File::open(target_path).unwrap();
-                    let mut bytes = [0u8; 8];
-                    file.read_exact(&mut bytes).unwrap();
-                    let _hash = u64::from_le_bytes(bytes);
-                    file.read_exact(&mut bytes).unwrap();
-                    let offset = u64::from_le_bytes(bytes);
-                    file.seek(SeekFrom::Start(offset)).unwrap();
-                    let mut data = Vec::new();
-                    file.read_to_end(&mut data).unwrap();
-                    let cooked = unsafe { <B::Data<'_> as Flat>::read(data.as_ptr()) };
-                    let target = baker.serve(cooked, exe_context);
-                    let or = output_ref;
-                    unsafe {
-                        *or.0 = Some(target);
-                        *or.1 = version;
-                    }
-                })
-        };
-
+        let target_path = self.make_target_path(&slot.base_path, file_name, meta);
+        let file_name = file_name.to_owned();
         let mut hasher = DefaultHasher::new();
         TypeId::of::<B::Data<'static>>().hash(&mut hasher);
 
-        if let Err(reason) = check_target_relevancy(&target_path, base_path, hasher.clone()) {
-            log::info!("Cooking {:?}: {}", reason, source_path.display());
-            let cooker = Arc::new(Cooker::new(base_path, hasher));
+        let load_task = if let Err(reason) =
+            check_target_relevancy(&target_path, &slot.base_path, hasher.clone())
+        {
+            log::info!(
+                "Cooking {:?}: {} version={}",
+                reason,
+                file_name.display(),
+                version
+            );
+            let cooker = Arc::new(Cooker::new(&slot.base_path, hasher));
             let cooker_arg = Arc::clone(&cooker);
-            let mut cook_finish_task = self
+            let baker = Arc::clone(&self.baker);
+            let mut load_task = self
                 .choir
-                .spawn(format!("cook finish for {}", source_path.display()))
-                .init(move |_| {
+                .spawn(format!("cook finish for {}", file_name.display()))
+                .init(move |exe_context| {
                     let mut inner = cooker.inner.lock().unwrap();
                     let mut file = fs::File::create(&target_path).unwrap_or_else(|e| {
                         panic!("Unable to create {}: {}", target_path.display(), e)
@@ -396,33 +385,85 @@ impl<B: Baker> AssetManager<B> {
                     }
                     let data_offset = file.stream_position().unwrap();
                     file.write_all(&inner.result).unwrap();
-                    *dependencies_ref = mem::take(&mut inner.dependencies);
                     // Write the real hash last, so that the cached file is not valid
                     // unless everything went smooth.
                     file.seek(SeekFrom::Start(0)).unwrap();
                     let hash = inner.hasher.finish();
                     file.write_all(&hash.to_le_bytes()).unwrap();
                     file.write_all(&data_offset.to_le_bytes()).unwrap();
+
+                    let dr = data_ref;
+                    if let Some(data) = unsafe { (*dr.data).take() } {
+                        baker.delete(data);
+                    }
+                    let cooked = unsafe { <B::Data<'_> as Flat>::read(inner.result.as_ptr()) };
+                    let target = baker.serve(cooked, exe_context);
+                    unsafe {
+                        *dr.data = Some(target);
+                        *dr.version = version;
+                        *dr.sources = mem::take(&mut inner.dependencies);
+                    }
                 });
 
-            //TODO: merge with cook_finish_task?
+            // Note: this task is separate, because it may spawn sub-tasks.
             let baker = Arc::clone(&self.baker);
+            let meta = meta.clone();
             let cook_task = self
                 .choir
-                .spawn(format!("cook {} as {}", source_path.display(), meta))
+                .spawn(format!("cook {} as {}", file_name.display(), meta))
                 .init(move |exe_context| {
                     // Read the source file through the same mechanism as the
-                    // dependencies, so that its modified time makes it into the hash.
-                    let source = cooker_arg.add_dependency(file_name);
+                    // dependencies, so that its mfile_nameodified time makes it into the hash.
+                    let source = cooker_arg.add_dependency(&file_name);
                     let extension = file_name.extension().unwrap().to_str().unwrap();
                     baker.cook(&source, extension, meta, cooker_arg, exe_context);
                 });
 
-            cook_finish_task.depend_on(&cook_task);
-            load_task.depend_on(&cook_finish_task);
-        }
+            load_task.depend_on(&cook_task);
+            load_task
+        } else if task_option.is_none() {
+            let baker = Arc::clone(&self.baker);
+            self.choir
+                .spawn(format!("load {} with {}", file_name.display(), meta))
+                .init(move |exe_context| {
+                    let mut file = fs::File::open(target_path).unwrap();
+                    let mut bytes = [0u8; 8];
+                    file.read_exact(&mut bytes).unwrap();
+                    let _hash = u64::from_le_bytes(bytes);
+                    file.read_exact(&mut bytes).unwrap();
+                    let offset = u64::from_le_bytes(bytes);
+                    file.seek(SeekFrom::Start(offset)).unwrap();
+                    let mut data = Vec::new();
+                    file.read_to_end(&mut data).unwrap();
+                    let cooked = unsafe { <B::Data<'_> as Flat>::read(data.as_ptr()) };
+                    let target = baker.serve(cooked, exe_context);
+                    let dr = data_ref;
+                    unsafe {
+                        *dr.data = Some(target);
+                        *dr.version = version;
+                        (*dr.sources).push(file_name);
+                    }
+                })
+        } else {
+            return None;
+        };
 
-        *task_option = Some(load_task.run());
+        let running_task = task_option.insert(load_task.run());
+        Some((version, running_task))
+    }
+
+    fn create(&self, source_path: &Path, meta: B::Meta) -> Handle<B::Output> {
+        let (handle, slot_ptr) = self.slots.alloc_default();
+        let slot = unsafe { &mut *slot_ptr };
+        assert_eq!(slot.version, 0);
+        slot.base_path = source_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_owned();
+        slot.meta = Box::into_raw(Box::new(meta)) as *const _;
+
+        let file_name = Path::new(source_path.file_name().unwrap());
+        let (version, _) = self.create_impl(slot, file_name).unwrap();
         Handle {
             inner: handle,
             version,
@@ -474,22 +515,13 @@ impl<B: Baker> AssetManager<B> {
         }
     }
 
-    /// Hot reload all changed assets.
-    pub fn hot_reload(&self, handles: &[Handle<B::Output>]) -> Option<choir::IdleTask<'static>> {
-        for &handle in handles {
-            let slot = &self.slots[handle.inner];
-            let file_name = slot.sources.first().unwrap();
-            let meta = unsafe { &*(slot.meta as *const B::Meta) };
-            let target_path = self.make_target_path(&slot.base_path, file_name, &meta);
-            let mut hasher = DefaultHasher::new();
-            TypeId::of::<B::Data<'static>>().hash(&mut hasher);
-
-            if let Err(_reason) =
-                check_target_relevancy(&target_path, &slot.base_path, hasher.clone())
-            {
-                //TODO: reload the asset
-            }
-        }
-        None
+    /// Hot reload a changed asset.
+    pub fn hot_reload(&self, handle: &mut Handle<B::Output>) -> Option<&choir::RunningTask> {
+        let slot = unsafe { &mut *self.slots.get_mut_ptr(handle.inner) };
+        let file_name = slot.sources.first().unwrap().to_owned();
+        self.create_impl(slot, &file_name).map(|(version, task)| {
+            handle.version = version;
+            task
+        })
     }
 }
