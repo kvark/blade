@@ -169,7 +169,7 @@ impl Example {
         let renderer = Renderer::new(
             &mut command_encoder,
             &context,
-            &shaders,
+            shaders,
             &asset_hub.shaders,
             &render_config,
         );
@@ -240,8 +240,11 @@ impl Example {
             }
         }
 
-        self.renderer
-            .hot_reload(&self.context, self.prev_sync_point.as_ref().unwrap());
+        self.renderer.hot_reload(
+            &self.asset_hub,
+            &self.context,
+            self.prev_sync_point.as_ref().unwrap(),
+        );
 
         self.command_encoder.start();
         let surface_config = Self::make_surface_config(physical_size);
