@@ -201,8 +201,8 @@ fn main() {
         }
         None => dummy.size,
     };
-    let env_shader = &asset_hub.shaders[shader_handle];
-    let env_sampler = EnvMapSampler::new(env_size, &env_shader.raw, &context);
+    let env_shader = asset_hub.shaders[shader_handle].raw.as_ref().unwrap();
+    let env_sampler = EnvMapSampler::new(env_size, env_shader, &context);
     env_sampler.accumulate(&mut command_encoder, env_map.main_view, env_map.weight_view);
     let sync_point = context.submit(&mut command_encoder);
 

@@ -480,22 +480,22 @@ impl ShaderPipelines {
         gpu: &blade_graphics::Context,
         shader_man: &blade_asset::AssetManager<crate::shader::Baker>,
     ) -> Result<Self, &'static str> {
-        let sh_main = &shader_man[shaders.ray_trace].raw;
+        let sh_main = shader_man[shaders.ray_trace].raw.as_ref().unwrap();
         Ok(Self {
-            fill: Self::create_gbuf_fill(&shader_man[shaders.fill_gbuf].raw, gpu),
+            fill: Self::create_gbuf_fill(shader_man[shaders.fill_gbuf].raw.as_ref().unwrap(), gpu),
             main: Self::create_ray_trace(sh_main, gpu),
             post_proc: Self::create_post_proc(
-                &shader_man[shaders.post_proc].raw,
+                shader_man[shaders.post_proc].raw.as_ref().unwrap(),
                 config.surface_format,
                 gpu,
             ),
             debug_draw: Self::create_debug_draw(
-                &shader_man[shaders.debug_draw].raw,
+                shader_man[shaders.debug_draw].raw.as_ref().unwrap(),
                 config.surface_format,
                 gpu,
             ),
             debug_blit: Self::create_debug_blit(
-                &shader_man[shaders.debug_blit].raw,
+                shader_man[shaders.debug_blit].raw.as_ref().unwrap(),
                 config.surface_format,
                 gpu,
             ),
@@ -660,44 +660,41 @@ impl Renderer {
         }
 
         if self.shaders.fill_gbuf != old.fill_gbuf {
-            self.fill_pipeline = ShaderPipelines::create_gbuf_fill(
-                &asset_hub.shaders[self.shaders.fill_gbuf].raw,
-                gpu,
-            );
+            if let Ok(ref shader) = asset_hub.shaders[self.shaders.fill_gbuf].raw {
+                self.fill_pipeline = ShaderPipelines::create_gbuf_fill(shader, gpu);
+            }
         }
         if self.shaders.ray_trace != old.ray_trace {
-            let shader = &asset_hub.shaders[self.shaders.ray_trace].raw;
-            assert_eq!(shader.get_struct_size("DebugLine"), self.debug.line_size);
-            assert_eq!(
-                shader.get_struct_size("DebugBuffer"),
-                self.debug.buffer_size
-            );
-            assert_eq!(
-                shader.get_struct_size("StoredReservoir"),
-                self.reservoir_size
-            );
-            self.main_pipeline = ShaderPipelines::create_ray_trace(shader, gpu);
+            if let Ok(ref shader) = asset_hub.shaders[self.shaders.ray_trace].raw {
+                assert_eq!(shader.get_struct_size("DebugLine"), self.debug.line_size);
+                assert_eq!(
+                    shader.get_struct_size("DebugBuffer"),
+                    self.debug.buffer_size
+                );
+                assert_eq!(
+                    shader.get_struct_size("StoredReservoir"),
+                    self.reservoir_size
+                );
+                self.main_pipeline = ShaderPipelines::create_ray_trace(shader, gpu);
+            }
         }
         if self.shaders.post_proc != old.post_proc {
-            self.blit_pipeline = ShaderPipelines::create_post_proc(
-                &asset_hub.shaders[self.shaders.post_proc].raw,
-                self.config.surface_format,
-                gpu,
-            );
+            if let Ok(ref shader) = asset_hub.shaders[self.shaders.post_proc].raw {
+                self.blit_pipeline =
+                    ShaderPipelines::create_post_proc(shader, self.config.surface_format, gpu);
+            }
         }
         if self.shaders.debug_draw != old.debug_draw {
-            self.debug.draw_pipeline = ShaderPipelines::create_debug_draw(
-                &asset_hub.shaders[self.shaders.debug_draw].raw,
-                self.config.surface_format,
-                gpu,
-            );
+            if let Ok(ref shader) = asset_hub.shaders[self.shaders.debug_draw].raw {
+                self.debug.draw_pipeline =
+                    ShaderPipelines::create_debug_draw(shader, self.config.surface_format, gpu);
+            }
         }
         if self.shaders.debug_blit != old.debug_blit {
-            self.debug.blit_pipeline = ShaderPipelines::create_debug_blit(
-                &asset_hub.shaders[self.shaders.debug_blit].raw,
-                self.config.surface_format,
-                gpu,
-            );
+            if let Ok(ref shader) = asset_hub.shaders[self.shaders.debug_blit].raw {
+                self.debug.blit_pipeline =
+                    ShaderPipelines::create_debug_blit(shader, self.config.surface_format, gpu);
+            }
         }
 
         true
