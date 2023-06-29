@@ -16,7 +16,7 @@ impl fmt::Display for Meta {
 }
 
 pub struct Shader {
-    pub raw: blade_graphics::Shader,
+    pub raw: Result<blade_graphics::Shader, &'static str>,
 }
 
 pub struct Baker {
@@ -82,16 +82,14 @@ impl blade_asset::Baker for Baker {
     }
     fn serve(&self, cooked: CookedShader, _exe_context: choir::ExecutionContext) -> Shader {
         let source = str::from_utf8(cooked.data).unwrap();
-        match self
+        let raw = self
             .gpu_context
-            .try_create_shader(blade_graphics::ShaderDesc { source })
-        {
-            Ok(raw) => Shader { raw },
-            Err(e) => {
-                let _ = fs::write(FAILURE_DUMP_NAME, source);
-                panic!("Shader compilation failed: {e:?}, source dumped as '{FAILURE_DUMP_NAME}'.")
-            }
+            .try_create_shader(blade_graphics::ShaderDesc { source });
+        if let Err(e) = raw {
+            let _ = fs::write(FAILURE_DUMP_NAME, source);
+            log::warn!("Shader compilation failed: {e:?}, source dumped as '{FAILURE_DUMP_NAME}'.")
         }
+        Shader { raw }
     }
     fn delete(&self, _output: Shader) {}
 }
