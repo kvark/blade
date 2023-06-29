@@ -31,7 +31,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - uses: actions-rs/cargo@v1
 
     - name: Setup Rust
       uses: actions-rs/toolchain@v1
@@ -42,16 +41,24 @@ jobs:
           override: true
 
     - name: Check Basics
-      run: cargo check --target ${{ matrix.target }} --workspace --all --no-default-features
+      uses: actions-rs/cargo@v1
+      with:
+        command: check
+        args: --target ${{ matrix.target }} --workspace --all --no-default-features
       
     - name: Test Basics
       if: matrix.name != 'Web'
-      run: cargo test -p blade-render --no-default-features
-
+      uses: actions-rs/cargo@v1
+      with:
+        command: test
+        args: -p blade-render --no-default-features
 
     - name: Test All
       if: matrix.name != 'Web'
-      run: cargo test --workspace --all-features
+      uses: actions-rs/cargo@v1
+      with:
+        command: test
+        args: --workspace --all-features
 
   fmt:
     name: Format
