@@ -293,7 +293,7 @@ fn balance_heuristic(w0: f32, w1: f32, h0: f32, h1: f32) -> HeuristicFactors {
 }
 
 fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, enable_debug: bool) -> vec3<f32> {
-    if (debug.view_mode == DEBUG_MODE_DEPTH) {
+    if (debug.view_mode == DebugMode_Depth) {
         return vec3<f32>(surface.depth / camera.depth);
     }
     let ray_dir = get_ray_direction(camera, pixel);
@@ -306,7 +306,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
     let position = camera.position + surface.depth * ray_dir;
     let normal = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
-    if (debug.view_mode == DEBUG_MODE_NORMAL) {
+    if (debug.view_mode == DebugMode_Normal) {
         return normal;
     }
 
@@ -450,7 +450,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let surface = read_surface(vec2<i32>(global_id.xy));
     let enable_debug = all(global_id.xy == debug.mouse_pos);
-    let enable_restir_debug = (debug.flags & DEBUG_FLAGS_RESTIR) != 0u && enable_debug;
+    let enable_restir_debug = (debug.flags & DebugFlags_RESTIR) != 0u && enable_debug;
     let color = compute_restir(surface, vec2<i32>(global_id.xy), &rng, enable_restir_debug);
     if (enable_debug) {
         debug_buf.variance.color_sum += color;

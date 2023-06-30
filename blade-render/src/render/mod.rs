@@ -21,7 +21,7 @@ struct Samplers {
     linear: blade_graphics::Sampler,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, blade_macros::AsPrimitive, strum::EnumIter)]
 #[repr(u32)]
 pub enum DebugMode {
     None = 0,

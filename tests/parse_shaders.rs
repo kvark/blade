@@ -1,9 +1,15 @@
 use naga::{front::wgsl, valid::Validator};
-use std::{fs, path::PathBuf};
+use std::{collections::HashMap, fs, path::PathBuf};
 
 /// Runs through all pass shaders and ensures they are valid WGSL.
 #[test]
 fn parse_wgsl() {
+    let mut expansions = HashMap::default();
+    expansions.insert(
+        "DebugMode".to_string(),
+        blade_render::shader::Expansion::from_enum::<blade_render::DebugMode>(),
+    );
+
     let read_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .read_dir()
@@ -35,7 +41,7 @@ fn parse_wgsl() {
             };
 
             let cooker = blade_asset::Cooker::new(&example, Default::default());
-            let text_out = blade_render::shader::parse_shader(&shader_raw, &cooker);
+            let text_out = blade_render::shader::parse_shader(&shader_raw, &cooker, &expansions);
 
             let module = match wgsl::parse_str(&text_out) {
                 Ok(module) => module,

@@ -58,7 +58,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var basis = vec4<f32>(0.0);
     var albedo = vec3<f32>(0.0);
     if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
-        let enable_debug = (debug.flags & DEBUG_FLAGS_GEOMETRY) != 0u && all(global_id.xy == debug.mouse_pos);
+        let enable_debug = (debug.flags & DebugFlags_GEOMETRY) != 0u && all(global_id.xy == debug.mouse_pos);
         let entry = hit_entries[intersection.instance_custom_index + intersection.geometry_index];
         depth = intersection.t;
 

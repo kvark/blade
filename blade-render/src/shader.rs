@@ -1,4 +1,4 @@
-use std::{fmt, fs, path::Path, str, sync::Arc};
+use std::{any, collections::HashMap, fmt, fs, path::Path, str, sync::Arc};
 
 const FAILURE_DUMP_NAME: &str = "_failure.wgsl";
 
@@ -19,15 +19,50 @@ pub struct Shader {
     pub raw: Result<blade_graphics::Shader, &'static str>,
 }
 
+pub struct Expansion(HashMap<String, u32>);
+impl Expansion {
+    pub fn from_enum<E: strum::IntoEnumIterator + fmt::Debug + Into<u32>>() -> Self {
+        Self(
+            E::iter()
+                .map(|variant| (format!("{variant:?}"), variant.into()))
+                .collect(),
+        )
+    }
+    pub fn from_bitflags<F: bitflags::Flags<Bits = u32>>() -> Self {
+        Self(
+            F::FLAGS
+                .iter()
+                .map(|flag| (flag.name().to_string(), flag.value().bits()))
+                .collect(),
+        )
+    }
+}
+
 pub struct Baker {
     gpu_context: Arc<blade_graphics::Context>,
+    expansions: HashMap<String, Expansion>,
 }
 
 impl Baker {
     pub fn new(gpu_context: &Arc<blade_graphics::Context>) -> Self {
         Self {
             gpu_context: Arc::clone(gpu_context),
+            expansions: HashMap::default(),
         }
+    }
+
+    fn register<T>(&mut self, expansion: Expansion) {
+        let full_name = any::type_name::<T>();
+        let short_name = full_name.split("::").last().unwrap().to_string();
+        self.expansions.insert(short_name, expansion);
+    }
+
+    pub fn register_enum<E: strum::IntoEnumIterator + fmt::Debug + Into<u32>>(&mut self) {
+        self.register::<E>(Expansion::from_enum::<E>());
+    }
+
+    pub fn register_bitflags<F: bitflags::Flags<Bits = u32>>(&mut self) {
+        self.register::<F>(Expansion::from_bitflags::<F>());
     }
 }
 
@@ -36,7 +71,10 @@ fn parse_impl(
     base_path: &Path,
     text_out: &mut String,
     cooker: &blade_asset::Cooker<CookedShader>,
+    expansions: &HashMap<String, Expansion>,
 ) {
+    use std::fmt::Write as _;
+
     let text_in = str::from_utf8(text_raw).unwrap();
     for line in text_in.lines() {
         if line.starts_with("#include") {
@@ -45,10 +83,19 @@ fn parse_impl(
                 None => panic!("Unable to extract the include path from: {line}"),
             };
             let include = cooker.add_dependency(&include_path);
-            *text_out += "//";
-            *text_out += line;
-            *text_out += "\n";
-            parse_impl(&include, include_path.parent().unwrap(), text_out, cooker);
+            writeln!(text_out, "//{}", line).unwrap();
+            parse_impl(
+                &include,
+                include_path.parent().unwrap(),
+                text_out,
+                cooker,
+                expansions,
+            );
+        } else if line.starts_with("#use") {
+            let type_name = line.split_whitespace().last().unwrap();
+            for (key, value) in expansions[type_name].0.iter() {
+                writeln!(text_out, "const {}_{}: u32 = {}u;", type_name, key, value).unwrap();
+            }
         } else {
             *text_out += line;
         }
@@ -56,9 +103,13 @@ fn parse_impl(
     }
 }
 
-pub fn parse_shader(text_raw: &[u8], cooker: &blade_asset::Cooker<CookedShader>) -> String {
+pub fn parse_shader(
+    text_raw: &[u8],
+    cooker: &blade_asset::Cooker<CookedShader>,
+    expansions: &HashMap<String, Expansion>,
+) -> String {
     let mut text_out = String::new();
-    parse_impl(text_raw, ".".as_ref(), &mut text_out, cooker);
+    parse_impl(text_raw, ".".as_ref(), &mut text_out, cooker, expansions);
     text_out
 }
 
@@ -75,7 +126,7 @@ impl blade_asset::Baker for Baker {
         _exe_context: choir::ExecutionContext,
     ) {
         assert_eq!(extension, "wgsl");
-        let text_out = parse_shader(source, &cooker);
+        let text_out = parse_shader(source, &cooker, &self.expansions);
         cooker.finish(CookedShader {
             data: text_out.as_bytes(),
         });
