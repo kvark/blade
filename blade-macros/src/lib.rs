@@ -1,3 +1,4 @@
+mod as_primitive;
 mod flat;
 mod shader_data;
 
@@ -59,6 +60,27 @@ pub fn shader_data_derive(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Flat)]
 pub fn flat_derive(input: TokenStream) -> TokenStream {
     let stream = match flat::generate(input) {
+        Ok(tokens) => tokens,
+        Err(err) => err.into_compile_error(),
+    };
+    stream.into()
+}
+
+/// Derive the `Into<primitive>` trait for an enum
+///
+/// ## Example
+///
+/// ```rust
+/// #[derive(blade_macros::AsPrimitive)]
+/// #[repr(u32)]
+/// enum Foo {
+///   A,
+///   B,
+/// }
+/// ```
+#[proc_macro_derive(AsPrimitive)]
+pub fn as_primitive_derive(input: TokenStream) -> TokenStream {
+    let stream = match as_primitive::generate(input) {
         Ok(tokens) => tokens,
         Err(err) => err.into_compile_error(),
     };
