@@ -21,14 +21,15 @@ pub use render::*;
 pub use shader::Shader;
 pub use texture::Texture;
 
+// Has to match the `Vertex` in shaders
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct Vertex {
     pub position: [f32; 3],
-    // XY of the normal encoded as signed-normalized
-    pub normal: [i16; 2],
+    pub bitangent_sign: f32,
     pub tex_coords: [f32; 2],
-    pub pad: [f32; 2],
+    pub normal: u32,
+    pub tangent: u32,
 }
 
 pub struct Camera {
