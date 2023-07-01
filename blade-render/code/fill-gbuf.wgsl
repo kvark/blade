@@ -6,9 +6,10 @@
 // Has to match the host!
 struct Vertex {
     pos: vec3<f32>,
-    normal: u32,
+    bitangent_sign: f32,
     tex_coords: vec2<f32>,
-    pad: vec2<f32>,
+    normal: u32,
+    tangent: u32,
 }
 struct VertexBuffer {
     data: array<Vertex>,
@@ -41,6 +42,15 @@ var acc_struct: acceleration_structure;
 var out_depth: texture_storage_2d<r32float, write>;
 var out_basis: texture_storage_2d<rgba8snorm, write>;
 var out_albedo: texture_storage_2d<rgba8unorm, write>;
+
+fn decode_normal(raw: u32) -> vec3<f32> {
+    return unpack4x8snorm(raw).xyz;
+}
+
+fn debug_raw_normal(pos: vec3<f32>, normal_raw: u32, rotation: vec4<f32>, debug_len: f32) {
+    let nw = normalize(qrot(rotation, decode_normal(normal_raw)));
+    debug_line(pos, pos + debug_len * nw, 0xFFFF00u);
+}
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -77,10 +87,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let barycentrics = vec3<f32>(1.0 - intersection.barycentrics.x - intersection.barycentrics.y, intersection.barycentrics);
         let tex_coords = mat3x2(vertices[0].tex_coords, vertices[1].tex_coords, vertices[2].tex_coords) * barycentrics;
-        let normal_rough = mat3x2(unpack2x16snorm(vertices[0].normal), unpack2x16snorm(vertices[1].normal), unpack2x16snorm(vertices[2].normal)) * barycentrics;
-        let normal_geo = vec3<f32>(normal_rough, sqrt(max(0.0, 1.0 - dot(normal_rough, normal_rough))));
+        let normal_geo = mat3x3(decode_normal(vertices[0].normal), decode_normal(vertices[1].normal), decode_normal(vertices[2].normal)) * barycentrics;
         let geo_to_world_rot = normalize(unpack4x8snorm(entry.geometry_to_world_rotation));
-        let normal_world = qrot(geo_to_world_rot, normal_geo);
+        let normal_world = normalize(qrot(geo_to_world_rot, normal_geo));
+
+        let pre_tangent = select(
+            vec3<f32>(0.0, 0.0, 1.0),
+            vec3<f32>(0.0, 1.0, 0.0),
+            abs(dot(normal_world, vec3<f32>(0.0, 1.0, 0.0))) < abs(dot(normal_world, vec3<f32>(0.0, 0.0, 1.0))));
+        let bitangent = normalize(cross(normal_world, pre_tangent));
+        let tangent = normalize(cross(bitangent, normal_world));
+        basis = make_quat(mat3x3(tangent, bitangent, normal_world));
 
         if (enable_debug) {
             let debug_len = intersection.t * 0.2;
@@ -95,18 +112,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             debug_line(positions[2].xyz, positions[0].xyz, 0x00FF00u);
             let poly_normal = normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
             let poly_center = (positions[0].xyz + positions[1].xyz + positions[2].xyz) / 3.0;
-            debug_line(poly_center, poly_center + debug_len * poly_normal, 0x0000FFu);
+            debug_line(poly_center, poly_center + 0.2 * debug_len * poly_normal, 0x0000FFu);
             let pos_world = camera.position + intersection.t * ray_dir;
             debug_line(pos_world, pos_world + debug_len * normal_world, 0xFF0000u);
+            // note: dynamic indexing into positions isn't allowed by WGSL yet
+            debug_raw_normal(positions[0].xyz, vertices[0].normal, geo_to_world_rot, 0.5*debug_len);
+            debug_raw_normal(positions[1].xyz, vertices[1].normal, geo_to_world_rot, 0.5*debug_len);
+            debug_raw_normal(positions[2].xyz, vertices[2].normal, geo_to_world_rot, 0.5*debug_len);
+            debug_line(pos_world, pos_world + debug_len * qrot(basis, vec3<f32>(0.0, 0.0, 1.0)), 0x00FFFFu);
         }
-
-        let pre_tangent = select(
-            vec3<f32>(0.0, 0.0, 1.0),
-            vec3<f32>(0.0, 1.0, 0.0),
-            abs(dot(normal_world, vec3<f32>(0.0, 1.0, 0.0))) < abs(dot(normal_world, vec3<f32>(0.0, 0.0, 1.0))));
-        let bitangent = normalize(cross(normal_world, pre_tangent));
-        let tangent = normalize(cross(bitangent, normal_world));
-        basis = make_quat(mat3x3(tangent, bitangent, normal_world));
 
         let base_color_factor = unpack4x8unorm(entry.base_color_factor);
         let lod = 0.0; //TODO: this is actually complicated

@@ -6,6 +6,16 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+fn pack4x8snorm(v: [f32; 4]) -> u32 {
+    v.iter().rev().fold(0u32, |u, f| {
+        (u << 8) | (f.clamp(-1.0, 1.0) * 127.0 + 0.5) as i8 as u8 as u32
+    })
+}
+
+fn encode_normal(v: [f32; 3]) -> u32 {
+    pack4x8snorm([v[0], v[1], v[2], 0.0])
+}
+
 pub struct Geometry {
     pub name: String,
     pub vertex_range: Range<u32>,
@@ -107,16 +117,22 @@ impl CookedModel<'_> {
                     for (v, tc) in vertices.iter_mut().zip(iter.into_f32()) {
                         v.tex_coords = tc;
                     }
+                } else {
+                    log::warn!("No tex coords in {name}");
                 }
                 if let Some(iter) = reader.read_normals() {
+                    assert_eq!(
+                        vertices.len(),
+                        iter.len(),
+                        "geometry {name} doesn't have enough normals"
+                    );
                     for (v, normal) in vertices.iter_mut().zip(iter) {
-                        // convert floating point to i16 normalized
-                        v.normal = [
-                            (normal[0] * i16::MAX as f32) as i16,
-                            (normal[1] * i16::MAX as f32) as i16,
-                        ];
+                        v.normal = encode_normal(normal);
                     }
+                } else {
+                    log::warn!("No normals in {name}");
                 }
+
                 self.geometries.push(CookedGeometry {
                     name: Cow::Owned(name.as_bytes().to_owned()),
                     vertices: Cow::Owned(vertices),
