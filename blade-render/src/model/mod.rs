@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
-    fmt, mem,
+    collections::hash_map::{Entry, HashMap},
+    fmt, hash, mem,
     ops::Range,
     ptr, str,
     sync::{Arc, Mutex},
@@ -59,6 +60,53 @@ struct CookedGeometry<'a> {
     material_index: u32,
 }
 
+#[derive(Clone, Default, PartialEq)]
+struct GltfVertex {
+    position: [f32; 3],
+    normal: [f32; 3],
+    tangent: [f32; 4],
+    tex_coords: [f32; 2],
+}
+impl Eq for GltfVertex {}
+impl hash::Hash for GltfVertex {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        for f in self.position.iter() {
+            f.to_bits().hash(state);
+        }
+        for f in self.normal.iter() {
+            f.to_bits().hash(state);
+        }
+        for f in self.tangent.iter() {
+            f.to_bits().hash(state);
+        }
+        for f in self.tex_coords.iter() {
+            f.to_bits().hash(state);
+        }
+    }
+}
+
+struct FlattenedGeometry(Box<[GltfVertex]>);
+impl mikktspace::Geometry for FlattenedGeometry {
+    fn num_faces(&self) -> usize {
+        self.0.len() / 3
+    }
+    fn num_vertices_of_face(&self, _face: usize) -> usize {
+        3
+    }
+    fn position(&self, face: usize, vert: usize) -> [f32; 3] {
+        self.0[face * 3 + vert].position
+    }
+    fn normal(&self, face: usize, vert: usize) -> [f32; 3] {
+        self.0[face * 3 + vert].normal
+    }
+    fn tex_coord(&self, face: usize, vert: usize) -> [f32; 2] {
+        self.0[face * 3 + vert].tex_coords
+    }
+    fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
+        self.0[face * 3 + vert].tangent = tangent;
+    }
+}
+
 #[derive(blade_macros::Flat)]
 pub struct CookedModel<'a> {
     name: &'a [u8],
@@ -104,34 +152,82 @@ impl CookedModel<'_> {
                 };
 
                 let reader = g_primitive.reader(|buffer| Some(&data_buffers[buffer.index()]));
-                let indices = match reader.read_indices() {
-                    Some(read) => read.into_u32().collect(),
-                    None => Vec::new(),
-                };
                 let vertex_count = g_primitive.get(&gltf::Semantic::Positions).unwrap().count();
-                let mut vertices = vec![crate::Vertex::default(); vertex_count];
-                for (v, pos) in vertices.iter_mut().zip(reader.read_positions().unwrap()) {
-                    v.position = pos;
-                }
-                if let Some(iter) = reader.read_tex_coords(0) {
-                    for (v, tc) in vertices.iter_mut().zip(iter.into_f32()) {
-                        v.tex_coords = tc;
+
+                // Read the vertices into memory
+                let mut flattened_geometry = {
+                    profiling::scope!("Read data");
+                    let mut pre_vertices = vec![GltfVertex::default(); vertex_count];
+
+                    for (v, pos) in pre_vertices
+                        .iter_mut()
+                        .zip(reader.read_positions().unwrap())
+                    {
+                        v.position = pos;
                     }
-                } else {
-                    log::warn!("No tex coords in {name}");
-                }
-                if let Some(iter) = reader.read_normals() {
-                    assert_eq!(
-                        vertices.len(),
-                        iter.len(),
-                        "geometry {name} doesn't have enough normals"
-                    );
-                    for (v, normal) in vertices.iter_mut().zip(iter) {
-                        v.normal = encode_normal(normal);
+                    if let Some(iter) = reader.read_tex_coords(0) {
+                        for (v, tc) in pre_vertices.iter_mut().zip(iter.into_f32()) {
+                            v.tex_coords = tc;
+                        }
+                    } else {
+                        log::warn!("No tex coords in {name}");
                     }
-                } else {
-                    log::warn!("No normals in {name}");
+                    if let Some(iter) = reader.read_normals() {
+                        assert_eq!(
+                            pre_vertices.len(),
+                            iter.len(),
+                            "geometry {name} doesn't have enough normals"
+                        );
+                        for (v, normal) in pre_vertices.iter_mut().zip(iter) {
+                            v.normal = normal;
+                        }
+                    } else {
+                        log::warn!("No normals in {name}");
+                    }
+
+                    // Untangle from the index buffer
+                    match reader.read_indices() {
+                        Some(read) => FlattenedGeometry(
+                            read.into_u32()
+                                .map(|i| pre_vertices[i as usize].clone())
+                                .collect(),
+                        ),
+                        None => FlattenedGeometry(pre_vertices.into_boxed_slice()),
+                    }
+                };
+
+                {
+                    profiling::scope!("Generate tangents");
+                    let ok = mikktspace::generate_tangents(&mut flattened_geometry);
+                    assert!(ok, "MikkTSpace failed for {name}");
                 }
+                profiling::scope!("Reconstruct indices");
+                let mut indices = Vec::with_capacity(flattened_geometry.0.len());
+                let mut vertices = Vec::new();
+                let mut cache = HashMap::new();
+                for v in flattened_geometry.0.iter() {
+                    let i = match cache.entry(v.clone()) {
+                        Entry::Occupied(e) => *e.get(),
+                        Entry::Vacant(e) => {
+                            let i = vertices.len() as u32;
+                            vertices.push(crate::Vertex {
+                                position: v.position,
+                                bitangent_sign: v.tangent[3],
+                                tex_coords: v.tex_coords,
+                                normal: encode_normal(v.normal),
+                                tangent: encode_normal([v.tangent[0], v.tangent[1], v.tangent[2]]),
+                            });
+                            *e.insert(i)
+                        }
+                    };
+                    indices.push(i);
+                }
+                log::info!(
+                    "Compacted {} vertices to {} unique in {}",
+                    flattened_geometry.0.len(),
+                    vertices.len(),
+                    name
+                );
 
                 self.geometries.push(CookedGeometry {
                     name: Cow::Owned(name.as_bytes().to_owned()),
