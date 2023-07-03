@@ -23,7 +23,7 @@ pub use texture::Texture;
 
 // Has to match the `Vertex` in shaders
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub bitangent_sign: f32,

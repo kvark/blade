@@ -46,7 +46,7 @@ pub struct Model {
 
 #[derive(blade_macros::Flat)]
 struct CookedMaterial<'a> {
-    base_color_path: &'a [u8],
+    base_color_path: Cow<'a, [u8]>,
     base_color_factor: [f32; 4],
     transparent: bool,
 }
@@ -85,7 +85,9 @@ impl hash::Hash for GltfVertex {
     }
 }
 
+#[cfg(feature = "asset")]
 struct FlattenedGeometry(Box<[GltfVertex]>);
+#[cfg(feature = "asset")]
 impl mikktspace::Geometry for FlattenedGeometry {
     fn num_faces(&self) -> usize {
         self.0.len() / 3
@@ -106,6 +108,34 @@ impl mikktspace::Geometry for FlattenedGeometry {
         self.0[face * 3 + vert].tangent = tangent;
     }
 }
+#[cfg(feature = "asset")]
+impl FlattenedGeometry {
+    #[profiling::function]
+    fn reconstruct_indices(self) -> (Vec<u32>, Vec<crate::Vertex>) {
+        let mut indices = Vec::with_capacity(self.0.len());
+        let mut vertices = Vec::new();
+        let mut cache = HashMap::new();
+        for v in self.0.iter() {
+            let i = match cache.entry(v.clone()) {
+                Entry::Occupied(e) => *e.get(),
+                Entry::Vacant(e) => {
+                    let i = vertices.len() as u32;
+                    vertices.push(crate::Vertex {
+                        position: v.position,
+                        bitangent_sign: v.tangent[3],
+                        tex_coords: v.tex_coords,
+                        normal: encode_normal(v.normal),
+                        tangent: encode_normal([v.tangent[0], v.tangent[1], v.tangent[2]]),
+                    });
+                    *e.insert(i)
+                }
+            };
+            indices.push(i);
+        }
+        log::info!("Compacted {}->{}", self.0.len(), vertices.len());
+        (indices, vertices)
+    }
+}
 
 #[derive(blade_macros::Flat)]
 pub struct CookedModel<'a> {
@@ -121,6 +151,7 @@ impl CookedModel<'_> {
         g_node: gltf::Node,
         parent_transform: glam::Mat4,
         data_buffers: &[Vec<u8>],
+        flattened_geos: &mut Vec<FlattenedGeometry>,
     ) {
         let local_transform = glam::Mat4::from_cols_array_2d(&g_node.transform().matrix());
         let global_transform = parent_transform * local_transform;
@@ -155,7 +186,7 @@ impl CookedModel<'_> {
                 let vertex_count = g_primitive.get(&gltf::Semantic::Positions).unwrap().count();
 
                 // Read the vertices into memory
-                let mut flattened_geometry = {
+                flattened_geos.push({
                     profiling::scope!("Read data");
                     let mut pre_vertices = vec![GltfVertex::default(); vertex_count];
 
@@ -194,45 +225,12 @@ impl CookedModel<'_> {
                         ),
                         None => FlattenedGeometry(pre_vertices.into_boxed_slice()),
                     }
-                };
-
-                {
-                    profiling::scope!("Generate tangents");
-                    let ok = mikktspace::generate_tangents(&mut flattened_geometry);
-                    assert!(ok, "MikkTSpace failed for {name}");
-                }
-                profiling::scope!("Reconstruct indices");
-                let mut indices = Vec::with_capacity(flattened_geometry.0.len());
-                let mut vertices = Vec::new();
-                let mut cache = HashMap::new();
-                for v in flattened_geometry.0.iter() {
-                    let i = match cache.entry(v.clone()) {
-                        Entry::Occupied(e) => *e.get(),
-                        Entry::Vacant(e) => {
-                            let i = vertices.len() as u32;
-                            vertices.push(crate::Vertex {
-                                position: v.position,
-                                bitangent_sign: v.tangent[3],
-                                tex_coords: v.tex_coords,
-                                normal: encode_normal(v.normal),
-                                tangent: encode_normal([v.tangent[0], v.tangent[1], v.tangent[2]]),
-                            });
-                            *e.insert(i)
-                        }
-                    };
-                    indices.push(i);
-                }
-                log::info!(
-                    "Compacted {} vertices to {} unique in {}",
-                    flattened_geometry.0.len(),
-                    vertices.len(),
-                    name
-                );
+                });
 
                 self.geometries.push(CookedGeometry {
                     name: Cow::Owned(name.as_bytes().to_owned()),
-                    vertices: Cow::Owned(vertices),
-                    indices: Cow::Owned(indices),
+                    vertices: Cow::Borrowed(&[]),
+                    indices: Cow::Borrowed(&[]),
                     transform,
                     material_index,
                 });
@@ -240,7 +238,7 @@ impl CookedModel<'_> {
         }
 
         for child in g_node.children() {
-            self.populate_gltf(child, global_transform, data_buffers);
+            self.populate_gltf(child, global_transform, data_buffers, flattened_geos);
         }
     }
 }
@@ -329,7 +327,7 @@ impl blade_asset::Baker for Baker {
         extension: &str,
         _meta: Meta,
         cooker: Arc<blade_asset::Cooker<CookedModel<'_>>>,
-        _exe_context: choir::ExecutionContext,
+        exe_context: choir::ExecutionContext,
     ) {
         match extension {
             #[cfg(feature = "asset")]
@@ -393,20 +391,45 @@ impl blade_asset::Baker for Baker {
                 for g_material in document.materials() {
                     let pbr = g_material.pbr_metallic_roughness();
                     model.materials.push(CookedMaterial {
-                        base_color_path: match pbr.base_color_texture() {
-                            Some(info) => texture_paths[info.texture().index()].as_bytes(),
-                            None => &[],
-                        },
+                        base_color_path: Cow::Owned(match pbr.base_color_texture() {
+                            Some(info) => texture_paths[info.texture().index()].as_bytes().to_vec(),
+                            None => Vec::new(),
+                        }),
                         base_color_factor: pbr.base_color_factor(),
                         transparent: g_material.alpha_mode() != gltf::material::AlphaMode::Opaque,
                     });
                 }
+                let mut flattened_geos = Vec::new();
                 for g_scene in document.scenes() {
                     for g_node in g_scene.nodes() {
-                        model.populate_gltf(g_node, glam::Mat4::IDENTITY, &buffers);
+                        model.populate_gltf(
+                            g_node,
+                            glam::Mat4::IDENTITY,
+                            &buffers,
+                            &mut flattened_geos,
+                        );
                     }
                 }
-                cooker.finish(model);
+
+                let model_shared = Arc::new(Mutex::new(model));
+                let model_clone = Arc::clone(&model_shared);
+                let gen_tangents = exe_context.choir().spawn("generate tangents").init_iter(
+                    flattened_geos.into_iter().enumerate(),
+                    move |(index, mut fg)| {
+                        let ok = mikktspace::generate_tangents(&mut fg);
+                        assert!(ok, "MillTSpace failed");
+                        let (indices, vertices) = fg.reconstruct_indices();
+                        let mut model = model_clone.lock().unwrap();
+                        let geo = &mut model.geometries[index];
+                        geo.vertices = Cow::Owned(vertices);
+                        geo.indices = Cow::Owned(indices);
+                    },
+                );
+                let mut finish = exe_context.fork("finish").init(move |_| {
+                    let model = Arc::into_inner(model_shared).unwrap().into_inner().unwrap();
+                    cooker.finish(model);
+                });
+                finish.depend_on(&gen_tangents);
             }
             other => panic!("Unknown model extension: {}", other),
         }
@@ -418,7 +441,7 @@ impl blade_asset::Baker for Baker {
             let base_color_texture = if material.base_color_path.is_empty() {
                 None
             } else {
-                let path_str = str::from_utf8(material.base_color_path).unwrap();
+                let path_str = str::from_utf8(&material.base_color_path).unwrap();
                 let (handle, task) = self.asset_textures.load(
                     path_str,
                     crate::texture::Meta {

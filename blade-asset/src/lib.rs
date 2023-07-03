@@ -370,6 +370,7 @@ impl<B: Baker> AssetManager<B> {
                 .spawn(format!("cook finish for {}", file_name.display()))
                 .init(move |exe_context| {
                     let mut inner = cooker.inner.lock().unwrap();
+                    assert!(!inner.result.is_empty());
                     let mut file = fs::File::create(&target_path).unwrap_or_else(|e| {
                         panic!("Unable to create {}: {}", target_path.display(), e)
                     });
@@ -413,7 +414,7 @@ impl<B: Baker> AssetManager<B> {
                 .spawn(format!("cook {} as {}", file_name.display(), meta))
                 .init(move |exe_context| {
                     // Read the source file through the same mechanism as the
-                    // dependencies, so that its mfile_nameodified time makes it into the hash.
+                    // dependencies, so that its modified time makes it into the hash.
                     let source = cooker_arg.add_dependency(&file_name);
                     let extension = file_name.extension().unwrap().to_str().unwrap();
                     baker.cook(&source, extension, meta, cooker_arg, exe_context);
