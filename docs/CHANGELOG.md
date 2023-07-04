@@ -1,8 +1,12 @@
 Changelog for Blade
 
 ## Unreleased
+- tangent space generation
+- spatio-temporal resampling
+- shaders as assets
+  - with includes, enums, and bitflags
 
-## 0.2 (TBD)
+## 0.2 (31 May 2023)
 - ray tracing support
 - examples: ray-query, scene
 - crate: `blade-egui` for egui integration
