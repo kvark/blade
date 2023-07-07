@@ -120,16 +120,16 @@ struct CachedAssetHeader {
 /// a task that writes the data to disk.
 ///
 /// Here `T` is the cooked asset type.
-pub struct Cooker<T> {
+pub struct Cooker<B> {
     inner: Mutex<Inner>,
     base_path: PathBuf,
-    _phantom: PhantomData<T>,
+    _phantom: PhantomData<B>,
 }
 // T doesn't matter for Send/Sync, since we aren't storing it here.
-unsafe impl<T> Send for Cooker<T> {}
-unsafe impl<T> Sync for Cooker<T> {}
+unsafe impl<B> Send for Cooker<B> {}
+unsafe impl<B> Sync for Cooker<B> {}
 
-impl<T: Flat> Cooker<T> {
+impl<B: Baker> Cooker<B> {
     /// Create a new container with no data.
     pub fn new(base_path: &Path, hasher: DefaultHasher) -> Self {
         Self {
@@ -149,7 +149,7 @@ impl<T: Flat> Cooker<T> {
     }
 
     /// Put the data into it.
-    pub fn finish(&self, value: T) {
+    pub fn finish<'a>(&self, value: B::Data<'a>) {
         let mut inner = self.inner.lock().unwrap();
         inner.result = vec![0u8; value.size()];
         unsafe { value.write(inner.result.as_mut_ptr()) };
@@ -179,7 +179,7 @@ impl<T: Flat> Cooker<T> {
 }
 
 /// Baker class abstracts over asset-specific logic.
-pub trait Baker: Send + Sync + 'static {
+pub trait Baker: Sized + Send + Sync + 'static {
     /// Metadata used for loading assets.
     type Meta: Clone + Eq + Hash + Send + fmt::Display;
     /// Intermediate data that is cached, which comes out as a result of cooking.
@@ -196,7 +196,7 @@ pub trait Baker: Send + Sync + 'static {
         source: &[u8],
         extension: &str,
         meta: Self::Meta,
-        cooker: Arc<Cooker<Self::Data<'_>>>,
+        cooker: Arc<Cooker<Self>>,
         exe_context: choir::ExecutionContext,
     );
     /// Produce the output bsed on a cooked asset.

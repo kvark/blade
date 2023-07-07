@@ -19,7 +19,7 @@ impl blade_asset::Baker for Baker {
         _source: &[u8],
         _extension: &str,
         meta: u32,
-        cooker: Arc<blade_asset::Cooker<u32>>,
+        cooker: Arc<blade_asset::Cooker<Self>>,
         _exe_context: choir::ExecutionContext,
     ) {
         assert!(self.allow_cooking.load(Ordering::SeqCst));

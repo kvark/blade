@@ -5,6 +5,7 @@ Changelog for Blade
 - spatio-temporal resampling
 - shaders as assets
   - with includes, enums, and bitflags
+  - with hot reloading
 
 ## 0.2 (31 May 2023)
 - ray tracing support
