@@ -56,6 +56,7 @@ struct Example {
     camera: blade_render::Camera,
     debug: blade_render::DebugConfig,
     need_accumulation_reset: bool,
+    is_debug_drawing: bool,
     last_render_time: time::Instant,
     render_times: VecDeque<u32>,
     ray_config: blade_render::RayConfig,
@@ -190,6 +191,7 @@ impl Example {
             camera,
             debug: blade_render::DebugConfig::default(),
             need_accumulation_reset: true,
+            is_debug_drawing: false,
             last_render_time: time::Instant::now(),
             render_times: VecDeque::with_capacity(FRAME_TIME_HISTORY),
             ray_config: blade_render::RayConfig {
@@ -278,6 +280,7 @@ impl Example {
                 &self.context,
                 &mut temp_buffers,
                 &mut temp_acceleration_structures,
+                self.is_debug_drawing,
                 self.debug.mouse_pos.is_some(),
                 self.need_accumulation_reset,
             );
@@ -374,6 +377,8 @@ impl Example {
                     ui.checkbox(&mut enabled, name);
                     self.debug.flags.set(bit, enabled);
                 }
+                // reset accumulation
+                self.need_accumulation_reset |= ui.button("reset").clicked();
                 // blits
                 let mut blits_to_remove = Vec::new();
                 for (i, db) in self.debug_blits.iter_mut().enumerate() {
@@ -497,10 +502,12 @@ impl Example {
     fn move_camera_by(&mut self, offset: glam::Vec3) {
         let dir = glam::Quat::from(self.camera.rot) * offset;
         self.camera.pos = (glam::Vec3::from(self.camera.pos) + dir).into();
+        self.debug.mouse_pos = None;
     }
     fn rotate_camera_z_by(&mut self, angle: f32) {
         let quat = glam::Quat::from(self.camera.rot);
         self.camera.rot = (quat * glam::Quat::from_rotation_z(angle)).into();
+        self.debug.mouse_pos = None;
     }
 }
 
@@ -613,6 +620,14 @@ fn main() {
                         ..
                     } => {
                         example.debug.mouse_pos = Some(last_mouse_pos);
+                        example.is_debug_drawing = true;
+                    }
+                    winit::event::WindowEvent::MouseInput {
+                        state: winit::event::ElementState::Released,
+                        button: winit::event::MouseButton::Right,
+                        ..
+                    } => {
+                        example.is_debug_drawing = false;
                     }
                     winit::event::WindowEvent::CursorMoved { position, .. } => {
                         last_mouse_pos = [position.x as i32, position.y as i32];
@@ -624,6 +639,7 @@ fn main() {
                                 (last_mouse_pos[1] - drag.screen_pos.y) as f32 * rotate_speed,
                             );
                             example.camera.rot = (qx * drag.rotation * qy).into();
+                            example.debug.mouse_pos = None;
                         }
                     }
                     _ => {}

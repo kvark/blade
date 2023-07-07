@@ -149,7 +149,7 @@ impl<B: Baker> Cooker<B> {
     }
 
     /// Put the data into it.
-    pub fn finish<'a>(&self, value: B::Data<'a>) {
+    pub fn finish(&self, value: B::Data<'_>) {
         let mut inner = self.inner.lock().unwrap();
         inner.result = vec![0u8; value.size()];
         unsafe { value.write(inner.result.as_mut_ptr()) };
