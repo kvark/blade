@@ -11,7 +11,7 @@ pub struct AssetHub {
 pub struct LoadContext<'a> {
     asset_hub: &'a AssetHub,
     base_path: &'a Path,
-    finish_task: choir::IdleTask<'static>,
+    finish_task: choir::IdleTask,
 }
 
 impl AssetHub {

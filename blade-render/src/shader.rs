@@ -70,7 +70,7 @@ fn parse_impl(
     text_raw: &[u8],
     base_path: &Path,
     text_out: &mut String,
-    cooker: &blade_asset::Cooker<CookedShader>,
+    cooker: &blade_asset::Cooker<Baker>,
     expansions: &HashMap<String, Expansion>,
 ) {
     use std::fmt::Write as _;
@@ -105,7 +105,7 @@ fn parse_impl(
 
 pub fn parse_shader(
     text_raw: &[u8],
-    cooker: &blade_asset::Cooker<CookedShader>,
+    cooker: &blade_asset::Cooker<Baker>,
     expansions: &HashMap<String, Expansion>,
 ) -> String {
     let mut text_out = String::new();
@@ -122,7 +122,7 @@ impl blade_asset::Baker for Baker {
         source: &[u8],
         extension: &str,
         _meta: Meta,
-        cooker: Arc<blade_asset::Cooker<CookedShader>>,
+        cooker: Arc<blade_asset::Cooker<Self>>,
         _exe_context: choir::ExecutionContext,
     ) {
         assert_eq!(extension, "wgsl");

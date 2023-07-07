@@ -110,7 +110,7 @@ impl blade_asset::Baker for Baker {
         source: &[u8],
         extension: &str,
         meta: Meta,
-        cooker: Arc<blade_asset::Cooker<CookedImage<'_>>>,
+        cooker: Arc<blade_asset::Cooker<Self>>,
         exe_context: choir::ExecutionContext,
     ) {
         use blade_graphics::TextureFormat as Tf;
@@ -279,7 +279,7 @@ impl blade_asset::Baker for Baker {
                                 dst_ptr: dst.as_mut_ptr(),
                             })
                             .enumerate(),
-                        move |(i, task)| {
+                        move |_, (i, task)| {
                             let extent = base_extent.at_mip_level(i as u32);
                             let compressed_size =
                                 dst_format.compressed_size(extent.width as _, extent.height as _);

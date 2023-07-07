@@ -326,7 +326,7 @@ impl blade_asset::Baker for Baker {
         source: &[u8],
         extension: &str,
         _meta: Meta,
-        cooker: Arc<blade_asset::Cooker<CookedModel<'_>>>,
+        cooker: Arc<blade_asset::Cooker<Self>>,
         exe_context: choir::ExecutionContext,
     ) {
         match extension {
@@ -417,7 +417,7 @@ impl blade_asset::Baker for Baker {
                 let model_clone = Arc::clone(&model_shared);
                 let gen_tangents = exe_context.choir().spawn("generate tangents").init_iter(
                     flattened_geos.into_iter().enumerate(),
-                    move |(index, mut fg)| {
+                    move |_, (index, mut fg)| {
                         let ok = mikktspace::generate_tangents(&mut fg);
                         assert!(ok, "MillTSpace failed");
                         let (indices, vertices) = fg.reconstruct_indices();
