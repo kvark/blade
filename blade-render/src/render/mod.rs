@@ -739,8 +739,9 @@ impl Renderer {
         gpu: &blade_graphics::Context,
         temp_buffers: &mut Vec<blade_graphics::Buffer>,
         temp_acceleration_structures: &mut Vec<blade_graphics::AccelerationStructure>,
-        enable_debug: bool,
-        reset_accumulation: bool,
+        enable_debug_draw: bool,
+        accumulate_variance: bool,
+        reset_reservoirs: bool,
     ) {
         if self.is_tlas_dirty {
             self.is_tlas_dirty = false;
@@ -898,29 +899,31 @@ impl Renderer {
         };
 
         let mut transfer = command_encoder.transfer();
-        if enable_debug {
+        if enable_debug_draw {
             // reset the debug line count
             transfer.fill_buffer(self.debug.buffer.at(4), 4, 0);
             transfer.fill_buffer(self.debug.buffer.at(20), 4, 1);
-            if !reset_accumulation {
-                // copy the previous frame variance
-                transfer.copy_buffer_to_buffer(
-                    self.debug.buffer.at(32),
-                    self.debug.variance_buffer.into(),
-                    mem::size_of::<DebugVariance>() as u64,
-                );
-            }
         } else {
-            // reset the open bit
-            transfer.fill_buffer(self.debug.buffer.at(20), 12, 0);
+            transfer.fill_buffer(self.debug.buffer.at(20), 4, 0);
         }
-        if reset_accumulation {
-            // reset the open bit, variance accumulator
+        if accumulate_variance {
+            // copy the previous frame variance
+            transfer.copy_buffer_to_buffer(
+                self.debug.buffer.at(32),
+                self.debug.variance_buffer.into(),
+                mem::size_of::<DebugVariance>() as u64,
+            );
+        } else {
             transfer.fill_buffer(
                 self.debug.buffer.at(32),
                 mem::size_of::<DebugVariance>() as u64,
                 0,
             );
+        }
+        if reset_reservoirs {
+            if !enable_debug_draw {
+                transfer.fill_buffer(self.debug.buffer.at(4), 4, 0);
+            }
             let total_reservoirs = self.screen_size.width as u64 * self.screen_size.height as u64;
             transfer.fill_buffer(
                 self.frame_data[0].reservoir_buf.into(),
