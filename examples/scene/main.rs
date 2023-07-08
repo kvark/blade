@@ -332,6 +332,8 @@ impl Example {
 
         if self.pending_scene.is_some() {
             ui.spinner();
+            //TODO: seeing GPU Device Lost issues without this
+            return;
         }
 
         egui::CollapsingHeader::new("Camera").show(ui, |ui| {

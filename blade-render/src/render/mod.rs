@@ -262,8 +262,8 @@ struct DebugParams {
     view_mode: u32,
     draw_flags: u32,
     texture_flags: u32,
-    mouse_pos: [i32; 2],
     unused: u32,
+    mouse_pos: [i32; 2],
 }
 
 #[repr(C)]
@@ -1003,11 +1003,11 @@ impl Renderer {
             view_mode: debug_config.view_mode as u32,
             draw_flags: debug_config.draw_flags.bits(),
             texture_flags: debug_config.texture_flags.bits(),
+            unused: 0,
             mouse_pos: match debug_config.mouse_pos {
                 Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
                 None => [-1; 2],
             },
-            unused: 0,
         };
         let cur = self.frame_data.first().unwrap();
         let prev = self.frame_data.last().unwrap();
