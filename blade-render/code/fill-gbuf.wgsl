@@ -72,7 +72,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var albedo = vec3<f32>(0.0);
 
     if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
-        let enable_debug = (debug.flags & DebugFlags_GEOMETRY) != 0u && all(global_id.xy == debug.mouse_pos);
+        let enable_debug = (debug.draw_flags & DebugDrawFlags_GEOMETRY) != 0u && all(global_id.xy == debug.mouse_pos);
         let entry = hit_entries[intersection.instance_custom_index + intersection.geometry_index];
         depth = intersection.t;
 
@@ -107,11 +107,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let geo_to_world_rot = normalize(unpack4x8snorm(entry.geometry_to_world_rotation));
         let tangent_space_geo = mat3x3(tangent_geo, bitangent_geo, normal_geo);
-        var normal_local = textureSampleLevel(textures[entry.normal_texture], sampler_linear, tex_coords, lod).xyz;
-        if (true) {
-            normal_local.z = sqrt(max(0.0, 1.0 - dot(normal_local.xy, normal_local.xy)));
-        } else {
+        var normal_local: vec3<f32>;
+        if ((debug.texture_flags & DebugTextureFlags_NORMAL) != 0u) {
             normal_local = vec3<f32>(0.0, 0.0, 1.0); // ignore normal map
+        } else {
+            let n_xy = textureSampleLevel(textures[entry.normal_texture], sampler_linear, tex_coords, lod).xy;
+            normal_local = vec3<f32>(n_xy, sqrt(max(0.0, 1.0 - dot(n_xy.xy, n_xy.xy))));
         }
         let normal = qrot(geo_to_world_rot, tangent_space_geo * normal_local);
         basis = shortest_arc_quat(vec3<f32>(0.0, 0.0, 1.0), normalize(normal));
@@ -135,8 +136,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         let base_color_factor = unpack4x8unorm(entry.base_color_factor);
-        let base_color_sample = textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tex_coords, lod);
-        albedo = (base_color_factor * base_color_sample).xyz;
+        if ((debug.texture_flags & DebugTextureFlags_ALBEDO) != 0u) {
+            albedo = base_color_factor.xyz;
+        } else {
+            let base_color_sample = textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tex_coords, lod);
+            albedo = (base_color_factor * base_color_sample).xyz;
+        }
     }
 
     textureStore(out_depth, global_id.xy, vec4<f32>(depth, 0.0, 0.0, 0.0));

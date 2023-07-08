@@ -461,7 +461,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let surface = read_surface(vec2<i32>(global_id.xy));
     let enable_debug = all(global_id.xy == debug.mouse_pos);
-    let enable_restir_debug = (debug.flags & DebugFlags_RESTIR) != 0u && enable_debug;
+    let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
     let color = compute_restir(surface, vec2<i32>(global_id.xy), &rng, enable_restir_debug);
     if (enable_debug) {
         debug_buf.variance.color_sum += color;
