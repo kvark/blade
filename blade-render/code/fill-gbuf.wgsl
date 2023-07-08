@@ -119,7 +119,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             debug_raw_normal(positions[0].xyz, vertices[0].normal, geo_to_world_rot, 0.5*debug_len);
             debug_raw_normal(positions[1].xyz, vertices[1].normal, geo_to_world_rot, 0.5*debug_len);
             debug_raw_normal(positions[2].xyz, vertices[2].normal, geo_to_world_rot, 0.5*debug_len);
-            debug_line(pos_world, pos_world + debug_len * qrot(basis, vec3<f32>(0.0, 0.0, 1.0)), 0x00FFFFu);
+            debug_line(pos_world, pos_world + debug_len * qrot(basis, vec3<f32>(1.0, 0.0, 0.0)), 0x00FFFFu);
+            debug_line(pos_world, pos_world + debug_len * qrot(basis, vec3<f32>(0.0, 1.0, 0.0)), 0xFF00FFu);
         }
 
         let base_color_factor = unpack4x8unorm(entry.base_color_factor);

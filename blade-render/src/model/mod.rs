@@ -391,8 +391,6 @@ impl blade_asset::Baker for Baker {
                 for g_material in document.materials() {
                     let pbr = g_material.pbr_metallic_roughness();
                     model.materials.push(CookedMaterial {
-                        //TODO: investigate why using `Cow::Borrowed` here
-                        // results in dangling pointers to `texture_paths`.
                         base_color_path: Cow::Owned(match pbr.base_color_texture() {
                             Some(info) => texture_paths[info.texture().index()].as_bytes().to_vec(),
                             None => Vec::new(),
