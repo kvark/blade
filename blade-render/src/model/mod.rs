@@ -31,6 +31,7 @@ pub struct Geometry {
 pub struct Material {
     pub base_color_texture: Option<blade_asset::Handle<crate::Texture>>,
     pub base_color_factor: [f32; 4],
+    pub normal_texture: Option<blade_asset::Handle<crate::Texture>>,
     pub transparent: bool,
 }
 
@@ -48,6 +49,7 @@ pub struct Model {
 struct CookedMaterial<'a> {
     base_color_path: Cow<'a, [u8]>,
     base_color_factor: [f32; 4],
+    normal_path: Cow<'a, [u8]>,
     transparent: bool,
 }
 
@@ -396,6 +398,10 @@ impl blade_asset::Baker for Baker {
                             None => Vec::new(),
                         }),
                         base_color_factor: pbr.base_color_factor(),
+                        normal_path: Cow::Owned(match g_material.normal_texture() {
+                            Some(info) => texture_paths[info.texture().index()].as_bytes().to_vec(),
+                            None => Vec::new(),
+                        }),
                         transparent: g_material.alpha_mode() != gltf::material::AlphaMode::Opaque,
                     });
                 }
@@ -417,7 +423,7 @@ impl blade_asset::Baker for Baker {
                     flattened_geos.into_iter().enumerate(),
                     move |_, (index, mut fg)| {
                         let ok = mikktspace::generate_tangents(&mut fg);
-                        assert!(ok, "MillTSpace failed");
+                        assert!(ok, "MikkTSpace failed");
                         let (indices, vertices) = fg.reconstruct_indices();
                         let mut model = model_clone.lock().unwrap();
                         let geo = &mut model.geometries[index];
@@ -453,9 +459,25 @@ impl blade_asset::Baker for Baker {
                 exe_context.add_fork(&task);
                 Some(handle)
             };
+            let normal_texture = if material.normal_path.is_empty() {
+                None
+            } else {
+                let path_str = str::from_utf8(&material.normal_path).unwrap();
+                let (handle, task) = self.asset_textures.load(
+                    path_str,
+                    crate::texture::Meta {
+                        format: blade_graphics::TextureFormat::Bc5Snorm,
+                        generate_mips: false,
+                        y_flip: true,
+                    },
+                );
+                exe_context.add_fork(&task);
+                Some(handle)
+            };
             materials.push(Material {
                 base_color_texture,
                 base_color_factor: material.base_color_factor,
+                normal_texture,
                 transparent: material.transparent,
             });
         }

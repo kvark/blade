@@ -33,6 +33,7 @@ struct HitEntry {
     base_color_texture: u32,
     // packed color factor
     base_color_factor: u32,
+    normal_texture: u32,
 }
 var<storage, read> hit_entries: array<HitEntry>;
 
@@ -47,9 +48,9 @@ fn decode_normal(raw: u32) -> vec3<f32> {
     return unpack4x8snorm(raw).xyz;
 }
 
-fn debug_raw_normal(pos: vec3<f32>, normal_raw: u32, rotation: vec4<f32>, debug_len: f32) {
+fn debug_raw_normal(pos: vec3<f32>, normal_raw: u32, rotation: vec4<f32>, debug_len: f32, color: u32) {
     let nw = normalize(qrot(rotation, decode_normal(normal_raw)));
-    debug_line(pos, pos + debug_len * nw, 0xFFFF00u);
+    debug_line(pos, pos + debug_len * nw, color);
 }
 
 @compute @workgroup_size(8, 8)
@@ -67,6 +68,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var depth = 0.0;
     var basis = vec4<f32>(0.0);
     var albedo = vec3<f32>(0.0);
+
     if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
         let enable_debug = (debug.flags & DebugFlags_GEOMETRY) != 0u && all(global_id.xy == debug.mouse_pos);
         let entry = hit_entries[intersection.instance_custom_index + intersection.geometry_index];
@@ -87,17 +89,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let barycentrics = vec3<f32>(1.0 - intersection.barycentrics.x - intersection.barycentrics.y, intersection.barycentrics);
         let tex_coords = mat3x2(vertices[0].tex_coords, vertices[1].tex_coords, vertices[2].tex_coords) * barycentrics;
-        let normal_geo = mat3x3(decode_normal(vertices[0].normal), decode_normal(vertices[1].normal), decode_normal(vertices[2].normal)) * barycentrics;
-        let geo_to_world_rot = normalize(unpack4x8snorm(entry.geometry_to_world_rotation));
-        let normal_world = normalize(qrot(geo_to_world_rot, normal_geo));
+        let normal_geo = normalize(mat3x3(decode_normal(vertices[0].normal), decode_normal(vertices[1].normal), decode_normal(vertices[2].normal)) * barycentrics);
+        let tangent_geo = normalize(mat3x3(decode_normal(vertices[0].tangent), decode_normal(vertices[1].tangent), decode_normal(vertices[2].tangent)) * barycentrics);
+        let bitangent_geo = normalize(cross(normal_geo, tangent_geo)) * vertices[0].bitangent_sign;
 
-        let pre_tangent = select(
-            vec3<f32>(0.0, 0.0, 1.0),
-            vec3<f32>(0.0, 1.0, 0.0),
-            abs(dot(normal_world, vec3<f32>(0.0, 1.0, 0.0))) < abs(dot(normal_world, vec3<f32>(0.0, 0.0, 1.0))));
-        let bitangent = normalize(cross(normal_world, pre_tangent));
-        let tangent = normalize(cross(bitangent, normal_world));
-        basis = make_quat(mat3x3(tangent, bitangent, normal_world));
+        let lod = 0.0; //TODO: this is actually complicated
+
+        let geo_to_world_rot = normalize(unpack4x8snorm(entry.geometry_to_world_rotation));
+        let tangent_space_geo = mat3x3(tangent_geo, bitangent_geo, normal_geo);
+        var normal_local = textureSampleLevel(textures[entry.normal_texture], sampler_linear, tex_coords, lod).xyz;
+        normal_local.z = sqrt(max(0.0, 1.0 - dot(normal_local.xy, normal_local.xy)));
+        //normal_local = vec3<f32>(0.0, 0.0, 1.0); //TEMP
+        let normal = qrot(geo_to_world_rot, tangent_space_geo * normal_local);
+        basis = shortest_arc_quat(vec3<f32>(0.0, 0.0, 1.0), normalize(normal));
 
         if (enable_debug) {
             let debug_len = intersection.t * 0.2;
@@ -107,27 +111,31 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let positions = intersection.object_to_world * mat3x4(
                 vec4<f32>(pos_object[0], 1.0), vec4<f32>(pos_object[1], 1.0), vec4<f32>(pos_object[2], 1.0)
             );
-            debug_line(positions[0].xyz, positions[1].xyz, 0x00FF00u);
-            debug_line(positions[1].xyz, positions[2].xyz, 0x00FF00u);
-            debug_line(positions[2].xyz, positions[0].xyz, 0x00FF00u);
+            debug_line(positions[0].xyz, positions[1].xyz, 0x00FFFFu);
+            debug_line(positions[1].xyz, positions[2].xyz, 0x00FFFFu);
+            debug_line(positions[2].xyz, positions[0].xyz, 0x00FFFFu);
             let poly_normal = normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
             let poly_center = (positions[0].xyz + positions[1].xyz + positions[2].xyz) / 3.0;
-            debug_line(poly_center, poly_center + 0.2 * debug_len * poly_normal, 0x0000FFu);
+            debug_line(poly_center, poly_center + 0.2 * debug_len * poly_normal, 0xFF00FFu);
             let pos_world = camera.position + intersection.t * ray_dir;
-            debug_line(pos_world, pos_world + debug_len * normal_world, 0xFF0000u);
             // note: dynamic indexing into positions isn't allowed by WGSL yet
-            debug_raw_normal(positions[0].xyz, vertices[0].normal, geo_to_world_rot, 0.5*debug_len);
-            debug_raw_normal(positions[1].xyz, vertices[1].normal, geo_to_world_rot, 0.5*debug_len);
-            debug_raw_normal(positions[2].xyz, vertices[2].normal, geo_to_world_rot, 0.5*debug_len);
-            debug_line(pos_world, pos_world + debug_len * qrot(basis, vec3<f32>(1.0, 0.0, 0.0)), 0x00FFFFu);
-            debug_line(pos_world, pos_world + debug_len * qrot(basis, vec3<f32>(0.0, 1.0, 0.0)), 0xFF00FFu);
+            debug_raw_normal(positions[0].xyz, vertices[0].normal, geo_to_world_rot, 0.5*debug_len, 0xFFFF00u);
+            debug_raw_normal(positions[0].xyz, vertices[0].tangent, geo_to_world_rot, 0.5*debug_len, 0xFF00FFu);
+            debug_raw_normal(positions[1].xyz, vertices[1].normal, geo_to_world_rot, 0.5*debug_len, 0xFFFF00u);
+            debug_raw_normal(positions[1].xyz, vertices[1].tangent, geo_to_world_rot, 0.5*debug_len, 0xFF00FFu);
+            debug_raw_normal(positions[2].xyz, vertices[2].normal, geo_to_world_rot, 0.5*debug_len, 0xFFFF00u);
+            debug_raw_normal(positions[2].xyz, vertices[2].tangent, geo_to_world_rot, 0.5*debug_len, 0xFF00FFu);
+            // draw tangent space
+            debug_line(pos_world, pos_world + debug_len * qrot(basis, vec3<f32>(1.0, 0.0, 0.0)), 0x0000FFu);
+            debug_line(pos_world, pos_world + debug_len * qrot(basis, vec3<f32>(0.0, 1.0, 0.0)), 0x00FF00u);
+            debug_line(pos_world, pos_world + debug_len * qrot(basis, vec3<f32>(0.0, 0.0, 1.0)), 0xFF0000u);
         }
 
         let base_color_factor = unpack4x8unorm(entry.base_color_factor);
-        let lod = 0.0; //TODO: this is actually complicated
         let base_color_sample = textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tex_coords, lod);
         albedo = (base_color_factor * base_color_sample).xyz;
     }
+
     textureStore(out_depth, global_id.xy, vec4<f32>(depth, 0.0, 0.0, 0.0));
     textureStore(out_basis, global_id.xy, basis);
     textureStore(out_albedo, global_id.xy, vec4<f32>(albedo, 0.0));

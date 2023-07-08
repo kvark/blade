@@ -34,3 +34,9 @@ fn make_quat(m: mat3x3<f32>) -> vec4<f32> {
     }
     return normalize(q);
 }
+
+// Find a quaternion that turns vector 'a' into vector 'b' in a shortest arc.
+// https://stackoverflow.com/questions/1171849/finding-quaternion-representing-the-rotation-from-one-vector-to-another
+fn shortest_arc_quat(a: vec3<f32>, b: vec3<f32>) -> vec4<f32> {
+    return normalize(vec4<f32>(cross(a, b), 1.0 + dot(a, b)));
+}
