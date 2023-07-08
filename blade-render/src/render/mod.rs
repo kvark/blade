@@ -106,6 +106,8 @@ struct FrameData {
     depth_view: blade_graphics::TextureView,
     basis: blade_graphics::Texture,
     basis_view: blade_graphics::TextureView,
+    flat_normal: blade_graphics::Texture,
+    flat_normal_view: blade_graphics::TextureView,
     albedo: blade_graphics::Texture,
     albedo_view: blade_graphics::TextureView,
     camera_params: CameraParams,
@@ -160,6 +162,13 @@ impl FrameData {
             gpu,
         );
         encoder.init_texture(basis);
+        let (flat_normal, flat_normal_view) = Self::create_target(
+            "flat_normal",
+            blade_graphics::TextureFormat::Rgba8Snorm,
+            size,
+            gpu,
+        );
+        encoder.init_texture(flat_normal);
         let (albedo, albedo_view) = Self::create_target(
             "basis",
             blade_graphics::TextureFormat::Rgba8Unorm,
@@ -173,6 +182,8 @@ impl FrameData {
             depth_view,
             basis,
             basis_view,
+            flat_normal,
+            flat_normal_view,
             albedo,
             albedo_view,
             camera_params: CameraParams::default(),
@@ -185,6 +196,8 @@ impl FrameData {
         gpu.destroy_texture(self.depth);
         gpu.destroy_texture_view(self.basis_view);
         gpu.destroy_texture(self.basis);
+        gpu.destroy_texture_view(self.flat_normal_view);
+        gpu.destroy_texture(self.flat_normal);
         gpu.destroy_texture_view(self.albedo_view);
         gpu.destroy_texture(self.albedo);
     }
@@ -267,6 +280,7 @@ struct FillData<'a> {
     debug_buf: blade_graphics::BufferPiece,
     out_depth: blade_graphics::TextureView,
     out_basis: blade_graphics::TextureView,
+    out_flat_normal: blade_graphics::TextureView,
     out_albedo: blade_graphics::TextureView,
 }
 
@@ -287,6 +301,8 @@ struct MainData {
     t_prev_basis: blade_graphics::TextureView,
     t_albedo: blade_graphics::TextureView,
     t_prev_albedo: blade_graphics::TextureView,
+    t_flat_normal: blade_graphics::TextureView,
+    t_prev_flat_normal: blade_graphics::TextureView,
     debug_buf: blade_graphics::BufferPiece,
     reservoirs: blade_graphics::BufferPiece,
     prev_reservoirs: blade_graphics::BufferPiece,
@@ -1000,6 +1016,7 @@ impl Renderer {
                     debug_buf: self.debug.buffer.into(),
                     out_depth: cur.depth_view,
                     out_basis: cur.basis_view,
+                    out_flat_normal: cur.flat_normal_view,
                     out_albedo: cur.albedo_view,
                 },
             );
@@ -1034,6 +1051,8 @@ impl Renderer {
                     t_prev_depth: prev.depth_view,
                     t_basis: cur.basis_view,
                     t_prev_basis: prev.basis_view,
+                    t_flat_normal: cur.flat_normal_view,
+                    t_prev_flat_normal: prev.flat_normal_view,
                     t_albedo: cur.albedo_view,
                     t_prev_albedo: prev.albedo_view,
                     debug_buf: self.debug.buffer.into(),
