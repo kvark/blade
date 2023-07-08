@@ -116,6 +116,8 @@ var t_basis: texture_2d<f32>;
 var t_prev_basis: texture_2d<f32>;
 var t_albedo: texture_2d<f32>;
 var t_prev_albedo: texture_2d<f32>;
+var t_flat_normal: texture_2d<f32>;
+var t_prev_flat_normal: texture_2d<f32>;
 var output: texture_storage_2d<rgba16float, write>;
 
 fn sample_circle(random: f32) -> vec2<f32> {
@@ -172,12 +174,14 @@ fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample
 struct Surface {
     basis: vec4<f32>,
     albedo: vec3<f32>,
+    flat_normal: vec3<f32>,
     depth: f32,
 }
 
 fn read_surface(pixel: vec2<i32>) -> Surface {
     var surface: Surface;
     surface.basis = normalize(textureLoad(t_basis, pixel, 0));
+    surface.flat_normal = normalize(textureLoad(t_flat_normal, pixel, 0).xyz);
     surface.albedo = textureLoad(t_albedo, pixel, 0).xyz;
     surface.depth = textureLoad(t_depth, pixel, 0).x;
     return surface;
@@ -186,6 +190,7 @@ fn read_surface(pixel: vec2<i32>) -> Surface {
 fn read_prev_surface(pixel: vec2<i32>) -> Surface {
     var surface: Surface;
     surface.basis = normalize(textureLoad(t_prev_basis, pixel, 0));
+    surface.flat_normal = normalize(textureLoad(t_prev_flat_normal, pixel, 0).xyz);
     surface.albedo = textureLoad(t_prev_albedo, pixel, 0).xyz;
     surface.depth = textureLoad(t_prev_depth, pixel, 0).x;
     return surface;
@@ -195,8 +200,7 @@ fn read_prev_surface(pixel: vec2<i32>) -> Surface {
 // 1.0 means fully compatible, and
 // 0.0 means totally incompatible.
 fn compare_surfaces(a: Surface, b: Surface) -> f32 {
-    //let r_normal = smoothstep(0.4, 0.9, dot(a.basis, b.basis));
-    let r_normal = 1.0; //TODO: need to use the flat or geometry normal
+    let r_normal = smoothstep(0.4, 0.9, dot(a.flat_normal, b.flat_normal));
     let r_depth = 1.0 - smoothstep(0.0, 100.0, abs(a.depth - b.depth));
     return r_normal * r_depth;
 }
@@ -258,14 +262,20 @@ fn estimate_target_pdf_with_occlusion(surface: Surface, position: vec3<f32>, dir
 
 const REJECT_NO = 0u;
 const REJECT_BACKFACING = 1u;
-const REJECT_ZERO_TARGET_SCORE = 2u;
-const REJECT_OCCLUDED = 3u;
+const REJECT_UNCORRELATED = 2u;
+const REJECT_ZERO_TARGET_SCORE = 3u;
+const REJECT_OCCLUDED = 4u;
 
 fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debug_len: f32) -> u32 {
+    if (dot(ls.dir, surface.flat_normal) <= 0.0)
+    {
+        return REJECT_BACKFACING;
+    }
+
     let up = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
     if (dot(ls.dir, up) <= 0.0)
     {
-        return REJECT_BACKFACING;
+        return REJECT_UNCORRELATED;
     }
 
     let target_score = compute_target_score(ls.radiance);
