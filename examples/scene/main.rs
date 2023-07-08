@@ -372,14 +372,22 @@ impl Example {
                         }
                     });
                 // debug flags
-                for (name, bit) in blade_render::DebugFlags::all().iter_names() {
-                    let mut enabled = self.debug.flags.contains(bit);
+                ui.label("Draw debug:");
+                for (name, bit) in blade_render::DebugDrawFlags::all().iter_names() {
+                    let mut enabled = self.debug.draw_flags.contains(bit);
                     ui.checkbox(&mut enabled, name);
-                    self.debug.flags.set(bit, enabled);
+                    self.debug.draw_flags.set(bit, enabled);
+                }
+                ui.label("Ignore textures:");
+                for (name, bit) in blade_render::DebugTextureFlags::all().iter_names() {
+                    let mut enabled = self.debug.texture_flags.contains(bit);
+                    ui.checkbox(&mut enabled, name);
+                    self.debug.texture_flags.set(bit, enabled);
                 }
                 // reset accumulation
                 self.need_accumulation_reset |= ui.button("reset").clicked();
                 // blits
+                ui.label("Blits:");
                 let mut blits_to_remove = Vec::new();
                 for (i, db) in self.debug_blits.iter_mut().enumerate() {
                     let style = ui.style();

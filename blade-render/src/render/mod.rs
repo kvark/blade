@@ -37,9 +37,17 @@ impl Default for DebugMode {
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq, PartialOrd)]
-    pub struct DebugFlags: u32 {
+    pub struct DebugDrawFlags: u32 {
         const GEOMETRY = 1;
         const RESTIR = 2;
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq, PartialOrd)]
+    pub struct DebugTextureFlags: u32 {
+        const ALBEDO = 1;
+        const NORMAL = 2;
     }
 }
 
@@ -66,7 +74,8 @@ pub struct DebugBlit {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DebugConfig {
     pub view_mode: DebugMode,
-    pub flags: DebugFlags,
+    pub draw_flags: DebugDrawFlags,
+    pub texture_flags: DebugTextureFlags,
     pub mouse_pos: Option<[i32; 2]>,
 }
 
@@ -251,8 +260,10 @@ struct CameraParams {
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct DebugParams {
     view_mode: u32,
-    flags: u32,
+    draw_flags: u32,
+    texture_flags: u32,
     mouse_pos: [i32; 2],
+    unused: u32,
 }
 
 #[repr(C)]
@@ -990,11 +1001,13 @@ impl Renderer {
         assert!(!self.is_tlas_dirty);
         let debug = DebugParams {
             view_mode: debug_config.view_mode as u32,
-            flags: debug_config.flags.bits(),
+            draw_flags: debug_config.draw_flags.bits(),
+            texture_flags: debug_config.texture_flags.bits(),
             mouse_pos: match debug_config.mouse_pos {
                 Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
                 None => [-1; 2],
             },
+            unused: 0,
         };
         let cur = self.frame_data.first().unwrap();
         let prev = self.frame_data.last().unwrap();
