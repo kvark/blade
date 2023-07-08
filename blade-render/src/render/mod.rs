@@ -343,8 +343,9 @@ struct HitEntry {
     geometry_to_object: mint::ColumnMatrix4<f32>,
     base_color_texture: u32,
     base_color_factor: [u8; 4],
+    normal_texture: u32,
     // make sure the end of the struct is aligned
-    finish_pad: [u32; 2],
+    finish_pad: [u32; 1],
 }
 
 #[derive(Clone, PartialEq)]
@@ -780,6 +781,7 @@ impl Renderer {
             self.index_buffers.clear();
             self.textures.clear();
             let dummy_white = self.textures.alloc(self.dummy.white_view);
+            let dummy_black = self.textures.alloc(self.dummy.black_view);
 
             if geometry_count != 0 {
                 let hit_staging = {
@@ -869,7 +871,16 @@ impl Renderer {
                                     (c[3] * 255.0) as u8,
                                 ]
                             },
-                            finish_pad: [0; 2],
+                            normal_texture: match material.normal_texture {
+                                Some(handle) => {
+                                    *texture_indices.entry(handle).or_insert_with(|| {
+                                        let texture = &asset_hub.textures[handle];
+                                        self.textures.alloc(texture.view)
+                                    })
+                                }
+                                None => dummy_black,
+                            },
+                            finish_pad: [0; 1],
                         };
 
                         log::debug!("Entry[{geometry_index}] = {hit_entry:?}");
