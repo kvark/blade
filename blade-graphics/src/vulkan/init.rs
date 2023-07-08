@@ -18,6 +18,7 @@ struct AdapterCapabilities {
     properties: vk::PhysicalDeviceProperties,
     layered: bool,
     ray_tracing: bool,
+    buffer_marker: bool,
 }
 
 unsafe fn inspect_adapter(
@@ -128,6 +129,7 @@ unsafe fn inspect_adapter(
         );
         return None;
     }
+
     let ray_tracing = if !supported_extensions.contains(&vk::KhrAccelerationStructureFn::name())
         || !supported_extensions.contains(&vk::KhrRayQueryFn::name())
     {
@@ -168,11 +170,14 @@ unsafe fn inspect_adapter(
         true
     };
 
+    let buffer_marker = supported_extensions.contains(&vk::AmdBufferMarkerFn::name());
+
     Some(AdapterCapabilities {
         api_version,
         properties,
         layered: portability_subset_properties.min_vertex_input_binding_stride_alignment != 0,
         ray_tracing,
+        buffer_marker,
     })
 }
 
@@ -317,6 +322,9 @@ impl super::Context {
                 device_extensions.push(vk::KhrDeferredHostOperationsFn::name());
                 device_extensions.push(vk::KhrAccelerationStructureFn::name());
                 device_extensions.push(vk::KhrRayQueryFn::name());
+            }
+            if capabilities.buffer_marker {
+                device_extensions.push(vk::AmdBufferMarkerFn::name());
             }
 
             let str_pointers = device_extensions
