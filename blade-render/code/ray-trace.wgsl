@@ -343,16 +343,18 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         }
     }
 
+    let prev_pixel = get_projected_pixel(prev_camera, position);
+
     // First, gather the list of reservoirs to merge with
     //TODO: pixel coordinates could be compressed here, easily
     var accepted_reservoir_pixels = array<vec2<i32>, MAX_RESERVOIRS>();
     var accepted_count = 0u;
     var temporal_index = ~0u;
     for (var tap = 0u; tap <= parameters.spatial_taps; tap += 1u) {
-        var other_pixel = pixel;
+        var other_pixel = prev_pixel;
         if (tap != 0u) {
-            let r0 = max(pixel - vec2<i32>(parameters.spatial_radius), vec2<i32>(0));
-            let r1 = min(pixel + vec2<i32>(parameters.spatial_radius + 1), vec2<i32>(camera.target_size));
+            let r0 = max(prev_pixel - vec2<i32>(parameters.spatial_radius), vec2<i32>(0));
+            let r1 = min(prev_pixel + vec2<i32>(parameters.spatial_radius + 1), vec2<i32>(prev_camera.target_size));
             other_pixel = vec2<i32>(mix(vec2<f32>(r0), vec2<f32>(r1), vec2<f32>(random_gen(rng), random_gen(rng))));
         } else if (parameters.temporal_history == 0u)
         {
