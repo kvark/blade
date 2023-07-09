@@ -32,6 +32,7 @@ struct Device {
     timeline_semaphore: khr::TimelineSemaphore,
     dynamic_rendering: khr::DynamicRendering,
     ray_tracing: Option<RayTracingDevice>,
+    buffer_marker: Option<vk::AmdBufferMarkerFn>,
     workarounds: Workarounds,
 }
 
@@ -225,12 +226,20 @@ struct Presentation {
     acquire_semaphore: vk::Semaphore,
 }
 
+struct CrashHandler {
+    name: String,
+    marker_buf: Buffer,
+    raw_string: Box<[u8]>,
+    next_offset: usize,
+}
+
 pub struct CommandEncoder {
     pool: vk::CommandPool,
     buffers: Box<[CommandBuffer]>,
     device: Device,
     update_data: Vec<u8>,
     present: Option<Presentation>,
+    crash_handler: Option<CrashHandler>,
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
@@ -318,6 +327,7 @@ impl crate::traits::CommandDevice for Context {
                 .allocate_command_buffers(&cmd_buf_info)
                 .unwrap()
         };
+
         let buffers = cmd_buffers
             .into_iter()
             .map(|raw| {
@@ -343,12 +353,29 @@ impl crate::traits::CommandDevice for Context {
                 }
             })
             .collect();
+
+        let crash_handler = if self.device.buffer_marker.is_some() {
+            Some(CrashHandler {
+                name: desc.name.to_string(),
+                marker_buf: self.create_buffer(crate::BufferDesc {
+                    name: "_marker",
+                    size: 4,
+                    memory: crate::Memory::Shared,
+                }),
+                raw_string: vec![0; 0x1000].into_boxed_slice(),
+                next_offset: 0,
+            })
+        } else {
+            None
+        };
+
         CommandEncoder {
             pool,
             buffers,
             device: self.device.clone(),
             update_data: Vec::new(),
             present: None,
+            crash_handler,
         }
     }
 
@@ -368,6 +395,9 @@ impl crate::traits::CommandDevice for Context {
             self.device
                 .core
                 .destroy_command_pool(command_encoder.pool, None)
+        };
+        if let Some(crash_handler) = command_encoder.crash_handler {
+            self.destroy_buffer(crash_handler.marker_buf);
         };
     }
 
@@ -398,11 +428,28 @@ impl crate::traits::CommandDevice for Context {
             .wait_dst_stage_mask(&wait_stages[..num_wait_semaphores])
             .signal_semaphores(&signal_semaphores_all[..num_signal_sepahores])
             .push_next(&mut timeline_info);
-        unsafe {
+        let ret = unsafe {
             self.device
                 .core
                 .queue_submit(queue.raw, &[vk_info.build()], vk::Fence::null())
-                .unwrap();
+        };
+        match ret {
+            Ok(()) => (),
+            Err(vk::Result::ERROR_DEVICE_LOST) => match encoder.crash_handler {
+                Some(ref ch) => {
+                    let last_id = unsafe { *(ch.marker_buf.data() as *mut u32) };
+                    if last_id != 0 {
+                        let (history, last_marker) = ch.extract(last_id);
+                        log::error!("Last GPU executed marker is '{last_marker}'");
+                        log::info!("Marker history: {}", history);
+                    }
+                    panic!("GPU has crashed in {}", ch.name);
+                }
+                None => {
+                    panic!("GPU has crashed, and no debug information is available.");
+                }
+            },
+            Err(other) => panic!("Submit error {}", other),
         }
 
         if let Some(presentation) = encoder.present.take() {
@@ -557,10 +604,12 @@ impl Device {
         &self,
         meshes: &[crate::AccelerationStructureMesh],
     ) -> BottomLevelAccelerationStructureInput {
+        let mut total_primitive_count = 0;
         let mut max_primitive_counts = Vec::with_capacity(meshes.len());
         let mut build_range_infos = Vec::with_capacity(meshes.len());
         let mut geometries = Vec::with_capacity(meshes.len());
         for mesh in meshes {
+            total_primitive_count += mesh.triangle_count;
             max_primitive_counts.push(mesh.triangle_count);
             build_range_infos.push(vk::AccelerationStructureBuildRangeInfoKHR {
                 primitive_count: mesh.triangle_count,
@@ -571,22 +620,33 @@ impl Device {
 
             let mut triangles = vk::AccelerationStructureGeometryTrianglesDataKHR::builder()
                 .vertex_format(map_vertex_format(mesh.vertex_format))
-                .vertex_data(vk::DeviceOrHostAddressConstKHR {
-                    device_address: self.get_device_address(&mesh.vertex_data),
+                .vertex_data({
+                    let device_address = self.get_device_address(&mesh.vertex_data);
+                    assert!(
+                        device_address & 0x3 == 0,
+                        "Vertex data address {device_address} is not aligned"
+                    );
+                    vk::DeviceOrHostAddressConstKHR { device_address }
                 })
                 .vertex_stride(mesh.vertex_stride as u64)
                 .max_vertex(mesh.vertex_count.saturating_sub(1))
                 .build();
             if let Some(index_type) = mesh.index_type {
+                let device_address = self.get_device_address(&mesh.index_data);
+                assert!(
+                    device_address & 0x3 == 0,
+                    "Index data address {device_address} is not aligned"
+                );
                 triangles.index_type = map_index_type(index_type);
-                triangles.index_data = vk::DeviceOrHostAddressConstKHR {
-                    device_address: self.get_device_address(&mesh.index_data),
-                };
+                triangles.index_data = vk::DeviceOrHostAddressConstKHR { device_address };
             }
             if mesh.transform_data.buffer.raw != vk::Buffer::null() {
-                triangles.transform_data = vk::DeviceOrHostAddressConstKHR {
-                    device_address: self.get_device_address(&mesh.transform_data),
-                };
+                let device_address = self.get_device_address(&mesh.transform_data);
+                assert!(
+                    device_address & 0xF == 0,
+                    "Transform data address {device_address} is not aligned"
+                );
+                triangles.transform_data = vk::DeviceOrHostAddressConstKHR { device_address };
             }
 
             let geometry = vk::AccelerationStructureGeometryKHR::builder()
@@ -607,6 +667,11 @@ impl Device {
             .geometries(&geometries)
             .build();
 
+        log::debug!(
+            "BLAS total {} primitives in {} geometries",
+            total_primitive_count,
+            geometries.len()
+        );
         BottomLevelAccelerationStructureInput {
             max_primitive_counts: max_primitive_counts.into_boxed_slice(),
             build_range_infos: build_range_infos.into_boxed_slice(),

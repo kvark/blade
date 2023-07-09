@@ -1,4 +1,31 @@
 use ash::vk;
+use std::str;
+
+impl super::CrashHandler {
+    fn add_marker(&mut self, marker: &str) -> u32 {
+        if self.next_offset < self.raw_string.len() {
+            self.raw_string[self.next_offset] = b'|';
+            self.next_offset += 1;
+        }
+        let len = marker.as_bytes().len().min(self.raw_string.len());
+        if self.next_offset + len > self.raw_string.len() {
+            self.next_offset = 0;
+        }
+        let start = self.next_offset;
+        self.next_offset += len;
+        let end = self.next_offset;
+        self.raw_string[start..end].copy_from_slice(&marker.as_bytes()[..len]);
+        start as u32 | (end << 16) as u32
+    }
+
+    pub(super) fn extract(&self, id: u32) -> (&str, &str) {
+        let start = id as usize & 0xFFFF;
+        let end = (id >> 16) as usize;
+        let history = str::from_utf8(&self.raw_string[..start]).unwrap_or_default();
+        let marker = str::from_utf8(&self.raw_string[start..end]).unwrap();
+        (history, marker)
+    }
+}
 
 impl super::PipelineContext<'_> {
     #[inline]
@@ -170,6 +197,26 @@ fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo {
 }
 
 impl super::CommandEncoder {
+    pub fn mark(&mut self, marker: &str) {
+        if let Some(ref mut ch) = self.crash_handler {
+            let id = ch.add_marker(marker);
+            unsafe {
+                (self
+                    .device
+                    .buffer_marker
+                    .as_ref()
+                    .unwrap()
+                    .cmd_write_buffer_marker_amd)(
+                    self.buffers[0].raw,
+                    vk::PipelineStageFlags::ALL_COMMANDS,
+                    ch.marker_buf.raw,
+                    0,
+                    id,
+                );
+            }
+        }
+    }
+
     pub fn start(&mut self) {
         self.buffers.rotate_left(1);
 
@@ -193,6 +240,7 @@ impl super::CommandEncoder {
 
     pub(super) fn finish(&mut self) -> vk::CommandBuffer {
         self.barrier();
+        self.mark("finish");
         let raw = self.buffers[0].raw;
         unsafe { self.device.core.end_command_buffer(raw).unwrap() }
         raw
@@ -281,6 +329,7 @@ impl super::CommandEncoder {
 
     pub fn transfer(&mut self) -> super::TransferCommandEncoder {
         self.barrier();
+        self.mark("pass/transfer");
         super::TransferCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
@@ -289,6 +338,7 @@ impl super::CommandEncoder {
 
     pub fn acceleration_structure(&mut self) -> super::AccelerationStructureCommandEncoder {
         self.barrier();
+        self.mark("pass/acc-struct");
         super::AccelerationStructureCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
@@ -297,6 +347,7 @@ impl super::CommandEncoder {
 
     pub fn compute(&mut self) -> super::ComputeCommandEncoder {
         self.barrier();
+        self.mark("pass/compute");
         super::ComputeCommandEncoder {
             cmd_buf: self.buffers[0],
             device: &self.device,
@@ -306,6 +357,7 @@ impl super::CommandEncoder {
 
     pub fn render(&mut self, targets: crate::RenderTargetSet) -> super::RenderCommandEncoder {
         self.barrier();
+        self.mark("pass/render");
 
         let mut target_size = [0u16; 2];
         let mut color_attachments = Vec::with_capacity(targets.colors.len());
@@ -472,8 +524,13 @@ impl crate::traits::AccelerationStructureEncoder
     ) {
         let mut blas_input = self.device.map_acceleration_structure_meshes(meshes);
         blas_input.build_info.dst_acceleration_structure = acceleration_structure.raw;
+        let scratch_address = self.device.get_device_address(&scratch_data);
+        assert!(
+            scratch_address & 0xFF == 0,
+            "BLAS scratch address {scratch_address} is not aligned"
+        );
         blas_input.build_info.scratch_data = vk::DeviceOrHostAddressKHR {
-            device_address: self.device.get_device_address(&scratch_data),
+            device_address: scratch_address,
         };
 
         let rt = self.device.ray_tracing.as_ref().unwrap();
