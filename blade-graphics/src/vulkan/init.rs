@@ -167,6 +167,7 @@ unsafe fn inspect_adapter(
         false
     } else {
         log::info!("Ray tracing is supported");
+        log::debug!("Ray tracing properties: {acceleration_structure_properties:#?}");
         true
     };
 
@@ -386,6 +387,18 @@ impl super::Context {
                         &device_core,
                     ),
                 })
+            } else {
+                None
+            },
+            buffer_marker: if capabilities.buffer_marker && desc.validation {
+                //TODO: https://github.com/ash-rs/ash/issues/768
+                Some(vk::AmdBufferMarkerFn::load(|name| unsafe {
+                    mem::transmute(
+                        instance
+                            .core
+                            .get_device_proc_addr(device_core.handle(), name.as_ptr()),
+                    )
+                }))
             } else {
                 None
             },

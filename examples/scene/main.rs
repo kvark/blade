@@ -50,7 +50,7 @@ struct Example {
     renderer: Renderer,
     pending_scene: Option<(choir::RunningTask, blade_render::Scene)>,
     gui_painter: blade_egui::GuiPainter,
-    command_encoder: gpu::CommandEncoder,
+    command_encoder: Option<gpu::CommandEncoder>,
     asset_hub: AssetHub,
     context: Arc<gpu::Context>,
     camera: blade_render::Camera,
@@ -185,7 +185,7 @@ impl Example {
             renderer,
             pending_scene: Some((load_finish.run(), scene)),
             gui_painter,
-            command_encoder,
+            command_encoder: Some(command_encoder),
             asset_hub,
             context,
             camera,
@@ -213,6 +213,8 @@ impl Example {
         self.gui_painter.destroy(&self.context);
         self.renderer.destroy(&self.context);
         self.asset_hub.destroy();
+        self.context
+            .destroy_command_encoder(self.command_encoder.take().unwrap());
     }
 
     fn wait_for_previous_frame(&mut self) {
@@ -248,33 +250,36 @@ impl Example {
             self.prev_sync_point.as_ref().unwrap(),
         );
 
-        self.command_encoder.start();
+        // Note: the resize is split in 2 parts because `wait_for_previous_frame`
+        // wants to borrow `self` mutably, and `command_encoder` blocks that.
         let surface_config = Self::make_surface_config(physical_size);
-        if surface_config.size != self.renderer.get_screen_size() {
-            log::info!("Resizing to {}", surface_config.size);
+        let new_render_size = surface_config.size;
+        if new_render_size != self.renderer.get_screen_size() {
+            log::info!("Resizing to {}", new_render_size);
             self.wait_for_previous_frame();
-            self.renderer.resize_screen(
-                surface_config.size,
-                &mut self.command_encoder,
-                &self.context,
-            );
             self.context.resize(surface_config);
+        }
+
+        let command_encoder = self.command_encoder.as_mut().unwrap();
+        command_encoder.start();
+        if new_render_size != self.renderer.get_screen_size() {
+            self.renderer
+                .resize_screen(new_render_size, command_encoder, &self.context);
             self.need_accumulation_reset = true;
         }
 
         self.gui_painter
-            .update_textures(&mut self.command_encoder, gui_textures, &self.context);
+            .update_textures(command_encoder, gui_textures, &self.context);
 
         let mut temp_buffers = Vec::new();
         let mut temp_acceleration_structures = Vec::new();
-        self.asset_hub
-            .flush(&mut self.command_encoder, &mut temp_buffers);
+        self.asset_hub.flush(command_encoder, &mut temp_buffers);
         //TODO: remove these checks.
         // We should be able to update TLAS and render content
         // even while it's still being loaded.
         if self.pending_scene.is_none() {
             self.renderer.prepare(
-                &mut self.command_encoder,
+                command_encoder,
                 &self.camera,
                 &self.asset_hub,
                 &self.context,
@@ -286,13 +291,13 @@ impl Example {
             );
             self.need_accumulation_reset = false;
             self.renderer
-                .ray_trace(&mut self.command_encoder, self.debug, self.ray_config);
+                .ray_trace(command_encoder, self.debug, self.ray_config);
         }
 
         let frame = self.context.acquire_frame();
-        self.command_encoder.init_texture(frame.texture());
+        command_encoder.init_texture(frame.texture());
 
-        if let mut pass = self.command_encoder.render(gpu::RenderTargetSet {
+        if let mut pass = command_encoder.render(gpu::RenderTargetSet {
             colors: &[gpu::RenderTarget {
                 view: frame.texture_view(),
                 init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
@@ -311,8 +316,8 @@ impl Example {
                 .paint(&mut pass, gui_primitives, &screen_desc, &self.context);
         }
 
-        self.command_encoder.present(frame);
-        let sync_point = self.context.submit(&mut self.command_encoder);
+        command_encoder.present(frame);
+        let sync_point = self.context.submit(command_encoder);
         self.gui_painter.after_submit(sync_point.clone());
 
         self.wait_for_previous_frame();

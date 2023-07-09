@@ -254,12 +254,14 @@ impl fmt::Display for Meta {
     }
 }
 
+#[derive(Debug)]
 struct Transfer {
     stage: blade_graphics::Buffer,
     dst: blade_graphics::Buffer,
     size: u64,
 }
 
+#[derive(Debug)]
 struct BlasConstruct {
     meshes: Vec<blade_graphics::AccelerationStructureMesh>,
     scratch: blade_graphics::Buffer,
