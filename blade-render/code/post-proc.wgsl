@@ -6,7 +6,8 @@ struct ToneMapParams {
     white_level: f32,
 }
 
-var input: texture_2d<f32>;
+var t_albedo: texture_2d<f32>;
+var light_diffuse: texture_2d<f32>;
 var<uniform> tone_map_params: ToneMapParams;
 
 struct VertexOutput {
@@ -18,14 +19,16 @@ struct VertexOutput {
 fn blit_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
     var vo: VertexOutput;
     vo.clip_pos = vec4<f32>(f32(vi & 1u) * 4.0 - 1.0, f32(vi & 2u) * 2.0 - 1.0, 0.0, 1.0);
-    vo.input_size = textureDimensions(input, 0);
+    vo.input_size = textureDimensions(light_diffuse, 0);
     return vo;
 }
 
 @fragment
 fn blit_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
     let tc = vec2<i32>(i32(vo.clip_pos.x), i32(vo.input_size.y) - i32(vo.clip_pos.y));
-    let color = textureLoad(input, tc, 0);
+    let albedo = textureLoad(t_albedo, tc, 0);
+    let radiance = textureLoad(light_diffuse, tc, 0);
+    let color = albedo * radiance;
     if (tone_map_params.enabled != 0u) {
         // Following https://blog.en.uwa4d.com/2022/07/19/physically-based-renderingg-hdr-tone-mapping/
         let l_adjusted = tone_map_params.key_value / tone_map_params.average_lum * color.xyz;

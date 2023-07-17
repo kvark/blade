@@ -5,9 +5,10 @@ mod scene;
 pub use dummy::DummyResources;
 pub use env_map::EnvironmentMap;
 
-use std::{collections::HashMap, mem, path::Path, ptr};
+use std::{collections::HashMap, mem, num::NonZeroU32, path::Path, ptr};
 
 const MAX_RESOURCES: u32 = 1000;
+const RADIANCE_FORMAT: blade_graphics::TextureFormat = blade_graphics::TextureFormat::Rgba16Float;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderConfig {
@@ -107,6 +108,71 @@ struct DebugRender {
     blit_pipeline: blade_graphics::RenderPipeline,
     line_size: u32,
     buffer_size: u32,
+}
+
+struct DoubleRenderTarget {
+    texture: blade_graphics::Texture,
+    views: [blade_graphics::TextureView; 2],
+    active: usize,
+}
+
+impl DoubleRenderTarget {
+    fn new(
+        name: &str,
+        format: blade_graphics::TextureFormat,
+        size: blade_graphics::Extent,
+        encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+    ) -> Self {
+        let texture = gpu.create_texture(blade_graphics::TextureDesc {
+            name,
+            format,
+            size,
+            dimension: blade_graphics::TextureDimension::D2,
+            array_layer_count: 2,
+            mip_level_count: 1,
+            usage: blade_graphics::TextureUsage::RESOURCE | blade_graphics::TextureUsage::STORAGE,
+        });
+        encoder.init_texture(texture);
+        let mut views = [blade_graphics::TextureView::default(); 2];
+        for (i, view) in views.iter_mut().enumerate() {
+            *view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
+                name: &format!("{name}-{i}"),
+                texture,
+                format,
+                dimension: blade_graphics::ViewDimension::D2,
+                subresources: &blade_graphics::TextureSubresources {
+                    base_array_layer: i as u32,
+                    array_layer_count: NonZeroU32::new(1),
+                    ..Default::default()
+                },
+            });
+        }
+
+        Self {
+            texture,
+            views,
+            active: 0,
+        }
+    }
+
+    fn destroy(&mut self, gpu: &blade_graphics::Context) {
+        gpu.destroy_texture(self.texture);
+        for view in self.views.iter_mut() {
+            gpu.destroy_texture_view(*view);
+        }
+    }
+
+    fn swap(&mut self) {
+        self.active = 1 - self.active;
+    }
+
+    fn cur(&self) -> blade_graphics::TextureView {
+        self.views[self.active]
+    }
+    fn prev(&self) -> blade_graphics::TextureView {
+        self.views[1 - self.active]
+    }
 }
 
 struct FrameData {
@@ -225,10 +291,10 @@ pub struct Renderer {
     config: RenderConfig,
     shaders: Shaders,
     frame_data: [FrameData; 2],
-    main_texture: blade_graphics::Texture,
-    main_view: blade_graphics::TextureView,
+    lighting_diffuse: DoubleRenderTarget,
     fill_pipeline: blade_graphics::ComputePipeline,
     main_pipeline: blade_graphics::ComputePipeline,
+    atrous_pipeline: blade_graphics::ComputePipeline,
     blit_pipeline: blade_graphics::RenderPipeline,
     scene: super::Scene,
     acceleration_structure: blade_graphics::AccelerationStructure,
@@ -310,13 +376,24 @@ struct MainData {
     t_prev_depth: blade_graphics::TextureView,
     t_basis: blade_graphics::TextureView,
     t_prev_basis: blade_graphics::TextureView,
-    t_albedo: blade_graphics::TextureView,
-    t_prev_albedo: blade_graphics::TextureView,
     t_flat_normal: blade_graphics::TextureView,
     t_prev_flat_normal: blade_graphics::TextureView,
     debug_buf: blade_graphics::BufferPiece,
     reservoirs: blade_graphics::BufferPiece,
     prev_reservoirs: blade_graphics::BufferPiece,
+    out_diffuse: blade_graphics::TextureView,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct AtrousParams {
+    extent: [u32; 2],
+}
+
+#[derive(blade_macros::ShaderData)]
+struct AtrousData {
+    params: AtrousParams,
+    input: blade_graphics::TextureView,
     output: blade_graphics::TextureView,
 }
 
@@ -331,7 +408,8 @@ struct ToneMapParams {
 
 #[derive(blade_macros::ShaderData)]
 struct BlitData {
-    input: blade_graphics::TextureView,
+    t_albedo: blade_graphics::TextureView,
+    light_diffuse: blade_graphics::TextureView,
     tone_map_params: ToneMapParams,
 }
 
@@ -379,6 +457,7 @@ struct HitEntry {
 pub struct Shaders {
     fill_gbuf: blade_asset::Handle<crate::Shader>,
     ray_trace: blade_asset::Handle<crate::Shader>,
+    atrous: blade_asset::Handle<crate::Shader>,
     post_proc: blade_asset::Handle<crate::Shader>,
     debug_draw: blade_asset::Handle<crate::Shader>,
     debug_blit: blade_asset::Handle<crate::Shader>,
@@ -390,6 +469,7 @@ impl Shaders {
         let shaders = Self {
             fill_gbuf: ctx.load_shader("fill-gbuf.wgsl"),
             ray_trace: ctx.load_shader("ray-trace.wgsl"),
+            atrous: ctx.load_shader("atrous.wgsl"),
             post_proc: ctx.load_shader("post-proc.wgsl"),
             debug_draw: ctx.load_shader("debug-draw.wgsl"),
             debug_blit: ctx.load_shader("debug-blit.wgsl"),
@@ -401,6 +481,7 @@ impl Shaders {
 struct ShaderPipelines {
     fill: blade_graphics::ComputePipeline,
     main: blade_graphics::ComputePipeline,
+    atrous: blade_graphics::ComputePipeline,
     post_proc: blade_graphics::RenderPipeline,
     debug_draw: blade_graphics::RenderPipeline,
     debug_blit: blade_graphics::RenderPipeline,
@@ -435,6 +516,17 @@ impl ShaderPipelines {
         let layout = <MainData as blade_graphics::ShaderData>::layout();
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "ray-trace",
+            data_layouts: &[&layout],
+            compute: shader.at("main"),
+        })
+    }
+    fn create_atrous(
+        shader: &blade_graphics::Shader,
+        gpu: &blade_graphics::Context,
+    ) -> blade_graphics::ComputePipeline {
+        let layout = <AtrousData as blade_graphics::ShaderData>::layout();
+        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+            name: "atrous",
             data_layouts: &[&layout],
             compute: shader.at("main"),
         })
@@ -512,6 +604,7 @@ impl ShaderPipelines {
         Ok(Self {
             fill: Self::create_gbuf_fill(shader_man[shaders.fill_gbuf].raw.as_ref().unwrap(), gpu),
             main: Self::create_ray_trace(sh_main, gpu),
+            atrous: Self::create_atrous(shader_man[shaders.atrous].raw.as_ref().unwrap(), gpu),
             post_proc: Self::create_post_proc(
                 shader_man[shaders.post_proc].raw.as_ref().unwrap(),
                 config.surface_format,
@@ -568,13 +661,6 @@ impl Renderer {
             ptr::write_bytes(variance_buffer.data(), 0, mem::size_of::<DebugVariance>());
         }
 
-        let (main_texture, main_view) = FrameData::create_target(
-            "main",
-            blade_graphics::TextureFormat::Rgba16Float,
-            config.screen_size,
-            gpu,
-        );
-        encoder.init_texture(main_texture);
         let frame_data = [
             FrameData::new(config.screen_size, sp.reservoir_size, encoder, gpu),
             FrameData::new(config.screen_size, sp.reservoir_size, encoder, gpu),
@@ -604,11 +690,17 @@ impl Renderer {
             config: *config,
             shaders,
             frame_data,
-            main_texture,
-            main_view,
+            lighting_diffuse: DoubleRenderTarget::new(
+                "light/diffuse",
+                RADIANCE_FORMAT,
+                config.screen_size,
+                encoder,
+                gpu,
+            ),
             scene: super::Scene::default(),
             fill_pipeline: sp.fill,
             main_pipeline: sp.main,
+            atrous_pipeline: sp.atrous,
             blit_pipeline: sp.post_proc,
             acceleration_structure: blade_graphics::AccelerationStructure::default(),
             env_map: EnvironmentMap::with_pipeline(&dummy, sp.env_preproc),
@@ -640,8 +732,7 @@ impl Renderer {
         for frame_data in self.frame_data.iter_mut() {
             frame_data.destroy(gpu);
         }
-        gpu.destroy_texture_view(self.main_view);
-        gpu.destroy_texture(self.main_texture);
+        self.lighting_diffuse.destroy(gpu);
         if self.hit_buffer != blade_graphics::Buffer::default() {
             gpu.destroy_buffer(self.hit_buffer);
         }
@@ -706,6 +797,11 @@ impl Renderer {
                 self.main_pipeline = ShaderPipelines::create_ray_trace(shader, gpu);
             }
         }
+        if self.shaders.atrous != old.atrous {
+            if let Ok(ref shader) = asset_hub.shaders[self.shaders.atrous].raw {
+                self.atrous_pipeline = ShaderPipelines::create_atrous(shader, gpu);
+            }
+        }
         if self.shaders.post_proc != old.post_proc {
             if let Ok(ref shader) = asset_hub.shaders[self.shaders.post_proc].raw {
                 self.blit_pipeline =
@@ -743,18 +839,9 @@ impl Renderer {
             frame_data.destroy(gpu);
             *frame_data = FrameData::new(size, self.reservoir_size, encoder, gpu);
         }
-
-        gpu.destroy_texture(self.main_texture);
-        gpu.destroy_texture_view(self.main_view);
-        let (main_texture, main_view) = FrameData::create_target(
-            "main",
-            blade_graphics::TextureFormat::Rgba16Float,
-            size,
-            gpu,
-        );
-        encoder.init_texture(main_texture);
-        self.main_texture = main_texture;
-        self.main_view = main_view;
+        self.lighting_diffuse.destroy(gpu);
+        self.lighting_diffuse =
+            DoubleRenderTarget::new("light/diffuse", RADIANCE_FORMAT, size, encoder, gpu);
     }
 
     /// Prepare to render a frame.
@@ -1066,12 +1153,29 @@ impl Renderer {
                     t_prev_basis: prev.basis_view,
                     t_flat_normal: cur.flat_normal_view,
                     t_prev_flat_normal: prev.flat_normal_view,
-                    t_albedo: cur.albedo_view,
-                    t_prev_albedo: prev.albedo_view,
                     debug_buf: self.debug.buffer.into(),
                     reservoirs: cur.reservoir_buf.into(),
                     prev_reservoirs: prev.reservoir_buf.into(),
-                    output: self.main_view,
+                    out_diffuse: self.lighting_diffuse.cur(),
+                },
+            );
+            pc.dispatch(groups);
+        }
+    }
+
+    pub fn denoise(&mut self, command_encoder: &mut blade_graphics::CommandEncoder) {
+        if let mut pass = command_encoder.compute() {
+            self.lighting_diffuse.swap();
+            let mut pc = pass.with(&self.atrous_pipeline);
+            let groups = self.atrous_pipeline.get_dispatch_for(self.screen_size);
+            pc.bind(
+                0,
+                &AtrousData {
+                    params: AtrousParams {
+                        extent: [self.screen_size.width, self.screen_size.height],
+                    },
+                    input: self.lighting_diffuse.prev(),
+                    output: self.lighting_diffuse.cur(),
                 },
             );
             pc.dispatch(groups);
@@ -1081,11 +1185,13 @@ impl Renderer {
     /// Blit the rendering result into a specified render pass.
     pub fn blit(&self, pass: &mut blade_graphics::RenderCommandEncoder, debug_blits: &[DebugBlit]) {
         let pp = &self.scene.post_processing;
+        let cur = self.frame_data.first().unwrap();
         if let mut pc = pass.with(&self.blit_pipeline) {
             pc.bind(
                 0,
                 &BlitData {
-                    input: self.main_view,
+                    t_albedo: cur.albedo_view,
+                    light_diffuse: self.lighting_diffuse.cur(),
                     tone_map_params: ToneMapParams {
                         enabled: 1,
                         average_lum: pp.average_luminocity,
@@ -1097,7 +1203,6 @@ impl Renderer {
             pc.draw(0, 3, 0, 1);
         }
         if let mut pc = pass.with(&self.debug.draw_pipeline) {
-            let cur = self.frame_data.first().unwrap();
             pc.bind(
                 0,
                 &DebugDrawData {

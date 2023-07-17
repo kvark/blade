@@ -292,6 +292,7 @@ impl Example {
             self.need_accumulation_reset = false;
             self.renderer
                 .ray_trace(command_encoder, self.debug, self.ray_config);
+            self.renderer.denoise(command_encoder);
         }
 
         let frame = self.context.acquire_frame();
