@@ -56,7 +56,7 @@ fn debug_raw_normal(pos: vec3<f32>, normal_raw: u32, rotation: vec4<f32>, debug_
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    if (any(global_id.xy > camera.target_size)) {
+    if (any(global_id.xy >= camera.target_size)) {
         return;
     }
 
@@ -69,7 +69,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var depth = 0.0;
     var basis = vec4<f32>(0.0);
     var flat_normal = vec3<f32>(0.0);
-    var albedo = vec3<f32>(0.0);
+    var albedo = vec3<f32>(1.0);
 
     if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
         let enable_debug = (debug.draw_flags & DebugDrawFlags_GEOMETRY) != 0u && all(global_id.xy == debug.mouse_pos);

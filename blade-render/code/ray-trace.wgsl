@@ -114,11 +114,9 @@ var t_depth: texture_2d<f32>;
 var t_prev_depth: texture_2d<f32>;
 var t_basis: texture_2d<f32>;
 var t_prev_basis: texture_2d<f32>;
-var t_albedo: texture_2d<f32>;
-var t_prev_albedo: texture_2d<f32>;
 var t_flat_normal: texture_2d<f32>;
 var t_prev_flat_normal: texture_2d<f32>;
-var output: texture_storage_2d<rgba16float, write>;
+var out_diffuse: texture_storage_2d<rgba16float, write>;
 
 fn sample_circle(random: f32) -> vec2<f32> {
     let angle = 2.0 * PI * random;
@@ -173,7 +171,6 @@ fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample
 
 struct Surface {
     basis: vec4<f32>,
-    albedo: vec3<f32>,
     flat_normal: vec3<f32>,
     depth: f32,
 }
@@ -182,7 +179,6 @@ fn read_surface(pixel: vec2<i32>) -> Surface {
     var surface: Surface;
     surface.basis = normalize(textureLoad(t_basis, pixel, 0));
     surface.flat_normal = normalize(textureLoad(t_flat_normal, pixel, 0).xyz);
-    surface.albedo = textureLoad(t_albedo, pixel, 0).xyz;
     surface.depth = textureLoad(t_depth, pixel, 0).x;
     return surface;
 }
@@ -191,7 +187,6 @@ fn read_prev_surface(pixel: vec2<i32>) -> Surface {
     var surface: Surface;
     surface.basis = normalize(textureLoad(t_prev_basis, pixel, 0));
     surface.flat_normal = normalize(textureLoad(t_prev_flat_normal, pixel, 0).xyz);
-    surface.albedo = textureLoad(t_prev_albedo, pixel, 0).xyz;
     surface.depth = textureLoad(t_prev_depth, pixel, 0).x;
     return surface;
 }
@@ -205,13 +200,11 @@ fn compare_surfaces(a: Surface, b: Surface) -> f32 {
     return r_normal * r_depth;
 }
 
-fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> vec3<f32> {
+fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> f32 {
     let lambert_brdf = 1.0 / PI;
     let lambert_term = qrot(qinv(surface.basis), dir).z;
-    if (lambert_term <= 0.0) {
-        return vec3<f32>(0.0);
-    }
-    return surface.albedo * lambert_brdf;
+    //Note: albedo not modulated
+    return lambert_brdf * max(0.0, lambert_term);
 }
 
 fn check_ray_occluded(position: vec3<f32>, direction: vec3<f32>, debug_len: f32) -> bool {
@@ -236,8 +229,9 @@ fn evaluate_reflected_light(surface: Surface, direction: vec3<f32>) -> vec3<f32>
     let uv = map_equirect_dir_to_uv(direction);
     let pixel = vec2<i32>(uv * vec2<f32>(dim));
     let radiance = textureLoad(env_map, pixel, 0).xyz;
-    let color = evaluate_brdf(surface, direction);
-    return radiance * color;
+    let brdf = evaluate_brdf(surface, direction);
+    // Note: returns radiance not modulated by albedo
+    return radiance * brdf;
 }
 
 struct TargetPdf {
@@ -303,22 +297,28 @@ fn balance_heuristic(w0: f32, w1: f32, h0: f32, h1: f32) -> HeuristicFactors {
     return hf;
 }
 
-fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, enable_debug: bool) -> vec3<f32> {
+struct RestirOutput {
+    radiance: vec3<f32>,
+}
+
+fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, enable_debug: bool) -> RestirOutput {
     if (debug.view_mode == DebugMode_Depth) {
-        return vec3<f32>(surface.depth / camera.depth);
+        let depth = vec3<f32>(surface.depth / camera.depth);
+        return RestirOutput(depth);
     }
     let ray_dir = get_ray_direction(camera, pixel);
     let pixel_index = get_reservoir_index(pixel, camera);
     if (surface.depth == 0.0) {
         reservoirs[pixel_index] = StoredReservoir();
-        return evaluate_environment(ray_dir);
+        let env = evaluate_environment(ray_dir);
+        return RestirOutput(env);
     }
 
     let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
     let position = camera.position + surface.depth * ray_dir;
     let normal = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
     if (debug.view_mode == DebugMode_Normal) {
-        return normal;
+        return RestirOutput(normal);
     }
 
     var canonical = LiveReservoir();
@@ -449,12 +449,14 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     let effective_history = select(reservoir.history, BASE_CANONICAL_MIS + f32(accepted_count), PAIRWISE_MIS);
     let stored = pack_reservoir_detail(reservoir, effective_history);
     reservoirs[pixel_index] = stored;
-    return stored.contribution_weight * shaded_color;
+    var ro = RestirOutput();
+    ro.radiance = stored.contribution_weight * shaded_color;
+    return ro;
 }
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    if (any(global_id.xy > camera.target_size)) {
+    if (any(global_id.xy >= camera.target_size)) {
         return;
     }
 
@@ -464,11 +466,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let surface = read_surface(vec2<i32>(global_id.xy));
     let enable_debug = all(global_id.xy == debug.mouse_pos);
     let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
-    let color = compute_restir(surface, vec2<i32>(global_id.xy), &rng, enable_restir_debug);
+    let ro = compute_restir(surface, vec2<i32>(global_id.xy), &rng, enable_restir_debug);
+    let color = ro.radiance;
     if (enable_debug) {
         debug_buf.variance.color_sum += color;
         debug_buf.variance.color2_sum += color * color;
         debug_buf.variance.count += 1u;
     }
-    textureStore(output, global_id.xy, vec4<f32>(color, 1.0));
+    textureStore(out_diffuse, global_id.xy, vec4<f32>(color, 1.0));
 }
