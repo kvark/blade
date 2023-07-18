@@ -90,6 +90,11 @@ pub struct RayConfig {
     pub spatial_radius: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct DenoiserConfig {
+    pub num_passes: u32,
+}
+
 // Has to match the shader!
 #[repr(C)]
 #[derive(Debug)]
@@ -394,6 +399,8 @@ struct AtrousParams {
 struct AtrousData {
     params: AtrousParams,
     input: blade_graphics::TextureView,
+    t_flat_normal: blade_graphics::TextureView,
+    t_depth: blade_graphics::TextureView,
     output: blade_graphics::TextureView,
 }
 
@@ -1163,22 +1170,31 @@ impl Renderer {
         }
     }
 
-    pub fn denoise(&mut self, command_encoder: &mut blade_graphics::CommandEncoder) {
-        if let mut pass = command_encoder.compute() {
-            self.lighting_diffuse.swap();
-            let mut pc = pass.with(&self.atrous_pipeline);
-            let groups = self.atrous_pipeline.get_dispatch_for(self.screen_size);
-            pc.bind(
-                0,
-                &AtrousData {
-                    params: AtrousParams {
-                        extent: [self.screen_size.width, self.screen_size.height],
+    pub fn denoise(
+        &mut self,
+        command_encoder: &mut blade_graphics::CommandEncoder,
+        denoiser_config: DenoiserConfig,
+    ) {
+        let cur = self.frame_data.first().unwrap();
+        for _ in 0..denoiser_config.num_passes {
+            if let mut pass = command_encoder.compute() {
+                self.lighting_diffuse.swap();
+                let mut pc = pass.with(&self.atrous_pipeline);
+                let groups = self.atrous_pipeline.get_dispatch_for(self.screen_size);
+                pc.bind(
+                    0,
+                    &AtrousData {
+                        params: AtrousParams {
+                            extent: [self.screen_size.width, self.screen_size.height],
+                        },
+                        input: self.lighting_diffuse.prev(),
+                        t_flat_normal: cur.flat_normal_view,
+                        t_depth: cur.depth_view,
+                        output: self.lighting_diffuse.cur(),
                     },
-                    input: self.lighting_diffuse.prev(),
-                    output: self.lighting_diffuse.cur(),
-                },
-            );
-            pc.dispatch(groups);
+                );
+                pc.dispatch(groups);
+            }
         }
     }
 
