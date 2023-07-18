@@ -33,6 +33,7 @@ struct Device {
     dynamic_rendering: khr::DynamicRendering,
     ray_tracing: Option<RayTracingDevice>,
     buffer_marker: Option<vk::AmdBufferMarkerFn>,
+    shader_info: Option<vk::AmdShaderInfoFn>,
     workarounds: Workarounds,
 }
 

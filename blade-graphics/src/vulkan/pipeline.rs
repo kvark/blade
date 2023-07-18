@@ -1,6 +1,6 @@
 use ash::vk;
 use naga::back::spv;
-use std::{ffi, mem, ptr};
+use std::{ffi, mem, ptr, str};
 
 const DUMP_PREFIX: Option<&str> = None;
 
@@ -409,6 +409,31 @@ impl super::Context {
         let raw = raw_vec.pop().unwrap();
 
         unsafe { self.device.core.destroy_shader_module(cs.vk_module, None) };
+
+        if let Some(ref ext) = self.device.shader_info {
+            let mut data_size = mem::size_of::<vk::ShaderStatisticsInfoAMD>();
+            let mut statistics = vk::ShaderStatisticsInfoAMD::default();
+            if unsafe {
+                #[allow(trivial_casts)]
+                (ext.get_shader_info_amd)(
+                    self.device.core.handle(),
+                    raw,
+                    vk::ShaderStageFlags::COMPUTE,
+                    vk::ShaderInfoTypeAMD::STATISTICS,
+                    &mut data_size,
+                    &mut statistics as *mut _ as *mut _,
+                )
+            } == vk::Result::SUCCESS
+            {
+                let ru = &statistics.resource_usage;
+                log::info!(
+                    "Compute pipeline '{}' uses: {} VGPRs, {} SGPRs",
+                    desc.name,
+                    ru.num_used_vgprs,
+                    ru.num_used_sgprs,
+                );
+            }
+        }
 
         if !desc.name.is_empty() {
             self.set_object_name(vk::ObjectType::PIPELINE, raw, desc.name);
