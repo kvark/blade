@@ -60,6 +60,7 @@ struct Example {
     last_render_time: time::Instant,
     render_times: VecDeque<u32>,
     ray_config: blade_render::RayConfig,
+    denoiser_config: blade_render::DenoiserConfig,
     debug_blits: Vec<blade_render::DebugBlit>,
     workers: Vec<choir::WorkerHandle>,
 }
@@ -202,6 +203,7 @@ impl Example {
                 spatial_tap_history: 5,
                 spatial_radius: 10,
             },
+            denoiser_config: blade_render::DenoiserConfig { num_passes: 5 },
             debug_blits: Vec::new(),
             workers,
         }
@@ -292,7 +294,7 @@ impl Example {
             self.need_accumulation_reset = false;
             self.renderer
                 .ray_trace(command_encoder, self.debug, self.ray_config);
-            self.renderer.denoise(command_encoder);
+            self.renderer.denoise(command_encoder, self.denoiser_config);
         }
 
         let frame = self.context.acquire_frame();
@@ -363,6 +365,7 @@ impl Example {
                     .logarithmic(true),
             );
         });
+
         egui::CollapsingHeader::new("Debug")
             .default_open(true)
             .show(ui, |ui| {
@@ -445,7 +448,8 @@ impl Example {
                     });
                 }
             });
-        let old_config = self.ray_config;
+
+        let old_ray_config = self.ray_config;
         egui::CollapsingHeader::new("Ray Trace")
             .default_open(true)
             .show(ui, |ui| {
@@ -475,7 +479,15 @@ impl Example {
                         .text("Spatial radius (px)"),
                 );
             });
-        self.need_accumulation_reset |= self.ray_config != old_config;
+        self.need_accumulation_reset |= self.ray_config != old_ray_config;
+
+        egui::CollapsingHeader::new("Denoise")
+            .default_open(true)
+            .show(ui, |ui| {
+                let dc = &mut self.denoiser_config;
+                ui.add(egui::Slider::new(&mut dc.num_passes, 0..=15u32).text("A-trous passes"));
+            });
+
         egui::CollapsingHeader::new("Tone Map").show(ui, |ui| {
             let pp = self.renderer.configure_post_processing();
             ui.add(
@@ -490,6 +502,7 @@ impl Example {
             );
             ui.add(egui::Slider::new(&mut pp.white_level, 0.1f32..=2f32).text("White level"));
         });
+
         egui::CollapsingHeader::new("Performance").show(ui, |ui| {
             let times = self.render_times.as_slices();
             let fd_points = egui::plot::PlotPoints::from_iter(
