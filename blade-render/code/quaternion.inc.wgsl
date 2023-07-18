@@ -38,5 +38,10 @@ fn make_quat(m: mat3x3<f32>) -> vec4<f32> {
 // Find a quaternion that turns vector 'a' into vector 'b' in a shortest arc.
 // https://stackoverflow.com/questions/1171849/finding-quaternion-representing-the-rotation-from-one-vector-to-another
 fn shortest_arc_quat(a: vec3<f32>, b: vec3<f32>) -> vec4<f32> {
-    return normalize(vec4<f32>(cross(a, b), 1.0 + dot(a, b)));
+    if (dot(a, b) < -0.99999) {
+        // Choose the axis of rotation that doesn't align with the vectors
+        return select(vec4<f32>(1.0, 0.0, 0.0, 0.0), vec4<f32>(0.0, 1.0, 0.0, 0.0), abs(a.x) > abs(a.y));
+    } else {
+        return normalize(vec4<f32>(cross(a, b), 1.0 + dot(a, b)));
+    }
 }
