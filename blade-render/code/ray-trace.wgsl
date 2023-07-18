@@ -440,7 +440,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     return ro;
 }
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(8, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (any(global_id.xy >= camera.target_size)) {
         return;

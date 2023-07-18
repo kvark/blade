@@ -54,7 +54,7 @@ fn debug_raw_normal(pos: vec3<f32>, normal_raw: u32, rotation: vec4<f32>, debug_
     debug_line(pos, pos + debug_len * nw, color);
 }
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(8, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (any(global_id.xy >= camera.target_size)) {
         return;
