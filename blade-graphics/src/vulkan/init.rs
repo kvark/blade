@@ -19,6 +19,7 @@ struct AdapterCapabilities {
     layered: bool,
     ray_tracing: bool,
     buffer_marker: bool,
+    shader_info: bool,
 }
 
 unsafe fn inspect_adapter(
@@ -172,6 +173,7 @@ unsafe fn inspect_adapter(
     };
 
     let buffer_marker = supported_extensions.contains(&vk::AmdBufferMarkerFn::name());
+    let shader_info = supported_extensions.contains(&vk::AmdShaderInfoFn::name());
 
     Some(AdapterCapabilities {
         api_version,
@@ -179,6 +181,7 @@ unsafe fn inspect_adapter(
         layered: portability_subset_properties.min_vertex_input_binding_stride_alignment != 0,
         ray_tracing,
         buffer_marker,
+        shader_info,
     })
 }
 
@@ -327,6 +330,9 @@ impl super::Context {
             if capabilities.buffer_marker {
                 device_extensions.push(vk::AmdBufferMarkerFn::name());
             }
+            if capabilities.shader_info {
+                device_extensions.push(vk::AmdShaderInfoFn::name());
+            }
 
             let str_pointers = device_extensions
                 .iter()
@@ -393,6 +399,17 @@ impl super::Context {
             buffer_marker: if capabilities.buffer_marker && desc.validation {
                 //TODO: https://github.com/ash-rs/ash/issues/768
                 Some(vk::AmdBufferMarkerFn::load(|name| unsafe {
+                    mem::transmute(
+                        instance
+                            .core
+                            .get_device_proc_addr(device_core.handle(), name.as_ptr()),
+                    )
+                }))
+            } else {
+                None
+            },
+            shader_info: if capabilities.shader_info {
+                Some(vk::AmdShaderInfoFn::load(|name| unsafe {
                     mem::transmute(
                         instance
                             .core
