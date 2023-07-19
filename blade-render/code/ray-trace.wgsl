@@ -7,7 +7,7 @@
 #include "surface.inc.wgsl"
 
 const PI: f32 = 3.1415926;
-const MAX_RESERVOIRS: u32 = 10u;
+const MAX_RESERVOIRS: u32 = 2u;
 // See "9.1 pairwise mis for robust reservoir reuse"
 // "Correlations and Reuse for Fast and Accurate Physically Based Light Transport"
 const PAIRWISE_MIS: bool = true;
@@ -65,6 +65,12 @@ fn get_reservoir_index(pixel: vec2<i32>, camera: CameraParams) -> i32 {
     } else {
         return -1;
     }
+}
+
+fn get_pixel_from_reservoir_index(index: i32, camera: CameraParams) -> vec2<i32> {
+    let y = index / i32(camera.target_size.x);
+    let x = index - y * i32(camera.target_size.x);
+    return vec2<i32>(x, y);
 }
 
 fn bump_reservoir(r: ptr<function, LiveReservoir>, history: f32) {
@@ -332,8 +338,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     let prev_pixel = get_projected_pixel(prev_camera, position);
 
     // First, gather the list of reservoirs to merge with
-    //TODO: pixel coordinates could be compressed here, easily
-    var accepted_reservoir_pixels = array<vec2<i32>, MAX_RESERVOIRS>();
+    var accepted_reservoir_indices = array<i32, MAX_RESERVOIRS>();
     var accepted_count = 0u;
     var temporal_index = ~0u;
     for (var tap = 0u; tap <= parameters.spatial_taps; tap += 1u) {
@@ -365,7 +370,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         if (tap == 0u) {
             temporal_index = accepted_count;
         }
-        accepted_reservoir_pixels[accepted_count] = other_pixel;
+        accepted_reservoir_indices[accepted_count] = other_index;
         if (accepted_count < MAX_RESERVOIRS) {
             accepted_count += 1u;
         }
@@ -376,14 +381,14 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     var shaded_color = vec3<f32>(0.0);
     var mis_canonical = BASE_CANONICAL_MIS;
     for (var rid = 0u; rid < accepted_count; rid += 1u) {
-        let neighbor_pixel = accepted_reservoir_pixels[rid];
-        let neighbor_index = get_reservoir_index(neighbor_pixel, prev_camera);
+        let neighbor_index = accepted_reservoir_indices[rid];
         let neighbor = prev_reservoirs[neighbor_index];
 
         let max_history = select(parameters.spatial_tap_history, parameters.temporal_history, rid == temporal_index);
         var other: LiveReservoir;
         var other_color: vec3<f32>;
         if (PAIRWISE_MIS) {
+            let neighbor_pixel = get_pixel_from_reservoir_index(neighbor_index, prev_camera);
             let neighbor_history = min(neighbor.confidence, f32(max_history));
             let neighbor_surface = read_prev_surface(neighbor_pixel);
             let neighbor_dir = get_ray_direction(prev_camera, neighbor_pixel);
