@@ -390,25 +390,27 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         if (PAIRWISE_MIS) {
             let neighbor_pixel = get_pixel_from_reservoir_index(neighbor_index, prev_camera);
             let neighbor_history = min(neighbor.confidence, f32(max_history));
-            let neighbor_surface = read_prev_surface(neighbor_pixel);
-            let neighbor_dir = get_ray_direction(prev_camera, neighbor_pixel);
-            let neighbor_position = prev_camera.position + neighbor_surface.depth * neighbor_dir;
+            {   // scoping this to hint the register allocation
+                let neighbor_surface = read_prev_surface(neighbor_pixel);
+                let neighbor_dir = get_ray_direction(prev_camera, neighbor_pixel);
+                let neighbor_position = prev_camera.position + neighbor_surface.depth * neighbor_dir;
 
-            let t_neighbor_at_canonical = estimate_target_pdf_with_occlusion(surface, position, neighbor.light_dir, debug_len);
-            let t_canonical_at_neighbor = estimate_target_pdf_with_occlusion(neighbor_surface, neighbor_position, canonical.selected_dir, debug_len);
+                let t_canonical_at_neighbor = estimate_target_pdf_with_occlusion(neighbor_surface, neighbor_position, canonical.selected_dir, debug_len);
+                let mis_sub_canonical = balance_heuristic(
+                    t_canonical_at_neighbor.score, canonical.selected_target_score,
+                    neighbor_history * f32(accepted_count), canonical.history);
+                mis_canonical += 1.0 - mis_sub_canonical.weight;
+            }
+
             // Notes about t_neighbor_at_neighbor:
             // 1. we assume lights aren't moving. Technically we should check if the
             //   target light has moved, and re-evaluate the occlusion.
             // 2. we can use the cached target score, and there is no use of the target color
             //let t_neighbor_at_neighbor = estimate_target_pdf(neighbor_surface, neighbor_position, neighbor.selected_dir);
-
+            let t_neighbor_at_canonical = estimate_target_pdf_with_occlusion(surface, position, neighbor.light_dir, debug_len);
             let mis_neighbor = balance_heuristic(
                 neighbor.target_score, t_neighbor_at_canonical.score,
                 neighbor_history * f32(accepted_count), canonical.history);
-            let mis_sub_canonical = balance_heuristic(
-                t_canonical_at_neighbor.score, canonical.selected_target_score,
-                neighbor_history * f32(accepted_count), canonical.history);
-            mis_canonical += 1.0 - mis_sub_canonical.weight;
 
             other.history = neighbor_history;
             other.selected_dir = neighbor.light_dir;
