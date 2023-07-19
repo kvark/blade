@@ -217,10 +217,7 @@ fn check_ray_occluded(position: vec3<f32>, direction: vec3<f32>, debug_len: f32)
 }
 
 fn evaluate_reflected_light(surface: Surface, direction: vec3<f32>) -> vec3<f32> {
-    let dim = textureDimensions(env_map);
-    let uv = map_equirect_dir_to_uv(direction);
-    let pixel = vec2<i32>(uv * vec2<f32>(dim));
-    let radiance = textureLoad(env_map, pixel, 0).xyz;
+    let radiance = evaluate_environment(direction);
     let brdf = evaluate_brdf(surface, direction);
     // Note: returns radiance not modulated by albedo
     return radiance * brdf;
@@ -231,18 +228,22 @@ struct TargetPdf {
     score: f32,
 }
 
-fn estimate_target_pdf(surface: Surface, position: vec3<f32>, direction: vec3<f32>) -> TargetPdf {
-    var t: TargetPdf;
-    t.color = evaluate_reflected_light(surface, direction);
-    t.score = compute_target_score(t.color);
-    return t;
+fn make_target_pdf(color: vec3<f32>) -> TargetPdf {
+    return TargetPdf(color, compute_target_score(color));
 }
 
 fn estimate_target_pdf_with_occlusion(surface: Surface, position: vec3<f32>, direction: vec3<f32>, debug_len: f32) -> TargetPdf {
+    let brdf = evaluate_brdf(surface, direction);
+    if (dot(direction, surface.flat_normal) <= 0.0 || brdf == 0.0) {
+        return TargetPdf();
+    }
+
     if (check_ray_occluded(position, direction, debug_len)) {
         return TargetPdf();
     } else {
-        return estimate_target_pdf(surface, position, direction);
+        //Note: same as `evaluate_reflected_light`
+        let radiance = evaluate_environment(direction);
+        return make_target_pdf(brdf * radiance);
     }
 }
 
@@ -278,14 +279,14 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debu
 
 struct HeuristicFactors {
     weight: f32,
-    history: f32,
+    //history: f32,
 }
 
 fn balance_heuristic(w0: f32, w1: f32, h0: f32, h1: f32) -> HeuristicFactors {
     var hf: HeuristicFactors;
     let balance_denom = h0 * w0 + h1 * w1;
     hf.weight = select(h0 * w0 / balance_denom, 0.0, balance_denom <= 0.0);
-    hf.history = select(pow(clamp(w1 / w0, 0.0, 1.0), 8.0), 1.0, w0 <= 0.0);
+    //hf.history = select(pow(clamp(w1 / w0, 0.0, 1.0), 8.0), 1.0, w0 <= 0.0);
     return hf;
 }
 
