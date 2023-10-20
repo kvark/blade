@@ -70,9 +70,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var basis = vec4<f32>(0.0);
     var flat_normal = vec3<f32>(0.0);
     var albedo = vec3<f32>(1.0);
+    let enable_debug = all(global_id.xy == debug.mouse_pos);
 
     if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
-        let enable_debug = (debug.draw_flags & DebugDrawFlags_GEOMETRY) != 0u && all(global_id.xy == debug.mouse_pos);
         let entry = hit_entries[intersection.instance_custom_index + intersection.geometry_index];
         depth = intersection.t;
 
@@ -118,6 +118,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         basis = shortest_arc_quat(vec3<f32>(0.0, 0.0, 1.0), normalize(normal));
 
         if (enable_debug) {
+            debug_buf.entry.tex_coords = tex_coords;
+            debug_buf.entry.base_color_texture = entry.base_color_texture;
+            debug_buf.entry.normal_texture = entry.normal_texture;
+        }
+        if (enable_debug && (debug.draw_flags & DebugDrawFlags_GEOMETRY) != 0u) {
             let debug_len = intersection.t * 0.2;
             debug_line(positions[0].xyz, positions[1].xyz, 0x00FFFFu);
             debug_line(positions[1].xyz, positions[2].xyz, 0x00FFFFu);
@@ -141,6 +146,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         } else {
             let base_color_sample = textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tex_coords, lod);
             albedo = (base_color_factor * base_color_sample).xyz;
+        }
+    } else {
+        if (enable_debug) {
+            debug_buf.entry = DebugEntry();
         }
     }
 
