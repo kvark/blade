@@ -429,10 +429,8 @@ impl Example {
                 }
                 // selection info
                 if let Some(screen_pos) = self.debug.mouse_pos {
-                    let sd = self
-                        .renderer
-                        .read_debug_std_deviation()
-                        .unwrap_or([0.0; 3].into());
+                    let info = self.renderer.read_debug_selection_info(&self.asset_hub);
+                    let sd = info.std_deviation.unwrap_or([0.0; 3].into());
                     let style = ui.style();
                     egui::Frame::group(style).show(ui, |ui| {
                         ui.label(format!("Selected: {screen_pos:?}"));
@@ -442,6 +440,20 @@ impl Example {
                             ui.label(format!("{:.2}", sd.y));
                             ui.label(format!("{:.2}", sd.z));
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("Texture coords:");
+                            ui.label(format!("{:.2}", info.tex_coords.x));
+                            ui.label(format!("{:.2}", info.tex_coords.y));
+                        });
+                        let missing = "-".to_string();
+                        ui.label(format!(
+                            "Base color: {}",
+                            info.base_color_texture.as_ref().unwrap_or(&missing)
+                        ));
+                        ui.label(format!(
+                            "Normal: {}",
+                            info.normal_texture.as_ref().unwrap_or(&missing)
+                        ));
                         if ui.button("Unselect").clicked() {
                             self.debug.mouse_pos = None;
                         }

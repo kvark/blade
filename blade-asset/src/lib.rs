@@ -317,6 +317,10 @@ impl<B: Baker> AssetManager<B> {
         }
     }
 
+    pub fn get_main_source_path(&self, handle: Handle<B::Output>) -> &Path {
+        self.slots[handle.inner].sources.first().unwrap()
+    }
+
     fn make_target_path(&self, base_path: &Path, file_name: &Path, meta: &B::Meta) -> PathBuf {
         use base64::engine::{general_purpose::URL_SAFE as ENCODING_ENGINE, Engine as _};
         // The name hash includes the parent path and the metadata.

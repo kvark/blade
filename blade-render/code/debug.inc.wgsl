@@ -11,6 +11,11 @@ struct DebugVariance {
     color2_sum: vec3<f32>,
     count: u32,
 }
+struct DebugEntry {
+    tex_coords: vec2<f32>,
+    base_color_texture: u32,
+    normal_texture: u32,
+}
 struct DebugBuffer {
     vertex_count: u32,
     instance_count: atomic<u32>,
@@ -19,6 +24,7 @@ struct DebugBuffer {
     capacity: u32,
     open: u32,
     variance: DebugVariance,
+    entry: DebugEntry,
     lines: array<DebugLine>,
 }
 

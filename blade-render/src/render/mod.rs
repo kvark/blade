@@ -95,6 +95,13 @@ pub struct DenoiserConfig {
     pub num_passes: u32,
 }
 
+pub struct SelectionInfo {
+    pub std_deviation: Option<mint::Vector3<f32>>,
+    pub tex_coords: mint::Vector2<f32>,
+    pub base_color_texture: Option<String>,
+    pub normal_texture: Option<String>,
+}
+
 // Has to match the shader!
 #[repr(C)]
 #[derive(Debug)]
@@ -105,10 +112,20 @@ struct DebugVariance {
     count: u32,
 }
 
+// Has to match the shader!
+#[repr(C)]
+#[derive(Debug)]
+struct DebugEntry {
+    tex_coords: [f32; 2],
+    base_color_texture: u32,
+    normal_texture: u32,
+}
+
 struct DebugRender {
     capacity: u32,
     buffer: blade_graphics::Buffer,
     variance_buffer: blade_graphics::Buffer,
+    entry_buffer: blade_graphics::Buffer,
     draw_pipeline: blade_graphics::RenderPipeline,
     blit_pipeline: blade_graphics::RenderPipeline,
     line_size: u32,
@@ -315,6 +332,10 @@ pub struct Renderer {
     is_tlas_dirty: bool,
     screen_size: blade_graphics::Extent,
     frame_index: u32,
+    //TODO: refactor `ResourceArray` to not carry the freelist logic
+    // This way we can embed user info into the allocator.
+    texture_resource_lookup:
+        HashMap<blade_graphics::ResourceIndex, blade_asset::Handle<crate::Texture>>,
 }
 
 #[repr(C)]
@@ -520,6 +541,7 @@ impl ShaderPipelines {
         shader.check_struct_size::<DebugParams>();
         shader.check_struct_size::<MainParams>();
         shader.check_struct_size::<DebugVariance>();
+        shader.check_struct_size::<DebugEntry>();
         let layout = <MainData as blade_graphics::ShaderData>::layout();
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "ray-trace",
@@ -654,18 +676,37 @@ impl Renderer {
 
         let sp = ShaderPipelines::init(&shaders, config, gpu, shader_man).unwrap();
 
-        let debug_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
-            name: "debug",
-            size: (sp.debug_buffer_size + (config.max_debug_lines - 1) * sp.debug_line_size) as u64,
-            memory: blade_graphics::Memory::Device,
-        });
-        let variance_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
-            name: "variance",
-            size: mem::size_of::<DebugVariance>() as u64,
-            memory: blade_graphics::Memory::Shared,
-        });
+        let debug = DebugRender {
+            capacity: config.max_debug_lines,
+            buffer: gpu.create_buffer(blade_graphics::BufferDesc {
+                name: "debug",
+                size: (sp.debug_buffer_size + (config.max_debug_lines - 1) * sp.debug_line_size)
+                    as u64,
+                memory: blade_graphics::Memory::Device,
+            }),
+            variance_buffer: gpu.create_buffer(blade_graphics::BufferDesc {
+                name: "variance",
+                size: mem::size_of::<DebugVariance>() as u64,
+                memory: blade_graphics::Memory::Shared,
+            }),
+            entry_buffer: gpu.create_buffer(blade_graphics::BufferDesc {
+                name: "debug entry",
+                size: mem::size_of::<DebugEntry>() as u64,
+                memory: blade_graphics::Memory::Shared,
+            }),
+            draw_pipeline: sp.debug_draw,
+            blit_pipeline: sp.debug_blit,
+            line_size: sp.debug_line_size,
+            buffer_size: sp.debug_buffer_size,
+        };
+
         unsafe {
-            ptr::write_bytes(variance_buffer.data(), 0, mem::size_of::<DebugVariance>());
+            ptr::write_bytes(
+                debug.variance_buffer.data(),
+                0,
+                mem::size_of::<DebugVariance>(),
+            );
+            ptr::write_bytes(debug.entry_buffer.data(), 0, mem::size_of::<DebugEntry>());
         }
 
         let frame_data = [
@@ -718,18 +759,11 @@ impl Renderer {
             textures: blade_graphics::TextureArray::new(),
             samplers,
             reservoir_size: sp.reservoir_size,
-            debug: DebugRender {
-                capacity: config.max_debug_lines,
-                buffer: debug_buffer,
-                variance_buffer,
-                draw_pipeline: sp.debug_draw,
-                blit_pipeline: sp.debug_blit,
-                line_size: sp.debug_line_size,
-                buffer_size: sp.debug_buffer_size,
-            },
+            debug,
             is_tlas_dirty: true,
             screen_size: config.screen_size,
             frame_index: 0,
+            texture_resource_lookup: HashMap::default(),
         }
     }
 
@@ -753,6 +787,7 @@ impl Renderer {
         // buffers
         gpu.destroy_buffer(self.debug.buffer);
         gpu.destroy_buffer(self.debug.variance_buffer);
+        gpu.destroy_buffer(self.debug.entry_buffer);
     }
 
     pub fn merge_scene(&mut self, scene: super::Scene) {
@@ -1015,6 +1050,11 @@ impl Renderer {
                     }
                 }
                 assert_eq!(geometry_index, geometry_count as usize);
+
+                self.texture_resource_lookup.clear();
+                for (handle, res_id) in texture_indices {
+                    self.texture_resource_lookup.insert(res_id, handle);
+                }
             } else {
                 self.hit_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
                     name: "hit entries",
@@ -1052,6 +1092,13 @@ impl Renderer {
                 0,
             );
         }
+        transfer.copy_buffer_to_buffer(
+            self.debug
+                .buffer
+                .at(32 + mem::size_of::<DebugVariance>() as u64),
+            self.debug.entry_buffer.into(),
+            mem::size_of::<DebugEntry>() as u64,
+        );
         if reset_reservoirs {
             if !enable_debug_draw {
                 transfer.fill_buffer(self.debug.buffer.at(4), 4, 0);
@@ -1273,19 +1320,36 @@ impl Renderer {
         }
     }
 
-    pub fn read_debug_std_deviation(&self) -> Option<mint::Vector3<f32>> {
-        let dv = unsafe { &*(self.debug.variance_buffer.data() as *const DebugVariance) };
-        if dv.count == 0 {
-            return None;
-        }
-        let sum_avg = glam::Vec3::from(dv.color_sum) / (dv.count as f32);
-        let sum2_avg = glam::Vec3::from(dv.color2_sum) / (dv.count as f32);
-        let variance = sum2_avg - sum_avg * sum_avg;
-        Some(mint::Vector3 {
-            x: variance.x.sqrt(),
-            y: variance.y.sqrt(),
-            z: variance.z.sqrt(),
+    fn find_debug_texture(&self, shader_id: u32, asset_hub: &crate::AssetHub) -> Option<String> {
+        self.texture_resource_lookup.get(&shader_id).map(|&handle| {
+            asset_hub
+                .textures
+                .get_main_source_path(handle)
+                .display()
+                .to_string()
         })
+    }
+
+    pub fn read_debug_selection_info(&self, asset_hub: &crate::AssetHub) -> SelectionInfo {
+        let db_v = unsafe { &*(self.debug.variance_buffer.data() as *const DebugVariance) };
+        let db_e = unsafe { &*(self.debug.entry_buffer.data() as *const DebugEntry) };
+        SelectionInfo {
+            std_deviation: if db_v.count == 0 {
+                None
+            } else {
+                let sum_avg = glam::Vec3::from(db_v.color_sum) / (db_v.count as f32);
+                let sum2_avg = glam::Vec3::from(db_v.color2_sum) / (db_v.count as f32);
+                let variance = sum2_avg - sum_avg * sum_avg;
+                Some(mint::Vector3 {
+                    x: variance.x.sqrt(),
+                    y: variance.y.sqrt(),
+                    z: variance.z.sqrt(),
+                })
+            },
+            tex_coords: db_e.tex_coords.into(),
+            base_color_texture: self.find_debug_texture(db_e.base_color_texture, asset_hub),
+            normal_texture: self.find_debug_texture(db_e.normal_texture, asset_hub),
+        }
     }
 
     pub fn configure_post_processing(&mut self) -> &mut crate::PostProcessing {
