@@ -246,7 +246,9 @@ impl CookedModel<'_> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Meta;
+pub struct Meta {
+    pub generate_tangents: bool,
+}
 
 impl fmt::Display for Meta {
     fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
@@ -329,7 +331,7 @@ impl blade_asset::Baker for Baker {
         &self,
         source: &[u8],
         extension: &str,
-        _meta: Meta,
+        meta: Meta,
         cooker: Arc<blade_asset::Cooker<Self>>,
         exe_context: choir::ExecutionContext,
     ) {
@@ -424,8 +426,14 @@ impl blade_asset::Baker for Baker {
                 let gen_tangents = exe_context.choir().spawn("generate tangents").init_iter(
                     flattened_geos.into_iter().enumerate(),
                     move |_, (index, mut fg)| {
-                        let ok = mikktspace::generate_tangents(&mut fg);
-                        assert!(ok, "MikkTSpace failed");
+                        if meta.generate_tangents {
+                            let ok = mikktspace::generate_tangents(&mut fg);
+                            assert!(ok, "MikkTSpace failed");
+                        } else {
+                            for v in fg.0.iter_mut() {
+                                v.tangent = [1.0, 0.0, 0.0, 0.0];
+                            }
+                        }
                         let (indices, vertices) = fg.reconstruct_indices();
                         let mut model = model_clone.lock().unwrap();
                         let geo = &mut model.geometries[index];

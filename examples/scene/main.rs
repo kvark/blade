@@ -3,9 +3,30 @@
 
 use blade_graphics as gpu;
 use blade_render::{AssetHub, Camera, RenderConfig, Renderer};
-use std::{collections::VecDeque, fs, path::Path, sync::Arc, time};
+use std::{collections::VecDeque, fmt, fs, path::Path, sync::Arc, time};
 
 const FRAME_TIME_HISTORY: usize = 30;
+
+#[derive(Clone, Copy, PartialEq, strum::EnumIter)]
+enum DebugBlitInput {
+    None,
+    SelectedBaseColor,
+    SelectedNormal,
+    Environment,
+    EnvironmentWeight,
+}
+impl fmt::Display for DebugBlitInput {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let desc = match *self {
+            Self::None => "-",
+            Self::SelectedBaseColor => "selected base color",
+            Self::SelectedNormal => "selected normal",
+            Self::Environment => "environment map",
+            Self::EnvironmentWeight => "environment weight",
+        };
+        desc.fmt(f)
+    }
+}
 
 #[derive(serde::Deserialize)]
 struct ConfigCamera {
@@ -61,7 +82,8 @@ struct Example {
     render_times: VecDeque<u32>,
     ray_config: blade_render::RayConfig,
     denoiser_config: blade_render::DenoiserConfig,
-    debug_blits: Vec<blade_render::DebugBlit>,
+    debug_blit: Option<blade_render::DebugBlit>,
+    debug_blit_input: DebugBlitInput,
     workers: Vec<choir::WorkerHandle>,
 }
 
@@ -146,9 +168,12 @@ impl Example {
             scene.environment_map = Some(texture);
         }
         for config_model in config_scene.models {
-            let (model, model_task) = asset_hub
-                .models
-                .load(parent.join(&config_model.path), blade_render::model::Meta);
+            let (model, model_task) = asset_hub.models.load(
+                parent.join(&config_model.path),
+                blade_render::model::Meta {
+                    generate_tangents: true,
+                },
+            );
             load_finish.depend_on(model_task);
             scene.objects.push(blade_render::Object {
                 model,
@@ -204,7 +229,8 @@ impl Example {
                 spatial_radius: 10,
             },
             denoiser_config: blade_render::DenoiserConfig { num_passes: 5 },
-            debug_blits: Vec::new(),
+            debug_blit: None,
+            debug_blit_input: DebugBlitInput::None,
             workers,
         }
     }
@@ -313,7 +339,15 @@ impl Example {
                 scale_factor,
             };
             if self.pending_scene.is_none() {
-                self.renderer.blit(&mut pass, &self.debug_blits);
+                let mut debug_blit_array = [blade_render::DebugBlit::default()];
+                let debug_blits = match self.debug_blit {
+                    Some(ref blit) => {
+                        debug_blit_array[0] = *blit;
+                        &debug_blit_array[..]
+                    }
+                    None => &[],
+                };
+                self.renderer.blit(&mut pass, debug_blits);
             }
             self.gui_painter
                 .paint(&mut pass, gui_primitives, &screen_desc, &self.context);
@@ -331,6 +365,8 @@ impl Example {
     }
 
     fn add_gui(&mut self, ui: &mut egui::Ui) {
+        use strum::IntoEnumIterator as _;
+
         let delta = self.last_render_time.elapsed();
         self.last_render_time += delta;
         while self.render_times.len() >= FRAME_TIME_HISTORY {
@@ -373,8 +409,7 @@ impl Example {
                 egui::ComboBox::from_label("View mode")
                     .selected_text(format!("{:?}", self.debug.view_mode))
                     .show_ui(ui, |ui| {
-                        use blade_render::DebugMode as Dm;
-                        for value in [Dm::None, Dm::Depth, Dm::Normal] {
+                        for value in blade_render::DebugMode::iter() {
                             ui.selectable_value(
                                 &mut self.debug.view_mode,
                                 value,
@@ -397,68 +432,110 @@ impl Example {
                 }
                 // reset accumulation
                 self.need_accumulation_reset |= ui.button("reset").clicked();
-                // blits
-                ui.label("Blits:");
-                let mut blits_to_remove = Vec::new();
-                for (i, db) in self.debug_blits.iter_mut().enumerate() {
-                    let style = ui.style();
-                    egui::Frame::group(style).show(ui, |ui| {
-                        if ui.button("-remove").clicked() {
-                            blits_to_remove.push(i);
-                        }
-                        egui::ComboBox::from_label("Input")
-                            .selected_text(format!("{:?}", db.input))
-                            .show_ui(ui, |ui| {
-                                use blade_render::DebugBlitInput as Dbi;
-                                for value in [Dbi::Dummy, Dbi::Environment, Dbi::EnvironmentWeight]
-                                {
-                                    ui.selectable_value(&mut db.input, value, format!("{value:?}"));
-                                }
-                            });
-                        ui.add(egui::Slider::new(&mut db.mip_level, 0u32..=15u32).text("Mip"));
-                        ui.add(
-                            egui::Slider::new(&mut db.scale_power, -5i32..=8i32).text("Scale Pow"),
-                        );
-                    });
-                }
-                for i in blits_to_remove.into_iter().rev() {
-                    self.debug_blits.remove(i);
-                }
-                if ui.button("+add blit").clicked() {
-                    self.debug_blits.push(blade_render::DebugBlit::default());
-                }
                 // selection info
+                let mut selection = blade_render::SelectionInfo::default();
                 if let Some(screen_pos) = self.debug.mouse_pos {
-                    let info = self.renderer.read_debug_selection_info(&self.asset_hub);
-                    let sd = info.std_deviation.unwrap_or([0.0; 3].into());
+                    selection = self.renderer.read_debug_selection_info();
+                    let sd = selection.std_deviation.unwrap_or([0.0; 3].into());
                     let style = ui.style();
                     egui::Frame::group(style).show(ui, |ui| {
-                        ui.label(format!("Selected: {screen_pos:?}"));
+                        ui.label(format!("Pixel: {screen_pos:?}"));
                         ui.horizontal(|ui| {
                             ui.label("Std Deviation:");
-                            ui.label(format!("{:.2}", sd.x));
-                            ui.label(format!("{:.2}", sd.y));
-                            ui.label(format!("{:.2}", sd.z));
+                            ui.colored_label(
+                                egui::Color32::WHITE,
+                                format!("{:.2} {:.2} {:.2}", sd.x, sd.y, sd.z),
+                            );
                         });
                         ui.horizontal(|ui| {
                             ui.label("Texture coords:");
-                            ui.label(format!("{:.2}", info.tex_coords.x));
-                            ui.label(format!("{:.2}", info.tex_coords.y));
+                            ui.colored_label(
+                                egui::Color32::WHITE,
+                                format!(
+                                    "{:.2} {:.2}",
+                                    selection.tex_coords.x, selection.tex_coords.y
+                                ),
+                            );
                         });
-                        let missing = "-".to_string();
-                        ui.label(format!(
-                            "Base color: {}",
-                            info.base_color_texture.as_ref().unwrap_or(&missing)
-                        ));
-                        ui.label(format!(
-                            "Normal: {}",
-                            info.normal_texture.as_ref().unwrap_or(&missing)
-                        ));
+                        ui.horizontal(|ui| {
+                            ui.label("Base color:");
+                            if let Some(handle) = selection.base_color_texture {
+                                let name = self
+                                    .asset_hub
+                                    .textures
+                                    .get_main_source_path(handle)
+                                    .display()
+                                    .to_string();
+                                ui.colored_label(egui::Color32::WHITE, name);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Normal:");
+                            if let Some(handle) = selection.normal_texture {
+                                let name = self
+                                    .asset_hub
+                                    .textures
+                                    .get_main_source_path(handle)
+                                    .display()
+                                    .to_string();
+                                ui.colored_label(egui::Color32::WHITE, name);
+                            }
+                        });
                         if ui.button("Unselect").clicked() {
                             self.debug.mouse_pos = None;
                         }
                     });
                 }
+                // blits
+                ui.label("Debug blit:");
+                egui::ComboBox::from_label("Input")
+                    .selected_text(format!("{}", self.debug_blit_input))
+                    .show_ui(ui, |ui| {
+                        for value in DebugBlitInput::iter() {
+                            ui.selectable_value(
+                                &mut self.debug_blit_input,
+                                value,
+                                format!("{value}"),
+                            );
+                        }
+                    });
+                let blit_view = match self.debug_blit_input {
+                    DebugBlitInput::None => None,
+                    DebugBlitInput::SelectedBaseColor => selection
+                        .base_color_texture
+                        .map(|handle| self.asset_hub.textures[handle].view),
+                    DebugBlitInput::SelectedNormal => selection
+                        .normal_texture
+                        .map(|handle| self.asset_hub.textures[handle].view),
+                    DebugBlitInput::Environment => Some(self.renderer.view_environment_main()),
+                    DebugBlitInput::EnvironmentWeight => {
+                        Some(self.renderer.view_environment_weight())
+                    }
+                };
+                let min_size = 64u32;
+                self.debug_blit = if let Some(view) = blit_view {
+                    let mut db = match self.debug_blit.take() {
+                        Some(db) => db,
+                        None => {
+                            let mut db = blade_render::DebugBlit::default();
+                            db.target_size = [min_size, min_size];
+                            db
+                        }
+                    };
+                    db.input = view;
+                    let style = ui.style();
+                    egui::Frame::group(style).show(ui, |ui| {
+                        ui.add(egui::Slider::new(&mut db.mip_level, 0u32..=15u32).text("Mip"));
+                        ui.add(
+                            egui::Slider::new(&mut db.target_size[0], min_size..=1024u32)
+                                .text("Target size"),
+                        );
+                        db.target_size[1] = db.target_size[0];
+                    });
+                    Some(db)
+                } else {
+                    None
+                };
             });
 
         let old_ray_config = self.ray_config;

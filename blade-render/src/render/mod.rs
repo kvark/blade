@@ -52,24 +52,12 @@ bitflags::bitflags! {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum DebugBlitInput {
-    Dummy,
-    Environment,
-    EnvironmentWeight,
-}
-impl Default for DebugBlitInput {
-    fn default() -> Self {
-        Self::Dummy
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DebugBlit {
-    pub input: DebugBlitInput,
-    pub offset: [i32; 2],
-    pub scale_power: i32,
+    pub input: blade_graphics::TextureView,
     pub mip_level: u32,
+    pub target_offset: [i32; 2],
+    pub target_size: [u32; 2],
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -98,8 +86,18 @@ pub struct DenoiserConfig {
 pub struct SelectionInfo {
     pub std_deviation: Option<mint::Vector3<f32>>,
     pub tex_coords: mint::Vector2<f32>,
-    pub base_color_texture: Option<String>,
-    pub normal_texture: Option<String>,
+    pub base_color_texture: Option<blade_asset::Handle<crate::Texture>>,
+    pub normal_texture: Option<blade_asset::Handle<crate::Texture>>,
+}
+impl Default for SelectionInfo {
+    fn default() -> Self {
+        Self {
+            std_deviation: None,
+            tex_coords: [0.0; 2].into(),
+            base_color_texture: None,
+            normal_texture: None,
+        }
+    }
 }
 
 // Has to match the shader!
@@ -870,6 +868,16 @@ impl Renderer {
         self.screen_size
     }
 
+    pub fn view_dummy_white(&self) -> blade_graphics::TextureView {
+        self.dummy.white_view
+    }
+    pub fn view_environment_main(&self) -> blade_graphics::TextureView {
+        self.env_map.main_view
+    }
+    pub fn view_environment_weight(&self) -> blade_graphics::TextureView {
+        self.env_map.weight_view
+    }
+
     pub fn resize_screen(
         &mut self,
         size: blade_graphics::Extent,
@@ -1277,38 +1285,20 @@ impl Renderer {
             pc.draw_indirect(self.debug.buffer.at(0));
         }
         if let mut pc = pass.with(&self.debug.blit_pipeline) {
-            fn scale(dim: u32, power: i32) -> u32 {
-                if power >= 0 {
-                    dim.max(1) << power
-                } else {
-                    (dim >> -power).max(1)
-                }
-            }
             for db in debug_blits {
-                let (input, size) = match db.input {
-                    DebugBlitInput::Dummy => {
-                        (self.dummy.white_view, blade_graphics::Extent::default())
-                    }
-                    DebugBlitInput::Environment => (self.env_map.main_view, self.env_map.size),
-                    DebugBlitInput::EnvironmentWeight => {
-                        (self.env_map.weight_view, self.env_map.weight_size())
-                    }
-                };
                 pc.bind(
                     0,
                     &DebugBlitData {
-                        input,
+                        input: db.input,
                         samp: self.samplers.linear,
                         params: DebugBlitParams {
                             target_offset: [
-                                db.offset[0] as f32 / self.screen_size.width as f32,
-                                db.offset[1] as f32 / self.screen_size.height as f32,
+                                db.target_offset[0] as f32 / self.screen_size.width as f32,
+                                db.target_offset[1] as f32 / self.screen_size.height as f32,
                             ],
                             target_size: [
-                                scale(size.width >> db.mip_level, db.scale_power) as f32
-                                    / self.screen_size.width as f32,
-                                scale(size.height >> db.mip_level, db.scale_power) as f32
-                                    / self.screen_size.height as f32,
+                                db.target_size[0] as f32 / self.screen_size.width as f32,
+                                db.target_size[1] as f32 / self.screen_size.height as f32,
                             ],
                             mip_level: db.mip_level as f32,
                             unused: 0,
@@ -1320,17 +1310,7 @@ impl Renderer {
         }
     }
 
-    fn find_debug_texture(&self, shader_id: u32, asset_hub: &crate::AssetHub) -> Option<String> {
-        self.texture_resource_lookup.get(&shader_id).map(|&handle| {
-            asset_hub
-                .textures
-                .get_main_source_path(handle)
-                .display()
-                .to_string()
-        })
-    }
-
-    pub fn read_debug_selection_info(&self, asset_hub: &crate::AssetHub) -> SelectionInfo {
+    pub fn read_debug_selection_info(&self) -> SelectionInfo {
         let db_v = unsafe { &*(self.debug.variance_buffer.data() as *const DebugVariance) };
         let db_e = unsafe { &*(self.debug.entry_buffer.data() as *const DebugEntry) };
         SelectionInfo {
@@ -1347,8 +1327,14 @@ impl Renderer {
                 })
             },
             tex_coords: db_e.tex_coords.into(),
-            base_color_texture: self.find_debug_texture(db_e.base_color_texture, asset_hub),
-            normal_texture: self.find_debug_texture(db_e.normal_texture, asset_hub),
+            base_color_texture: self
+                .texture_resource_lookup
+                .get(&db_e.base_color_texture)
+                .cloned(),
+            normal_texture: self
+                .texture_resource_lookup
+                .get(&db_e.normal_texture)
+                .cloned(),
         }
     }
 
