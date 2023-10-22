@@ -60,7 +60,7 @@ impl EnvironmentMap {
         Self::with_pipeline(dummy, Self::init_pipeline(gpu).unwrap())
     }
 
-    pub fn weight_size(&self) -> blade_graphics::Extent {
+    fn weight_size(&self) -> blade_graphics::Extent {
         // The weight texture has to include all of the edge pixels, starting at mip 1
         blade_graphics::Extent {
             width: self.size.width.next_power_of_two() / 2,
