@@ -34,6 +34,7 @@ struct ConfigCamera {
     orientation: [f32; 4],
     fov_y: f32,
     max_depth: f32,
+    speed: f32,
 }
 
 fn default_transform() -> [[f32; 4]; 3] {
@@ -75,6 +76,7 @@ struct Example {
     asset_hub: AssetHub,
     context: Arc<gpu::Context>,
     camera: blade_render::Camera,
+    fly_speed: f32,
     debug: blade_render::DebugConfig,
     need_accumulation_reset: bool,
     is_debug_drawing: bool,
@@ -215,6 +217,7 @@ impl Example {
             asset_hub,
             context,
             camera,
+            fly_speed: config_scene.camera.speed,
             debug: blade_render::DebugConfig::default(),
             need_accumulation_reset: true,
             is_debug_drawing: false,
@@ -660,7 +663,7 @@ fn main() {
         *control_flow = winit::event_loop::ControlFlow::Poll;
         let delta = last_event.elapsed().as_secs_f32();
         last_event = time::Instant::now();
-        let move_speed = 2000.0 * delta;
+        let move_speed = example.fly_speed * delta;
         let rotate_speed = 0.01f32;
         let rotate_speed_z = 200.0 * delta;
 

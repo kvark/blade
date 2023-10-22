@@ -3,6 +3,8 @@
 #include "debug.inc.wgsl"
 #include "debug-param.inc.wgsl"
 
+const DEBUG_CONSISTENCY: bool = false;
+
 // Has to match the host!
 struct Vertex {
     pos: vec3<f32>,
@@ -117,6 +119,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let normal = qrot(geo_to_world_rot, tangent_space_geo * normal_local);
         basis = shortest_arc_quat(vec3<f32>(0.0, 0.0, 1.0), normalize(normal));
 
+        let hit_position = camera.position + intersection.t * ray_dir;
         if (enable_debug) {
             debug_buf.entry.tex_coords = tex_coords;
             debug_buf.entry.base_color_texture = entry.base_color_texture;
@@ -129,15 +132,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             debug_line(positions[2].xyz, positions[0].xyz, 0x00FFFFu);
             let poly_center = (positions[0].xyz + positions[1].xyz + positions[2].xyz) / 3.0;
             debug_line(poly_center, poly_center + 0.2 * debug_len * flat_normal, 0xFF00FFu);
-            let pos_world = camera.position + intersection.t * ray_dir;
             // note: dynamic indexing into positions isn't allowed by WGSL yet
             debug_raw_normal(positions[0].xyz, vertices[0].normal, geo_to_world_rot, 0.5*debug_len, 0xFFFF00u);
             debug_raw_normal(positions[1].xyz, vertices[1].normal, geo_to_world_rot, 0.5*debug_len, 0xFFFF00u);
             debug_raw_normal(positions[2].xyz, vertices[2].normal, geo_to_world_rot, 0.5*debug_len, 0xFFFF00u);
             // draw tangent space
-            debug_line(pos_world, pos_world + debug_len * qrot(basis, vec3<f32>(1.0, 0.0, 0.0)), 0x0000FFu);
-            debug_line(pos_world, pos_world + debug_len * qrot(basis, vec3<f32>(0.0, 1.0, 0.0)), 0x00FF00u);
-            debug_line(pos_world, pos_world + debug_len * qrot(basis, vec3<f32>(0.0, 0.0, 1.0)), 0xFF0000u);
+            debug_line(hit_position, hit_position + debug_len * qrot(basis, vec3<f32>(1.0, 0.0, 0.0)), 0x0000FFu);
+            debug_line(hit_position, hit_position + debug_len * qrot(basis, vec3<f32>(0.0, 1.0, 0.0)), 0x00FF00u);
+            debug_line(hit_position, hit_position + debug_len * qrot(basis, vec3<f32>(0.0, 0.0, 1.0)), 0xFF0000u);
         }
 
         let base_color_factor = unpack4x8unorm(entry.base_color_factor);
@@ -146,6 +148,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         } else {
             let base_color_sample = textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tex_coords, lod);
             albedo = (base_color_factor * base_color_sample).xyz;
+        }
+        if (DEBUG_CONSISTENCY) {
+            albedo = vec3<f32>(length(positions * barycentrics - hit_position));
         }
     } else {
         if (enable_debug) {
