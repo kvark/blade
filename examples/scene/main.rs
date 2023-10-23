@@ -30,19 +30,20 @@ impl fmt::Display for DebugBlitInput {
 
 #[derive(serde::Deserialize)]
 struct ConfigCamera {
-    position: [f32; 3],
-    orientation: [f32; 4],
+    position: mint::Vector3<f32>,
+    orientation: mint::Quaternion<f32>,
     fov_y: f32,
     max_depth: f32,
     speed: f32,
 }
 
-fn default_transform() -> [[f32; 4]; 3] {
+fn default_transform() -> mint::RowMatrix3x4<f32> {
     [
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.0],
     ]
+    .into()
 }
 fn default_luminocity() -> f32 {
     1.0
@@ -52,7 +53,7 @@ fn default_luminocity() -> f32 {
 struct ConfigModel {
     path: String,
     #[serde(default = "default_transform")]
-    transform: [[f32; 4]; 3],
+    transform: mint::RowMatrix3x4<f32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -139,11 +140,10 @@ impl Example {
                 .expect("Unable to parse the scene file");
 
         let camera = Camera {
-            pos: config_scene.camera.position.into(),
-            rot: {
-                let [x, y, z, w] = config_scene.camera.orientation;
-                glam::Quat::from_xyzw(x, y, z, w).normalize().into()
-            },
+            pos: config_scene.camera.position,
+            rot: glam::Quat::from(config_scene.camera.orientation)
+                .normalize()
+                .into(),
             fov_y: config_scene.camera.fov_y,
             depth: config_scene.camera.max_depth,
         };
@@ -179,7 +179,7 @@ impl Example {
             load_finish.depend_on(model_task);
             scene.objects.push(blade_render::Object {
                 model,
-                transform: config_model.transform.into(),
+                transform: config_model.transform,
             });
         }
 
@@ -625,10 +625,12 @@ impl Example {
         self.camera.pos = (glam::Vec3::from(self.camera.pos) + dir).into();
         self.debug.mouse_pos = None;
     }
-    fn rotate_camera_z_by(&mut self, angle: f32) {
+    fn rotate_camera_z_by(&mut self, angle: f32) -> glam::Quat {
         let quat = glam::Quat::from(self.camera.rot);
-        self.camera.rot = (quat * glam::Quat::from_rotation_z(angle)).into();
+        let rotation = glam::Quat::from_rotation_z(angle);
+        self.camera.rot = (quat * rotation).into();
         self.debug.mouse_pos = None;
+        rotation
     }
 }
 
@@ -655,7 +657,7 @@ fn main() {
         screen_pos: glam::IVec2,
         rotation: glam::Quat,
     }
-    let mut drag_start = None;
+    let mut drag_start = None::<Drag>;
     let mut last_event = time::Instant::now();
     let mut last_mouse_pos = [0i32; 2];
 
@@ -665,7 +667,7 @@ fn main() {
         last_event = time::Instant::now();
         let move_speed = example.fly_speed * delta;
         let rotate_speed = 0.01f32;
-        let rotate_speed_z = 200.0 * delta;
+        let rotate_speed_z = 1000.0 * delta;
 
         match event {
             winit::event::Event::RedrawEventsCleared => {
@@ -694,10 +696,10 @@ fn main() {
                             *control_flow = winit::event_loop::ControlFlow::Exit;
                         }
                         winit::event::VirtualKeyCode::W => {
-                            example.move_camera_by(glam::Vec3::new(0.0, 0.0, move_speed));
+                            example.move_camera_by(glam::Vec3::new(0.0, 0.0, -move_speed));
                         }
                         winit::event::VirtualKeyCode::S => {
-                            example.move_camera_by(glam::Vec3::new(0.0, 0.0, -move_speed));
+                            example.move_camera_by(glam::Vec3::new(0.0, 0.0, move_speed));
                         }
                         winit::event::VirtualKeyCode::A => {
                             example.move_camera_by(glam::Vec3::new(-move_speed, 0.0, 0.0));
@@ -712,10 +714,16 @@ fn main() {
                             example.move_camera_by(glam::Vec3::new(0.0, move_speed, 0.0));
                         }
                         winit::event::VirtualKeyCode::Q => {
-                            example.rotate_camera_z_by(rotate_speed_z);
+                            let rot = example.rotate_camera_z_by(rotate_speed_z);
+                            if let Some(ref mut drag) = drag_start {
+                                drag.rotation *= rot;
+                            }
                         }
                         winit::event::VirtualKeyCode::E => {
-                            example.rotate_camera_z_by(-rotate_speed_z);
+                            let rot = example.rotate_camera_z_by(-rotate_speed_z);
+                            if let Some(ref mut drag) = drag_start {
+                                drag.rotation *= rot;
+                            }
                         }
                         _ => {}
                     },
@@ -754,12 +762,12 @@ fn main() {
                         last_mouse_pos = [position.x as i32, position.y as i32];
                         if let Some(ref mut drag) = drag_start {
                             let qx = glam::Quat::from_rotation_y(
-                                (last_mouse_pos[0] - drag.screen_pos.x) as f32 * rotate_speed,
+                                (drag.screen_pos.x - last_mouse_pos[0]) as f32 * rotate_speed,
                             );
                             let qy = glam::Quat::from_rotation_x(
-                                (last_mouse_pos[1] - drag.screen_pos.y) as f32 * rotate_speed,
+                                (drag.screen_pos.y - last_mouse_pos[1]) as f32 * rotate_speed,
                             );
-                            example.camera.rot = (qx * drag.rotation * qy).into();
+                            example.camera.rot = (drag.rotation * qx * qy).into();
                             example.debug.mouse_pos = None;
                         }
                     }

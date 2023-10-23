@@ -168,10 +168,12 @@ impl CookedModel<'_> {
             };
             let transform = mint::RowMatrix3x4::from(col_matrix).into();
 
-            for g_primitive in g_mesh.primitives() {
+            for (prim_index, g_primitive) in g_mesh.primitives().enumerate() {
                 if g_primitive.mode() != gltf::mesh::Mode::Triangles {
                     log::warn!(
-                        "Skipping primitive for having mesh mode {:?}",
+                        "Skipping primitive '{}'[{}] for having mesh mode {:?}",
+                        name,
+                        prim_index,
                         g_primitive.mode()
                     );
                     continue;
@@ -179,7 +181,11 @@ impl CookedModel<'_> {
                 let material_index = match g_primitive.material().index() {
                     Some(index) => index as u32,
                     None => {
-                        log::warn!("Skipping primitive for having default material");
+                        log::warn!(
+                            "Skipping primitive '{}'[{}] for having default material",
+                            name,
+                            prim_index
+                        );
                         continue;
                     }
                 };
@@ -421,6 +427,10 @@ impl blade_asset::Baker for Baker {
                     }
                 }
 
+                assert!(
+                    !model.geometries.is_empty(),
+                    "Empty models are not supported yet"
+                );
                 let model_shared = Arc::new(Mutex::new(model));
                 let model_clone = Arc::clone(&model_shared);
                 let gen_tangents = exe_context.choir().spawn("generate tangents").init_iter(

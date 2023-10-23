@@ -150,7 +150,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             albedo = (base_color_factor * base_color_sample).xyz;
         }
         if (DEBUG_CONSISTENCY) {
-            albedo = vec3<f32>(length(positions * barycentrics - hit_position));
+            let reprojected = get_projected_pixel(camera, hit_position);
+            let barycentrics_pos_diff = positions * barycentrics - hit_position;
+            let camera_projection_diff = vec2<f32>(global_id.xy) - vec2<f32>(reprojected);
+            albedo = vec3<f32>(length(barycentrics_pos_diff), length(camera_projection_diff), 0.0);
         }
     } else {
         if (enable_debug) {
