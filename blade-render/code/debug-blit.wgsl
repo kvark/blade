@@ -14,9 +14,10 @@ struct VertexOutput {
 
 @vertex
 fn blit_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
+    let tc = vec2<f32>(vec2<u32>(vi & 1u, (vi & 2u) >> 1u));
+    let transformed = params.target_offset + params.target_size * vec2<f32>(tc.x, 1.0 - tc.y);
     var vo: VertexOutput;
-    vo.tc = vec2<f32>(vec2<u32>(vi & 1u, (vi & 2u) >> 1u));
-    let transformed = params.target_offset + params.target_size * vo.tc;
+    vo.tc = tc;
     vo.clip_pos = vec4<f32>(2.0 * transformed - 1.0, 0.0, 1.0);
     return vo;
 }

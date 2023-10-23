@@ -463,7 +463,7 @@ impl blade_asset::Baker for Baker {
                     crate::texture::Meta {
                         format: blade_graphics::TextureFormat::Bc1UnormSrgb,
                         generate_mips: true,
-                        y_flip: true,
+                        y_flip: false,
                     },
                 );
                 exe_context.add_fork(&task);
@@ -478,7 +478,7 @@ impl blade_asset::Baker for Baker {
                     crate::texture::Meta {
                         format: blade_graphics::TextureFormat::Bc5Snorm,
                         generate_mips: false,
-                        y_flip: true,
+                        y_flip: false,
                     },
                 );
                 exe_context.add_fork(&task);
