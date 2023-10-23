@@ -778,12 +778,15 @@ fn main() {
                 let mut quit = false;
                 let raw_input = egui_winit.take_egui_input(&window);
                 let egui_output = egui_ctx.run(raw_input, |egui_ctx| {
-                    egui::SidePanel::right("control_panel").show(egui_ctx, |ui| {
-                        example.add_gui(ui);
-                        if ui.button("Quit").clicked() {
-                            quit = true;
-                        }
-                    });
+                    let frame = egui::Frame::default().fill(egui::Color32::from_white_alpha(0x80));
+                    egui::SidePanel::right("control_panel")
+                        .frame(frame)
+                        .show(egui_ctx, |ui| {
+                            example.add_gui(ui);
+                            if ui.button("Quit").clicked() {
+                                quit = true;
+                            }
+                        });
                 });
 
                 egui_winit.handle_platform_output(&window, &egui_ctx, egui_output.platform_output);
