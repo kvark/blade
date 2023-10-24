@@ -23,7 +23,7 @@ fn debug_vs(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) inst
     let ndc = local_dir.xy / tan(0.5 * camera.fov);
 
     var out: DebugVarying;
-    out.pos = vec4<f32>(ndc, 0.0, local_dir.z);
+    out.pos = vec4<f32>(ndc, 0.0, -local_dir.z);
     out.color = unpack4x8unorm(point.color);
     out.dir = world_dir;
     return out;

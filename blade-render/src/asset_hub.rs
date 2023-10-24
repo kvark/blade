@@ -77,6 +77,14 @@ impl AssetHub {
             finish_task: self.shaders.choir.spawn(name).init_dummy(),
         }
     }
+
+    pub fn list_running_tasks(&self) -> Vec<choir::RunningTask> {
+        let mut list = Vec::new();
+        self.textures.list_running_tasks(&mut list);
+        self.models.list_running_tasks(&mut list);
+        self.shaders.list_running_tasks(&mut list);
+        list
+    }
 }
 
 impl LoadContext<'_> {

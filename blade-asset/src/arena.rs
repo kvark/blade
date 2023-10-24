@@ -11,7 +11,7 @@ use std::{
 };
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Hash, Ord)]
 struct Address {
     index: u32,
     chunk: NonZeroU8,
@@ -81,6 +81,10 @@ impl<T: Default> Arena<T> {
         }
     }
 
+    fn chunk_size(&self, chunk: NonZeroU8) -> usize {
+        self.min_size << chunk.get()
+    }
+
     pub fn alloc(&self, value: T) -> Handle<T> {
         let mut freeman = self.freeman.lock().unwrap();
         let (address, chunk_start) = match freeman.free_list.pop() {
@@ -93,7 +97,7 @@ impl<T: Default> Arena<T> {
                     index: 0,
                     chunk: NonZeroU8::new(freeman.chunk_bases.len() as _).unwrap(),
                 };
-                let size = self.min_size << freeman.chunk_bases.len();
+                let size = self.chunk_size(address.chunk);
                 let mut data = (0..size).map(|_| T::default()).collect::<Box<[T]>>();
                 let chunk_start: *mut T = data.first_mut().unwrap();
                 self.chunks[address.chunk.get() as usize].store(chunk_start, Ordering::Release);
@@ -125,6 +129,31 @@ impl<T: Default> Arena<T> {
         freeman.free_list.push(handle.0);
         let ptr = self.get_mut_ptr(handle);
         unsafe { mem::take(&mut *ptr) }
+    }
+
+    pub fn for_each(&self, mut fun: impl FnMut(Handle<T>, &T)) {
+        let mut freeman = self.freeman.lock().unwrap();
+        freeman.free_list.sort(); // enables fast search
+        for (chunk_index, chunk_start) in self.chunks[..freeman.chunk_bases.len()]
+            .iter()
+            .enumerate()
+            .skip(1)
+        {
+            let first_ptr = chunk_start.load(Ordering::Acquire);
+            let chunk = NonZeroU8::new(chunk_index as _).unwrap();
+            for index in 0..self.chunk_size(chunk) {
+                let address = Address {
+                    index: index as u32,
+                    chunk,
+                };
+                if freeman.free_list.binary_search(&address).is_err() {
+                    //Note: this is only safe if `get_mut_ptr` isn't called
+                    // for example, during hot reloading.
+                    let item = unsafe { &*first_ptr.add(index) };
+                    fun(Handle(address, PhantomData), item);
+                }
+            }
+        }
     }
 }
 
