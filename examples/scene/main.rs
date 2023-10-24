@@ -378,8 +378,14 @@ impl Example {
         self.render_times.push_front(delta.as_millis() as u32);
 
         if self.pending_scene.is_some() {
-            ui.spinner();
+            ui.horizontal(|ui| {
+                ui.label("Loading...");
+                ui.spinner();
+            });
             //TODO: seeing GPU Device Lost issues without this
+            for task in self.asset_hub.list_running_tasks() {
+                ui.label(format!("{}", task.as_ref()));
+            }
             return;
         }
 
@@ -778,7 +784,17 @@ fn main() {
                 let mut quit = false;
                 let raw_input = egui_winit.take_egui_input(&window);
                 let egui_output = egui_ctx.run(raw_input, |egui_ctx| {
-                    let frame = egui::Frame::default().fill(egui::Color32::from_white_alpha(0x80));
+                    let frame = {
+                        let mut frame = egui::Frame::side_top_panel(&egui_ctx.style());
+                        let mut fill = frame.fill.to_array();
+                        for f in fill.iter_mut() {
+                            *f = (*f as u32 * 7 / 8) as u8;
+                        }
+                        frame.fill = egui::Color32::from_rgba_premultiplied(
+                            fill[0], fill[1], fill[2], fill[3],
+                        );
+                        frame
+                    };
                     egui::SidePanel::right("control_panel")
                         .frame(frame)
                         .show(egui_ctx, |ui| {

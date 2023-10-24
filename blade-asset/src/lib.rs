@@ -529,4 +529,14 @@ impl<B: Baker> AssetManager<B> {
             task
         })
     }
+
+    pub fn list_running_tasks(&self, list: &mut Vec<choir::RunningTask>) {
+        self.slots.for_each(|_, slot| {
+            if let Some(ref task) = slot.load_task {
+                if !task.is_done() {
+                    list.push(task.clone());
+                }
+            }
+        });
+    }
 }
