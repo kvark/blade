@@ -7,6 +7,19 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+const PRELOAD_TEXTURES: bool = false;
+
+const META_BASE_COLOR: crate::texture::Meta = crate::texture::Meta {
+    format: blade_graphics::TextureFormat::Bc1UnormSrgb,
+    generate_mips: true,
+    y_flip: false,
+};
+const META_NORMAL: crate::texture::Meta = crate::texture::Meta {
+    format: blade_graphics::TextureFormat::Bc5Snorm,
+    generate_mips: false,
+    y_flip: false,
+};
+
 fn pack4x8snorm(v: [f32; 4]) -> u32 {
     v.iter().rev().fold(0u32, |u, f| {
         (u << 8) | (f.clamp(-1.0, 1.0) * 127.0 + 0.5) as i8 as u8 as u32
@@ -404,12 +417,24 @@ impl blade_asset::Baker for Baker {
                     let pbr = g_material.pbr_metallic_roughness();
                     model.materials.push(CookedMaterial {
                         base_color_path: Cow::Owned(match pbr.base_color_texture() {
-                            Some(info) => texture_paths[info.texture().index()].as_bytes().to_vec(),
+                            Some(info) => {
+                                let path = &texture_paths[info.texture().index()];
+                                if PRELOAD_TEXTURES {
+                                    self.asset_textures.load(path, META_BASE_COLOR);
+                                }
+                                path.as_bytes().to_vec()
+                            }
                             None => Vec::new(),
                         }),
                         base_color_factor: pbr.base_color_factor(),
                         normal_path: Cow::Owned(match g_material.normal_texture() {
-                            Some(info) => texture_paths[info.texture().index()].as_bytes().to_vec(),
+                            Some(info) => {
+                                let path = &texture_paths[info.texture().index()];
+                                if PRELOAD_TEXTURES {
+                                    self.asset_textures.load(path, META_BASE_COLOR);
+                                }
+                                path.as_bytes().to_vec()
+                            }
                             None => Vec::new(),
                         }),
                         transparent: g_material.alpha_mode() != gltf::material::AlphaMode::Opaque,
@@ -468,14 +493,7 @@ impl blade_asset::Baker for Baker {
                 None
             } else {
                 let path_str = str::from_utf8(&material.base_color_path).unwrap();
-                let (handle, task) = self.asset_textures.load(
-                    path_str,
-                    crate::texture::Meta {
-                        format: blade_graphics::TextureFormat::Bc1UnormSrgb,
-                        generate_mips: true,
-                        y_flip: false,
-                    },
-                );
+                let (handle, task) = self.asset_textures.load(path_str, META_BASE_COLOR);
                 exe_context.add_fork(&task);
                 Some(handle)
             };
@@ -483,14 +501,7 @@ impl blade_asset::Baker for Baker {
                 None
             } else {
                 let path_str = str::from_utf8(&material.normal_path).unwrap();
-                let (handle, task) = self.asset_textures.load(
-                    path_str,
-                    crate::texture::Meta {
-                        format: blade_graphics::TextureFormat::Bc5Snorm,
-                        generate_mips: false,
-                        y_flip: false,
-                    },
-                );
+                let (handle, task) = self.asset_textures.load(path_str, META_NORMAL);
                 exe_context.add_fork(&task);
                 Some(handle)
             };
