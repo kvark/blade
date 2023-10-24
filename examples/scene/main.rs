@@ -767,13 +767,14 @@ fn main() {
                     winit::event::WindowEvent::CursorMoved { position, .. } => {
                         last_mouse_pos = [position.x as i32, position.y as i32];
                         if let Some(ref mut drag) = drag_start {
+                            // This is rotation around the world UP, which is assumed to be Y
                             let qx = glam::Quat::from_rotation_y(
                                 (drag.screen_pos.x - last_mouse_pos[0]) as f32 * rotate_speed,
                             );
                             let qy = glam::Quat::from_rotation_x(
                                 (drag.screen_pos.y - last_mouse_pos[1]) as f32 * rotate_speed,
                             );
-                            example.camera.rot = (drag.rotation * qx * qy).into();
+                            example.camera.rot = (qx * drag.rotation * qy).into();
                             example.debug.mouse_pos = None;
                         }
                     }
