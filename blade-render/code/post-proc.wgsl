@@ -1,5 +1,7 @@
+#use PostProcMode
+
 struct ToneMapParams {
-    enabled: u32,
+    mode: u32,
     average_lum: f32,
     key_value: f32,
     // minimum value of the pixels mapped to white brightness
@@ -8,6 +10,7 @@ struct ToneMapParams {
 
 var t_albedo: texture_2d<f32>;
 var light_diffuse: texture_2d<f32>;
+var t_debug: texture_2d<f32>;
 var<uniform> tone_map_params: ToneMapParams;
 
 struct VertexOutput {
@@ -25,17 +28,21 @@ fn blit_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
 
 @fragment
 fn blit_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
-    let tc = vec2<i32>(i32(vo.clip_pos.x), i32(vo.input_size.y) - i32(vo.clip_pos.y));
-    let albedo = textureLoad(t_albedo, tc, 0);
-    let radiance = textureLoad(light_diffuse, tc, 0);
-    let color = albedo * radiance;
-    if (tone_map_params.enabled != 0u) {
-        // Following https://blog.en.uwa4d.com/2022/07/19/physically-based-renderingg-hdr-tone-mapping/
-        let l_adjusted = tone_map_params.key_value / tone_map_params.average_lum * color.xyz;
-        let l_white = tone_map_params.white_level;
-        let l_ldr = l_adjusted * (1.0 + l_adjusted / (l_white*l_white)) / (1.0 + l_adjusted);
-        return vec4<f32>(l_ldr, 1.0);
+    let tc = vec2<i32>(i32(vo.clip_pos.x), i32(vo.input_size.y) - i32(vo.clip_pos.y) - 1);
+    if (tone_map_params.mode == PostProcMode_Debug) {
+        return textureLoad(t_debug, tc, 0);
     } else {
-        return color;
+        let albedo = textureLoad(t_albedo, tc, 0);
+        let radiance = textureLoad(light_diffuse, tc, 0);
+        let color = albedo * radiance;
+        if (tone_map_params.mode == PostProcMode_Tonemap) {
+            // Following https://blog.en.uwa4d.com/2022/07/19/physically-based-renderingg-hdr-tone-mapping/
+            let l_adjusted = tone_map_params.key_value / tone_map_params.average_lum * color.xyz;
+            let l_white = tone_map_params.white_level;
+            let l_ldr = l_adjusted * (1.0 + l_adjusted / (l_white*l_white)) / (1.0 + l_adjusted);
+            return vec4<f32>(l_ldr, 1.0);
+        } else {
+            return color;
+        }
     }
 }

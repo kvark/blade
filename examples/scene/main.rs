@@ -342,6 +342,11 @@ impl Example {
                 scale_factor,
             };
             if self.pending_scene.is_none() {
+                let pp_mode = if self.debug.view_mode == blade_render::DebugMode::default() {
+                    blade_render::PostProcMode::Tonemap
+                } else {
+                    blade_render::PostProcMode::Debug
+                };
                 let mut debug_blit_array = [blade_render::DebugBlit::default()];
                 let debug_blits = match self.debug_blit {
                     Some(ref blit) => {
@@ -350,7 +355,7 @@ impl Example {
                     }
                     None => &[],
                 };
-                self.renderer.blit(&mut pass, debug_blits);
+                self.renderer.post_proc(&mut pass, pp_mode, debug_blits);
             }
             self.gui_painter
                 .paint(&mut pass, gui_primitives, &screen_desc, &self.context);

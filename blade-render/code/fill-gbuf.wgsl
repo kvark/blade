@@ -3,8 +3,6 @@
 #include "debug.inc.wgsl"
 #include "debug-param.inc.wgsl"
 
-const DEBUG_CONSISTENCY: bool = false;
-
 // Has to match the host!
 struct Vertex {
     pos: vec3<f32>,
@@ -46,6 +44,7 @@ var out_depth: texture_storage_2d<r32float, write>;
 var out_flat_normal: texture_storage_2d<rgba8snorm, write>;
 var out_basis: texture_storage_2d<rgba8snorm, write>;
 var out_albedo: texture_storage_2d<rgba8unorm, write>;
+var out_debug: texture_storage_2d<rgba8unorm, write>;
 
 fn decode_normal(raw: u32) -> vec3<f32> {
     return unpack4x8snorm(raw).xyz;
@@ -149,15 +148,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let base_color_sample = textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tex_coords, lod);
             albedo = (base_color_factor * base_color_sample).xyz;
         }
-        if (DEBUG_CONSISTENCY) {
+        if (debug.view_mode == DebugMode_HitConsistency) {
             let reprojected = get_projected_pixel(camera, hit_position);
             let barycentrics_pos_diff = positions * barycentrics - hit_position;
             let camera_projection_diff = vec2<f32>(global_id.xy) - vec2<f32>(reprojected);
-            albedo = vec3<f32>(length(barycentrics_pos_diff), length(camera_projection_diff), 0.0);
+            let consistency = vec4<f32>(length(barycentrics_pos_diff), length(camera_projection_diff), 0.0, 0.0);
+            textureStore(out_debug, global_id.xy, consistency);
         }
     } else {
         if (enable_debug) {
             debug_buf.entry = DebugEntry();
+        }
+        if (debug.view_mode != DebugMode_Final) {
+            textureStore(out_debug, global_id.xy, vec4<f32>(0.0));
         }
     }
 

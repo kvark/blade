@@ -37,6 +37,7 @@ impl AssetHub {
         sh_baker.register_enum::<crate::render::DebugMode>();
         sh_baker.register_bitflags::<crate::render::DebugDrawFlags>();
         sh_baker.register_bitflags::<crate::render::DebugTextureFlags>();
+        sh_baker.register_enum::<crate::render::PostProcMode>();
         let shaders = AssetManager::new(target, choir, sh_baker);
 
         Self {
