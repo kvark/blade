@@ -25,15 +25,24 @@ struct Samplers {
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, blade_macros::AsPrimitive, strum::EnumIter)]
 #[repr(u32)]
 pub enum DebugMode {
-    None = 0,
+    Final = 0,
     Depth = 1,
     Normal = 2,
+    HitConsistency = 3,
 }
 
 impl Default for DebugMode {
     fn default() -> Self {
-        Self::None
+        Self::Final
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, blade_macros::AsPrimitive, strum::EnumIter)]
+#[repr(u32)]
+pub enum PostProcMode {
+    Tonemap = 0,
+    Reconstruct = 1,
+    Debug = 2,
 }
 
 bitflags::bitflags! {
@@ -250,6 +259,7 @@ impl FrameData {
         let (depth, depth_view) =
             Self::create_target("depth", blade_graphics::TextureFormat::R32Float, size, gpu);
         encoder.init_texture(depth);
+
         let (basis, basis_view) = Self::create_target(
             "basis",
             blade_graphics::TextureFormat::Rgba8Snorm,
@@ -257,6 +267,7 @@ impl FrameData {
             gpu,
         );
         encoder.init_texture(basis);
+
         let (flat_normal, flat_normal_view) = Self::create_target(
             "flat_normal",
             blade_graphics::TextureFormat::Rgba8Snorm,
@@ -264,6 +275,7 @@ impl FrameData {
             gpu,
         );
         encoder.init_texture(flat_normal);
+
         let (albedo, albedo_view) = Self::create_target(
             "basis",
             blade_graphics::TextureFormat::Rgba8Unorm,
@@ -271,6 +283,7 @@ impl FrameData {
             gpu,
         );
         encoder.init_texture(albedo);
+
         Self {
             reservoir_buf,
             depth,
@@ -312,6 +325,8 @@ pub struct Renderer {
     shaders: Shaders,
     frame_data: [FrameData; 2],
     lighting_diffuse: DoubleRenderTarget,
+    debug_texture: blade_graphics::Texture,
+    debug_view: blade_graphics::TextureView,
     fill_pipeline: blade_graphics::ComputePipeline,
     main_pipeline: blade_graphics::ComputePipeline,
     atrous_pipeline: blade_graphics::ComputePipeline,
@@ -383,6 +398,7 @@ struct FillData<'a> {
     out_basis: blade_graphics::TextureView,
     out_flat_normal: blade_graphics::TextureView,
     out_albedo: blade_graphics::TextureView,
+    out_debug: blade_graphics::TextureView,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -406,6 +422,7 @@ struct MainData {
     reservoirs: blade_graphics::BufferPiece,
     prev_reservoirs: blade_graphics::BufferPiece,
     out_diffuse: blade_graphics::TextureView,
+    out_debug: blade_graphics::TextureView,
 }
 
 #[repr(C)]
@@ -426,16 +443,17 @@ struct AtrousData {
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 struct ToneMapParams {
-    enabled: u32,
+    mode: u32,
     average_lum: f32,
     key_value: f32,
     white_level: f32,
 }
 
 #[derive(blade_macros::ShaderData)]
-struct BlitData {
+struct PostProcData {
     t_albedo: blade_graphics::TextureView,
     light_diffuse: blade_graphics::TextureView,
+    t_debug: blade_graphics::TextureView,
     tone_map_params: ToneMapParams,
 }
 
@@ -563,7 +581,7 @@ impl ShaderPipelines {
         format: blade_graphics::TextureFormat,
         gpu: &blade_graphics::Context,
     ) -> blade_graphics::RenderPipeline {
-        let layout = <BlitData as blade_graphics::ShaderData>::layout();
+        let layout = <PostProcData as blade_graphics::ShaderData>::layout();
         gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
             name: "main",
             data_layouts: &[&layout],
@@ -712,6 +730,13 @@ impl Renderer {
             FrameData::new(config.screen_size, sp.reservoir_size, encoder, gpu),
         ];
         let dummy = DummyResources::new(encoder, gpu);
+        let (debug_texture, debug_view) = FrameData::create_target(
+            "debug",
+            blade_graphics::TextureFormat::Rgba8Unorm,
+            config.screen_size,
+            gpu,
+        );
+        encoder.init_texture(debug_texture);
 
         let samplers = Samplers {
             nearest: gpu.create_sampler(blade_graphics::SamplerDesc {
@@ -743,6 +768,8 @@ impl Renderer {
                 encoder,
                 gpu,
             ),
+            debug_texture,
+            debug_view,
             scene: super::Scene::default(),
             fill_pipeline: sp.fill,
             main_pipeline: sp.main,
@@ -772,6 +799,8 @@ impl Renderer {
             frame_data.destroy(gpu);
         }
         self.lighting_diffuse.destroy(gpu);
+        gpu.destroy_texture(self.debug_texture);
+        gpu.destroy_texture_view(self.debug_view);
         if self.hit_buffer != blade_graphics::Buffer::default() {
             gpu.destroy_buffer(self.hit_buffer);
         }
@@ -889,9 +918,22 @@ impl Renderer {
             frame_data.destroy(gpu);
             *frame_data = FrameData::new(size, self.reservoir_size, encoder, gpu);
         }
+
         self.lighting_diffuse.destroy(gpu);
         self.lighting_diffuse =
             DoubleRenderTarget::new("light/diffuse", RADIANCE_FORMAT, size, encoder, gpu);
+
+        gpu.destroy_texture(self.debug_texture);
+        gpu.destroy_texture_view(self.debug_view);
+        let (debug_texture, debug_view) = FrameData::create_target(
+            "debug",
+            blade_graphics::TextureFormat::Rgba8Unorm,
+            size,
+            gpu,
+        );
+        encoder.init_texture(debug_texture);
+        self.debug_texture = debug_texture;
+        self.debug_view = debug_view;
     }
 
     /// Prepare to render a frame.
@@ -1180,6 +1222,7 @@ impl Renderer {
                     out_basis: cur.basis_view,
                     out_flat_normal: cur.flat_normal_view,
                     out_albedo: cur.albedo_view,
+                    out_debug: self.debug_view,
                 },
             );
             pc.dispatch(groups);
@@ -1219,6 +1262,7 @@ impl Renderer {
                     reservoirs: cur.reservoir_buf.into(),
                     prev_reservoirs: prev.reservoir_buf.into(),
                     out_diffuse: self.lighting_diffuse.cur(),
+                    out_debug: self.debug_view,
                 },
             );
             pc.dispatch(groups);
@@ -1254,17 +1298,23 @@ impl Renderer {
     }
 
     /// Blit the rendering result into a specified render pass.
-    pub fn blit(&self, pass: &mut blade_graphics::RenderCommandEncoder, debug_blits: &[DebugBlit]) {
+    pub fn post_proc(
+        &self,
+        pass: &mut blade_graphics::RenderCommandEncoder,
+        mode: PostProcMode,
+        debug_blits: &[DebugBlit],
+    ) {
         let pp = &self.scene.post_processing;
         let cur = self.frame_data.first().unwrap();
         if let mut pc = pass.with(&self.blit_pipeline) {
             pc.bind(
                 0,
-                &BlitData {
+                &PostProcData {
                     t_albedo: cur.albedo_view,
                     light_diffuse: self.lighting_diffuse.cur(),
+                    t_debug: self.debug_view,
                     tone_map_params: ToneMapParams {
-                        enabled: 1,
+                        mode: mode as u32,
                         average_lum: pp.average_luminocity,
                         key_value: pp.exposure_key_value,
                         white_level: pp.white_level,

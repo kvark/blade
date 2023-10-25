@@ -131,6 +131,7 @@ var t_prev_basis: texture_2d<f32>;
 var t_flat_normal: texture_2d<f32>;
 var t_prev_flat_normal: texture_2d<f32>;
 var out_diffuse: texture_storage_2d<rgba16float, write>;
+var out_debug: texture_storage_2d<rgba8unorm, write>;
 
 fn sample_circle(random: f32) -> vec2<f32> {
     let angle = 2.0 * PI * random;
@@ -312,8 +313,7 @@ struct RestirOutput {
 
 fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, enable_debug: bool) -> RestirOutput {
     if (debug.view_mode == DebugMode_Depth) {
-        let depth = vec3<f32>(surface.depth / camera.depth);
-        return RestirOutput(depth);
+        textureStore(out_debug, pixel, vec4<f32>(surface.depth / camera.depth));
     }
     let ray_dir = get_ray_direction(camera, pixel);
     let pixel_index = get_reservoir_index(pixel, camera);
@@ -327,7 +327,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     let position = camera.position + surface.depth * ray_dir;
     let normal = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
     if (debug.view_mode == DebugMode_Normal) {
-        return RestirOutput(normal);
+        textureStore(out_debug, pixel, vec4<f32>(normal, 0.0));
     }
 
     var canonical = LiveReservoir();
