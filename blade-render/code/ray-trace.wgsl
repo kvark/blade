@@ -15,6 +15,9 @@ const PAIRWISE_MIS: bool = true;
 // Bitterli's pseudocode (where it's 1) and NVidia's RTXDI implementation (where it's 0).
 // With Bitterli's 1 we have MIS not respecting the prior history enough.
 const BASE_CANONICAL_MIS: f32 = 0.05;
+// See "DECOUPLING SHADING AND REUSE" in
+// "Rearchitecting Spatiotemporal Resampling for Production"
+const DECOUPLED_SHADING: bool = false;
 
 struct MainParams {
     frame_index: u32,
@@ -54,6 +57,7 @@ struct LiveReservoir {
     selected_uv: vec2<f32>,
     selected_light_index: u32,
     selected_target_score: f32,
+    radiance: vec3<f32>,
     weight_sum: f32,
     history: f32,
 }
@@ -81,9 +85,10 @@ fn bump_reservoir(r: ptr<function, LiveReservoir>, history: f32) {
 }
 fn make_reservoir(ls: LightSample, light_index: u32, brdf: vec3<f32>) -> LiveReservoir {
     var r: LiveReservoir;
+    r.radiance = ls.radiance * brdf;
     r.selected_uv = ls.uv;
     r.selected_light_index = light_index;
-    r.selected_target_score = compute_target_score(ls.radiance * brdf);
+    r.selected_target_score = compute_target_score(r.radiance);
     r.weight_sum = r.selected_target_score / ls.pdf;
     r.history = 1.0;
     return r;
@@ -95,6 +100,7 @@ fn merge_reservoir(r: ptr<function, LiveReservoir>, other: LiveReservoir, random
         (*r).selected_light_index = other.selected_light_index;
         (*r).selected_uv = other.selected_uv;
         (*r).selected_target_score = other.selected_target_score;
+        (*r).radiance = other.radiance;
         return true;
     } else {
         return false;
@@ -105,6 +111,7 @@ fn unpack_reservoir(f: StoredReservoir, max_history: u32) -> LiveReservoir {
     r.selected_light_index = f.light_index;
     r.selected_uv = f.light_uv;
     r.selected_target_score = f.target_score;
+    r.radiance = vec3<f32>(0.0); // to be continued...
     let history = min(f.confidence, f32(max_history));
     r.weight_sum = f.contribution_weight * f.target_score * history;
     r.history = history;
@@ -238,34 +245,36 @@ fn evaluate_reflected_light(surface: Surface, light_index: u32, light_uv: vec2<f
     return radiance * brdf;
 }
 
-struct TargetPdf {
+struct TargetScore {
     color: vec3<f32>,
     score: f32,
 }
 
-fn make_target_pdf(color: vec3<f32>) -> TargetPdf {
-    return TargetPdf(color, compute_target_score(color));
+fn make_target_score(color: vec3<f32>) -> TargetScore {
+    return TargetScore(color, compute_target_score(color));
 }
 
-fn estimate_target_pdf_with_occlusion(surface: Surface, position: vec3<f32>, light_index: u32, light_uv: vec2<f32>, debug_len: f32) -> TargetPdf {
+fn estimate_target_score_with_occlusion(
+    surface: Surface, position: vec3<f32>, light_index: u32, light_uv: vec2<f32>, debug_len: f32
+) -> TargetScore {
     if (light_index != 0u) {
-        return TargetPdf();
+        return TargetScore();
     }
     let direction = map_equirect_uv_to_dir(light_uv);
     if (dot(direction, surface.flat_normal) <= 0.0) {
-        return TargetPdf();
+        return TargetScore();
     }
     let brdf = evaluate_brdf(surface, direction);
     if (brdf <= 0.0) {
-        return TargetPdf();
+        return TargetScore();
     }
 
     if (check_ray_occluded(position, direction, debug_len)) {
-        return TargetPdf();
+        return TargetScore();
     } else {
         //Note: same as `evaluate_reflected_light`
         let radiance = textureSampleLevel(env_map, sampler_nearest, light_uv, 0.0).xyz;
-        return make_target_pdf(brdf * radiance);
+        return make_target_score(brdf * radiance);
     }
 }
 
@@ -331,7 +340,6 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     }
 
     var canonical = LiveReservoir();
-    var canonical_radiance = vec3<f32>(0.0);
     for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
         var ls: LightSample;
         if (parameters.environment_importance_sampling != 0u) {
@@ -343,9 +351,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         let brdf = evaluate_sample(ls, surface, position, debug_len);
         if (brdf > 0.0) {
             let other = make_reservoir(ls, 0u, vec3<f32>(brdf));
-            if (merge_reservoir(&canonical, other, random_gen(rng))) {
-                canonical_radiance = ls.radiance * brdf;
-            }
+            merge_reservoir(&canonical, other, random_gen(rng));
         } else {
             bump_reservoir(&canonical, 1.0);
         }
@@ -396,13 +402,13 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     var reservoir = LiveReservoir();
     var shaded_color = vec3<f32>(0.0);
     var mis_canonical = BASE_CANONICAL_MIS;
+    var color_and_weight = vec4<f32>(0.0);
     for (var rid = 0u; rid < accepted_count; rid += 1u) {
         let neighbor_index = accepted_reservoir_indices[rid];
         let neighbor = prev_reservoirs[neighbor_index];
 
         let max_history = select(parameters.spatial_tap_history, parameters.temporal_history, rid == temporal_index);
         var other: LiveReservoir;
-        var other_color: vec3<f32>;
         if (PAIRWISE_MIS) {
             let neighbor_pixel = get_pixel_from_reservoir_index(neighbor_index, prev_camera);
             let neighbor_history = min(neighbor.confidence, f32(max_history));
@@ -411,7 +417,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
                 let neighbor_dir = get_ray_direction(prev_camera, neighbor_pixel);
                 let neighbor_position = prev_camera.position + neighbor_surface.depth * neighbor_dir;
 
-                let t_canonical_at_neighbor = estimate_target_pdf_with_occlusion(
+                let t_canonical_at_neighbor = estimate_target_score_with_occlusion(
                     neighbor_surface, neighbor_position, canonical.selected_light_index, canonical.selected_uv, debug_len);
                 let mis_sub_canonical = balance_heuristic(
                     t_canonical_at_neighbor.score, canonical.selected_target_score,
@@ -424,7 +430,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
             //   target light has moved, and re-evaluate the occlusion.
             // 2. we can use the cached target score, and there is no use of the target color
             //let t_neighbor_at_neighbor = estimate_target_pdf(neighbor_surface, neighbor_position, neighbor.selected_dir);
-            let t_neighbor_at_canonical = estimate_target_pdf_with_occlusion(
+            let t_neighbor_at_canonical = estimate_target_score_with_occlusion(
                 surface, position, neighbor.light_index, neighbor.light_uv, debug_len);
             let mis_neighbor = balance_heuristic(
                 neighbor.target_score, t_neighbor_at_canonical.score,
@@ -437,16 +443,19 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
             other.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor.weight;
             //Note: should be needed according to the paper
             // other.history *= min(mis_neighbor.history, mis_sub_canonical.history);
-            other_color = t_neighbor_at_canonical.color;
+            other.radiance = t_neighbor_at_canonical.color;
         } else {
             other = unpack_reservoir(neighbor, max_history);
-            other_color = evaluate_reflected_light(surface, other.selected_light_index, other.selected_uv);
+            other.radiance = evaluate_reflected_light(surface, other.selected_light_index, other.selected_uv);
         }
 
+        if (DECOUPLED_SHADING) {
+            color_and_weight += other.weight_sum * vec4<f32>(neighbor.contribution_weight * other.radiance, 1.0);
+        }
         if (other.weight_sum <= 0.0) {
             bump_reservoir(&reservoir, other.history);
-        } else if (merge_reservoir(&reservoir, other, random_gen(rng))) {
-            shaded_color = other_color;
+        } else {
+            merge_reservoir(&reservoir, other, random_gen(rng));
         }
     }
 
@@ -454,15 +463,22 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     if (PAIRWISE_MIS) {
         canonical.weight_sum *= mis_canonical / canonical.history;
     }
-    if (merge_reservoir(&reservoir, canonical, random_gen(rng))) {
-        shaded_color = canonical_radiance;
+    if (DECOUPLED_SHADING) {
+        //FIXME: issue with near zero denominator. Do we need do use BASE_CANONICAL_MIS?
+        let cw = canonical.weight_sum / max(canonical.selected_target_score * mis_canonical, 0.1);
+        color_and_weight += canonical.weight_sum * vec4<f32>(cw * canonical.radiance, 1.0);
     }
+    merge_reservoir(&reservoir, canonical, random_gen(rng));
 
     let effective_history = select(reservoir.history, BASE_CANONICAL_MIS + f32(accepted_count), PAIRWISE_MIS);
     let stored = pack_reservoir_detail(reservoir, effective_history);
     reservoirs[pixel_index] = stored;
     var ro = RestirOutput();
-    ro.radiance = stored.contribution_weight * shaded_color;
+    if (DECOUPLED_SHADING) {
+        ro.radiance = color_and_weight.xyz / max(color_and_weight.w, 0.001);
+    } else {
+        ro.radiance = stored.contribution_weight * reservoir.radiance;
+    }
     return ro;
 }
 

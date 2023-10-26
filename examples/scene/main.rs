@@ -275,7 +275,7 @@ impl Example {
             }
         }
 
-        self.renderer.hot_reload(
+        self.need_accumulation_reset |= self.renderer.hot_reload(
             &self.asset_hub,
             &self.context,
             self.prev_sync_point.as_ref().unwrap(),
@@ -444,22 +444,38 @@ impl Example {
                     ui.checkbox(&mut enabled, name);
                     self.debug.texture_flags.set(bit, enabled);
                 }
-                // reset accumulation
-                self.need_accumulation_reset |= ui.button("reset").clicked();
                 // selection info
                 let mut selection = blade_render::SelectionInfo::default();
                 if let Some(screen_pos) = self.debug.mouse_pos {
                     selection = self.renderer.read_debug_selection_info();
-                    let sd = selection.std_deviation.unwrap_or([0.0; 3].into());
                     let style = ui.style();
                     egui::Frame::group(style).show(ui, |ui| {
-                        ui.label(format!("Pixel: {screen_pos:?}"));
                         ui.horizontal(|ui| {
+                            ui.label("Pixel:");
+                            ui.colored_label(
+                                egui::Color32::WHITE,
+                                format!("{}x{}", screen_pos[0], screen_pos[1]),
+                            );
+                            if ui.button("Unselect").clicked() {
+                                self.debug.mouse_pos = None;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            let sd = &selection.std_deviation;
                             ui.label("Std Deviation:");
                             ui.colored_label(
                                 egui::Color32::WHITE,
                                 format!("{:.2} {:.2} {:.2}", sd.x, sd.y, sd.z),
                             );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Samples:");
+                            let power = selection
+                                .std_deviation_history
+                                .next_power_of_two()
+                                .trailing_zeros();
+                            ui.colored_label(egui::Color32::WHITE, format!("2^{}", power));
+                            self.need_accumulation_reset |= ui.button("Reset").clicked();
                         });
                         ui.horizontal(|ui| {
                             ui.label("Texture coords:");
@@ -495,9 +511,6 @@ impl Example {
                                 ui.colored_label(egui::Color32::WHITE, name);
                             }
                         });
-                        if ui.button("Unselect").clicked() {
-                            self.debug.mouse_pos = None;
-                        }
                     });
                 }
                 // blits
