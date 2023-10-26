@@ -93,7 +93,8 @@ pub struct DenoiserConfig {
 }
 
 pub struct SelectionInfo {
-    pub std_deviation: Option<mint::Vector3<f32>>,
+    pub std_deviation: mint::Vector3<f32>,
+    pub std_deviation_history: u32,
     pub tex_coords: mint::Vector2<f32>,
     pub base_color_texture: Option<blade_asset::Handle<crate::Texture>>,
     pub normal_texture: Option<blade_asset::Handle<crate::Texture>>,
@@ -101,7 +102,8 @@ pub struct SelectionInfo {
 impl Default for SelectionInfo {
     fn default() -> Self {
         Self {
-            std_deviation: None,
+            std_deviation: [0.0; 3].into(),
+            std_deviation_history: 0,
             tex_coords: [0.0; 2].into(),
             base_color_texture: None,
             normal_texture: None,
@@ -1128,18 +1130,18 @@ impl Renderer {
         } else {
             transfer.fill_buffer(self.debug.buffer.at(20), 4, 0);
         }
-        if accumulate_variance {
+        if reset_reservoirs || !accumulate_variance {
+            transfer.fill_buffer(
+                self.debug.buffer.at(32),
+                mem::size_of::<DebugVariance>() as u64,
+                0,
+            );
+        } else {
             // copy the previous frame variance
             transfer.copy_buffer_to_buffer(
                 self.debug.buffer.at(32),
                 self.debug.variance_buffer.into(),
                 mem::size_of::<DebugVariance>() as u64,
-            );
-        } else {
-            transfer.fill_buffer(
-                self.debug.buffer.at(32),
-                mem::size_of::<DebugVariance>() as u64,
-                0,
             );
         }
         transfer.copy_buffer_to_buffer(
@@ -1365,17 +1367,18 @@ impl Renderer {
         let db_e = unsafe { &*(self.debug.entry_buffer.data() as *const DebugEntry) };
         SelectionInfo {
             std_deviation: if db_v.count == 0 {
-                None
+                [0.0; 3].into()
             } else {
                 let sum_avg = glam::Vec3::from(db_v.color_sum) / (db_v.count as f32);
                 let sum2_avg = glam::Vec3::from(db_v.color2_sum) / (db_v.count as f32);
                 let variance = sum2_avg - sum_avg * sum_avg;
-                Some(mint::Vector3 {
+                mint::Vector3 {
                     x: variance.x.sqrt(),
                     y: variance.y.sqrt(),
                     z: variance.z.sqrt(),
-                })
+                }
             },
+            std_deviation_history: db_v.count,
             tex_coords: db_e.tex_coords.into(),
             base_color_texture: self
                 .texture_resource_lookup
