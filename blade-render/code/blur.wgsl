@@ -21,6 +21,16 @@ var input: texture_2d<f32>;
 var prev_input: texture_2d<f32>;
 var output: texture_storage_2d<rgba16float, write>;
 
+fn get_projected_pixel_quad(cp: CameraParams, point: vec3<f32>) -> array<vec2<i32>, 4> {
+    let pixel = get_projected_pixel_float(cp, point);
+    return array<vec2<i32>, 4>(
+        vec2<i32>(vec2<f32>(pixel.x - 0.5, pixel.y - 0.5)),
+        vec2<i32>(vec2<f32>(pixel.x + 0.5, pixel.y - 0.5)),
+        vec2<i32>(vec2<f32>(pixel.x + 0.5, pixel.y + 0.5)),
+        vec2<i32>(vec2<f32>(pixel.x - 0.5, pixel.y + 0.5)),
+    );
+}
+
 fn read_surface(pixel: vec2<i32>) -> Surface {
     var surface = Surface();
     surface.flat_normal = normalize(textureLoad(t_flat_normal, pixel, 0).xyz);
@@ -44,17 +54,29 @@ fn temporal_accum(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cur_radiance = textureLoad(input, pixel, 0).xyz;
     let surface = read_surface(pixel);
     let pos_world = camera.position + surface.depth * get_ray_direction(camera, pixel);
-    let prev_pixel = get_projected_pixel(prev_camera, pos_world);
-    var prev_radiance = cur_radiance;
-    var history_weight = 1.0 - params.temporal_weight;
-    if (all(prev_pixel >= vec2<i32>(0)) && all(prev_pixel < params.extent)) {
-        prev_radiance = textureLoad(prev_input, prev_pixel, 0).xyz;
-        let prev_surface = read_prev_surface(prev_pixel);
-        let projected_distance = length(pos_world - prev_camera.position);
-        history_weight *= compare_flat_normals(surface.flat_normal, prev_surface.flat_normal);
-        history_weight *= compare_depths(surface.depth, projected_distance);
+    // considering all samples in 2x2 quad, to help with edges
+    var prev_pixels = get_projected_pixel_quad(prev_camera, pos_world);
+    var best_index = 0;
+    var best_weight = 0.0;
+    for (var i = 0; i < 4; i += 1) {
+        let prev_pixel = prev_pixels[i];
+        if (all(prev_pixel >= vec2<i32>(0)) && all(prev_pixel < params.extent)) {
+            let prev_surface = read_prev_surface(prev_pixel);
+            let projected_distance = length(pos_world - prev_camera.position);
+            let weight = compare_flat_normals(surface.flat_normal, prev_surface.flat_normal)
+                * compare_depths(surface.depth, projected_distance);
+            if (weight > best_weight) {
+                best_index = i;
+                best_weight = weight;
+            }
+        }
     }
-    let radiance = mix(cur_radiance, prev_radiance, history_weight);
+
+    var prev_radiance = cur_radiance;
+    if (best_weight > 0.01) {
+        prev_radiance = textureLoad(prev_input, prev_pixels[best_index], 0).xyz;
+    }
+    let radiance = mix(cur_radiance, prev_radiance, best_weight * (1.0 - params.temporal_weight));
     textureStore(output, global_id.xy, vec4<f32>(radiance, 0.0));
 }
 

@@ -14,12 +14,16 @@ fn get_ray_direction(cp: CameraParams, pixel: vec2<i32>) -> vec3<f32> {
     return normalize(qrot(cp.orientation, local_dir));
 }
 
-fn get_projected_pixel(cp: CameraParams, point: vec3<f32>) -> vec2<i32> {
+fn get_projected_pixel_float(cp: CameraParams, point: vec3<f32>) -> vec2<f32> {
     let local_dir = qrot(qinv(cp.orientation), point - cp.position);
     if local_dir.z >= 0.0 {
-        return vec2<i32>(-1);
+        return vec2<f32>(-1.0);
     }
     let ndc = local_dir.xy / (-local_dir.z * tan(0.5 * cp.fov));
     let half_size = 0.5 * vec2<f32>(cp.target_size);
-    return vec2<i32>((ndc + vec2<f32>(1.0)) * half_size);
+    return (ndc + vec2<f32>(1.0)) * half_size;
+}
+
+fn get_projected_pixel(cp: CameraParams, point: vec3<f32>) -> vec2<i32> {
+    return vec2<i32>(get_projected_pixel_float(cp, point));
 }
