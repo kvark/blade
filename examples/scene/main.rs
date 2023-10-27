@@ -84,6 +84,7 @@ struct Example {
     last_render_time: time::Instant,
     render_times: VecDeque<u32>,
     ray_config: blade_render::RayConfig,
+    denoiser_enabled: bool,
     denoiser_config: blade_render::DenoiserConfig,
     debug_blit: Option<blade_render::DebugBlit>,
     debug_blit_input: DebugBlitInput,
@@ -231,7 +232,11 @@ impl Example {
                 spatial_tap_history: 5,
                 spatial_radius: 10,
             },
-            denoiser_config: blade_render::DenoiserConfig { num_passes: 5 },
+            denoiser_enabled: true,
+            denoiser_config: blade_render::DenoiserConfig {
+                num_passes: 5,
+                temporal_weight: 0.1,
+            },
             debug_blit: None,
             debug_blit_input: DebugBlitInput::None,
             workers,
@@ -323,7 +328,9 @@ impl Example {
             self.need_accumulation_reset = false;
             self.renderer
                 .ray_trace(command_encoder, self.debug, self.ray_config);
-            self.renderer.denoise(command_encoder, self.denoiser_config);
+            if self.denoiser_enabled {
+                self.renderer.denoise(command_encoder, self.denoiser_config);
+            }
         }
 
         let frame = self.context.acquire_frame();
@@ -600,7 +607,12 @@ impl Example {
         egui::CollapsingHeader::new("Denoise")
             .default_open(true)
             .show(ui, |ui| {
+                ui.checkbox(&mut self.denoiser_enabled, "Enable");
                 let dc = &mut self.denoiser_config;
+                ui.add(
+                    egui::Slider::new(&mut dc.temporal_weight, 0.0..=1.0f32)
+                        .text("Temporal weight"),
+                );
                 ui.add(egui::Slider::new(&mut dc.num_passes, 0..=15u32).text("A-trous passes"));
             });
 
