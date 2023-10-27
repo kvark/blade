@@ -90,6 +90,7 @@ pub struct RayConfig {
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct DenoiserConfig {
     pub num_passes: u32,
+    pub temporal_weight: f32,
 }
 
 pub struct SelectionInfo {
@@ -141,12 +142,13 @@ struct DebugRender {
     buffer_size: u32,
 }
 
+#[allow(dead_code)]
 struct DoubleRenderTarget {
     texture: blade_graphics::Texture,
     views: [blade_graphics::TextureView; 2],
     active: usize,
 }
-
+#[allow(dead_code)]
 impl DoubleRenderTarget {
     fn new(
         name: &str,
@@ -216,6 +218,8 @@ struct FrameData {
     flat_normal_view: blade_graphics::TextureView,
     albedo: blade_graphics::Texture,
     albedo_view: blade_graphics::TextureView,
+    light_diffuse: blade_graphics::Texture,
+    light_diffuse_view: blade_graphics::TextureView,
     camera_params: CameraParams,
 }
 
@@ -271,7 +275,7 @@ impl FrameData {
         encoder.init_texture(basis);
 
         let (flat_normal, flat_normal_view) = Self::create_target(
-            "flat_normal",
+            "flat-normal",
             blade_graphics::TextureFormat::Rgba8Snorm,
             size,
             gpu,
@@ -286,6 +290,10 @@ impl FrameData {
         );
         encoder.init_texture(albedo);
 
+        let (light_diffuse, light_diffuse_view) =
+            Self::create_target("light-diffuse", RADIANCE_FORMAT, size, gpu);
+        encoder.init_texture(light_diffuse);
+
         Self {
             reservoir_buf,
             depth,
@@ -296,6 +304,8 @@ impl FrameData {
             flat_normal_view,
             albedo,
             albedo_view,
+            light_diffuse,
+            light_diffuse_view,
             camera_params: CameraParams::default(),
         }
     }
@@ -310,7 +320,14 @@ impl FrameData {
         gpu.destroy_texture(self.flat_normal);
         gpu.destroy_texture_view(self.albedo_view);
         gpu.destroy_texture(self.albedo);
+        gpu.destroy_texture_view(self.light_diffuse_view);
+        gpu.destroy_texture(self.light_diffuse);
     }
+}
+
+struct Blur {
+    temporal_accum_pipeline: blade_graphics::ComputePipeline,
+    atrous_pipeline: blade_graphics::ComputePipeline,
 }
 
 /// Blade Renderer is a comprehensive rendering solution for
@@ -326,13 +343,15 @@ pub struct Renderer {
     config: RenderConfig,
     shaders: Shaders,
     frame_data: [FrameData; 2],
-    lighting_diffuse: DoubleRenderTarget,
+    light_temp_texture: blade_graphics::Texture,
+    light_temp_view: blade_graphics::TextureView,
+    post_proc_input: blade_graphics::TextureView,
     debug_texture: blade_graphics::Texture,
     debug_view: blade_graphics::TextureView,
     fill_pipeline: blade_graphics::ComputePipeline,
     main_pipeline: blade_graphics::ComputePipeline,
-    atrous_pipeline: blade_graphics::ComputePipeline,
-    blit_pipeline: blade_graphics::RenderPipeline,
+    post_proc_pipeline: blade_graphics::RenderPipeline,
+    blur: Blur,
     scene: super::Scene,
     acceleration_structure: blade_graphics::AccelerationStructure,
     env_map: EnvironmentMap,
@@ -429,13 +448,29 @@ struct MainData {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct AtrousParams {
+struct BlurParams {
     extent: [u32; 2],
+    temporal_weight: f32,
+    pad: f32,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct TemporalAccumData {
+    camera: CameraParams,
+    prev_camera: CameraParams,
+    params: BlurParams,
+    input: blade_graphics::TextureView,
+    prev_input: blade_graphics::TextureView,
+    t_depth: blade_graphics::TextureView,
+    t_prev_depth: blade_graphics::TextureView,
+    t_flat_normal: blade_graphics::TextureView,
+    t_prev_flat_normal: blade_graphics::TextureView,
+    output: blade_graphics::TextureView,
 }
 
 #[derive(blade_macros::ShaderData)]
 struct AtrousData {
-    params: AtrousParams,
+    params: BlurParams,
     input: blade_graphics::TextureView,
     t_flat_normal: blade_graphics::TextureView,
     t_depth: blade_graphics::TextureView,
@@ -503,7 +538,7 @@ struct HitEntry {
 pub struct Shaders {
     fill_gbuf: blade_asset::Handle<crate::Shader>,
     ray_trace: blade_asset::Handle<crate::Shader>,
-    atrous: blade_asset::Handle<crate::Shader>,
+    blur: blade_asset::Handle<crate::Shader>,
     post_proc: blade_asset::Handle<crate::Shader>,
     debug_draw: blade_asset::Handle<crate::Shader>,
     debug_blit: blade_asset::Handle<crate::Shader>,
@@ -515,7 +550,7 @@ impl Shaders {
         let shaders = Self {
             fill_gbuf: ctx.load_shader("fill-gbuf.wgsl"),
             ray_trace: ctx.load_shader("ray-trace.wgsl"),
-            atrous: ctx.load_shader("atrous.wgsl"),
+            blur: ctx.load_shader("blur.wgsl"),
             post_proc: ctx.load_shader("post-proc.wgsl"),
             debug_draw: ctx.load_shader("debug-draw.wgsl"),
             debug_blit: ctx.load_shader("debug-blit.wgsl"),
@@ -527,6 +562,7 @@ impl Shaders {
 struct ShaderPipelines {
     fill: blade_graphics::ComputePipeline,
     main: blade_graphics::ComputePipeline,
+    temporal_accum: blade_graphics::ComputePipeline,
     atrous: blade_graphics::ComputePipeline,
     post_proc: blade_graphics::RenderPipeline,
     debug_draw: blade_graphics::RenderPipeline,
@@ -567,6 +603,19 @@ impl ShaderPipelines {
             compute: shader.at("main"),
         })
     }
+
+    fn create_temporal_accum(
+        shader: &blade_graphics::Shader,
+        gpu: &blade_graphics::Context,
+    ) -> blade_graphics::ComputePipeline {
+        let layout = <TemporalAccumData as blade_graphics::ShaderData>::layout();
+        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+            name: "temporal-accum",
+            data_layouts: &[&layout],
+            compute: shader.at("temporal_accum"),
+        })
+    }
+
     fn create_atrous(
         shader: &blade_graphics::Shader,
         gpu: &blade_graphics::Context,
@@ -575,9 +624,10 @@ impl ShaderPipelines {
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "atrous",
             data_layouts: &[&layout],
-            compute: shader.at("main"),
+            compute: shader.at("atrous"),
         })
     }
+
     fn create_post_proc(
         shader: &blade_graphics::Shader,
         format: blade_graphics::TextureFormat,
@@ -597,6 +647,7 @@ impl ShaderPipelines {
             depth_stencil: None,
         })
     }
+
     fn create_debug_draw(
         shader: &blade_graphics::Shader,
         format: blade_graphics::TextureFormat,
@@ -620,6 +671,7 @@ impl ShaderPipelines {
             }],
         })
     }
+
     fn create_debug_blit(
         shader: &blade_graphics::Shader,
         format: blade_graphics::TextureFormat,
@@ -648,10 +700,12 @@ impl ShaderPipelines {
         shader_man: &blade_asset::AssetManager<crate::shader::Baker>,
     ) -> Result<Self, &'static str> {
         let sh_main = shader_man[shaders.ray_trace].raw.as_ref().unwrap();
+        let sh_blur = shader_man[shaders.blur].raw.as_ref().unwrap();
         Ok(Self {
             fill: Self::create_gbuf_fill(shader_man[shaders.fill_gbuf].raw.as_ref().unwrap(), gpu),
             main: Self::create_ray_trace(sh_main, gpu),
-            atrous: Self::create_atrous(shader_man[shaders.atrous].raw.as_ref().unwrap(), gpu),
+            temporal_accum: Self::create_temporal_accum(sh_blur, gpu),
+            atrous: Self::create_atrous(sh_blur, gpu),
             post_proc: Self::create_post_proc(
                 shader_man[shaders.post_proc].raw.as_ref().unwrap(),
                 config.surface_format,
@@ -731,6 +785,10 @@ impl Renderer {
             FrameData::new(config.screen_size, sp.reservoir_size, encoder, gpu),
             FrameData::new(config.screen_size, sp.reservoir_size, encoder, gpu),
         ];
+        let (light_temp_texture, light_temp_view) =
+            FrameData::create_target("light-temp", RADIANCE_FORMAT, config.screen_size, gpu);
+        encoder.init_texture(light_temp_texture);
+
         let dummy = DummyResources::new(encoder, gpu);
         let (debug_texture, debug_view) = FrameData::create_target(
             "debug",
@@ -763,20 +821,19 @@ impl Renderer {
             config: *config,
             shaders,
             frame_data,
-            lighting_diffuse: DoubleRenderTarget::new(
-                "light/diffuse",
-                RADIANCE_FORMAT,
-                config.screen_size,
-                encoder,
-                gpu,
-            ),
+            light_temp_texture,
+            light_temp_view,
+            post_proc_input: blade_graphics::TextureView::default(),
             debug_texture,
             debug_view,
             scene: super::Scene::default(),
             fill_pipeline: sp.fill,
             main_pipeline: sp.main,
-            atrous_pipeline: sp.atrous,
-            blit_pipeline: sp.post_proc,
+            post_proc_pipeline: sp.post_proc,
+            blur: Blur {
+                temporal_accum_pipeline: sp.temporal_accum,
+                atrous_pipeline: sp.atrous,
+            },
             acceleration_structure: blade_graphics::AccelerationStructure::default(),
             env_map: EnvironmentMap::with_pipeline(&dummy, sp.env_preproc),
             dummy,
@@ -800,7 +857,8 @@ impl Renderer {
         for frame_data in self.frame_data.iter_mut() {
             frame_data.destroy(gpu);
         }
-        self.lighting_diffuse.destroy(gpu);
+        gpu.destroy_texture(self.light_temp_texture);
+        gpu.destroy_texture_view(self.light_temp_view);
         gpu.destroy_texture(self.debug_texture);
         gpu.destroy_texture_view(self.debug_view);
         if self.hit_buffer != blade_graphics::Buffer::default() {
@@ -835,6 +893,7 @@ impl Renderer {
 
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.fill_gbuf));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.ray_trace));
+        tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.blur));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.post_proc));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.debug_draw));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.debug_blit));
@@ -868,14 +927,16 @@ impl Renderer {
                 self.main_pipeline = ShaderPipelines::create_ray_trace(shader, gpu);
             }
         }
-        if self.shaders.atrous != old.atrous {
-            if let Ok(ref shader) = asset_hub.shaders[self.shaders.atrous].raw {
-                self.atrous_pipeline = ShaderPipelines::create_atrous(shader, gpu);
+        if self.shaders.blur != old.blur {
+            if let Ok(ref shader) = asset_hub.shaders[self.shaders.blur].raw {
+                self.blur.temporal_accum_pipeline =
+                    ShaderPipelines::create_temporal_accum(shader, gpu);
+                self.blur.atrous_pipeline = ShaderPipelines::create_atrous(shader, gpu);
             }
         }
         if self.shaders.post_proc != old.post_proc {
             if let Ok(ref shader) = asset_hub.shaders[self.shaders.post_proc].raw {
-                self.blit_pipeline =
+                self.post_proc_pipeline =
                     ShaderPipelines::create_post_proc(shader, self.config.surface_format, gpu);
             }
         }
@@ -921,9 +982,13 @@ impl Renderer {
             *frame_data = FrameData::new(size, self.reservoir_size, encoder, gpu);
         }
 
-        self.lighting_diffuse.destroy(gpu);
-        self.lighting_diffuse =
-            DoubleRenderTarget::new("light/diffuse", RADIANCE_FORMAT, size, encoder, gpu);
+        gpu.destroy_texture(self.light_temp_texture);
+        gpu.destroy_texture_view(self.light_temp_view);
+        let (light_temp_texture, light_temp_view) =
+            FrameData::create_target("light-temp", RADIANCE_FORMAT, size, gpu);
+        encoder.init_texture(light_temp_texture);
+        self.light_temp_texture = light_temp_texture;
+        self.light_temp_view = light_temp_view;
 
         gpu.destroy_texture(self.debug_texture);
         gpu.destroy_texture_view(self.debug_view);
@@ -1166,6 +1231,7 @@ impl Renderer {
         self.frame_index += 1;
         self.frame_data.swap(0, 1);
         self.frame_data[0].camera_params = self.make_camera_params(camera);
+        self.post_proc_input = self.frame_data[0].light_diffuse_view;
     }
 
     fn make_camera_params(&self, camera: &super::Camera) -> CameraParams {
@@ -1263,7 +1329,7 @@ impl Renderer {
                     debug_buf: self.debug.buffer.into(),
                     reservoirs: cur.reservoir_buf.into(),
                     prev_reservoirs: prev.reservoir_buf.into(),
-                    out_diffuse: self.lighting_diffuse.cur(),
+                    out_diffuse: cur.light_diffuse_view,
                     out_debug: self.debug_view,
                 },
             );
@@ -1272,29 +1338,69 @@ impl Renderer {
     }
 
     pub fn denoise(
-        &mut self,
+        &mut self, //TODO: borrow immutably
         command_encoder: &mut blade_graphics::CommandEncoder,
         denoiser_config: DenoiserConfig,
     ) {
-        let cur = self.frame_data.first().unwrap();
-        for _ in 0..denoiser_config.num_passes {
+        let params = BlurParams {
+            extent: [self.screen_size.width, self.screen_size.height],
+            temporal_weight: denoiser_config.temporal_weight,
+            pad: 0.0,
+        };
+        if denoiser_config.temporal_weight < 1.0 {
+            let cur = self.frame_data.first().unwrap();
+            let prev = self.frame_data.last().unwrap();
             if let mut pass = command_encoder.compute() {
-                self.lighting_diffuse.swap();
-                let mut pc = pass.with(&self.atrous_pipeline);
-                let groups = self.atrous_pipeline.get_dispatch_for(self.screen_size);
+                let mut pc = pass.with(&self.blur.temporal_accum_pipeline);
+                let groups = self.blur.atrous_pipeline.get_dispatch_for(self.screen_size);
                 pc.bind(
                     0,
-                    &AtrousData {
-                        params: AtrousParams {
-                            extent: [self.screen_size.width, self.screen_size.height],
-                        },
-                        input: self.lighting_diffuse.prev(),
-                        t_flat_normal: cur.flat_normal_view,
+                    &TemporalAccumData {
+                        camera: cur.camera_params,
+                        prev_camera: prev.camera_params,
+                        params,
+                        input: cur.light_diffuse_view,
+                        prev_input: prev.light_diffuse_view,
                         t_depth: cur.depth_view,
-                        output: self.lighting_diffuse.cur(),
+                        t_prev_depth: prev.depth_view,
+                        t_flat_normal: cur.flat_normal_view,
+                        t_prev_flat_normal: prev.flat_normal_view,
+                        output: self.light_temp_view,
                     },
                 );
                 pc.dispatch(groups);
+            }
+
+            // make it so `cur.light_diffuse_view` always contains the fresh reprojection result
+            let cur_mut = self.frame_data.first_mut().unwrap();
+            mem::swap(&mut self.light_temp_view, &mut cur_mut.light_diffuse_view);
+            mem::swap(&mut self.light_temp_texture, &mut cur_mut.light_diffuse);
+        }
+
+        {
+            let cur = self.frame_data.first().unwrap();
+            let prev = self.frame_data.last().unwrap();
+            self.post_proc_input = cur.light_diffuse_view;
+            //Note: we no longer need `prev.light_diffuse_view` so reusing it here
+            let mut targets = [self.light_temp_view, prev.light_diffuse_view];
+            for _ in 0..denoiser_config.num_passes {
+                if let mut pass = command_encoder.compute() {
+                    let mut pc = pass.with(&self.blur.atrous_pipeline);
+                    let groups = self.blur.atrous_pipeline.get_dispatch_for(self.screen_size);
+                    pc.bind(
+                        0,
+                        &AtrousData {
+                            params,
+                            input: self.post_proc_input,
+                            t_flat_normal: cur.flat_normal_view,
+                            t_depth: cur.depth_view,
+                            output: targets[0],
+                        },
+                    );
+                    pc.dispatch(groups);
+                    self.post_proc_input = targets[0];
+                    targets.swap(0, 1); // rotate the views
+                }
             }
         }
     }
@@ -1308,12 +1414,12 @@ impl Renderer {
     ) {
         let pp = &self.scene.post_processing;
         let cur = self.frame_data.first().unwrap();
-        if let mut pc = pass.with(&self.blit_pipeline) {
+        if let mut pc = pass.with(&self.post_proc_pipeline) {
             pc.bind(
                 0,
                 &PostProcData {
                     t_albedo: cur.albedo_view,
-                    light_diffuse: self.lighting_diffuse.cur(),
+                    light_diffuse: self.post_proc_input,
                     t_debug: self.debug_view,
                     tone_map_params: ToneMapParams {
                         mode: mode as u32,
