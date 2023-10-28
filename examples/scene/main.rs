@@ -234,7 +234,7 @@ impl Example {
             },
             denoiser_enabled: true,
             denoiser_config: blade_render::DenoiserConfig {
-                num_passes: 5,
+                num_passes: 2,
                 temporal_weight: 0.1,
             },
             debug_blit: None,
@@ -613,7 +613,7 @@ impl Example {
                     egui::Slider::new(&mut dc.temporal_weight, 0.0..=1.0f32)
                         .text("Temporal weight"),
                 );
-                ui.add(egui::Slider::new(&mut dc.num_passes, 0..=15u32).text("A-trous passes"));
+                ui.add(egui::Slider::new(&mut dc.num_passes, 0..=5u32).text("A-trous passes"));
             });
 
         egui::CollapsingHeader::new("Tone Map").show(ui, |ui| {

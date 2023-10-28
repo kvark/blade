@@ -4,8 +4,10 @@ struct Surface {
     depth: f32,
 }
 
+const SIGMA_N: f32 = 4.0;
+
 fn compare_flat_normals(a: vec3<f32>, b: vec3<f32>) -> f32 {
-    return smoothstep(0.4, 0.9, dot(a, b));
+    return pow(max(0.0, dot(a, b)), SIGMA_N);
 }
 
 fn compare_depths(a: f32, b: f32) -> f32 {
