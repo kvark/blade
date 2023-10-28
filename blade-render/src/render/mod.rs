@@ -29,20 +29,13 @@ pub enum DebugMode {
     Depth = 1,
     Normal = 2,
     HitConsistency = 3,
+    Variance = 4,
 }
 
 impl Default for DebugMode {
     fn default() -> Self {
         Self::Final
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, blade_macros::AsPrimitive, strum::EnumIter)]
-#[repr(u32)]
-pub enum PostProcMode {
-    Tonemap = 0,
-    Reconstruct = 1,
-    Debug = 2,
 }
 
 bitflags::bitflags! {
@@ -480,7 +473,7 @@ struct AtrousData {
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 struct ToneMapParams {
-    mode: u32,
+    enabled: u32,
     average_lum: f32,
     key_value: f32,
     white_level: f32,
@@ -492,6 +485,7 @@ struct PostProcData {
     light_diffuse: blade_graphics::TextureView,
     t_debug: blade_graphics::TextureView,
     tone_map_params: ToneMapParams,
+    debug_params: DebugParams,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -1234,6 +1228,19 @@ impl Renderer {
         self.post_proc_input = self.frame_data[0].light_diffuse_view;
     }
 
+    fn make_debug_params(&self, config: &DebugConfig) -> DebugParams {
+        DebugParams {
+            view_mode: config.view_mode as u32,
+            draw_flags: config.draw_flags.bits(),
+            texture_flags: config.texture_flags.bits(),
+            unused: 0,
+            mouse_pos: match config.mouse_pos {
+                Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
+                None => [-1; 2],
+            },
+        }
+    }
+
     fn make_camera_params(&self, camera: &super::Camera) -> CameraParams {
         let fov_x = 2.0
             * ((camera.fov_y * 0.5).tan() * self.screen_size.width as f32
@@ -1258,16 +1265,7 @@ impl Renderer {
         ray_config: RayConfig,
     ) {
         assert!(!self.is_tlas_dirty);
-        let debug = DebugParams {
-            view_mode: debug_config.view_mode as u32,
-            draw_flags: debug_config.draw_flags.bits(),
-            texture_flags: debug_config.texture_flags.bits(),
-            unused: 0,
-            mouse_pos: match debug_config.mouse_pos {
-                Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
-                None => [-1; 2],
-            },
-        };
+        let debug = self.make_debug_params(&debug_config);
         let cur = self.frame_data.first().unwrap();
         let prev = self.frame_data.last().unwrap();
 
@@ -1410,12 +1408,13 @@ impl Renderer {
     pub fn post_proc(
         &self,
         pass: &mut blade_graphics::RenderCommandEncoder,
-        mode: PostProcMode,
+        debug_config: DebugConfig,
         debug_blits: &[DebugBlit],
     ) {
         let pp = &self.scene.post_processing;
         let cur = self.frame_data.first().unwrap();
         if let mut pc = pass.with(&self.post_proc_pipeline) {
+            let debug_params = self.make_debug_params(&debug_config);
             pc.bind(
                 0,
                 &PostProcData {
@@ -1423,11 +1422,12 @@ impl Renderer {
                     light_diffuse: self.post_proc_input,
                     t_debug: self.debug_view,
                     tone_map_params: ToneMapParams {
-                        mode: mode as u32,
+                        enabled: 1,
                         average_lum: pp.average_luminocity,
                         key_value: pp.exposure_key_value,
                         white_level: pp.white_level,
                     },
+                    debug_params,
                 },
             );
             pc.draw(0, 3, 0, 1);

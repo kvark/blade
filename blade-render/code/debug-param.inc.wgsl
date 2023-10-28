@@ -9,4 +9,3 @@ struct DebugParams {
     pad: u32,
     mouse_pos: vec2<u32>,
 };
-var<uniform> debug: DebugParams;

@@ -32,6 +32,7 @@ struct MainParams {
 var<uniform> camera: CameraParams;
 var<uniform> prev_camera: CameraParams;
 var<uniform> parameters: MainParams;
+var<uniform> debug: DebugParams;
 var acc_struct: acceleration_structure;
 var env_map: texture_2d<f32>;
 var sampler_linear: sampler;
