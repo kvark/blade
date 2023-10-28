@@ -26,16 +26,6 @@ var output: texture_storage_2d<rgba16float, write>;
 
 const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
-fn get_projected_pixel_quad(cp: CameraParams, point: vec3<f32>) -> array<vec2<i32>, 4> {
-    let pixel = get_projected_pixel_float(cp, point);
-    return array<vec2<i32>, 4>(
-        vec2<i32>(vec2<f32>(pixel.x - 0.5, pixel.y - 0.5)),
-        vec2<i32>(vec2<f32>(pixel.x + 0.5, pixel.y - 0.5)),
-        vec2<i32>(vec2<f32>(pixel.x + 0.5, pixel.y + 0.5)),
-        vec2<i32>(vec2<f32>(pixel.x - 0.5, pixel.y + 0.5)),
-    );
-}
-
 fn read_surface(pixel: vec2<i32>) -> Surface {
     var surface = Surface();
     surface.flat_normal = normalize(textureLoad(t_flat_normal, pixel, 0).xyz);
@@ -55,34 +45,55 @@ fn temporal_accum(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (any(pixel >= params.extent)) {
         return;
     }
+
     //TODO: use motion vectors
-    let cur_illumination = textureLoad(input, pixel, 0).xyz;
     let surface = read_surface(pixel);
     let pos_world = camera.position + surface.depth * get_ray_direction(camera, pixel);
     // considering all samples in 2x2 quad, to help with edges
-    var prev_pixels = get_projected_pixel_quad(prev_camera, pos_world);
-    var best_index = 0;
-    var best_weight = 0.0;
+    let center_pixel = get_projected_pixel_float(prev_camera, pos_world);
+    var prev_pixels = array<vec2<i32>, 4>(
+        vec2<i32>(vec2<f32>(center_pixel.x - 0.5, center_pixel.y - 0.5)),
+        vec2<i32>(vec2<f32>(center_pixel.x + 0.5, center_pixel.y - 0.5)),
+        vec2<i32>(vec2<f32>(center_pixel.x + 0.5, center_pixel.y + 0.5)),
+        vec2<i32>(vec2<f32>(center_pixel.x - 0.5, center_pixel.y + 0.5)),
+    );
+    //Note: careful about the pixel center when there is a perfect match
+    let w_bot_right = fract(center_pixel + vec2<f32>(0.5));
+    var prev_weights = vec4<f32>(
+        (1.0 - w_bot_right.x) * (1.0 - w_bot_right.y),
+        w_bot_right.x * (1.0 - w_bot_right.y),
+        w_bot_right.x * w_bot_right.y,
+        (1.0 - w_bot_right.x) * w_bot_right.y,
+    );
+
+    var sum_weight = 0.0;
+    var sum_ilm = vec4<f32>(0.0);
     //TODO: optimize depth load with a gather operation
     for (var i = 0; i < 4; i += 1) {
         let prev_pixel = prev_pixels[i];
         if (all(prev_pixel >= vec2<i32>(0)) && all(prev_pixel < params.extent)) {
             let prev_surface = read_prev_surface(prev_pixel);
-            let projected_distance = length(pos_world - prev_camera.position);
-            let weight = compare_flat_normals(surface.flat_normal, prev_surface.flat_normal)
-                * compare_depths(surface.depth, projected_distance);
-            if (weight > best_weight) {
-                best_index = i;
-                best_weight = weight;
+            if (compare_flat_normals(surface.flat_normal, prev_surface.flat_normal) < 0.5) {
+                continue;
             }
+            let projected_distance = length(pos_world - prev_camera.position);
+            if (compare_depths(prev_surface.depth, projected_distance) < 0.5) {
+                continue;
+            }
+            let w = prev_weights[i];
+            sum_weight += w;
+            let illumination = w * textureLoad(prev_input, prev_pixel, 0).xyz;
+            let luminocity = dot(illumination, LUMA);
+            sum_ilm += vec4<f32>(illumination, luminocity * luminocity);
         }
     }
 
-    let luminocity = dot(cur_illumination, LUMA);
-    var mixed_ilm = vec4<f32>(cur_illumination, luminocity * luminocity);
-    if (best_weight > 0.01) {
-        let prev_ilm = textureLoad(prev_input, prev_pixels[best_index], 0);
-        mixed_ilm = mix(mixed_ilm, prev_ilm, best_weight * (1.0 - params.temporal_weight));
+    let cur_illumination = textureLoad(input, pixel, 0).xyz;
+    let cur_luminocity = dot(cur_illumination, LUMA);
+    var mixed_ilm = vec4<f32>(cur_illumination, cur_luminocity * cur_luminocity);
+    if (sum_weight > 0.01) {
+        let prev_ilm = sum_ilm / w4(sum_weight);
+        mixed_ilm = mix(mixed_ilm, prev_ilm, sum_weight * (1.0 - params.temporal_weight));
     }
     textureStore(output, global_id.xy, mixed_ilm);
 }
