@@ -5,9 +5,12 @@
 // Spatio-temporal variance-guided filtering
 // https://research.nvidia.com/sites/default/files/pubs/2017-07_Spatiotemporal-Variance-Guided-Filtering%3A//svgf_preprint.pdf
 
+// Note: using "ilm" in place of "illumination and the 2nd moment of its luminanc"
+
 struct Params {
     extent: vec2<i32>,
     temporal_weight: f32,
+    iteration: u32,
 }
 
 var<uniform> camera: CameraParams;
@@ -20,6 +23,8 @@ var t_prev_depth: texture_2d<f32>;
 var input: texture_2d<f32>;
 var prev_input: texture_2d<f32>;
 var output: texture_storage_2d<rgba16float, write>;
+
+const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
 fn get_projected_pixel_quad(cp: CameraParams, point: vec3<f32>) -> array<vec2<i32>, 4> {
     let pixel = get_projected_pixel_float(cp, point);
@@ -51,13 +56,14 @@ fn temporal_accum(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     //TODO: use motion vectors
-    let cur_radiance = textureLoad(input, pixel, 0).xyz;
+    let cur_illumination = textureLoad(input, pixel, 0).xyz;
     let surface = read_surface(pixel);
     let pos_world = camera.position + surface.depth * get_ray_direction(camera, pixel);
     // considering all samples in 2x2 quad, to help with edges
     var prev_pixels = get_projected_pixel_quad(prev_camera, pos_world);
     var best_index = 0;
     var best_weight = 0.0;
+    //TODO: optimize depth load with a gather operation
     for (var i = 0; i < 4; i += 1) {
         let prev_pixel = prev_pixels[i];
         if (all(prev_pixel >= vec2<i32>(0)) && all(prev_pixel < params.extent)) {
@@ -72,45 +78,62 @@ fn temporal_accum(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    var prev_radiance = cur_radiance;
+    let luminocity = dot(cur_illumination, LUMA);
+    var mixed_ilm = vec4<f32>(cur_illumination, luminocity * luminocity);
     if (best_weight > 0.01) {
-        prev_radiance = textureLoad(prev_input, prev_pixels[best_index], 0).xyz;
+        let prev_ilm = textureLoad(prev_input, prev_pixels[best_index], 0);
+        mixed_ilm = mix(mixed_ilm, prev_ilm, best_weight * (1.0 - params.temporal_weight));
     }
-    let radiance = mix(cur_radiance, prev_radiance, best_weight * (1.0 - params.temporal_weight));
-    textureStore(output, global_id.xy, vec4<f32>(radiance, 0.0));
+    textureStore(output, global_id.xy, mixed_ilm);
 }
 
-const gaussian_weights = vec2<f32>(0.44198, 0.27901);
+const GAUSSIAN_WEIGHTS = vec2<f32>(0.44198, 0.27901);
+const SIGMA_L: f32 = 4.0;
+const EPSILON: f32 = 0.001;
+
+fn compare_luminance(a_lum: f32, b_lum: f32, variance: f32) -> f32 {
+    return exp(-abs(a_lum - b_lum) / (SIGMA_L * variance + EPSILON));
+}
+
+fn w4(w: f32) -> vec4<f32> {
+    return vec4<f32>(vec3<f32>(w), w * w);
+}
 
 @compute @workgroup_size(8, 8)
-fn atrous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn atrous3x3(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let center = vec2<i32>(global_id.xy);
     if (any(center >= params.extent)) {
         return;
     }
 
-    let center_radiance = textureLoad(input, center, 0).xyz;
+    let center_ilm = textureLoad(input, center, 0);
+    let center_luma = dot(center_ilm.xyz, LUMA);
+    let variance = sqrt(center_ilm.w);
     let center_suf = read_surface(center);
-    var sum_weight = gaussian_weights[0] * gaussian_weights[0];
-    var sum_radiance = center_radiance * sum_weight;
+    var sum_weight = GAUSSIAN_WEIGHTS[0] * GAUSSIAN_WEIGHTS[0];
+    var sum_ilm = w4(sum_weight) * center_ilm;
 
     for (var yy=-1; yy<=1; yy+=1) {
         for (var xx=-1; xx<=1; xx+=1) {
-            let p = center + vec2<i32>(xx, yy);
+            let p = center + vec2<i32>(xx, yy) * (1 << params.iteration);
             if (all(p == center) || any(p < vec2<i32>(0)) || any(p >= params.extent)) {
                 continue;
             }
 
             //TODO: store in group-shared memory
             let surface = read_surface(p);
-            var weight = gaussian_weights[abs(xx)] * gaussian_weights[abs(yy)];
-            //weight *= compare_surfaces(center_suf, surface);
-            let radiance = textureLoad(input, p, 0).xyz;
-            sum_radiance += weight * radiance;
+            var weight = GAUSSIAN_WEIGHTS[abs(xx)] * GAUSSIAN_WEIGHTS[abs(yy)];
+            //TODO: make it stricter on higher iterations
+            weight *= compare_flat_normals(surface.flat_normal, center_suf.flat_normal);
+            //Note: should we use a projected depth instead of the surface one?
+            weight *= compare_depths(surface.depth, center_suf.depth);
+            let other_ilm = textureLoad(input, p, 0);
+            weight *= compare_luminance(center_luma, dot(other_ilm.xyz, LUMA), variance);
+            sum_ilm += w4(weight) * other_ilm;
             sum_weight += weight;
         }
     }
 
-    let radiance = sum_radiance / sum_weight;
-    textureStore(output, global_id.xy, vec4<f32>(radiance, 0.0));
+    let filtered_ilm = sum_ilm / w4(sum_weight);
+    textureStore(output, global_id.xy, filtered_ilm);
 }

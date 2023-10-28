@@ -451,7 +451,7 @@ struct MainData {
 struct BlurParams {
     extent: [u32; 2],
     temporal_weight: f32,
-    pad: f32,
+    iteration: i32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -624,7 +624,7 @@ impl ShaderPipelines {
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "atrous",
             data_layouts: &[&layout],
-            compute: shader.at("atrous"),
+            compute: shader.at("atrous3x3"),
         })
     }
 
@@ -1342,10 +1342,10 @@ impl Renderer {
         command_encoder: &mut blade_graphics::CommandEncoder,
         denoiser_config: DenoiserConfig,
     ) {
-        let params = BlurParams {
+        let mut params = BlurParams {
             extent: [self.screen_size.width, self.screen_size.height],
             temporal_weight: denoiser_config.temporal_weight,
-            pad: 0.0,
+            iteration: 0,
         };
         if denoiser_config.temporal_weight < 1.0 {
             let cur = self.frame_data.first().unwrap();
@@ -1400,6 +1400,7 @@ impl Renderer {
                     pc.dispatch(groups);
                     self.post_proc_input = targets[0];
                     targets.swap(0, 1); // rotate the views
+                    params.iteration += 1;
                 }
             }
         }
