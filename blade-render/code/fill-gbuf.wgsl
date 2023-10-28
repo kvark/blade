@@ -38,6 +38,7 @@ struct HitEntry {
 var<storage, read> hit_entries: array<HitEntry>;
 
 var<uniform> camera: CameraParams;
+var<uniform> debug: DebugParams;
 var acc_struct: acceleration_structure;
 
 var out_depth: texture_storage_2d<r32float, write>;
