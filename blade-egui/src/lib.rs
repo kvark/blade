@@ -116,6 +116,7 @@ impl GuiPainter {
     ///
     /// It supports renderpasses with only a color attachment,
     /// and this attachment format must be The `output_format`.
+    #[profiling::function]
     pub fn new(
         context: &blade_graphics::Context,
         output_format: blade_graphics::TextureFormat,
@@ -167,6 +168,7 @@ impl GuiPainter {
         }
     }
 
+    #[profiling::function]
     fn triage_deletions(&mut self, context: &blade_graphics::Context) {
         let valid_pos = self
             .textures_to_delete
@@ -182,6 +184,7 @@ impl GuiPainter {
     /// Updates the texture used by egui for the fonts etc.
     /// New textures should be added before the call to `execute()`,
     /// and old textures should be removed after.
+    #[profiling::function]
     pub fn update_textures(
         &mut self,
         command_encoder: &mut blade_graphics::CommandEncoder,
@@ -270,6 +273,7 @@ impl GuiPainter {
 
     /// Render the set of clipped primitives into a render pass.
     /// The `sd` must contain dimensions of the render target.
+    #[profiling::function]
     pub fn paint(
         &mut self,
         pass: &mut blade_graphics::RenderCommandEncoder,
@@ -344,6 +348,7 @@ impl GuiPainter {
     }
 
     /// Call this after submitting work at the given `sync_point`.
+    #[profiling::function]
     pub fn after_submit(&mut self, sync_point: blade_graphics::SyncPoint) {
         self.textures_to_delete.extend(
             self.textures_dropped

@@ -79,6 +79,7 @@ struct Example {
     camera: blade_render::Camera,
     fly_speed: f32,
     debug: blade_render::DebugConfig,
+    track_hot_reloads: bool,
     need_accumulation_reset: bool,
     is_debug_drawing: bool,
     last_render_time: time::Instant,
@@ -106,9 +107,9 @@ impl Example {
         }
     }
 
+    #[profiling::function]
     fn new(window: &winit::window::Window, scene_path: &Path) -> Self {
         log::info!("Initializing");
-        //let _ = profiling::tracy_client::Client::start();
 
         let context = Arc::new(unsafe {
             gpu::Context::init_windowed(
@@ -220,6 +221,7 @@ impl Example {
             camera,
             fly_speed: config_scene.camera.speed,
             debug: blade_render::DebugConfig::default(),
+            track_hot_reloads: false,
             need_accumulation_reset: true,
             is_debug_drawing: false,
             last_render_time: time::Instant::now(),
@@ -253,6 +255,7 @@ impl Example {
             .destroy_command_encoder(self.command_encoder.take().unwrap());
     }
 
+    #[profiling::function]
     fn wait_for_previous_frame(&mut self) {
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);
@@ -265,6 +268,7 @@ impl Example {
         }
     }
 
+    #[profiling::function]
     fn render(
         &mut self,
         gui_primitives: &[egui::ClippedPrimitive],
@@ -280,11 +284,13 @@ impl Example {
             }
         }
 
-        self.need_accumulation_reset |= self.renderer.hot_reload(
-            &self.asset_hub,
-            &self.context,
-            self.prev_sync_point.as_ref().unwrap(),
-        );
+        if self.track_hot_reloads {
+            self.need_accumulation_reset |= self.renderer.hot_reload(
+                &self.asset_hub,
+                &self.context,
+                self.prev_sync_point.as_ref().unwrap(),
+            );
+        }
 
         // Note: the resize is split in 2 parts because `wait_for_previous_frame`
         // wants to borrow `self` mutably, and `command_encoder` blocks that.
@@ -374,6 +380,7 @@ impl Example {
             .extend(temp_acceleration_structures);
     }
 
+    #[profiling::function]
     fn add_gui(&mut self, ui: &mut egui::Ui) {
         use strum::IntoEnumIterator as _;
 
@@ -421,6 +428,7 @@ impl Example {
         egui::CollapsingHeader::new("Debug")
             .default_open(true)
             .show(ui, |ui| {
+                ui.checkbox(&mut self.track_hot_reloads, "Hot reloading");
                 // debug mode
                 egui::ComboBox::from_label("View mode")
                     .selected_text(format!("{:?}", self.debug.view_mode))
@@ -667,6 +675,7 @@ impl Example {
 
 fn main() {
     env_logger::init();
+    //let _ = profiling::tracy_client::Client::start();
 
     let event_loop = winit::event_loop::EventLoop::new();
     let window = winit::window::WindowBuilder::new()
@@ -851,6 +860,7 @@ fn main() {
                     window.inner_size(),
                     egui_ctx.pixels_per_point(),
                 );
+                profiling::finish_frame!();
             }
             winit::event::Event::LoopDestroyed => {
                 example.destroy();

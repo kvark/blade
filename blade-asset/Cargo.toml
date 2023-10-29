@@ -14,3 +14,4 @@ base64 = { workspace = true }
 bytemuck = { workspace = true }
 choir = { workspace = true }
 log = { workspace = true }
+profiling = { workspace = true }

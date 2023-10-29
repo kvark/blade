@@ -224,6 +224,7 @@ enum CookReason {
     WrongDataOffset,
 }
 
+#[profiling::function]
 #[allow(clippy::read_zero_byte_vec)] // bad warning?
 fn check_target_relevancy(
     target_path: &Path,

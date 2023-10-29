@@ -50,6 +50,7 @@ impl AssetHub {
     ///
     /// Populates the list of temporary buffers that can be freed when the
     /// relevant submission is completely retired.
+    #[profiling::function]
     pub fn flush(
         &self,
         command_encoder: &mut blade_graphics::CommandEncoder,
@@ -78,6 +79,7 @@ impl AssetHub {
         }
     }
 
+    #[profiling::function]
     pub fn list_running_tasks(&self) -> Vec<choir::RunningTask> {
         let mut list = Vec::new();
         self.textures.list_running_tasks(&mut list);
