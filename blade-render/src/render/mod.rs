@@ -728,6 +728,7 @@ impl Renderer {
     ///
     /// Panics if the system is not compatible.
     /// Records initialization routines into the given command encoder.
+    #[profiling::function]
     pub fn new(
         encoder: &mut blade_graphics::CommandEncoder,
         gpu: &blade_graphics::Context,
@@ -876,6 +877,7 @@ impl Renderer {
         self.is_tlas_dirty = true;
     }
 
+    #[profiling::function]
     pub fn hot_reload(
         &mut self,
         asset_hub: &crate::AssetHub,
@@ -964,6 +966,7 @@ impl Renderer {
         self.env_map.weight_view
     }
 
+    #[profiling::function]
     pub fn resize_screen(
         &mut self,
         size: blade_graphics::Extent,
@@ -998,6 +1001,7 @@ impl Renderer {
     }
 
     /// Prepare to render a frame.
+    #[profiling::function]
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
@@ -1258,6 +1262,7 @@ impl Renderer {
     /// Ray trace the scene.
     ///
     /// The result is stored internally in an HDR render target.
+    #[profiling::function]
     pub fn ray_trace(
         &self,
         command_encoder: &mut blade_graphics::CommandEncoder,
@@ -1335,6 +1340,8 @@ impl Renderer {
         }
     }
 
+    /// Perform noise reduction using SVGF.
+    #[profiling::function]
     pub fn denoise(
         &mut self, //TODO: borrow immutably
         command_encoder: &mut blade_graphics::CommandEncoder,
@@ -1405,6 +1412,7 @@ impl Renderer {
     }
 
     /// Blit the rendering result into a specified render pass.
+    #[profiling::function]
     pub fn post_proc(
         &self,
         pass: &mut blade_graphics::RenderCommandEncoder,
@@ -1469,6 +1477,7 @@ impl Renderer {
         }
     }
 
+    #[profiling::function]
     pub fn read_debug_selection_info(&self) -> SelectionInfo {
         let db_v = unsafe { &*(self.debug.variance_buffer.data() as *const DebugVariance) };
         let db_e = unsafe { &*(self.debug.entry_buffer.data() as *const DebugEntry) };

@@ -531,7 +531,7 @@ pub struct ShaderDataLayout {
 }
 
 impl ShaderDataLayout {
-    pub const EMPTY: &Self = &Self {
+    pub const EMPTY: &'static Self = &Self {
         bindings: Vec::new(),
     };
 }
