@@ -40,44 +40,15 @@ pub struct Camera {
 }
 
 pub struct Object {
-    pub model: blade_asset::Handle<Model>,
     pub transform: blade_graphics::Transform,
+    pub model: blade_asset::Handle<Model>,
 }
 
 impl From<blade_asset::Handle<Model>> for Object {
     fn from(model: blade_asset::Handle<Model>) -> Self {
         Self {
+            transform: blade_graphics::IDENTITY_TRANSFORM,
             model,
-            transform: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-            ]
-            .into(),
         }
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct PostProcessing {
-    //TODO: remove this, compute automatically
-    pub average_luminocity: f32,
-    pub exposure_key_value: f32,
-    pub white_level: f32,
-}
-impl Default for PostProcessing {
-    fn default() -> Self {
-        Self {
-            average_luminocity: 1.0,
-            exposure_key_value: 1.0,
-            white_level: 1.0,
-        }
-    }
-}
-
-#[derive(Default)]
-pub struct Scene {
-    pub objects: Vec<Object>,
-    pub environment_map: Option<blade_asset::Handle<Texture>>,
-    pub post_processing: PostProcessing,
 }

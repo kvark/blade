@@ -1,6 +1,5 @@
 mod dummy;
 mod env_map;
-mod scene;
 
 pub use dummy::DummyResources;
 pub use env_map::EnvironmentMap;
@@ -86,6 +85,23 @@ pub struct DenoiserConfig {
     pub temporal_weight: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct PostProcConfig {
+    //TODO: compute automatically
+    pub average_luminocity: f32,
+    pub exposure_key_value: f32,
+    pub white_level: f32,
+}
+impl Default for PostProcConfig {
+    fn default() -> Self {
+        Self {
+            average_luminocity: 1.0,
+            exposure_key_value: 1.0,
+            white_level: 1.0,
+        }
+    }
+}
+
 pub struct SelectionInfo {
     pub std_deviation: mint::Vector3<f32>,
     pub std_deviation_history: u32,
@@ -125,7 +141,7 @@ struct DebugEntry {
 }
 
 struct DebugRender {
-    capacity: u32,
+    _capacity: u32,
     buffer: blade_graphics::Buffer,
     variance_buffer: blade_graphics::Buffer,
     entry_buffer: blade_graphics::Buffer,
@@ -345,7 +361,6 @@ pub struct Renderer {
     main_pipeline: blade_graphics::ComputePipeline,
     post_proc_pipeline: blade_graphics::RenderPipeline,
     blur: Blur,
-    scene: super::Scene,
     acceleration_structure: blade_graphics::AccelerationStructure,
     env_map: EnvironmentMap,
     dummy: DummyResources,
@@ -356,7 +371,6 @@ pub struct Renderer {
     samplers: Samplers,
     reservoir_size: u32,
     debug: DebugRender,
-    is_tlas_dirty: bool,
     screen_size: blade_graphics::Extent,
     frame_index: u32,
     //TODO: refactor `ResourceArray` to not carry the freelist logic
@@ -744,7 +758,7 @@ impl Renderer {
         let sp = ShaderPipelines::init(&shaders, config, gpu, shader_man).unwrap();
 
         let debug = DebugRender {
-            capacity: config.max_debug_lines,
+            _capacity: config.max_debug_lines,
             buffer: gpu.create_buffer(blade_graphics::BufferDesc {
                 name: "debug",
                 size: (sp.debug_buffer_size + (config.max_debug_lines - 1) * sp.debug_line_size)
@@ -767,6 +781,9 @@ impl Renderer {
             buffer_size: sp.debug_buffer_size,
         };
 
+        let debug_init_data = [2u32, 0, 0, config.max_debug_lines];
+        let debug_init_size = debug_init_data.len() * mem::size_of::<u32>();
+        assert!(debug_init_size <= mem::size_of::<DebugEntry>());
         unsafe {
             ptr::write_bytes(
                 debug.variance_buffer.data(),
@@ -774,6 +791,20 @@ impl Renderer {
                 mem::size_of::<DebugVariance>(),
             );
             ptr::write_bytes(debug.entry_buffer.data(), 0, mem::size_of::<DebugEntry>());
+            // piggyback on the staging buffers to upload the data
+            ptr::copy_nonoverlapping(
+                debug_init_data.as_ptr(),
+                debug.entry_buffer.data() as *mut u32,
+                debug_init_data.len(),
+            );
+        }
+        {
+            let mut transfers = encoder.transfer();
+            transfers.copy_buffer_to_buffer(
+                debug.entry_buffer.at(0),
+                debug.buffer.at(0),
+                debug_init_size as u64,
+            );
         }
 
         let frame_data = [
@@ -821,7 +852,6 @@ impl Renderer {
             post_proc_input: blade_graphics::TextureView::default(),
             debug_texture,
             debug_view,
-            scene: super::Scene::default(),
             fill_pipeline: sp.fill,
             main_pipeline: sp.main,
             post_proc_pipeline: sp.post_proc,
@@ -839,7 +869,6 @@ impl Renderer {
             samplers,
             reservoir_size: sp.reservoir_size,
             debug,
-            is_tlas_dirty: true,
             screen_size: config.screen_size,
             frame_index: 0,
             texture_resource_lookup: HashMap::default(),
@@ -870,11 +899,6 @@ impl Renderer {
         gpu.destroy_buffer(self.debug.buffer);
         gpu.destroy_buffer(self.debug.variance_buffer);
         gpu.destroy_buffer(self.debug.entry_buffer);
-    }
-
-    pub fn merge_scene(&mut self, scene: super::Scene) {
-        self.scene = scene;
-        self.is_tlas_dirty = true;
     }
 
     #[profiling::function]
@@ -1000,192 +1024,209 @@ impl Renderer {
         self.debug_view = debug_view;
     }
 
-    /// Prepare to render a frame.
     #[profiling::function]
-    #[allow(clippy::too_many_arguments)]
-    pub fn prepare(
+    pub fn build_scene(
         &mut self,
         command_encoder: &mut blade_graphics::CommandEncoder,
-        camera: &super::Camera,
+        objects: &[crate::Object],
+        env_map: Option<blade_asset::Handle<crate::Texture>>,
         asset_hub: &crate::AssetHub,
         gpu: &blade_graphics::Context,
         temp_buffers: &mut Vec<blade_graphics::Buffer>,
         temp_acceleration_structures: &mut Vec<blade_graphics::AccelerationStructure>,
+    ) {
+        let (env_view, env_extent) = match env_map {
+            Some(handle) => {
+                let asset = &asset_hub.textures[handle];
+                (asset.view, asset.extent)
+            }
+            None => (self.dummy.white_view, blade_graphics::Extent::default()),
+        };
+        self.env_map
+            .assign(env_view, env_extent, command_encoder, gpu);
+
+        if self.acceleration_structure != blade_graphics::AccelerationStructure::default() {
+            temp_acceleration_structures.push(self.acceleration_structure);
+        }
+
+        let geometry_count = objects
+            .iter()
+            .map(|object| {
+                let model = &asset_hub.models[object.model];
+                model.geometries.len()
+            })
+            .sum::<usize>();
+        let hit_size = (geometry_count.max(1) * mem::size_of::<HitEntry>()) as u64;
+        //TODO: reuse the hit buffer
+        if self.hit_buffer != blade_graphics::Buffer::default() {
+            temp_buffers.push(self.hit_buffer);
+        }
+        self.hit_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "hit entries",
+            size: hit_size,
+            memory: blade_graphics::Memory::Device,
+        });
+        let hit_staging = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "hit staging",
+            size: hit_size,
+            memory: blade_graphics::Memory::Upload,
+        });
+        temp_buffers.push(hit_staging);
+        {
+            let mut transfers = command_encoder.transfer();
+            transfers.copy_buffer_to_buffer(hit_staging.at(0), self.hit_buffer.at(0), hit_size);
+        }
+
+        self.vertex_buffers.clear();
+        self.index_buffers.clear();
+        self.textures.clear();
+        let dummy_white = self.textures.alloc(self.dummy.white_view);
+        let dummy_black = self.textures.alloc(self.dummy.black_view);
+
+        let mut geometry_index = 0;
+        let mut instances = Vec::with_capacity(objects.len());
+        let mut blases = Vec::with_capacity(objects.len());
+        let mut texture_indices = HashMap::new();
+
+        for object in objects {
+            let m3_object = glam::Mat3 {
+                x_axis: glam::Vec4::from(object.transform.x).truncate(),
+                y_axis: glam::Vec4::from(object.transform.y).truncate(),
+                z_axis: glam::Vec4::from(object.transform.z).truncate(),
+            };
+
+            let model = &asset_hub.models[object.model];
+            instances.push(blade_graphics::AccelerationStructureInstance {
+                acceleration_structure_index: blases.len() as u32,
+                transform: object.transform,
+                mask: 0xFF,
+                custom_index: geometry_index as u32,
+            });
+            blases.push(model.acceleration_structure);
+
+            for geometry in model.geometries.iter() {
+                let material = &model.materials[geometry.material_index];
+                let vertex_offset =
+                    geometry.vertex_range.start as u64 * mem::size_of::<crate::Vertex>() as u64;
+                let geometry_to_world_rotation = {
+                    let colm = mint::ColumnMatrix3x4::from(geometry.transform);
+                    let m3_geo = glam::Mat3 {
+                        x_axis: colm.x.into(),
+                        y_axis: colm.y.into(),
+                        z_axis: colm.z.into(),
+                    };
+                    let m3_normal = (m3_object * m3_geo).inverse().transpose();
+                    let quat = glam::Quat::from_mat3(&m3_normal);
+                    let qv = glam::Vec4::from(quat) * 127.0;
+                    [qv.x as i8, qv.y as i8, qv.z as i8, qv.w as i8]
+                };
+
+                let hit_entry = HitEntry {
+                    index_buf: match geometry.index_type {
+                        Some(_) => self
+                            .index_buffers
+                            .alloc(model.index_buffer.at(geometry.index_offset)),
+                        None => !0,
+                    },
+                    vertex_buf: self
+                        .vertex_buffers
+                        .alloc(model.vertex_buffer.at(vertex_offset)),
+                    geometry_to_world_rotation,
+                    unused: 0,
+                    geometry_to_object: mint::ColumnMatrix4::from(mint::RowMatrix4 {
+                        x: geometry.transform.x,
+                        y: geometry.transform.y,
+                        z: geometry.transform.z,
+                        w: [0.0, 0.0, 0.0, 1.0].into(),
+                    }),
+                    base_color_texture: match material.base_color_texture {
+                        Some(handle) => *texture_indices.entry(handle).or_insert_with(|| {
+                            let texture = &asset_hub.textures[handle];
+                            self.textures.alloc(texture.view)
+                        }),
+                        None => dummy_white,
+                    },
+                    base_color_factor: {
+                        let c = material.base_color_factor;
+                        [
+                            (c[0] * 255.0) as u8,
+                            (c[1] * 255.0) as u8,
+                            (c[2] * 255.0) as u8,
+                            (c[3] * 255.0) as u8,
+                        ]
+                    },
+                    normal_texture: match material.normal_texture {
+                        Some(handle) => *texture_indices.entry(handle).or_insert_with(|| {
+                            let texture = &asset_hub.textures[handle];
+                            self.textures.alloc(texture.view)
+                        }),
+                        None => dummy_black,
+                    },
+                    finish_pad: [0; 1],
+                };
+
+                log::debug!("Entry[{geometry_index}] = {hit_entry:?}");
+                unsafe {
+                    ptr::write(
+                        (hit_staging.data() as *mut HitEntry).add(geometry_index),
+                        hit_entry,
+                    );
+                }
+                geometry_index += 1;
+            }
+        }
+
+        self.texture_resource_lookup.clear();
+        for (handle, res_id) in texture_indices {
+            self.texture_resource_lookup.insert(res_id, handle);
+        }
+
+        assert_eq!(geometry_index, geometry_count);
+        log::info!(
+            "Preparing ray tracing with {} geometries in total",
+            geometry_count
+        );
+
+        // Needs to be a separate encoder in order to force synchronization
+        let sizes = gpu.get_top_level_acceleration_structure_sizes(instances.len() as u32);
+        self.acceleration_structure =
+            gpu.create_acceleration_structure(blade_graphics::AccelerationStructureDesc {
+                name: "TLAS",
+                ty: blade_graphics::AccelerationStructureType::TopLevel,
+                size: sizes.data,
+            });
+        let instance_buf = gpu.create_acceleration_structure_instance_buffer(&instances, &blases);
+        let scratch_buf = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "TLAS scratch",
+            size: sizes.scratch,
+            memory: blade_graphics::Memory::Device,
+        });
+
+        let mut tlas_encoder = command_encoder.acceleration_structure();
+        tlas_encoder.build_top_level(
+            self.acceleration_structure,
+            &blases,
+            instances.len() as u32,
+            instance_buf.at(0),
+            scratch_buf.at(0),
+        );
+
+        temp_buffers.push(instance_buf);
+        temp_buffers.push(scratch_buf);
+    }
+
+    /// Prepare to render a frame.
+    #[profiling::function]
+    pub fn prepare(
+        &mut self,
+        command_encoder: &mut blade_graphics::CommandEncoder,
+        camera: &crate::Camera,
         enable_debug_draw: bool,
         accumulate_variance: bool,
         reset_reservoirs: bool,
     ) {
-        if self.is_tlas_dirty {
-            self.is_tlas_dirty = false;
-            if self.acceleration_structure != blade_graphics::AccelerationStructure::default() {
-                temp_buffers.push(self.hit_buffer);
-                temp_acceleration_structures.push(self.acceleration_structure);
-            }
-
-            let (tlas, geometry_count) = self.scene.build_top_level_acceleration_structure(
-                command_encoder,
-                &asset_hub.models,
-                gpu,
-                temp_buffers,
-            );
-            self.acceleration_structure = tlas;
-            log::info!("Preparing ray tracing with {geometry_count} geometries in total");
-            let mut transfers = command_encoder.transfer();
-
-            {
-                // init the debug buffer
-                let data = [2, 0, 0, 0, self.debug.capacity, 0];
-                let size = 4 * data.len() as u64;
-                let staging = gpu.create_buffer(blade_graphics::BufferDesc {
-                    name: "debug buf staging",
-                    size,
-                    memory: blade_graphics::Memory::Upload,
-                });
-                unsafe {
-                    ptr::write(staging.data() as *mut _, data);
-                }
-                transfers.copy_buffer_to_buffer(staging.into(), self.debug.buffer.into(), size);
-                temp_buffers.push(staging);
-            }
-
-            self.vertex_buffers.clear();
-            self.index_buffers.clear();
-            self.textures.clear();
-            let dummy_white = self.textures.alloc(self.dummy.white_view);
-            let dummy_black = self.textures.alloc(self.dummy.black_view);
-
-            if geometry_count != 0 {
-                let hit_staging = {
-                    // init the hit buffer
-                    let hit_size = (geometry_count as usize * mem::size_of::<HitEntry>()) as u64;
-                    self.hit_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
-                        name: "hit entries",
-                        size: hit_size,
-                        memory: blade_graphics::Memory::Device,
-                    });
-                    let staging = gpu.create_buffer(blade_graphics::BufferDesc {
-                        name: "hit staging",
-                        size: hit_size,
-                        memory: blade_graphics::Memory::Upload,
-                    });
-                    temp_buffers.push(staging);
-                    transfers.copy_buffer_to_buffer(staging.at(0), self.hit_buffer.at(0), hit_size);
-                    staging
-                };
-
-                fn extract_matrix3(transform: blade_graphics::Transform) -> glam::Mat3 {
-                    let col_mx = mint::ColumnMatrix3x4::from(transform);
-                    glam::Mat3::from_cols(col_mx.x.into(), col_mx.y.into(), col_mx.z.into())
-                }
-
-                let mut texture_indices = HashMap::new();
-                let mut geometry_index = 0;
-                for object in self.scene.objects.iter() {
-                    let m3_object = extract_matrix3(object.transform);
-                    let model = &asset_hub.models[object.model];
-                    for geometry in model.geometries.iter() {
-                        let material = &model.materials[geometry.material_index];
-                        let vertex_offset = geometry.vertex_range.start as u64
-                            * mem::size_of::<crate::Vertex>() as u64;
-                        let geometry_to_world_rotation = {
-                            let m3_geo = extract_matrix3(geometry.transform);
-                            let m3_normal = (m3_object * m3_geo).inverse().transpose();
-                            let quat = glam::Quat::from_mat3(&m3_normal);
-                            let qv = glam::Vec4::from(quat) * 127.0;
-                            [qv.x as i8, qv.y as i8, qv.z as i8, qv.w as i8]
-                        };
-                        fn extend(v: mint::Vector3<f32>) -> mint::Vector4<f32> {
-                            mint::Vector4 {
-                                x: v.x,
-                                y: v.y,
-                                z: v.z,
-                                w: 0.0,
-                            }
-                        }
-
-                        let hit_entry = HitEntry {
-                            index_buf: match geometry.index_type {
-                                Some(_) => self
-                                    .index_buffers
-                                    .alloc(model.index_buffer.at(geometry.index_offset)),
-                                None => !0,
-                            },
-                            vertex_buf: self
-                                .vertex_buffers
-                                .alloc(model.vertex_buffer.at(vertex_offset)),
-                            geometry_to_world_rotation,
-                            unused: 0,
-                            geometry_to_object: {
-                                let m = mint::ColumnMatrix3x4::from(geometry.transform);
-                                mint::ColumnMatrix4 {
-                                    x: extend(m.x),
-                                    y: extend(m.y),
-                                    z: extend(m.z),
-                                    w: extend(m.w),
-                                }
-                            },
-                            base_color_texture: match material.base_color_texture {
-                                Some(handle) => {
-                                    *texture_indices.entry(handle).or_insert_with(|| {
-                                        let texture = &asset_hub.textures[handle];
-                                        self.textures.alloc(texture.view)
-                                    })
-                                }
-                                None => dummy_white,
-                            },
-                            base_color_factor: {
-                                let c = material.base_color_factor;
-                                [
-                                    (c[0] * 255.0) as u8,
-                                    (c[1] * 255.0) as u8,
-                                    (c[2] * 255.0) as u8,
-                                    (c[3] * 255.0) as u8,
-                                ]
-                            },
-                            normal_texture: match material.normal_texture {
-                                Some(handle) => {
-                                    *texture_indices.entry(handle).or_insert_with(|| {
-                                        let texture = &asset_hub.textures[handle];
-                                        self.textures.alloc(texture.view)
-                                    })
-                                }
-                                None => dummy_black,
-                            },
-                            finish_pad: [0; 1],
-                        };
-
-                        log::debug!("Entry[{geometry_index}] = {hit_entry:?}");
-                        unsafe {
-                            ptr::write(
-                                (hit_staging.data() as *mut HitEntry).add(geometry_index),
-                                hit_entry,
-                            );
-                        }
-                        geometry_index += 1;
-                    }
-                }
-                assert_eq!(geometry_index, geometry_count as usize);
-
-                self.texture_resource_lookup.clear();
-                for (handle, res_id) in texture_indices {
-                    self.texture_resource_lookup.insert(res_id, handle);
-                }
-            } else {
-                self.hit_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
-                    name: "hit entries",
-                    size: mem::size_of::<HitEntry>() as u64,
-                    memory: blade_graphics::Memory::Device,
-                });
-            }
-        }
-
-        if let Some(handle) = self.scene.environment_map {
-            let asset = &asset_hub.textures[handle];
-            self.env_map
-                .assign(asset.view, asset.extent, command_encoder, gpu);
-        };
-
         let mut transfer = command_encoder.transfer();
+
         if enable_debug_draw {
             // reset the debug line count
             transfer.fill_buffer(self.debug.buffer.at(4), 4, 0);
@@ -1193,6 +1234,7 @@ impl Renderer {
         } else {
             transfer.fill_buffer(self.debug.buffer.at(20), 4, 0);
         }
+
         if reset_reservoirs || !accumulate_variance {
             transfer.fill_buffer(
                 self.debug.buffer.at(32),
@@ -1214,6 +1256,7 @@ impl Renderer {
             self.debug.entry_buffer.into(),
             mem::size_of::<DebugEntry>() as u64,
         );
+
         if reset_reservoirs {
             if !enable_debug_draw {
                 transfer.fill_buffer(self.debug.buffer.at(4), 4, 0);
@@ -1269,7 +1312,6 @@ impl Renderer {
         debug_config: DebugConfig,
         ray_config: RayConfig,
     ) {
-        assert!(!self.is_tlas_dirty);
         let debug = self.make_debug_params(&debug_config);
         let cur = self.frame_data.first().unwrap();
         let prev = self.frame_data.last().unwrap();
@@ -1417,9 +1459,9 @@ impl Renderer {
         &self,
         pass: &mut blade_graphics::RenderCommandEncoder,
         debug_config: DebugConfig,
+        pp_config: PostProcConfig,
         debug_blits: &[DebugBlit],
     ) {
-        let pp = &self.scene.post_processing;
         let cur = self.frame_data.first().unwrap();
         if let mut pc = pass.with(&self.post_proc_pipeline) {
             let debug_params = self.make_debug_params(&debug_config);
@@ -1431,9 +1473,9 @@ impl Renderer {
                     t_debug: self.debug_view,
                     tone_map_params: ToneMapParams {
                         enabled: 1,
-                        average_lum: pp.average_luminocity,
-                        key_value: pp.exposure_key_value,
-                        white_level: pp.white_level,
+                        average_lum: pp_config.average_luminocity,
+                        key_value: pp_config.exposure_key_value,
+                        white_level: pp_config.white_level,
                     },
                     debug_params,
                 },
@@ -1505,9 +1547,5 @@ impl Renderer {
                 .get(&db_e.normal_texture)
                 .cloned(),
         }
-    }
-
-    pub fn configure_post_processing(&mut self) -> &mut crate::PostProcessing {
-        &mut self.scene.post_processing
     }
 }

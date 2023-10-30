@@ -26,6 +26,27 @@
 pub use naga::{StorageAccess, VectorSize};
 pub type Transform = mint::RowMatrix3x4<f32>;
 
+pub const IDENTITY_TRANSFORM: Transform = mint::RowMatrix3x4 {
+    x: mint::Vector4 {
+        x: 1.0,
+        y: 0.0,
+        z: 0.0,
+        w: 0.0,
+    },
+    y: mint::Vector4 {
+        x: 0.0,
+        y: 1.0,
+        z: 0.0,
+        w: 0.0,
+    },
+    z: mint::Vector4 {
+        x: 0.0,
+        y: 0.0,
+        z: 1.0,
+        w: 0.0,
+    },
+};
+
 #[cfg_attr(
     all(not(vulkan), not(gles), any(target_os = "ios", target_os = "macos")),
     path = "metal/mod.rs"

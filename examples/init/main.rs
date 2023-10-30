@@ -151,8 +151,9 @@ fn main() {
         .collect::<Vec<_>>();
 
     let mut asset_hub = blade_render::AssetHub::new(Path::new("asset-cache"), &choir, &context);
+    let mut environment_map = None;
+    let mut _object = None;
 
-    let mut scene = blade_render::Scene::default();
     println!("Populating the scene");
     let mut load_finish = choir.spawn("load finish").init_dummy();
     let (shader_handle, shader_task) = asset_hub
@@ -169,7 +170,7 @@ fn main() {
             };
             let (texture, texture_task) = asset_hub.textures.load(arg, meta);
             load_finish.depend_on(texture_task);
-            scene.environment_map = Some(texture);
+            environment_map = Some(texture);
         } else if arg.ends_with(".gltf") {
             println!("\tmodels += {}", arg);
             let (model, model_task) = asset_hub.models.load(
@@ -179,7 +180,7 @@ fn main() {
                 },
             );
             load_finish.depend_on(model_task);
-            scene.objects.push(model.into());
+            _object = Some(blade_render::Object::from(model));
         } else {
             print!("\tunrecognized: {}", arg);
         }
@@ -198,7 +199,7 @@ fn main() {
     asset_hub.flush(&mut command_encoder, &mut temp_buffers);
 
     let mut env_map = blade_render::EnvironmentMap::new(&dummy, &context);
-    let env_size = match scene.environment_map {
+    let env_size = match environment_map {
         Some(handle) => {
             let texture = &asset_hub.textures[handle];
             env_map.assign(texture.view, texture.extent, &mut command_encoder, &context);
@@ -212,12 +213,11 @@ fn main() {
     let sync_point = context.submit(&mut command_encoder);
 
     context.wait_for(&sync_point, !0);
+    context.destroy_command_encoder(command_encoder);
     for buffer in temp_buffers {
         context.destroy_buffer(buffer);
     }
-    if scene.environment_map.is_some() {
-        env_map.destroy(&context);
-    }
+    env_map.destroy(&context);
     env_sampler.destroy(&context);
     dummy.destroy(&context);
     asset_hub.destroy();
