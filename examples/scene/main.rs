@@ -71,11 +71,13 @@ struct Example {
     prev_acceleration_structures: Vec<gpu::AccelerationStructure>,
     prev_sync_point: Option<gpu::SyncPoint>,
     renderer: Renderer,
-    pending_scene: Option<(choir::RunningTask, blade_render::Scene)>,
+    scene_load_task: Option<choir::RunningTask>,
     gui_painter: blade_egui::GuiPainter,
     command_encoder: Option<gpu::CommandEncoder>,
     asset_hub: AssetHub,
     context: Arc<gpu::Context>,
+    environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
+    objects: Vec<blade_render::Object>,
     camera: blade_render::Camera,
     fly_speed: f32,
     debug: blade_render::DebugConfig,
@@ -87,6 +89,7 @@ struct Example {
     ray_config: blade_render::RayConfig,
     denoiser_enabled: bool,
     denoiser_config: blade_render::DenoiserConfig,
+    post_proc_config: blade_render::PostProcConfig,
     debug_blit: Option<blade_render::DebugBlit>,
     debug_blit_input: DebugBlitInput,
     workers: Vec<choir::WorkerHandle>,
@@ -150,13 +153,8 @@ impl Example {
             depth: config_scene.camera.max_depth,
         };
 
-        let mut scene = blade_render::Scene::default();
-        scene.post_processing = blade_render::PostProcessing {
-            average_luminocity: config_scene.average_luminocity,
-            exposure_key_value: 1.0 / 9.6,
-            white_level: 1.0,
-        };
-
+        let mut environment_map = None;
+        let mut objects = Vec::new();
         let parent = scene_path.parent().unwrap();
         let mut load_finish = choir.spawn("load finish").init_dummy();
         if !config_scene.environment_map.is_empty() {
@@ -169,7 +167,7 @@ impl Example {
                 .textures
                 .load(parent.join(&config_scene.environment_map), meta);
             load_finish.depend_on(texture_task);
-            scene.environment_map = Some(texture);
+            environment_map = Some(texture);
         }
         for config_model in config_scene.models {
             let (model, model_task) = asset_hub.models.load(
@@ -179,9 +177,9 @@ impl Example {
                 },
             );
             load_finish.depend_on(model_task);
-            scene.objects.push(blade_render::Object {
-                model,
+            objects.push(blade_render::Object {
                 transform: config_model.transform,
+                model,
             });
         }
 
@@ -213,11 +211,13 @@ impl Example {
             prev_acceleration_structures: Vec::new(),
             prev_sync_point: Some(sync_point),
             renderer,
-            pending_scene: Some((load_finish.run(), scene)),
+            scene_load_task: Some(load_finish.run()),
             gui_painter,
             command_encoder: Some(command_encoder),
             asset_hub,
             context,
+            environment_map,
+            objects,
             camera,
             fly_speed: config_scene.camera.speed,
             debug: blade_render::DebugConfig::default(),
@@ -236,8 +236,13 @@ impl Example {
             },
             denoiser_enabled: true,
             denoiser_config: blade_render::DenoiserConfig {
-                num_passes: 2,
+                num_passes: 3,
                 temporal_weight: 0.1,
+            },
+            post_proc_config: blade_render::PostProcConfig {
+                average_luminocity: config_scene.average_luminocity,
+                exposure_key_value: 1.0 / 9.6,
+                white_level: 1.0,
             },
             debug_blit: None,
             debug_blit_input: DebugBlitInput::None,
@@ -276,14 +281,6 @@ impl Example {
         physical_size: winit::dpi::PhysicalSize<u32>,
         scale_factor: f32,
     ) {
-        if let Some((ref task, _)) = self.pending_scene {
-            if task.is_done() {
-                log::info!("Scene is loaded");
-                let (_, scene) = self.pending_scene.take().unwrap();
-                self.renderer.merge_scene(scene);
-            }
-        }
-
         if self.track_hot_reloads {
             self.need_accumulation_reset |= self.renderer.hot_reload(
                 &self.asset_hub,
@@ -316,17 +313,29 @@ impl Example {
         let mut temp_buffers = Vec::new();
         let mut temp_acceleration_structures = Vec::new();
         self.asset_hub.flush(command_encoder, &mut temp_buffers);
+
+        if let Some(ref task) = self.scene_load_task {
+            if task.is_done() {
+                log::info!("Scene is loaded");
+                self.scene_load_task = None;
+                self.renderer.build_scene(
+                    command_encoder,
+                    &self.objects,
+                    self.environment_map,
+                    &self.asset_hub,
+                    &self.context,
+                    &mut temp_buffers,
+                    &mut temp_acceleration_structures,
+                );
+            }
+        }
         //TODO: remove these checks.
         // We should be able to update TLAS and render content
         // even while it's still being loaded.
-        if self.pending_scene.is_none() {
+        if self.scene_load_task.is_none() {
             self.renderer.prepare(
                 command_encoder,
                 &self.camera,
-                &self.asset_hub,
-                &self.context,
-                &mut temp_buffers,
-                &mut temp_acceleration_structures,
                 self.is_debug_drawing,
                 self.debug.mouse_pos.is_some(),
                 self.need_accumulation_reset,
@@ -354,7 +363,7 @@ impl Example {
                 physical_size: (physical_size.width, physical_size.height),
                 scale_factor,
             };
-            if self.pending_scene.is_none() {
+            if self.scene_load_task.is_none() {
                 let mut debug_blit_array = [blade_render::DebugBlit::default()];
                 let debug_blits = match self.debug_blit {
                     Some(ref blit) => {
@@ -363,7 +372,8 @@ impl Example {
                     }
                     None => &[],
                 };
-                self.renderer.post_proc(&mut pass, self.debug, debug_blits);
+                self.renderer
+                    .post_proc(&mut pass, self.debug, self.post_proc_config, debug_blits);
             }
             self.gui_painter
                 .paint(&mut pass, gui_primitives, &screen_desc, &self.context);
@@ -391,7 +401,7 @@ impl Example {
         }
         self.render_times.push_front(delta.as_millis() as u32);
 
-        if self.pending_scene.is_some() {
+        if self.scene_load_task.is_some() {
             ui.horizontal(|ui| {
                 ui.label("Loading...");
                 ui.spinner();
@@ -620,18 +630,26 @@ impl Example {
             });
 
         egui::CollapsingHeader::new("Tone Map").show(ui, |ui| {
-            let pp = self.renderer.configure_post_processing();
             ui.add(
-                egui::Slider::new(&mut pp.average_luminocity, 0.1f32..=1_000f32)
-                    .text("Average luminocity")
-                    .logarithmic(true),
+                egui::Slider::new(
+                    &mut self.post_proc_config.average_luminocity,
+                    0.1f32..=1_000f32,
+                )
+                .text("Average luminocity")
+                .logarithmic(true),
             );
             ui.add(
-                egui::Slider::new(&mut pp.exposure_key_value, 0.01f32..=10f32)
-                    .text("Key value")
-                    .logarithmic(true),
+                egui::Slider::new(
+                    &mut self.post_proc_config.exposure_key_value,
+                    0.01f32..=10f32,
+                )
+                .text("Key value")
+                .logarithmic(true),
             );
-            ui.add(egui::Slider::new(&mut pp.white_level, 0.1f32..=2f32).text("White level"));
+            ui.add(
+                egui::Slider::new(&mut self.post_proc_config.white_level, 0.1f32..=2f32)
+                    .text("White level"),
+            );
         });
 
         egui::CollapsingHeader::new("Performance").show(ui, |ui| {
