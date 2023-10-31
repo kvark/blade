@@ -191,7 +191,7 @@ impl super::Context {
         let naga_stage = sf.shader.module.entry_points[ep_index].stage;
         let mut module = sf.shader.module.clone();
         let mut layouter = naga::proc::Layouter::default();
-        layouter.update(&module.types, &module.constants).unwrap();
+        layouter.update(module.to_ctx()).unwrap();
 
         for (handle, var) in module.global_variables.iter_mut() {
             if ep_info[handle].is_empty() {
@@ -301,7 +301,7 @@ impl super::Context {
         };
 
         let pipeline_options = msl::PipelineOptions {
-            allow_point_size: flags.contains(ShaderFlags::ALLOW_POINT_SIZE),
+            allow_and_force_point_size: flags.contains(ShaderFlags::ALLOW_POINT_SIZE),
         };
         let (source, info) =
             msl::write_string(&module, &sf.shader.info, &naga_options, &pipeline_options).unwrap();

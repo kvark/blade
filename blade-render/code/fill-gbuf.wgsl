@@ -3,6 +3,9 @@
 #include "debug.inc.wgsl"
 #include "debug-param.inc.wgsl"
 
+//TODO: use proper WGSL
+const RAY_FLAG_CULL_NO_OPAQUE: u32 = 0x80u;
+
 // Has to match the host!
 struct Vertex {
     pos: vec3<f32>,
@@ -64,7 +67,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var rq: ray_query;
     let ray_dir = get_ray_direction(camera, vec2<i32>(global_id.xy));
-    rayQueryInitialize(&rq, acc_struct, RayDesc(0x90u, 0xFFu, 0.0, camera.depth, camera.position, ray_dir));
+    rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_CULL_NO_OPAQUE, 0xFFu, 0.0, camera.depth, camera.position, ray_dir));
     rayQueryProceed(&rq);
     let intersection = rayQueryGetCommittedIntersection(&rq);
 
