@@ -12,6 +12,8 @@ struct DebugVariance {
     count: u32,
 }
 struct DebugEntry {
+    custom_index: u32,
+    depth: f32,
     tex_coords: vec2<f32>,
     base_color_texture: u32,
     normal_texture: u32,
