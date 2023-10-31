@@ -105,6 +105,8 @@ impl Default for PostProcConfig {
 pub struct SelectionInfo {
     pub std_deviation: mint::Vector3<f32>,
     pub std_deviation_history: u32,
+    pub custom_index: u32,
+    pub depth: f32,
     pub tex_coords: mint::Vector2<f32>,
     pub base_color_texture: Option<blade_asset::Handle<crate::Texture>>,
     pub normal_texture: Option<blade_asset::Handle<crate::Texture>>,
@@ -114,6 +116,8 @@ impl Default for SelectionInfo {
         Self {
             std_deviation: [0.0; 3].into(),
             std_deviation_history: 0,
+            custom_index: 0,
+            depth: 0.0,
             tex_coords: [0.0; 2].into(),
             base_color_texture: None,
             normal_texture: None,
@@ -135,6 +139,8 @@ struct DebugVariance {
 #[repr(C)]
 #[derive(Debug)]
 struct DebugEntry {
+    custom_index: u32,
+    depth: f32,
     tex_coords: [f32; 2],
     base_color_texture: u32,
     normal_texture: u32,
@@ -1537,6 +1543,8 @@ impl Renderer {
                 }
             },
             std_deviation_history: db_v.count,
+            custom_index: db_e.custom_index,
+            depth: db_e.depth,
             tex_coords: db_e.tex_coords.into(),
             base_color_texture: self
                 .texture_resource_lookup

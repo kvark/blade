@@ -498,6 +498,13 @@ impl Example {
                             self.need_accumulation_reset |= ui.button("Reset").clicked();
                         });
                         ui.horizontal(|ui| {
+                            ui.label("Depth:");
+                            ui.colored_label(
+                                egui::Color32::WHITE,
+                                format!("{:.2}", selection.depth),
+                            );
+                        });
+                        ui.horizontal(|ui| {
                             ui.label("Texture coords:");
                             ui.colored_label(
                                 egui::Color32::WHITE,

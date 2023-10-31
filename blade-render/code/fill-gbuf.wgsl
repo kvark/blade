@@ -124,6 +124,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let hit_position = camera.position + intersection.t * ray_dir;
         if (enable_debug) {
+            debug_buf.entry.custom_index = intersection.instance_custom_index;
+            debug_buf.entry.depth = intersection.t;
             debug_buf.entry.tex_coords = tex_coords;
             debug_buf.entry.base_color_texture = entry.base_color_texture;
             debug_buf.entry.normal_texture = entry.normal_texture;
