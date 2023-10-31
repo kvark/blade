@@ -6,6 +6,9 @@
 #include "camera.inc.wgsl"
 #include "surface.inc.wgsl"
 
+//TODO: use proper WGSL
+const RAY_FLAG_CULL_NO_OPAQUE: u32 = 0x80u;
+
 const PI: f32 = 3.1415926;
 const MAX_RESERVOIRS: u32 = 2u;
 // See "9.1 pairwise mis for robust reservoir reuse"
@@ -218,8 +221,9 @@ fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> f32 {
 fn check_ray_occluded(position: vec3<f32>, direction: vec3<f32>, debug_len: f32) -> bool {
     let start_t = 0.5; // some offset required to avoid self-shadowing
     var rq: ray_query;
+    let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
     rayQueryInitialize(&rq, acc_struct,
-        RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT | 0x80u, 0xFFu, start_t, camera.depth, position, direction)
+        RayDesc(flags, 0xFFu, start_t, camera.depth, position, direction)
     );
     rayQueryProceed(&rq);
     let intersection = rayQueryGetCommittedIntersection(&rq);

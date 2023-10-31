@@ -61,6 +61,7 @@ impl super::Context {
             capabilities: None,
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
             zero_initialize_workgroup_memory: spv::ZeroInitializeWorkgroupMemoryMode::None,
+            debug_info: None,
         }
     }
 
@@ -77,7 +78,7 @@ impl super::Context {
 
         let mut module = sf.shader.module.clone();
         let mut layouter = naga::proc::Layouter::default();
-        layouter.update(&module.types, &module.constants).unwrap();
+        layouter.update(module.to_ctx()).unwrap();
 
         for (handle, var) in module.global_variables.iter_mut() {
             if ep_info[handle].is_empty() {
