@@ -78,6 +78,7 @@ struct Example {
     context: Arc<gpu::Context>,
     environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
     objects: Vec<blade_render::Object>,
+    have_objects_changed: bool,
     camera: blade_render::Camera,
     fly_speed: f32,
     debug: blade_render::DebugConfig,
@@ -218,6 +219,7 @@ impl Example {
             context,
             environment_map,
             objects,
+            have_objects_changed: false,
             camera,
             fly_speed: config_scene.camera.speed,
             debug: blade_render::DebugConfig::default(),
@@ -318,6 +320,15 @@ impl Example {
             if task.is_done() {
                 log::info!("Scene is loaded");
                 self.scene_load_task = None;
+                self.have_objects_changed = true;
+            }
+        }
+
+        //TODO: remove these checks.
+        // We should be able to update TLAS and render content
+        // even while it's still being loaded.
+        if self.scene_load_task.is_none() {
+            if self.have_objects_changed {
                 self.renderer.build_scene(
                     command_encoder,
                     &self.objects,
@@ -327,12 +338,9 @@ impl Example {
                     &mut temp_buffers,
                     &mut temp_acceleration_structures,
                 );
+                self.have_objects_changed = false;
             }
-        }
-        //TODO: remove these checks.
-        // We should be able to update TLAS and render content
-        // even while it's still being loaded.
-        if self.scene_load_task.is_none() {
+
             self.renderer.prepare(
                 command_encoder,
                 &self.camera,
@@ -341,6 +349,7 @@ impl Example {
                 self.need_accumulation_reset,
             );
             self.need_accumulation_reset = false;
+
             self.renderer
                 .ray_trace(command_encoder, self.debug, self.ray_config);
             if self.denoiser_enabled {
@@ -464,10 +473,12 @@ impl Example {
                     ui.checkbox(&mut enabled, name);
                     self.debug.texture_flags.set(bit, enabled);
                 }
+
                 // selection info
                 let mut selection = blade_render::SelectionInfo::default();
                 if let Some(screen_pos) = self.debug.mouse_pos {
                     selection = self.renderer.read_debug_selection_info();
+
                     let style = ui.style();
                     egui::Frame::group(style).show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -539,7 +550,57 @@ impl Example {
                             }
                         });
                     });
+
+                    let view_matrix = glam::Mat4::from_rotation_translation(
+                        self.camera.rot.into(),
+                        self.camera.pos.into(),
+                    )
+                    .inverse();
+                    let extent = self.renderer.get_screen_size();
+                    let aspect = extent.width as f32 / extent.height as f32;
+                    let projection_matrix = glam::Mat4::perspective_rh(
+                        self.camera.fov_y,
+                        aspect,
+                        1.0,
+                        self.camera.depth,
+                    );
+                    let obj_index = self.find_object(selection.custom_index);
+                    let model_matrix = mint::ColumnMatrix4::from({
+                        let t = self.objects[obj_index].transform;
+                        mint::RowMatrix4 {
+                            x: t.x,
+                            y: t.y,
+                            z: t.z,
+                            w: mint::Vector4 {
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                w: 1.0,
+                            },
+                        }
+                    });
+                    let gizmo = egui_gizmo::Gizmo::new("Object")
+                        .view_matrix(mint::ColumnMatrix4::from(view_matrix))
+                        .projection_matrix(mint::ColumnMatrix4::from(projection_matrix))
+                        .model_matrix(mint::ColumnMatrix4::from(model_matrix))
+                        .orientation(egui_gizmo::GizmoOrientation::Global)
+                        .snapping(true);
+                    if let Some(response) = gizmo.interact(ui) {
+                        let m = glam::Mat4::from_scale_rotation_translation(
+                            response.scale,
+                            response.rotation,
+                            response.translation,
+                        )
+                        .transpose();
+                        self.objects[obj_index].transform = blade_graphics::Transform {
+                            x: m.x_axis.into(),
+                            y: m.y_axis.into(),
+                            z: m.z_axis.into(),
+                        };
+                        self.have_objects_changed = true;
+                    }
                 }
+
                 // blits
                 ui.label("Debug blit:");
                 egui::ComboBox::from_label("Input")
@@ -661,7 +722,7 @@ impl Example {
 
         egui::CollapsingHeader::new("Performance").show(ui, |ui| {
             let times = self.render_times.as_slices();
-            let fd_points = egui::plot::PlotPoints::from_iter(
+            let fd_points = egui_plot::PlotPoints::from_iter(
                 times
                     .0
                     .iter()
@@ -669,8 +730,8 @@ impl Example {
                     .enumerate()
                     .map(|(x, &y)| [x as f64, y as f64]),
             );
-            let fd_line = egui::plot::Line::new(fd_points).name("last");
-            egui::plot::Plot::new("Frame time")
+            let fd_line = egui_plot::Line::new(fd_points).name("last");
+            egui_plot::Plot::new("Frame time")
                 .allow_zoom(false)
                 .allow_scroll(false)
                 .allow_drag(false)
@@ -679,9 +740,21 @@ impl Example {
                 .show_axes([false, true])
                 .show(ui, |plot_ui| {
                     plot_ui.line(fd_line);
-                    plot_ui.hline(egui::plot::HLine::new(1000.0 / 60.0).name("smooth"));
+                    plot_ui.hline(egui_plot::HLine::new(1000.0 / 60.0).name("smooth"));
                 });
         });
+    }
+
+    fn find_object(&self, geometry_index: u32) -> usize {
+        let mut index = geometry_index as usize;
+        for (i, object) in self.objects.iter().enumerate() {
+            let model = &self.asset_hub.models[object.model];
+            match index.checked_sub(model.geometries.len()) {
+                Some(i) => index = i,
+                None => return i,
+            }
+        }
+        panic!("Object with geometry index {geometry_index} is not found");
     }
 
     fn move_camera_by(&mut self, offset: glam::Vec3) {
