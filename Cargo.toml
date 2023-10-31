@@ -14,8 +14,8 @@ base64 = "0.21"
 bitflags = "2"
 bytemuck = { version = "1", features = ["derive"] }
 choir = { git = "https://github.com/kvark/choir", rev = "2d7c6ffb74a21a34c18c70aeb0b93a61a42eb04f" }
-egui = "0.22"
-glam = { version = "0.23", features = ["mint"] }
+egui = "0.23"
+glam = { version = "0.24", features = ["mint"] }
 log = "0.4"
 mint = "0.5"
 naga = { version = "0.14", features = ["wgsl-in", "span", "validate"] }
@@ -63,7 +63,9 @@ strum = { workspace = true }
 winit = "0.28"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-egui-winit = "0.22"
+egui-winit = "0.23"
+egui_plot = "0.23"
+egui-gizmo = "0.12"
 env_logger = "0.10"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
