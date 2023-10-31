@@ -399,6 +399,51 @@ impl Example {
             .extend(temp_acceleration_structures);
     }
 
+    fn add_manipulation_gizmo(&mut self, custom_index: u32, ui: &mut egui::Ui) {
+        let view_matrix =
+            glam::Mat4::from_rotation_translation(self.camera.rot.into(), self.camera.pos.into())
+                .inverse();
+        let extent = self.renderer.get_screen_size();
+        let aspect = extent.width as f32 / extent.height as f32;
+        let projection_matrix =
+            glam::Mat4::perspective_rh(self.camera.fov_y, aspect, 1.0, self.camera.depth);
+        let obj_index = self.find_object(custom_index);
+        let model_matrix = mint::ColumnMatrix4::from({
+            let t = self.objects[obj_index].transform;
+            mint::RowMatrix4 {
+                x: t.x,
+                y: t.y,
+                z: t.z,
+                w: mint::Vector4 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+            }
+        });
+        let gizmo = egui_gizmo::Gizmo::new("Object")
+            .view_matrix(mint::ColumnMatrix4::from(view_matrix))
+            .projection_matrix(mint::ColumnMatrix4::from(projection_matrix))
+            .model_matrix(mint::ColumnMatrix4::from(model_matrix))
+            .orientation(egui_gizmo::GizmoOrientation::Global)
+            .snapping(true);
+        if let Some(response) = gizmo.interact(ui) {
+            let m = glam::Mat4::from_scale_rotation_translation(
+                response.scale,
+                response.rotation,
+                response.translation,
+            )
+            .transpose();
+            self.objects[obj_index].transform = blade_graphics::Transform {
+                x: m.x_axis.into(),
+                y: m.y_axis.into(),
+                z: m.z_axis.into(),
+            };
+            self.have_objects_changed = true;
+        }
+    }
+
     #[profiling::function]
     fn add_gui(&mut self, ui: &mut egui::Ui) {
         use strum::IntoEnumIterator as _;
@@ -420,6 +465,12 @@ impl Example {
                 ui.label(format!("{}", task.as_ref()));
             }
             return;
+        }
+
+        let mut selection = blade_render::SelectionInfo::default();
+        if self.debug.mouse_pos.is_some() {
+            selection = self.renderer.read_debug_selection_info();
+            self.add_manipulation_gizmo(selection.custom_index, ui);
         }
 
         egui::CollapsingHeader::new("Camera").show(ui, |ui| {
@@ -475,10 +526,7 @@ impl Example {
                 }
 
                 // selection info
-                let mut selection = blade_render::SelectionInfo::default();
                 if let Some(screen_pos) = self.debug.mouse_pos {
-                    selection = self.renderer.read_debug_selection_info();
-
                     let style = ui.style();
                     egui::Frame::group(style).show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -550,55 +598,6 @@ impl Example {
                             }
                         });
                     });
-
-                    let view_matrix = glam::Mat4::from_rotation_translation(
-                        self.camera.rot.into(),
-                        self.camera.pos.into(),
-                    )
-                    .inverse();
-                    let extent = self.renderer.get_screen_size();
-                    let aspect = extent.width as f32 / extent.height as f32;
-                    let projection_matrix = glam::Mat4::perspective_rh(
-                        self.camera.fov_y,
-                        aspect,
-                        1.0,
-                        self.camera.depth,
-                    );
-                    let obj_index = self.find_object(selection.custom_index);
-                    let model_matrix = mint::ColumnMatrix4::from({
-                        let t = self.objects[obj_index].transform;
-                        mint::RowMatrix4 {
-                            x: t.x,
-                            y: t.y,
-                            z: t.z,
-                            w: mint::Vector4 {
-                                x: 0.0,
-                                y: 0.0,
-                                z: 0.0,
-                                w: 1.0,
-                            },
-                        }
-                    });
-                    let gizmo = egui_gizmo::Gizmo::new("Object")
-                        .view_matrix(mint::ColumnMatrix4::from(view_matrix))
-                        .projection_matrix(mint::ColumnMatrix4::from(projection_matrix))
-                        .model_matrix(mint::ColumnMatrix4::from(model_matrix))
-                        .orientation(egui_gizmo::GizmoOrientation::Global)
-                        .snapping(true);
-                    if let Some(response) = gizmo.interact(ui) {
-                        let m = glam::Mat4::from_scale_rotation_translation(
-                            response.scale,
-                            response.rotation,
-                            response.translation,
-                        )
-                        .transpose();
-                        self.objects[obj_index].transform = blade_graphics::Transform {
-                            x: m.x_axis.into(),
-                            y: m.y_axis.into(),
-                            z: m.z_axis.into(),
-                        };
-                        self.have_objects_changed = true;
-                    }
                 }
 
                 // blits
@@ -937,6 +936,11 @@ fn main() {
                             }
                         });
                 });
+
+                //HACK: https://github.com/urholaukkarinen/egui-gizmo/issues/29
+                if example.have_objects_changed {
+                    drag_start = None;
+                }
 
                 egui_winit.handle_platform_output(&window, &egui_ctx, egui_output.platform_output);
 
