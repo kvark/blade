@@ -434,24 +434,7 @@ impl crate::traits::CommandDevice for Context {
                 .core
                 .queue_submit(queue.raw, &[vk_info.build()], vk::Fence::null())
         };
-        match ret {
-            Ok(()) => (),
-            Err(vk::Result::ERROR_DEVICE_LOST) => match encoder.crash_handler {
-                Some(ref ch) => {
-                    let last_id = unsafe { *(ch.marker_buf.data() as *mut u32) };
-                    if last_id != 0 {
-                        let (history, last_marker) = ch.extract(last_id);
-                        log::error!("Last GPU executed marker is '{last_marker}'");
-                        log::info!("Marker history: {}", history);
-                    }
-                    panic!("GPU has crashed in {}", ch.name);
-                }
-                None => {
-                    panic!("GPU has crashed, and no debug information is available.");
-                }
-            },
-            Err(other) => panic!("Submit error {}", other),
-        }
+        encoder.check_gpu_crash(ret);
 
         if let Some(presentation) = encoder.present.take() {
             let surface = self.surface.as_ref().unwrap().lock().unwrap();
@@ -462,12 +445,8 @@ impl crate::traits::CommandDevice for Context {
                 .swapchains(&swapchains)
                 .image_indices(&image_indices)
                 .wait_semaphores(&wait_semaphores);
-            unsafe {
-                surface
-                    .extension
-                    .queue_present(queue.raw, &present_info)
-                    .unwrap()
-            };
+            let ret = unsafe { surface.extension.queue_present(queue.raw, &present_info) };
+            let _ = encoder.check_gpu_crash(ret);
         }
 
         SyncPoint { progress }
