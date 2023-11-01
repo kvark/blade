@@ -4,10 +4,10 @@
         orientation: (-0.07, 0.36, 0.01, 0.93),
         fov_y: 1.0,
         max_depth: 100.0,
-	  speed: 1000.0,
+        speed: 1000.0,
     ),
     average_luminocity: 0.3,
-    models: [
+    objects: [
         (
             path: "monkey.gltf",
         ),

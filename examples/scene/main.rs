@@ -6,6 +6,7 @@ use blade_render::{AssetHub, Camera, RenderConfig, Renderer};
 use std::{collections::VecDeque, fmt, fs, path::Path, sync::Arc, time};
 
 const FRAME_TIME_HISTORY: usize = 30;
+const RENDER_WHILE_LOADING: bool = true;
 
 #[derive(Clone, Copy, PartialEq, strum::EnumIter)]
 enum DebugBlitInput {
@@ -28,7 +29,7 @@ impl fmt::Display for DebugBlitInput {
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct ConfigCamera {
     position: mint::Vector3<f32>,
     orientation: mint::Quaternion<f32>,
@@ -49,21 +50,21 @@ fn default_luminocity() -> f32 {
     1.0
 }
 
-#[derive(serde::Deserialize)]
-struct ConfigModel {
+#[derive(serde::Deserialize, serde::Serialize)]
+struct ConfigObject {
     path: String,
     #[serde(default = "default_transform")]
     transform: mint::RowMatrix3x4<f32>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct ConfigScene {
     camera: ConfigCamera,
     #[serde(default)]
     environment_map: String,
     #[serde(default = "default_luminocity")]
     average_luminocity: f32,
-    models: Vec<ConfigModel>,
+    objects: Vec<ConfigObject>,
 }
 
 struct Example {
@@ -78,6 +79,7 @@ struct Example {
     context: Arc<gpu::Context>,
     environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
     objects: Vec<blade_render::Object>,
+    selected_object_index: Option<usize>,
     have_objects_changed: bool,
     camera: blade_render::Camera,
     fly_speed: f32,
@@ -170,16 +172,16 @@ impl Example {
             load_finish.depend_on(texture_task);
             environment_map = Some(texture);
         }
-        for config_model in config_scene.models {
+        for config_object in config_scene.objects {
             let (model, model_task) = asset_hub.models.load(
-                parent.join(&config_model.path),
+                parent.join(&config_object.path),
                 blade_render::model::Meta {
                     generate_tangents: true,
                 },
             );
             load_finish.depend_on(model_task);
             objects.push(blade_render::Object {
-                transform: config_model.transform,
+                transform: config_object.transform,
                 model,
             });
         }
@@ -219,6 +221,7 @@ impl Example {
             context,
             environment_map,
             objects,
+            selected_object_index: None,
             have_objects_changed: false,
             camera,
             fly_speed: config_scene.camera.speed,
@@ -324,10 +327,9 @@ impl Example {
             }
         }
 
-        //TODO: remove these checks.
         // We should be able to update TLAS and render content
         // even while it's still being loaded.
-        if self.scene_load_task.is_none() {
+        if self.scene_load_task.is_none() || RENDER_WHILE_LOADING {
             if self.have_objects_changed {
                 self.renderer.build_scene(
                     command_encoder,
@@ -350,10 +352,14 @@ impl Example {
             );
             self.need_accumulation_reset = false;
 
-            self.renderer
-                .ray_trace(command_encoder, self.debug, self.ray_config);
-            if self.denoiser_enabled {
-                self.renderer.denoise(command_encoder, self.denoiser_config);
+            //TODO: figure out why the main RT pipeline
+            // causes a GPU crash when there are no objects
+            if !self.objects.is_empty() {
+                self.renderer
+                    .ray_trace(command_encoder, self.debug, self.ray_config);
+                if self.denoiser_enabled {
+                    self.renderer.denoise(command_encoder, self.denoiser_config);
+                }
             }
         }
 
@@ -399,7 +405,7 @@ impl Example {
             .extend(temp_acceleration_structures);
     }
 
-    fn add_manipulation_gizmo(&mut self, custom_index: u32, ui: &mut egui::Ui) {
+    fn add_manipulation_gizmo(&mut self, obj_index: usize, ui: &mut egui::Ui) {
         let view_matrix =
             glam::Mat4::from_rotation_translation(self.camera.rot.into(), self.camera.pos.into())
                 .inverse();
@@ -407,7 +413,6 @@ impl Example {
         let aspect = extent.width as f32 / extent.height as f32;
         let projection_matrix =
             glam::Mat4::perspective_rh(self.camera.fov_y, aspect, 1.0, self.camera.depth);
-        let obj_index = self.find_object(custom_index);
         let model_matrix = mint::ColumnMatrix4::from({
             let t = self.objects[obj_index].transform;
             mint::RowMatrix4 {
@@ -445,7 +450,7 @@ impl Example {
     }
 
     #[profiling::function]
-    fn add_gui(&mut self, ui: &mut egui::Ui) {
+    fn populate_view(&mut self, ui: &mut egui::Ui) {
         use strum::IntoEnumIterator as _;
 
         let delta = self.last_render_time.elapsed();
@@ -470,7 +475,7 @@ impl Example {
         let mut selection = blade_render::SelectionInfo::default();
         if self.debug.mouse_pos.is_some() {
             selection = self.renderer.read_debug_selection_info();
-            self.add_manipulation_gizmo(selection.custom_index, ui);
+            self.selected_object_index = self.find_object(selection.custom_index);
         }
 
         egui::CollapsingHeader::new("Camera").show(ui, |ui| {
@@ -491,6 +496,11 @@ impl Example {
             ui.add(
                 egui::Slider::new(&mut self.camera.depth, 1f32..=1_000_000f32)
                     .text("depth")
+                    .logarithmic(true),
+            );
+            ui.add(
+                egui::Slider::new(&mut self.fly_speed, 1f32..=10000f32)
+                    .text("Fly speed")
                     .logarithmic(true),
             );
         });
@@ -744,16 +754,61 @@ impl Example {
         });
     }
 
-    fn find_object(&self, geometry_index: u32) -> usize {
+    #[profiling::function]
+    fn populate_content(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Scene")
+            .default_open(true)
+            .show(ui, |_ui| {
+                //TODO
+            });
+        if let Some(index) = self.selected_object_index {
+            self.add_manipulation_gizmo(index, ui);
+            egui::CollapsingHeader::new("Transform")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("Unselect").clicked() {
+                            self.selected_object_index = None;
+                            self.debug.mouse_pos = None;
+                        }
+                        if ui.button("Delete!").clicked() {
+                            self.selected_object_index = None;
+                            self.objects.remove(index as usize);
+                            self.have_objects_changed = true;
+                        }
+                    });
+                });
+        }
+    }
+
+    fn find_object(&self, geometry_index: u32) -> Option<usize> {
         let mut index = geometry_index as usize;
-        for (i, object) in self.objects.iter().enumerate() {
+        for (obj_index, object) in self.objects.iter().enumerate() {
             let model = &self.asset_hub.models[object.model];
             match index.checked_sub(model.geometries.len()) {
                 Some(i) => index = i,
-                None => return i,
+                None => return Some(obj_index),
             }
         }
-        panic!("Object with geometry index {geometry_index} is not found");
+        None
+    }
+
+    fn add_object(&mut self, file_path: &Path) -> bool {
+        if self.scene_load_task.is_some() {
+            return false;
+        }
+        let (model, model_task) = self.asset_hub.models.load(
+            file_path,
+            blade_render::model::Meta {
+                generate_tangents: true,
+            },
+        );
+        self.scene_load_task = Some(model_task.clone());
+        self.objects.push(blade_render::Object {
+            transform: blade_graphics::IDENTITY_TRANSFORM,
+            model,
+        });
+        true
     }
 
     fn move_camera_by(&mut self, offset: glam::Vec3) {
@@ -909,6 +964,14 @@ fn main() {
                             example.debug.mouse_pos = None;
                         }
                     }
+                    winit::event::WindowEvent::DroppedFile(file_path) => {
+                        if !example.add_object(&file_path) {
+                            log::warn!(
+                                "Unable to drop {}, loading in progress",
+                                file_path.display()
+                            );
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -927,10 +990,15 @@ fn main() {
                         );
                         frame
                     };
-                    egui::SidePanel::right("control_panel")
+                    egui::SidePanel::right("view")
                         .frame(frame)
                         .show(egui_ctx, |ui| {
-                            example.add_gui(ui);
+                            example.populate_view(ui);
+                        });
+                    egui::SidePanel::left("content")
+                        .frame(frame)
+                        .show(egui_ctx, |ui| {
+                            example.populate_content(ui);
                             if ui.button("Quit").clicked() {
                                 quit = true;
                             }
