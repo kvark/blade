@@ -3,7 +3,13 @@
 
 use blade_graphics as gpu;
 use blade_render::{AssetHub, Camera, RenderConfig, Renderer};
-use std::{collections::VecDeque, fmt, fs, path::Path, sync::Arc, time};
+use std::{
+    collections::VecDeque,
+    fmt, fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time,
+};
 
 const FRAME_TIME_HISTORY: usize = 30;
 const RENDER_WHILE_LOADING: bool = true;
@@ -26,6 +32,43 @@ impl fmt::Display for DebugBlitInput {
             Self::EnvironmentWeight => "environment weight",
         };
         desc.fmt(f)
+    }
+}
+
+struct TransformComponents {
+    scale: glam::Vec3,
+    rotation: glam::Quat,
+    translation: glam::Vec3,
+}
+impl From<blade_graphics::Transform> for TransformComponents {
+    fn from(bm: blade_graphics::Transform) -> Self {
+        let transposed = glam::Mat4 {
+            x_axis: bm.x.into(),
+            y_axis: bm.y.into(),
+            z_axis: bm.z.into(),
+            w_axis: glam::Vec4::W,
+        };
+        let (scale, rotation, translation) = transposed.transpose().to_scale_rotation_translation();
+        Self {
+            scale,
+            rotation,
+            translation,
+        }
+    }
+}
+impl TransformComponents {
+    fn to_blade(&self) -> blade_graphics::Transform {
+        let m = glam::Mat4::from_scale_rotation_translation(
+            self.scale,
+            self.rotation,
+            self.translation,
+        )
+        .transpose();
+        blade_graphics::Transform {
+            x: m.x_axis.into(),
+            y: m.y_axis.into(),
+            z: m.z_axis.into(),
+        }
     }
 }
 
@@ -68,6 +111,7 @@ struct ConfigScene {
 }
 
 struct Example {
+    scene_path: PathBuf,
     prev_temp_buffers: Vec<gpu::Buffer>,
     prev_acceleration_structures: Vec<gpu::AccelerationStructure>,
     prev_sync_point: Option<gpu::SyncPoint>,
@@ -80,6 +124,7 @@ struct Example {
     environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
     objects: Vec<blade_render::Object>,
     selected_object_index: Option<usize>,
+    gizmo_mode: egui_gizmo::GizmoMode,
     have_objects_changed: bool,
     camera: blade_render::Camera,
     fly_speed: f32,
@@ -210,6 +255,7 @@ impl Example {
         let gui_painter = blade_egui::GuiPainter::new(&context, surface_format);
 
         Self {
+            scene_path: scene_path.to_owned(),
             prev_temp_buffers: Vec::new(),
             prev_acceleration_structures: Vec::new(),
             prev_sync_point: Some(sync_point),
@@ -222,6 +268,7 @@ impl Example {
             environment_map,
             objects,
             selected_object_index: None,
+            gizmo_mode: egui_gizmo::GizmoMode::Translate,
             have_objects_changed: false,
             camera,
             fly_speed: config_scene.camera.speed,
@@ -430,21 +477,17 @@ impl Example {
         let gizmo = egui_gizmo::Gizmo::new("Object")
             .view_matrix(mint::ColumnMatrix4::from(view_matrix))
             .projection_matrix(mint::ColumnMatrix4::from(projection_matrix))
-            .model_matrix(mint::ColumnMatrix4::from(model_matrix))
+            .model_matrix(model_matrix)
+            .mode(self.gizmo_mode)
             .orientation(egui_gizmo::GizmoOrientation::Global)
             .snapping(true);
         if let Some(response) = gizmo.interact(ui) {
-            let m = glam::Mat4::from_scale_rotation_translation(
-                response.scale,
-                response.rotation,
-                response.translation,
-            )
-            .transpose();
-            self.objects[obj_index].transform = blade_graphics::Transform {
-                x: m.x_axis.into(),
-                y: m.y_axis.into(),
-                z: m.z_axis.into(),
+            let tc = TransformComponents {
+                scale: response.scale,
+                rotation: response.rotation,
+                translation: response.translation,
             };
+            self.objects[obj_index].transform = tc.to_blade();
             self.have_objects_changed = true;
         }
     }
@@ -756,28 +799,73 @@ impl Example {
 
     #[profiling::function]
     fn populate_content(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Scene")
+        ui.colored_label(egui::Color32::WHITE, self.scene_path.display().to_string());
+        if ui.button("Save").clicked() {
+            //TODO
+        }
+        if ui.button("Reload").clicked() {
+            //TODO
+        }
+
+        egui::CollapsingHeader::new("Objects")
             .default_open(true)
             .show(ui, |_ui| {
                 //TODO
             });
+
         if let Some(index) = self.selected_object_index {
             self.add_manipulation_gizmo(index, ui);
             egui::CollapsingHeader::new("Transform")
                 .default_open(true)
                 .show(ui, |ui| {
+                    let object = self.objects.get_mut(index).unwrap();
+                    let mut tc = TransformComponents::from(object.transform);
                     ui.horizontal(|ui| {
-                        if ui.button("Unselect").clicked() {
-                            self.selected_object_index = None;
-                            self.debug.mouse_pos = None;
-                        }
-                        if ui.button("Delete!").clicked() {
-                            self.selected_object_index = None;
-                            self.objects.remove(index as usize);
-                            self.have_objects_changed = true;
-                        }
+                        ui.radio_value(
+                            &mut self.gizmo_mode,
+                            egui_gizmo::GizmoMode::Translate,
+                            "Translate",
+                        );
+                        ui.add(egui::DragValue::new(&mut tc.translation.x));
+                        ui.add(egui::DragValue::new(&mut tc.translation.y));
+                        ui.add(egui::DragValue::new(&mut tc.translation.z));
                     });
+                    ui.horizontal(|ui| {
+                        ui.radio_value(
+                            &mut self.gizmo_mode,
+                            egui_gizmo::GizmoMode::Rotate,
+                            "Rotate",
+                        );
+                        ui.add(egui::DragValue::new(&mut tc.rotation.x));
+                        ui.add(egui::DragValue::new(&mut tc.rotation.y));
+                        ui.add(egui::DragValue::new(&mut tc.rotation.z));
+                        ui.add(egui::DragValue::new(&mut tc.rotation.w));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut self.gizmo_mode, egui_gizmo::GizmoMode::Scale, "Scale");
+                        ui.add(egui::DragValue::new(&mut tc.scale.x));
+                        ui.add(egui::DragValue::new(&mut tc.scale.y));
+                        ui.add(egui::DragValue::new(&mut tc.scale.z));
+                    });
+
+                    let transform = tc.to_blade();
+                    if object.transform != transform {
+                        object.transform = transform;
+                        self.have_objects_changed = true;
+                    }
                 });
+
+            ui.horizontal(|ui| {
+                if ui.button("Unselect").clicked() {
+                    self.selected_object_index = None;
+                    self.debug.mouse_pos = None;
+                }
+                if ui.button("Delete!").clicked() {
+                    self.selected_object_index = None;
+                    self.objects.remove(index);
+                    self.have_objects_changed = true;
+                }
+            });
         }
     }
 
