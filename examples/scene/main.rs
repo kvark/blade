@@ -71,6 +71,14 @@ impl TransformComponents {
             z: m.z_axis.into(),
         }
     }
+    fn is_inversible(&self) -> bool {
+        self.scale
+            .x
+            .abs()
+            .min(self.scale.y.abs())
+            .min(self.scale.z.abs())
+            > 0.01
+    }
 }
 
 struct ObjectExtra {
@@ -130,6 +138,7 @@ struct Example {
     objects: Vec<blade_render::Object>,
     object_extras: Vec<ObjectExtra>,
     selected_object_index: Option<usize>,
+    need_picked_selection_frames: usize,
     gizmo_mode: egui_gizmo::GizmoMode,
     have_objects_changed: bool,
     camera: blade_render::Camera,
@@ -234,6 +243,7 @@ impl Example {
             objects: Vec::new(),
             object_extras: Vec::new(),
             selected_object_index: None,
+            need_picked_selection_frames: 0,
             gizmo_mode: egui_gizmo::GizmoMode::Translate,
             have_objects_changed: false,
             camera: blade_render::Camera {
@@ -596,7 +606,10 @@ impl Example {
         let mut selection = blade_render::SelectionInfo::default();
         if self.debug.mouse_pos.is_some() {
             selection = self.renderer.read_debug_selection_info();
-            self.selected_object_index = self.find_object(selection.custom_index);
+            if self.need_picked_selection_frames > 0 {
+                self.need_picked_selection_frames -= 1;
+                self.selected_object_index = self.find_object(selection.custom_index);
+            }
         }
 
         egui::CollapsingHeader::new("Camera").show(ui, |ui| {
@@ -872,45 +885,42 @@ impl Example {
 
     #[profiling::function]
     fn populate_content(&mut self, ui: &mut egui::Ui) {
-        ui.colored_label(egui::Color32::WHITE, self.scene_path.display().to_string());
-        ui.horizontal(|ui| {
-            if ui.button("Save").clicked() {
-                self.save_scene(&self.scene_path);
-            }
-            if ui.button("Reload").clicked() {
-                let path = self.scene_path.clone();
-                self.load_scene(&path);
-            }
+        ui.group(|ui| {
+            ui.colored_label(egui::Color32::WHITE, self.scene_path.display().to_string());
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked() {
+                    self.save_scene(&self.scene_path);
+                }
+                if ui.button("Reload").clicked() {
+                    let path = self.scene_path.clone();
+                    self.load_scene(&path);
+                }
+            });
         });
 
         egui::CollapsingHeader::new("Objects")
             .default_open(true)
             .show(ui, |ui| {
-                let old_value = self.selected_object_index;
                 for (index, extra) in self.object_extras.iter().enumerate() {
                     let name = extra.path.file_name().unwrap().to_str().unwrap();
                     ui.selectable_value(&mut self.selected_object_index, Some(index), name);
-                }
-                if self.selected_object_index != old_value {
-                    // we don't want the current mouse pixel to override our selection
-                    self.debug.mouse_pos = None;
                 }
             });
 
         if let Some(index) = self.selected_object_index {
             self.add_manipulation_gizmo(index, ui);
-
-            ui.horizontal(|ui| {
-                if ui.button("Unselect").clicked() {
-                    self.selected_object_index = None;
-                    self.debug.mouse_pos = None;
-                }
-                if ui.button("Delete!").clicked() {
-                    self.selected_object_index = None;
-                    self.objects.remove(index);
-                    self.object_extras.remove(index);
-                    self.have_objects_changed = true;
-                }
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Unselect").clicked() {
+                        self.selected_object_index = None;
+                    }
+                    if ui.button("Delete!").clicked() {
+                        self.selected_object_index = None;
+                        self.objects.remove(index);
+                        self.object_extras.remove(index);
+                        self.have_objects_changed = true;
+                    }
+                })
             });
         }
 
@@ -954,8 +964,10 @@ impl Example {
 
                     let transform = tc.to_blade();
                     if object.transform != transform {
-                        object.transform = transform;
-                        self.have_objects_changed = true;
+                        if tc.is_inversible() {
+                            object.transform = transform;
+                            self.have_objects_changed = true;
+                        }
                     }
                 });
         }
@@ -1126,6 +1138,7 @@ fn main() {
                     } => {
                         example.debug.mouse_pos = Some(last_mouse_pos);
                         example.is_debug_drawing = true;
+                        example.need_picked_selection_frames = 3;
                     }
                     winit::event::WindowEvent::MouseInput {
                         state: winit::event::ElementState::Released,
@@ -1183,6 +1196,7 @@ fn main() {
                         .frame(frame)
                         .show(egui_ctx, |ui| {
                             example.populate_content(ui);
+                            ui.separator();
                             if ui.button("Quit").clicked() {
                                 quit = true;
                             }
