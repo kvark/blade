@@ -74,7 +74,7 @@ impl TransformComponents {
 }
 
 struct ObjectExtra {
-    path: String,
+    path: PathBuf,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -116,6 +116,7 @@ struct ConfigScene {
 
 struct Example {
     scene_path: PathBuf,
+    scene_environment_map: String,
     prev_temp_buffers: Vec<gpu::Buffer>,
     prev_acceleration_structures: Vec<gpu::AccelerationStructure>,
     prev_sync_point: Option<gpu::SyncPoint>,
@@ -146,6 +147,7 @@ struct Example {
     debug_blit: Option<blade_render::DebugBlit>,
     debug_blit_input: DebugBlitInput,
     workers: Vec<choir::WorkerHandle>,
+    choir: Arc<choir::Choir>,
 }
 
 impl Example {
@@ -164,7 +166,7 @@ impl Example {
     }
 
     #[profiling::function]
-    fn new(window: &winit::window::Window, scene_path: &Path) -> Self {
+    fn new(window: &winit::window::Window) -> Self {
         log::info!("Initializing");
 
         let context = Arc::new(unsafe {
@@ -184,7 +186,7 @@ impl Example {
 
         let num_workers = num_cpus::get_physical().max((num_cpus::get() * 3 + 2) / 4);
         log::info!("Initializing Choir with {} workers", num_workers);
-        let choir = Arc::new(choir::Choir::new());
+        let choir = choir::Choir::new();
         let workers = (0..num_workers)
             .map(|i| choir.add_worker(&format!("Worker-{}", i)))
             .collect();
@@ -192,53 +194,6 @@ impl Example {
         let asset_hub = AssetHub::new(Path::new("asset-cache"), &choir, &context);
         let (shaders, shader_task) =
             blade_render::Shaders::load("blade-render/code/".as_ref(), &asset_hub);
-
-        let config_scene: ConfigScene =
-            ron::de::from_bytes(&fs::read(scene_path).expect("Unable to open the scene file"))
-                .expect("Unable to parse the scene file");
-
-        let camera = Camera {
-            pos: config_scene.camera.position,
-            rot: glam::Quat::from(config_scene.camera.orientation)
-                .normalize()
-                .into(),
-            fov_y: config_scene.camera.fov_y,
-            depth: MAX_DEPTH,
-        };
-
-        let mut environment_map = None;
-        let mut objects = Vec::new();
-        let mut object_extras = Vec::new();
-        let parent = scene_path.parent().unwrap();
-        let mut load_finish = choir.spawn("load finish").init_dummy();
-        if !config_scene.environment_map.is_empty() {
-            let meta = blade_render::texture::Meta {
-                format: blade_graphics::TextureFormat::Rgba32Float,
-                generate_mips: false,
-                y_flip: false,
-            };
-            let (texture, texture_task) = asset_hub
-                .textures
-                .load(parent.join(&config_scene.environment_map), meta);
-            load_finish.depend_on(texture_task);
-            environment_map = Some(texture);
-        }
-        for config_object in config_scene.objects {
-            let (model, model_task) = asset_hub.models.load(
-                parent.join(&config_object.path),
-                blade_render::model::Meta {
-                    generate_tangents: true,
-                },
-            );
-            load_finish.depend_on(model_task);
-            objects.push(blade_render::Object {
-                transform: config_object.transform,
-                model,
-            });
-            object_extras.push(ObjectExtra {
-                path: config_object.path,
-            });
-        }
 
         log::info!("Spinning up the renderer");
         shader_task.join();
@@ -264,24 +219,41 @@ impl Example {
         let gui_painter = blade_egui::GuiPainter::new(&context, surface_format);
 
         Self {
-            scene_path: scene_path.to_owned(),
+            scene_path: PathBuf::new(),
+            scene_environment_map: String::new(),
             prev_temp_buffers: Vec::new(),
             prev_acceleration_structures: Vec::new(),
             prev_sync_point: Some(sync_point),
             renderer,
-            scene_load_task: Some(load_finish.run()),
+            scene_load_task: None,
             gui_painter,
             command_encoder: Some(command_encoder),
             asset_hub,
             context,
-            environment_map,
-            objects,
-            object_extras,
+            environment_map: None,
+            objects: Vec::new(),
+            object_extras: Vec::new(),
             selected_object_index: None,
             gizmo_mode: egui_gizmo::GizmoMode::Translate,
             have_objects_changed: false,
-            camera,
-            fly_speed: config_scene.camera.speed,
+            camera: blade_render::Camera {
+                pos: mint::Vector3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                rot: mint::Quaternion {
+                    v: mint::Vector3 {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    s: 1.0,
+                },
+                fov_y: 0.0,
+                depth: 0.0,
+            },
+            fly_speed: 0.0,
             debug: blade_render::DebugConfig::default(),
             track_hot_reloads: false,
             need_accumulation_reset: true,
@@ -290,7 +262,7 @@ impl Example {
             render_times: VecDeque::with_capacity(FRAME_TIME_HISTORY),
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
-                environment_importance_sampling: !config_scene.environment_map.is_empty(),
+                environment_importance_sampling: false,
                 temporal_history: 10,
                 spatial_taps: 1,
                 spatial_tap_history: 5,
@@ -302,13 +274,14 @@ impl Example {
                 temporal_weight: 0.1,
             },
             post_proc_config: blade_render::PostProcConfig {
-                average_luminocity: config_scene.average_luminocity,
+                average_luminocity: 1.0,
                 exposure_key_value: 1.0 / 9.6,
                 white_level: 1.0,
             },
             debug_blit: None,
             debug_blit_input: DebugBlitInput::None,
             workers,
+            choir,
         }
     }
 
@@ -320,6 +293,100 @@ impl Example {
         self.asset_hub.destroy();
         self.context
             .destroy_command_encoder(self.command_encoder.take().unwrap());
+    }
+
+    pub fn load_scene(&mut self, scene_path: &Path) {
+        if self.scene_load_task.is_some() {
+            log::error!("Unable to reload the scene while something is loading");
+            return;
+        }
+
+        self.objects.clear();
+        self.object_extras.clear();
+        self.selected_object_index = None;
+        self.have_objects_changed = true;
+
+        log::info!("Loading scene from: {}", scene_path.display());
+        let config_scene: ConfigScene =
+            ron::de::from_bytes(&fs::read(scene_path).expect("Unable to open the scene file"))
+                .expect("Unable to parse the scene file");
+
+        self.camera = Camera {
+            pos: config_scene.camera.position,
+            rot: glam::Quat::from(config_scene.camera.orientation)
+                .normalize()
+                .into(),
+            fov_y: config_scene.camera.fov_y,
+            depth: MAX_DEPTH,
+        };
+        self.fly_speed = config_scene.camera.speed;
+        self.ray_config.environment_importance_sampling = !config_scene.environment_map.is_empty();
+        self.post_proc_config.average_luminocity = config_scene.average_luminocity;
+
+        self.environment_map = None;
+        let parent = scene_path.parent().unwrap();
+        let mut load_finish = self.choir.spawn("load finish").init_dummy();
+
+        if !config_scene.environment_map.is_empty() {
+            let meta = blade_render::texture::Meta {
+                format: blade_graphics::TextureFormat::Rgba32Float,
+                generate_mips: false,
+                y_flip: false,
+            };
+            let (texture, texture_task) = self
+                .asset_hub
+                .textures
+                .load(parent.join(&config_scene.environment_map), meta);
+            load_finish.depend_on(texture_task);
+            self.environment_map = Some(texture);
+        }
+        for config_object in config_scene.objects {
+            let (model, model_task) = self.asset_hub.models.load(
+                parent.join(&config_object.path),
+                blade_render::model::Meta {
+                    generate_tangents: true,
+                },
+            );
+            load_finish.depend_on(model_task);
+            self.objects.push(blade_render::Object {
+                transform: config_object.transform,
+                model,
+            });
+            self.object_extras.push(ObjectExtra {
+                path: PathBuf::from(config_object.path),
+            });
+        }
+
+        self.scene_load_task = Some(load_finish.run());
+        self.scene_path = scene_path.to_owned();
+        self.scene_environment_map = config_scene.environment_map;
+    }
+
+    pub fn save_scene(&self, scene_path: &Path) {
+        let config_scene = ConfigScene {
+            camera: ConfigCamera {
+                position: self.camera.pos,
+                orientation: self.camera.rot,
+                fov_y: self.camera.fov_y,
+                speed: self.fly_speed,
+            },
+            environment_map: self.scene_environment_map.clone(),
+            average_luminocity: self.post_proc_config.average_luminocity,
+            objects: self
+                .objects
+                .iter()
+                .zip(self.object_extras.iter())
+                .map(|(object, extra)| ConfigObject {
+                    path: extra.path.to_string_lossy().into_owned(),
+                    transform: object.transform,
+                })
+                .collect(),
+        };
+
+        let string = ron::ser::to_string_pretty(&config_scene, ron::ser::PrettyConfig::default())
+            .expect("Unable to form the scene file");
+        fs::write(scene_path, &string).expect("Unable to write the scene file");
+        log::info!("Saving scene to: {}", scene_path.display());
     }
 
     #[profiling::function]
@@ -808,18 +875,25 @@ impl Example {
         ui.colored_label(egui::Color32::WHITE, self.scene_path.display().to_string());
         ui.horizontal(|ui| {
             if ui.button("Save").clicked() {
-                //TODO
+                self.save_scene(&self.scene_path);
             }
             if ui.button("Reload").clicked() {
-                //TODO
+                let path = self.scene_path.clone();
+                self.load_scene(&path);
             }
         });
 
         egui::CollapsingHeader::new("Objects")
             .default_open(true)
             .show(ui, |ui| {
+                let old_value = self.selected_object_index;
                 for (index, extra) in self.object_extras.iter().enumerate() {
-                    ui.selectable_value(&mut self.selected_object_index, Some(index), &extra.path);
+                    let name = extra.path.file_name().unwrap().to_str().unwrap();
+                    ui.selectable_value(&mut self.selected_object_index, Some(index), name);
+                }
+                if self.selected_object_index != old_value {
+                    // we don't want the current mouse pixel to override our selection
+                    self.debug.mouse_pos = None;
                 }
             });
 
@@ -838,7 +912,9 @@ impl Example {
                     self.have_objects_changed = true;
                 }
             });
+        }
 
+        if let Some(index) = self.selected_object_index {
             egui::CollapsingHeader::new("Transform")
                 .default_open(true)
                 .show(ui, |ui| {
@@ -913,7 +989,7 @@ impl Example {
             model,
         });
         self.object_extras.push(ObjectExtra {
-            path: file_path.to_string_lossy().into_owned(),
+            path: file_path.to_owned(),
         });
         true
     }
@@ -950,7 +1026,8 @@ fn main() {
         .nth(1)
         .unwrap_or("examples/scene/data/scene.ron".to_string());
 
-    let mut example = Example::new(&window, Path::new(&path_to_scene));
+    let mut example = Example::new(&window);
+    example.load_scene(Path::new(&path_to_scene));
 
     struct Drag {
         screen_pos: glam::IVec2,
