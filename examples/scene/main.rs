@@ -13,6 +13,7 @@ use std::{
 
 const FRAME_TIME_HISTORY: usize = 30;
 const RENDER_WHILE_LOADING: bool = true;
+const MAX_DEPTH: f32 = 1e9;
 
 #[derive(Clone, Copy, PartialEq, strum::EnumIter)]
 enum DebugBlitInput {
@@ -72,12 +73,15 @@ impl TransformComponents {
     }
 }
 
+struct ObjectExtra {
+    path: String,
+}
+
 #[derive(serde::Deserialize, serde::Serialize)]
 struct ConfigCamera {
     position: mint::Vector3<f32>,
     orientation: mint::Quaternion<f32>,
     fov_y: f32,
-    max_depth: f32,
     speed: f32,
 }
 
@@ -123,6 +127,7 @@ struct Example {
     context: Arc<gpu::Context>,
     environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
     objects: Vec<blade_render::Object>,
+    object_extras: Vec<ObjectExtra>,
     selected_object_index: Option<usize>,
     gizmo_mode: egui_gizmo::GizmoMode,
     have_objects_changed: bool,
@@ -198,11 +203,12 @@ impl Example {
                 .normalize()
                 .into(),
             fov_y: config_scene.camera.fov_y,
-            depth: config_scene.camera.max_depth,
+            depth: MAX_DEPTH,
         };
 
         let mut environment_map = None;
         let mut objects = Vec::new();
+        let mut object_extras = Vec::new();
         let parent = scene_path.parent().unwrap();
         let mut load_finish = choir.spawn("load finish").init_dummy();
         if !config_scene.environment_map.is_empty() {
@@ -228,6 +234,9 @@ impl Example {
             objects.push(blade_render::Object {
                 transform: config_object.transform,
                 model,
+            });
+            object_extras.push(ObjectExtra {
+                path: config_object.path,
             });
         }
 
@@ -267,6 +276,7 @@ impl Example {
             context,
             environment_map,
             objects,
+            object_extras,
             selected_object_index: None,
             gizmo_mode: egui_gizmo::GizmoMode::Translate,
             have_objects_changed: false,
@@ -377,6 +387,7 @@ impl Example {
         // We should be able to update TLAS and render content
         // even while it's still being loaded.
         if self.scene_load_task.is_none() || RENDER_WHILE_LOADING {
+            assert_eq!(self.objects.len(), self.object_extras.len());
             if self.have_objects_changed {
                 self.renderer.build_scene(
                     command_encoder,
@@ -536,11 +547,6 @@ impl Example {
                 ui.add(egui::DragValue::new(&mut self.camera.rot.s));
             });
             ui.add(egui::Slider::new(&mut self.camera.fov_y, 0.5f32..=2.0f32).text("FOV"));
-            ui.add(
-                egui::Slider::new(&mut self.camera.depth, 1f32..=1_000_000f32)
-                    .text("depth")
-                    .logarithmic(true),
-            );
             ui.add(
                 egui::Slider::new(&mut self.fly_speed, 1f32..=10000f32)
                     .text("Fly speed")
@@ -800,28 +806,46 @@ impl Example {
     #[profiling::function]
     fn populate_content(&mut self, ui: &mut egui::Ui) {
         ui.colored_label(egui::Color32::WHITE, self.scene_path.display().to_string());
-        if ui.button("Save").clicked() {
-            //TODO
-        }
-        if ui.button("Reload").clicked() {
-            //TODO
-        }
+        ui.horizontal(|ui| {
+            if ui.button("Save").clicked() {
+                //TODO
+            }
+            if ui.button("Reload").clicked() {
+                //TODO
+            }
+        });
 
         egui::CollapsingHeader::new("Objects")
             .default_open(true)
-            .show(ui, |_ui| {
-                //TODO
+            .show(ui, |ui| {
+                for (index, extra) in self.object_extras.iter().enumerate() {
+                    ui.selectable_value(&mut self.selected_object_index, Some(index), &extra.path);
+                }
             });
 
         if let Some(index) = self.selected_object_index {
             self.add_manipulation_gizmo(index, ui);
+
+            ui.horizontal(|ui| {
+                if ui.button("Unselect").clicked() {
+                    self.selected_object_index = None;
+                    self.debug.mouse_pos = None;
+                }
+                if ui.button("Delete!").clicked() {
+                    self.selected_object_index = None;
+                    self.objects.remove(index);
+                    self.object_extras.remove(index);
+                    self.have_objects_changed = true;
+                }
+            });
+
             egui::CollapsingHeader::new("Transform")
                 .default_open(true)
                 .show(ui, |ui| {
                     let object = self.objects.get_mut(index).unwrap();
                     let mut tc = TransformComponents::from(object.transform);
                     ui.horizontal(|ui| {
-                        ui.radio_value(
+                        ui.selectable_value(
                             &mut self.gizmo_mode,
                             egui_gizmo::GizmoMode::Translate,
                             "Translate",
@@ -831,7 +855,7 @@ impl Example {
                         ui.add(egui::DragValue::new(&mut tc.translation.z));
                     });
                     ui.horizontal(|ui| {
-                        ui.radio_value(
+                        ui.selectable_value(
                             &mut self.gizmo_mode,
                             egui_gizmo::GizmoMode::Rotate,
                             "Rotate",
@@ -842,7 +866,11 @@ impl Example {
                         ui.add(egui::DragValue::new(&mut tc.rotation.w));
                     });
                     ui.horizontal(|ui| {
-                        ui.radio_value(&mut self.gizmo_mode, egui_gizmo::GizmoMode::Scale, "Scale");
+                        ui.selectable_value(
+                            &mut self.gizmo_mode,
+                            egui_gizmo::GizmoMode::Scale,
+                            "Scale",
+                        );
                         ui.add(egui::DragValue::new(&mut tc.scale.x));
                         ui.add(egui::DragValue::new(&mut tc.scale.y));
                         ui.add(egui::DragValue::new(&mut tc.scale.z));
@@ -854,18 +882,6 @@ impl Example {
                         self.have_objects_changed = true;
                     }
                 });
-
-            ui.horizontal(|ui| {
-                if ui.button("Unselect").clicked() {
-                    self.selected_object_index = None;
-                    self.debug.mouse_pos = None;
-                }
-                if ui.button("Delete!").clicked() {
-                    self.selected_object_index = None;
-                    self.objects.remove(index);
-                    self.have_objects_changed = true;
-                }
-            });
         }
     }
 
@@ -895,6 +911,9 @@ impl Example {
         self.objects.push(blade_render::Object {
             transform: blade_graphics::IDENTITY_TRANSFORM,
             model,
+        });
+        self.object_extras.push(ObjectExtra {
+            path: file_path.to_string_lossy().into_owned(),
         });
         true
     }
