@@ -349,7 +349,7 @@ impl GuiPainter {
 
     /// Call this after submitting work at the given `sync_point`.
     #[profiling::function]
-    pub fn after_submit(&mut self, sync_point: blade_graphics::SyncPoint) {
+    pub fn after_submit(&mut self, sync_point: &blade_graphics::SyncPoint) {
         self.textures_to_delete.extend(
             self.textures_dropped
                 .drain(..)
