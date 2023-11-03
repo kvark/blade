@@ -550,6 +550,7 @@ struct HitEntry {
 
 #[derive(Clone, PartialEq)]
 pub struct Shaders {
+    env_prepare: blade_asset::Handle<crate::Shader>,
     fill_gbuf: blade_asset::Handle<crate::Shader>,
     ray_trace: blade_asset::Handle<crate::Shader>,
     blur: blade_asset::Handle<crate::Shader>,
@@ -562,6 +563,7 @@ impl Shaders {
     pub fn load(path: &Path, asset_hub: &crate::AssetHub) -> (Self, choir::RunningTask) {
         let mut ctx = asset_hub.open_context(path, "shader finish");
         let shaders = Self {
+            env_prepare: ctx.load_shader("env-prepare.wgsl"),
             fill_gbuf: ctx.load_shader("fill-gbuf.wgsl"),
             ray_trace: ctx.load_shader("ray-trace.wgsl"),
             blur: ctx.load_shader("blur.wgsl"),
@@ -581,7 +583,7 @@ struct ShaderPipelines {
     post_proc: blade_graphics::RenderPipeline,
     debug_draw: blade_graphics::RenderPipeline,
     debug_blit: blade_graphics::RenderPipeline,
-    env_preproc: blade_graphics::ComputePipeline,
+    env_prepare: blade_graphics::ComputePipeline,
     debug_line_size: u32,
     debug_buffer_size: u32,
     reservoir_size: u32,
@@ -735,7 +737,10 @@ impl ShaderPipelines {
                 config.surface_format,
                 gpu,
             ),
-            env_preproc: EnvironmentMap::init_pipeline(gpu)?,
+            env_prepare: EnvironmentMap::init_pipeline(
+                shader_man[shaders.env_prepare].raw.as_ref().unwrap(),
+                gpu,
+            )?,
             debug_line_size: sh_main.get_struct_size("DebugLine"),
             debug_buffer_size: sh_main.get_struct_size("DebugBuffer"),
             reservoir_size: sh_main.get_struct_size("StoredReservoir"),
@@ -866,7 +871,7 @@ impl Renderer {
                 atrous_pipeline: sp.atrous,
             },
             acceleration_structure: blade_graphics::AccelerationStructure::default(),
-            env_map: EnvironmentMap::with_pipeline(&dummy, sp.env_preproc),
+            env_map: EnvironmentMap::with_pipeline(&dummy, sp.env_prepare),
             dummy,
             hit_buffer: blade_graphics::Buffer::default(),
             vertex_buffers: blade_graphics::BufferArray::new(),

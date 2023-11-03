@@ -249,6 +249,7 @@ impl Example {
         if let Some(sp) = self.prev_sync_point {
             self.context.wait_for(&sp, !0);
         }
+        self.context.destroy_command_encoder(self.command_encoder);
         self.context.destroy_texture_view(self.target_view);
         self.context.destroy_texture(self.target);
         self.context.destroy_acceleration_structure(self.blas);
