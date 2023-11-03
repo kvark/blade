@@ -85,7 +85,7 @@ impl BufferBelt {
         bp
     }
 
-    pub fn flush(&mut self, sp: blade_graphics::SyncPoint) {
+    pub fn flush(&mut self, sp: &blade_graphics::SyncPoint) {
         self.buffers
             .extend(self.active.drain(..).map(|(rb, _)| (rb, sp.clone())));
     }

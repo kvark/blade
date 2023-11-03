@@ -103,7 +103,7 @@ impl Example {
         }
         encoder.present(frame);
         let sync_point = self.context.submit(encoder);
-        self.gui_painter.after_submit(sync_point.clone());
+        self.gui_painter.after_submit(&sync_point);
 
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);

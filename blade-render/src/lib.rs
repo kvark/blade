@@ -14,6 +14,7 @@ pub mod model;
 mod render;
 pub mod shader;
 pub mod texture;
+pub mod util;
 
 pub use asset_hub::*;
 pub use model::Model;

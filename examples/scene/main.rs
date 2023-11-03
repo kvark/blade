@@ -119,13 +119,10 @@ struct ConfigScene {
 struct Example {
     scene_path: PathBuf,
     scene_environment_map: String,
-    prev_temp_buffers: Vec<gpu::Buffer>,
-    prev_acceleration_structures: Vec<gpu::AccelerationStructure>,
-    prev_sync_point: Option<gpu::SyncPoint>,
+    pacer: blade_render::util::FramePacer,
     renderer: blade_render::Renderer,
     scene_load_task: Option<choir::RunningTask>,
     gui_painter: blade_egui::GuiPainter,
-    command_encoder: Option<gpu::CommandEncoder>,
     asset_hub: blade_render::AssetHub,
     context: Arc<gpu::Context>,
     environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
@@ -198,37 +195,30 @@ impl Example {
 
         log::info!("Spinning up the renderer");
         shader_task.join();
-        let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
-            name: "main",
-            buffer_count: 2,
-        });
-        command_encoder.start();
+        let mut pacer = blade_render::util::FramePacer::new(&context);
+        let (command_encoder, _) = pacer.begin_frame();
         let render_config = blade_render::RenderConfig {
             screen_size,
             surface_format,
             max_debug_lines: 1000,
         };
         let renderer = blade_render::Renderer::new(
-            &mut command_encoder,
+            command_encoder,
             &context,
             shaders,
             &asset_hub.shaders,
             &render_config,
         );
-        let sync_point = context.submit(&mut command_encoder);
-
+        pacer.end_frame(&context);
         let gui_painter = blade_egui::GuiPainter::new(surface_format, &context);
 
         Self {
             scene_path: PathBuf::new(),
             scene_environment_map: String::new(),
-            prev_temp_buffers: Vec::new(),
-            prev_acceleration_structures: Vec::new(),
-            prev_sync_point: Some(sync_point),
+            pacer,
             renderer,
             scene_load_task: None,
             gui_painter,
-            command_encoder: Some(command_encoder),
             asset_hub,
             context,
             environment_map: None,
@@ -289,12 +279,10 @@ impl Example {
 
     fn destroy(&mut self) {
         self.workers.clear();
-        self.wait_for_previous_frame();
+        self.pacer.destroy(&self.context);
         self.gui_painter.destroy(&self.context);
         self.renderer.destroy(&self.context);
         self.asset_hub.destroy();
-        self.context
-            .destroy_command_encoder(self.command_encoder.take().unwrap());
     }
 
     pub fn load_scene(&mut self, scene_path: &Path) {
@@ -392,19 +380,6 @@ impl Example {
     }
 
     #[profiling::function]
-    fn wait_for_previous_frame(&mut self) {
-        if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(&sp, !0);
-        }
-        for buffer in self.prev_temp_buffers.drain(..) {
-            self.context.destroy_buffer(buffer);
-        }
-        for accel_structure in self.prev_acceleration_structures.drain(..) {
-            self.context.destroy_acceleration_structure(accel_structure);
-        }
-    }
-
-    #[profiling::function]
     fn render(
         &mut self,
         gui_primitives: &[egui::ClippedPrimitive],
@@ -416,7 +391,7 @@ impl Example {
             self.need_accumulation_reset |= self.renderer.hot_reload(
                 &self.asset_hub,
                 &self.context,
-                self.prev_sync_point.as_ref().unwrap(),
+                self.pacer.last_sync_point().unwrap(),
             );
         }
 
@@ -426,12 +401,11 @@ impl Example {
         let new_render_size = surface_config.size;
         if new_render_size != self.renderer.get_screen_size() {
             log::info!("Resizing to {}", new_render_size);
-            self.wait_for_previous_frame();
+            self.pacer.wait_for_previous_frame(&self.context);
             self.context.resize(surface_config);
         }
 
-        let command_encoder = self.command_encoder.as_mut().unwrap();
-        command_encoder.start();
+        let (command_encoder, temp) = self.pacer.begin_frame();
         if new_render_size != self.renderer.get_screen_size() {
             self.renderer
                 .resize_screen(new_render_size, command_encoder, &self.context);
@@ -441,9 +415,7 @@ impl Example {
         self.gui_painter
             .update_textures(command_encoder, gui_textures, &self.context);
 
-        let mut temp_buffers = Vec::new();
-        let mut temp_acceleration_structures = Vec::new();
-        self.asset_hub.flush(command_encoder, &mut temp_buffers);
+        self.asset_hub.flush(command_encoder, &mut temp.buffers);
 
         if let Some(ref task) = self.scene_load_task {
             if task.is_done() {
@@ -464,8 +436,7 @@ impl Example {
                     self.environment_map,
                     &self.asset_hub,
                     &self.context,
-                    &mut temp_buffers,
-                    &mut temp_acceleration_structures,
+                    temp,
                 );
                 self.have_objects_changed = false;
             }
@@ -522,14 +493,8 @@ impl Example {
         }
 
         command_encoder.present(frame);
-        let sync_point = self.context.submit(command_encoder);
-        self.gui_painter.after_submit(sync_point.clone());
-
-        self.wait_for_previous_frame();
-        self.prev_sync_point = Some(sync_point);
-        self.prev_temp_buffers.extend(temp_buffers);
-        self.prev_acceleration_structures
-            .extend(temp_acceleration_structures);
+        let sync_point = self.pacer.end_frame(&self.context);
+        self.gui_painter.after_submit(sync_point);
     }
 
     fn add_manipulation_gizmo(&mut self, obj_index: usize, ui: &mut egui::Ui) {

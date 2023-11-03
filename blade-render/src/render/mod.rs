@@ -748,6 +748,13 @@ impl ShaderPipelines {
     }
 }
 
+/// Temporary resources associated with a GPU frame.
+#[derive(Default)]
+pub struct FrameResources {
+    pub buffers: Vec<blade_graphics::Buffer>,
+    pub acceleration_structures: Vec<blade_graphics::AccelerationStructure>,
+}
+
 impl Renderer {
     /// Create a new renderer with a given configuration.
     ///
@@ -1043,8 +1050,7 @@ impl Renderer {
         env_map: Option<blade_asset::Handle<crate::Texture>>,
         asset_hub: &crate::AssetHub,
         gpu: &blade_graphics::Context,
-        temp_buffers: &mut Vec<blade_graphics::Buffer>,
-        temp_acceleration_structures: &mut Vec<blade_graphics::AccelerationStructure>,
+        temp: &mut FrameResources,
     ) {
         let (env_view, env_extent) = match env_map {
             Some(handle) => {
@@ -1057,7 +1063,8 @@ impl Renderer {
             .assign(env_view, env_extent, command_encoder, gpu);
 
         if self.acceleration_structure != blade_graphics::AccelerationStructure::default() {
-            temp_acceleration_structures.push(self.acceleration_structure);
+            temp.acceleration_structures
+                .push(self.acceleration_structure);
         }
 
         let geometry_count = objects
@@ -1070,7 +1077,7 @@ impl Renderer {
         let hit_size = (geometry_count.max(1) * mem::size_of::<HitEntry>()) as u64;
         //TODO: reuse the hit buffer
         if self.hit_buffer != blade_graphics::Buffer::default() {
-            temp_buffers.push(self.hit_buffer);
+            temp.buffers.push(self.hit_buffer);
         }
         self.hit_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
             name: "hit entries",
@@ -1082,7 +1089,7 @@ impl Renderer {
             size: hit_size,
             memory: blade_graphics::Memory::Upload,
         });
-        temp_buffers.push(hit_staging);
+        temp.buffers.push(hit_staging);
         {
             let mut transfers = command_encoder.transfer();
             transfers.copy_buffer_to_buffer(hit_staging.at(0), self.hit_buffer.at(0), hit_size);
@@ -1222,8 +1229,8 @@ impl Renderer {
             scratch_buf.at(0),
         );
 
-        temp_buffers.push(instance_buf);
-        temp_buffers.push(scratch_buf);
+        temp.buffers.push(instance_buf);
+        temp.buffers.push(scratch_buf);
     }
 
     /// Prepare to render a frame.
