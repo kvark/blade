@@ -15,10 +15,12 @@
 
 mod belt;
 
+const SHADER_SOURCE: &'static str = include_str!("../shader.wgsl");
+
 use belt::{BeltDescriptor, BufferBelt};
 use std::{
     collections::hash_map::{Entry, HashMap},
-    fs, mem, ptr,
+    mem, ptr,
 };
 
 #[repr(C)]
@@ -118,14 +120,12 @@ impl GuiPainter {
     /// and this attachment format must be The `output_format`.
     #[profiling::function]
     pub fn new(
-        context: &blade_graphics::Context,
         output_format: blade_graphics::TextureFormat,
+        context: &blade_graphics::Context,
     ) -> Self {
-        let shader_source = fs::read_to_string("blade-egui/shader.wgsl").unwrap();
         let shader = context.create_shader(blade_graphics::ShaderDesc {
-            source: &shader_source,
+            source: SHADER_SOURCE,
         });
-
         let globals_layout = <Globals as blade_graphics::ShaderData>::layout();
         let locals_layout = <Locals as blade_graphics::ShaderData>::layout();
         let pipeline = context.create_render_pipeline(blade_graphics::RenderPipelineDesc {

@@ -1,4 +1,4 @@
-use std::{fs, num::NonZeroU32};
+use std::num::NonZeroU32;
 
 use crate::DummyResources;
 
@@ -21,21 +21,20 @@ pub struct EnvironmentMap {
     pub weight_texture: blade_graphics::Texture,
     pub weight_view: blade_graphics::TextureView,
     pub weight_mips: Vec<blade_graphics::TextureView>,
-    pub preproc_pipeline: blade_graphics::ComputePipeline,
+    pub prepare_pipeline: blade_graphics::ComputePipeline,
 }
 
 impl EnvironmentMap {
     pub fn init_pipeline(
+        shader: &blade_graphics::Shader,
         gpu: &blade_graphics::Context,
     ) -> Result<blade_graphics::ComputePipeline, &'static str> {
-        let source = fs::read_to_string("blade-render/code/env-preproc.wgsl").unwrap();
-        let shader = gpu.try_create_shader(blade_graphics::ShaderDesc { source: &source })?;
         let layout = <EnvPreprocData as blade_graphics::ShaderData>::layout();
         shader.check_struct_size::<EnvPreprocParams>();
 
         Ok(
             gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
-                name: "env-preproc",
+                name: "env-prepare",
                 data_layouts: &[&layout],
                 compute: shader.at("downsample"),
             }),
@@ -44,7 +43,7 @@ impl EnvironmentMap {
 
     pub fn with_pipeline(
         dummy: &DummyResources,
-        preproc_pipeline: blade_graphics::ComputePipeline,
+        prepare_pipeline: blade_graphics::ComputePipeline,
     ) -> Self {
         Self {
             main_view: dummy.white_view,
@@ -52,12 +51,16 @@ impl EnvironmentMap {
             weight_texture: blade_graphics::Texture::default(),
             weight_view: dummy.red_view,
             weight_mips: Vec::new(),
-            preproc_pipeline,
+            prepare_pipeline,
         }
     }
 
-    pub fn new(dummy: &DummyResources, gpu: &blade_graphics::Context) -> Self {
-        Self::with_pipeline(dummy, Self::init_pipeline(gpu).unwrap())
+    pub fn new(
+        shader: &blade_graphics::Shader,
+        dummy: &DummyResources,
+        gpu: &blade_graphics::Context,
+    ) -> Self {
+        Self::with_pipeline(dummy, Self::init_pipeline(shader, gpu).unwrap())
     }
 
     fn weight_size(&self) -> blade_graphics::Extent {
@@ -134,10 +137,10 @@ impl EnvironmentMap {
         encoder.init_texture(self.weight_texture);
         for target_level in 0..mip_level_count {
             let groups = self
-                .preproc_pipeline
+                .prepare_pipeline
                 .get_dispatch_for(weight_extent.at_mip_level(target_level));
             let mut compute = encoder.compute();
-            let mut pass = compute.with(&self.preproc_pipeline);
+            let mut pass = compute.with(&self.prepare_pipeline);
             pass.bind(
                 0,
                 &EnvPreprocData {

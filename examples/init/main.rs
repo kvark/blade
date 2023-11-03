@@ -156,10 +156,16 @@ fn main() {
 
     println!("Populating the scene");
     let mut load_finish = choir.spawn("load finish").init_dummy();
-    let (shader_handle, shader_task) = asset_hub
+    let (shader_main_handle, shader_main_task) = asset_hub
         .shaders
         .load("examples/init/env-sample.wgsl", blade_render::shader::Meta);
-    load_finish.depend_on(shader_task);
+    load_finish.depend_on(shader_main_task);
+    let (shader_init_handle, shader_init_task) = asset_hub.shaders.load(
+        "blade-render/code/env-prepare.wgsl",
+        blade_render::shader::Meta,
+    );
+    load_finish.depend_on(shader_init_task);
+
     for arg in env::args().skip(1) {
         if arg.ends_with(".exr") {
             println!("\tenvironment map = {}", arg);
@@ -198,7 +204,11 @@ fn main() {
     let mut temp_buffers = Vec::new();
     asset_hub.flush(&mut command_encoder, &mut temp_buffers);
 
-    let mut env_map = blade_render::EnvironmentMap::new(&dummy, &context);
+    let mut env_map = blade_render::EnvironmentMap::new(
+        asset_hub.shaders[shader_init_handle].raw.as_ref().unwrap(),
+        &dummy,
+        &context,
+    );
     let env_size = match environment_map {
         Some(handle) => {
             let texture = &asset_hub.textures[handle];
@@ -207,8 +217,11 @@ fn main() {
         }
         None => dummy.size,
     };
-    let env_shader = asset_hub.shaders[shader_handle].raw.as_ref().unwrap();
-    let env_sampler = EnvMapSampler::new(env_size, env_shader, &context);
+    let env_sampler = EnvMapSampler::new(
+        env_size,
+        asset_hub.shaders[shader_main_handle].raw.as_ref().unwrap(),
+        &context,
+    );
     env_sampler.accumulate(&mut command_encoder, env_map.main_view, env_map.weight_view);
     let sync_point = context.submit(&mut command_encoder);
 

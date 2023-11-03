@@ -217,7 +217,7 @@ impl Example {
         );
         let sync_point = context.submit(&mut command_encoder);
 
-        let gui_painter = blade_egui::GuiPainter::new(&context, surface_format);
+        let gui_painter = blade_egui::GuiPainter::new(surface_format, &context);
 
         Self {
             scene_path: PathBuf::new(),
