@@ -2,7 +2,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use blade_graphics as gpu;
-use blade_render::{AssetHub, Camera, RenderConfig, Renderer};
 use std::{
     collections::VecDeque,
     fmt, fs,
@@ -41,8 +40,8 @@ struct TransformComponents {
     rotation: glam::Quat,
     translation: glam::Vec3,
 }
-impl From<blade_graphics::Transform> for TransformComponents {
-    fn from(bm: blade_graphics::Transform) -> Self {
+impl From<gpu::Transform> for TransformComponents {
+    fn from(bm: gpu::Transform) -> Self {
         let transposed = glam::Mat4 {
             x_axis: bm.x.into(),
             y_axis: bm.y.into(),
@@ -58,14 +57,14 @@ impl From<blade_graphics::Transform> for TransformComponents {
     }
 }
 impl TransformComponents {
-    fn to_blade(&self) -> blade_graphics::Transform {
+    fn to_blade(&self) -> gpu::Transform {
         let m = glam::Mat4::from_scale_rotation_translation(
             self.scale,
             self.rotation,
             self.translation,
         )
         .transpose();
-        blade_graphics::Transform {
+        gpu::Transform {
             x: m.x_axis.into(),
             y: m.y_axis.into(),
             z: m.z_axis.into(),
@@ -94,12 +93,7 @@ struct ConfigCamera {
 }
 
 fn default_transform() -> mint::RowMatrix3x4<f32> {
-    [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-    ]
-    .into()
+    gpu::IDENTITY_TRANSFORM
 }
 fn default_luminocity() -> f32 {
     1.0
@@ -128,11 +122,11 @@ struct Example {
     prev_temp_buffers: Vec<gpu::Buffer>,
     prev_acceleration_structures: Vec<gpu::AccelerationStructure>,
     prev_sync_point: Option<gpu::SyncPoint>,
-    renderer: Renderer,
+    renderer: blade_render::Renderer,
     scene_load_task: Option<choir::RunningTask>,
     gui_painter: blade_egui::GuiPainter,
     command_encoder: Option<gpu::CommandEncoder>,
-    asset_hub: AssetHub,
+    asset_hub: blade_render::AssetHub,
     context: Arc<gpu::Context>,
     environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
     objects: Vec<blade_render::Object>,
@@ -160,11 +154,9 @@ struct Example {
 }
 
 impl Example {
-    fn make_surface_config(
-        physical_size: winit::dpi::PhysicalSize<u32>,
-    ) -> blade_graphics::SurfaceConfig {
-        blade_graphics::SurfaceConfig {
-            size: blade_graphics::Extent {
+    fn make_surface_config(physical_size: winit::dpi::PhysicalSize<u32>) -> gpu::SurfaceConfig {
+        gpu::SurfaceConfig {
+            size: gpu::Extent {
                 width: physical_size.width,
                 height: physical_size.height,
                 depth: 1,
@@ -200,7 +192,7 @@ impl Example {
             .map(|i| choir.add_worker(&format!("Worker-{}", i)))
             .collect();
 
-        let asset_hub = AssetHub::new(Path::new("asset-cache"), &choir, &context);
+        let asset_hub = blade_render::AssetHub::new(Path::new("asset-cache"), &choir, &context);
         let (shaders, shader_task) =
             blade_render::Shaders::load("blade-render/code/".as_ref(), &asset_hub);
 
@@ -211,12 +203,12 @@ impl Example {
             buffer_count: 2,
         });
         command_encoder.start();
-        let render_config = RenderConfig {
+        let render_config = blade_render::RenderConfig {
             screen_size,
             surface_format,
             max_debug_lines: 1000,
         };
-        let renderer = Renderer::new(
+        let renderer = blade_render::Renderer::new(
             &mut command_encoder,
             &context,
             shaders,
@@ -321,7 +313,7 @@ impl Example {
             ron::de::from_bytes(&fs::read(scene_path).expect("Unable to open the scene file"))
                 .expect("Unable to parse the scene file");
 
-        self.camera = Camera {
+        self.camera = blade_render::Camera {
             pos: config_scene.camera.position,
             rot: glam::Quat::from(config_scene.camera.orientation)
                 .normalize()
@@ -339,7 +331,7 @@ impl Example {
 
         if !config_scene.environment_map.is_empty() {
             let meta = blade_render::texture::Meta {
-                format: blade_graphics::TextureFormat::Rgba32Float,
+                format: gpu::TextureFormat::Rgba32Float,
                 generate_mips: false,
                 y_flip: false,
             };
@@ -997,7 +989,7 @@ impl Example {
         );
         self.scene_load_task = Some(model_task.clone());
         self.objects.push(blade_render::Object {
-            transform: blade_graphics::IDENTITY_TRANSFORM,
+            transform: gpu::IDENTITY_TRANSFORM,
             model,
         });
         self.object_extras.push(ObjectExtra {
