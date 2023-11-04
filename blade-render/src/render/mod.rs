@@ -40,8 +40,9 @@ impl Default for DebugMode {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq, PartialOrd)]
     pub struct DebugDrawFlags: u32 {
-        const GEOMETRY = 1;
-        const RESTIR = 2;
+        const SPACE = 1;
+        const GEOMETRY = 2;
+        const RESTIR = 4;
     }
 }
 
@@ -144,6 +145,11 @@ struct DebugEntry {
     tex_coords: [f32; 2],
     base_color_texture: u32,
     normal_texture: u32,
+    pad: [u32; 2],
+    position: [f32; 3],
+    position_w: f32,
+    normal: [f32; 3],
+    normal_w: f32,
 }
 
 struct DebugRender {
@@ -799,7 +805,7 @@ impl Renderer {
             buffer_size: sp.debug_buffer_size,
         };
 
-        let debug_init_data = [2u32, 0, 0, config.max_debug_lines];
+        let debug_init_data = [2u32, 0, 0, 0, config.max_debug_lines];
         let debug_init_size = debug_init_data.len() * mem::size_of::<u32>();
         assert!(debug_init_size <= mem::size_of::<DebugEntry>());
         unsafe {
