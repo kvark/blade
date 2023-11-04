@@ -132,6 +132,7 @@ struct Example {
     need_picked_selection_frames: usize,
     gizmo_mode: egui_gizmo::GizmoMode,
     have_objects_changed: bool,
+    have_fallback_scene: bool,
     camera: blade_render::Camera,
     fly_speed: f32,
     debug: blade_render::DebugConfig,
@@ -228,6 +229,7 @@ impl Example {
             need_picked_selection_frames: 0,
             gizmo_mode: egui_gizmo::GizmoMode::Translate,
             have_objects_changed: false,
+            have_fallback_scene: false,
             camera: blade_render::Camera {
                 pos: mint::Vector3 {
                     x: 0.0,
@@ -428,22 +430,23 @@ impl Example {
             }
         }
 
+        if self.scene_load_task.is_none() && self.have_objects_changed {
+            assert_eq!(self.objects.len(), self.object_extras.len());
+            self.renderer.build_scene(
+                command_encoder,
+                &self.objects,
+                self.environment_map,
+                &self.asset_hub,
+                &self.context,
+                temp,
+            );
+            self.have_objects_changed = false;
+            self.have_fallback_scene = true;
+        }
+
         // We should be able to update TLAS and render content
         // even while it's still being loaded.
-        if self.scene_load_task.is_none() || RENDER_WHILE_LOADING {
-            assert_eq!(self.objects.len(), self.object_extras.len());
-            if self.have_objects_changed {
-                self.renderer.build_scene(
-                    command_encoder,
-                    &self.objects,
-                    self.environment_map,
-                    &self.asset_hub,
-                    &self.context,
-                    temp,
-                );
-                self.have_objects_changed = false;
-            }
-
+        if self.scene_load_task.is_none() || (RENDER_WHILE_LOADING && self.have_fallback_scene) {
             self.renderer.prepare(
                 command_encoder,
                 &self.camera,
@@ -588,7 +591,7 @@ impl Example {
             });
             ui.add(egui::Slider::new(&mut self.camera.fov_y, 0.5f32..=2.0f32).text("FOV"));
             ui.add(
-                egui::Slider::new(&mut self.fly_speed, 1f32..=10000f32)
+                egui::Slider::new(&mut self.fly_speed, 1f32..=100000f32)
                     .text("Fly speed")
                     .logarithmic(true),
             );
