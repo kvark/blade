@@ -17,6 +17,9 @@ struct DebugEntry {
     tex_coords: vec2<f32>,
     base_color_texture: u32,
     normal_texture: u32,
+    pad: vec2<u32>,
+    position: vec3<f32>,
+    flat_normal: vec3<f32>,
 }
 struct DebugBuffer {
     vertex_count: u32,
