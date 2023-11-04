@@ -246,7 +246,10 @@ impl Example {
                 depth: 0.0,
             },
             fly_speed: 0.0,
-            debug: blade_render::DebugConfig::default(),
+            debug: blade_render::DebugConfig {
+                draw_flags: blade_render::DebugDrawFlags::SPACE,
+                ..Default::default()
+            },
             track_hot_reloads: false,
             need_accumulation_reset: true,
             is_debug_drawing: false,
@@ -946,6 +949,22 @@ impl Example {
         if self.scene_load_task.is_some() {
             return false;
         }
+
+        let transform = if self.debug.mouse_pos.is_some() {
+            let selection = self.renderer.read_debug_selection_info();
+            //Note: assuming the object is Y-up
+            let rotation = glam::Quat::from_rotation_arc(glam::Vec3::Y, selection.normal.into());
+            let m = glam::Mat4::from_rotation_translation(rotation, selection.position.into())
+                .transpose();
+            gpu::Transform {
+                x: m.x_axis.into(),
+                y: m.y_axis.into(),
+                z: m.z_axis.into(),
+            }
+        } else {
+            gpu::IDENTITY_TRANSFORM
+        };
+
         let (model, model_task) = self.asset_hub.models.load(
             file_path,
             blade_render::model::Meta {
@@ -953,10 +972,7 @@ impl Example {
             },
         );
         self.scene_load_task = Some(model_task.clone());
-        self.objects.push(blade_render::Object {
-            transform: gpu::IDENTITY_TRANSFORM,
-            model,
-        });
+        self.objects.push(blade_render::Object { transform, model });
         self.object_extras.push(ObjectExtra {
             path: file_path.to_owned(),
         });
