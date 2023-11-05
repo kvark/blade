@@ -138,7 +138,8 @@ struct Example {
     debug: blade_render::DebugConfig,
     track_hot_reloads: bool,
     need_accumulation_reset: bool,
-    is_debug_drawing: bool,
+    is_point_selected: bool,
+    is_file_hovered: bool,
     last_render_time: time::Instant,
     render_times: VecDeque<u32>,
     ray_config: blade_render::RayConfig,
@@ -248,13 +249,11 @@ impl Example {
                 depth: 0.0,
             },
             fly_speed: 0.0,
-            debug: blade_render::DebugConfig {
-                draw_flags: blade_render::DebugDrawFlags::SPACE,
-                ..Default::default()
-            },
+            debug: blade_render::DebugConfig::default(),
             track_hot_reloads: false,
             need_accumulation_reset: true,
-            is_debug_drawing: false,
+            is_point_selected: false,
+            is_file_hovered: false,
             last_render_time: time::Instant::now(),
             render_times: VecDeque::with_capacity(FRAME_TIME_HISTORY),
             ray_config: blade_render::RayConfig {
@@ -450,7 +449,7 @@ impl Example {
             self.renderer.prepare(
                 command_encoder,
                 &self.camera,
-                self.is_debug_drawing,
+                self.is_point_selected || self.is_file_hovered,
                 self.debug.mouse_pos.is_some(),
                 self.need_accumulation_reset,
             );
@@ -1112,8 +1111,7 @@ fn main() {
                         button: winit::event::MouseButton::Right,
                         ..
                     } => {
-                        example.debug.mouse_pos = Some(last_mouse_pos);
-                        example.is_debug_drawing = true;
+                        example.is_point_selected = true;
                         example.need_picked_selection_frames = 3;
                     }
                     winit::event::WindowEvent::MouseInput {
@@ -1121,7 +1119,7 @@ fn main() {
                         button: winit::event::MouseButton::Right,
                         ..
                     } => {
-                        example.is_debug_drawing = false;
+                        example.is_point_selected = false;
                     }
                     winit::event::WindowEvent::CursorMoved { position, .. } => {
                         last_mouse_pos = [position.x as i32, position.y as i32];
@@ -1137,7 +1135,26 @@ fn main() {
                             example.debug.mouse_pos = None;
                         }
                     }
+                    winit::event::WindowEvent::HoveredFile(_) => {
+                        example.is_file_hovered = true;
+                        example
+                            .debug
+                            .draw_flags
+                            .set(blade_render::DebugDrawFlags::SPACE, true);
+                    }
+                    winit::event::WindowEvent::HoveredFileCancelled => {
+                        example.is_file_hovered = false;
+                        example
+                            .debug
+                            .draw_flags
+                            .set(blade_render::DebugDrawFlags::SPACE, false);
+                    }
                     winit::event::WindowEvent::DroppedFile(file_path) => {
+                        example.is_file_hovered = false;
+                        example
+                            .debug
+                            .draw_flags
+                            .set(blade_render::DebugDrawFlags::SPACE, false);
                         if !example.add_object(&file_path) {
                             log::warn!(
                                 "Unable to drop {}, loading in progress",
@@ -1146,6 +1163,12 @@ fn main() {
                         }
                     }
                     _ => {}
+                }
+
+                if example.is_point_selected || example.is_file_hovered {
+                    //TODO: unfortunately winit doesn't update cursor position during a drag
+                    // https://github.com/rust-windowing/winit/issues/1550
+                    example.debug.mouse_pos = Some(last_mouse_pos);
                 }
             }
             winit::event::Event::RedrawRequested(_) => {
