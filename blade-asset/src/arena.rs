@@ -124,14 +124,14 @@ impl<T: Default> Arena<T> {
         unsafe { first_ptr.add(handle.0.index as usize) }
     }
 
-    pub fn dealloc(&self, handle: Handle<T>) -> T {
+    pub fn _dealloc(&self, handle: Handle<T>) -> T {
         let mut freeman = self.freeman.lock().unwrap();
         freeman.free_list.push(handle.0);
         let ptr = self.get_mut_ptr(handle);
-        unsafe { mem::take(&mut *ptr) }
+        mem::take(unsafe { &mut *ptr })
     }
 
-    pub fn for_each(&self, mut fun: impl FnMut(Handle<T>, &T)) {
+    fn for_internal(&self, mut fun: impl FnMut(Address, *mut T)) {
         let mut freeman = self.freeman.lock().unwrap();
         freeman.free_list.sort(); // enables fast search
         for (chunk_index, chunk_start) in self.chunks[..freeman.chunk_bases.len()]
@@ -147,13 +147,25 @@ impl<T: Default> Arena<T> {
                     chunk,
                 };
                 if freeman.free_list.binary_search(&address).is_err() {
-                    //Note: this is only safe if `get_mut_ptr` isn't called
+                    //Note: accessing this is only safe if `get_mut_ptr` isn't called
                     // for example, during hot reloading.
-                    let item = unsafe { &*first_ptr.add(index) };
-                    fun(Handle(address, PhantomData), item);
+                    fun(address, unsafe { first_ptr.add(index) });
                 }
             }
         }
+    }
+
+    pub fn for_each(&self, mut fun: impl FnMut(Handle<T>, &T)) {
+        self.for_internal(|address, ptr| fun(Handle(address, PhantomData), unsafe { &*ptr }))
+    }
+
+    pub fn dealloc_each(&self, mut fun: impl FnMut(Handle<T>, T)) {
+        self.for_internal(|address, ptr| {
+            fun(
+                Handle(address, PhantomData),
+                mem::take(unsafe { &mut *ptr }),
+            )
+        })
     }
 }
 

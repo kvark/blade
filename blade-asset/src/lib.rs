@@ -94,6 +94,7 @@ impl<T> Default for Slot<T> {
     }
 }
 
+#[derive(Default)]
 struct Inner {
     result: Vec<u8>,
     dependencies: Vec<PathBuf>,
@@ -141,6 +142,21 @@ impl<B: Baker> Cooker<B> {
             base_path: base_path.to_path_buf(),
             _phantom: PhantomData,
         }
+    }
+
+    /// Create a new container with no data, no path, and no hasher.
+    pub fn new_embedded() -> Self {
+        Self {
+            inner: Mutex::new(Inner::default()),
+            base_path: Default::default(),
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn extract_embedded(&self) -> Vec<u8> {
+        let mut inner = self.inner.lock().unwrap();
+        assert!(inner.dependencies.is_empty());
+        mem::take(&mut inner.result)
     }
 
     /// Return the base path of the asset.
@@ -197,12 +213,12 @@ pub trait Baker: Sized + Send + Sync + 'static {
         extension: &str,
         meta: Self::Meta,
         cooker: Arc<Cooker<Self>>,
-        exe_context: choir::ExecutionContext,
+        exe_context: &choir::ExecutionContext,
     );
     /// Produce the output bsed on a cooked asset.
     ///
     /// This method is also called within a task `exe_context`.
-    fn serve(&self, cooked: Self::Data<'_>, exe_context: choir::ExecutionContext) -> Self::Output;
+    fn serve(&self, cooked: Self::Data<'_>, exe_context: &choir::ExecutionContext) -> Self::Output;
     /// Delete the output of an asset.
     fn delete(&self, output: Self::Output);
 }
@@ -318,8 +334,8 @@ impl<B: Baker> AssetManager<B> {
         }
     }
 
-    pub fn get_main_source_path(&self, handle: Handle<B::Output>) -> &Path {
-        self.slots[handle.inner].sources.first().unwrap()
+    pub fn get_main_source_path(&self, handle: Handle<B::Output>) -> Option<&PathBuf> {
+        self.slots[handle.inner].sources.first()
     }
 
     fn make_target_path(&self, base_path: &Path, file_name: &Path, meta: &B::Meta) -> PathBuf {
@@ -405,7 +421,7 @@ impl<B: Baker> AssetManager<B> {
                         baker.delete(data);
                     }
                     let cooked = unsafe { <B::Data<'_> as Flat>::read(inner.result.as_ptr()) };
-                    let target = baker.serve(cooked, exe_context);
+                    let target = baker.serve(cooked, &exe_context);
                     unsafe {
                         *dr.data = Some(target);
                         *dr.version = version;
@@ -427,7 +443,7 @@ impl<B: Baker> AssetManager<B> {
                         Some(data) => data,
                         None => cooker_arg.add_dependency(&file_name),
                     };
-                    baker.cook(&source, extension, meta, cooker_arg, exe_context);
+                    baker.cook(&source, extension, meta, cooker_arg, &exe_context);
                 });
 
             load_task.depend_on(&cook_task);
@@ -447,7 +463,7 @@ impl<B: Baker> AssetManager<B> {
                     let mut data = Vec::new();
                     file.read_to_end(&mut data).unwrap();
                     let cooked = unsafe { <B::Data<'_> as Flat>::read(data.as_ptr()) };
-                    let target = baker.serve(cooked, exe_context);
+                    let target = baker.serve(cooked, &exe_context);
                     let dr = data_ref;
                     unsafe {
                         *dr.data = Some(target);
@@ -467,11 +483,14 @@ impl<B: Baker> AssetManager<B> {
         let (handle, slot_ptr) = self.slots.alloc_default();
         let slot = unsafe { &mut *slot_ptr };
         assert_eq!(slot.version, 0);
-        slot.base_path = source_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_owned();
-        slot.meta = Box::into_raw(Box::new(meta)) as *const _;
+        *slot = Slot {
+            base_path: source_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_owned(),
+            meta: Box::into_raw(Box::new(meta)) as *const _,
+            ..Default::default()
+        };
 
         let file_name = Path::new(source_path.file_name().unwrap());
         let (version, _) = self.create_impl(slot, file_name, None).unwrap();
@@ -495,8 +514,10 @@ impl<B: Baker> AssetManager<B> {
         let (handle, slot_ptr) = self.slots.alloc_default();
         let slot = unsafe { &mut *slot_ptr };
         assert_eq!(slot.version, 0);
-        slot.base_path = Default::default();
-        slot.meta = Box::into_raw(Box::new(meta)) as *const _;
+        *slot = Slot {
+            meta: Box::into_raw(Box::new(meta)) as *const _,
+            ..Default::default()
+        };
 
         let (version, _) = self.create_impl(slot, name, Some(data)).unwrap();
 
@@ -533,12 +554,35 @@ impl<B: Baker> AssetManager<B> {
         (handle, task)
     }
 
+    /// Load an asset that has been pre-cooked already.
+    ///
+    /// Expected to run inside a task.
+    pub fn load_cooked_inside_task(
+        &self,
+        cooked: B::Data<'_>,
+        exe_context: &choir::ExecutionContext,
+    ) -> Handle<B::Output> {
+        let value = self.baker.serve(cooked, exe_context);
+        let (handle, slot_ptr) = self.slots.alloc_default();
+        let slot = unsafe { &mut *slot_ptr };
+        assert_eq!(slot.version, 0);
+        *slot = Slot {
+            version: 1,
+            data: Some(value),
+            ..Slot::default()
+        };
+        Handle {
+            inner: handle,
+            version: slot.version,
+        }
+    }
+
     /// Clear the asset manager by deleting all the stored assets.
     ///
     /// Invalidates all handles produced from loading assets.
     pub fn clear(&self) {
-        for (_key, handle) in self.paths.lock().unwrap().drain() {
-            let slot = self.slots.dealloc(handle.inner);
+        self.paths.lock().unwrap().clear();
+        self.slots.dealloc_each(|_handle, slot| {
             if let Some(task) = slot.load_task {
                 task.join();
             }
@@ -550,7 +594,7 @@ impl<B: Baker> AssetManager<B> {
                     let _ = Box::from_raw(slot.meta as *mut B::Meta);
                 }
             }
-        }
+        })
     }
 
     /// Hot reload a changed asset.

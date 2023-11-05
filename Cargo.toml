@@ -20,6 +20,7 @@ log = "0.4"
 mint = "0.5"
 naga = { version = "0.14", features = ["wgsl-in", "span", "validate"] }
 profiling = "1"
+slab = "0.4"
 strum = { version = "0.25", features = ["derive"] }
 web-sys = "0.3.60"
 

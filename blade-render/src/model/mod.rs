@@ -58,11 +58,19 @@ pub struct Model {
     pub acceleration_structure: blade_graphics::AccelerationStructure,
 }
 
+#[derive(blade_macros::Flat, Default)]
+struct TextureReference<'a> {
+    path: Cow<'a, [u8]>,
+    embedded_data: Cow<'a, [u8]>,
+    //Note: this isn't used for anything during deserialization
+    source_index: usize,
+}
+
 #[derive(blade_macros::Flat)]
 struct CookedMaterial<'a> {
-    base_color_path: Cow<'a, [u8]>,
+    base_color: TextureReference<'a>,
     base_color_factor: [f32; 4],
-    normal_path: Cow<'a, [u8]>,
+    normal: TextureReference<'a>,
     transparent: bool,
 }
 
@@ -295,6 +303,29 @@ struct PendingOperations {
     blas_constructs: Vec<BlasConstruct>,
 }
 
+enum TextureSource {
+    Path(String),
+    Embedded(
+        Option<choir::IdleTask>,
+        Arc<blade_asset::Cooker<super::texture::Baker>>,
+    ),
+}
+
+#[cfg(feature = "asset")]
+impl TextureReference<'_> {
+    fn complete(&mut self, sources: &slab::Slab<TextureSource>) {
+        match sources.get(self.source_index) {
+            Some(&TextureSource::Embedded(ref _task, ref sub_cooker)) => {
+                self.embedded_data = Cow::Owned(sub_cooker.extract_embedded());
+            }
+            Some(&TextureSource::Path(ref relative)) => {
+                self.path = Cow::Owned(relative.as_bytes().to_owned());
+            }
+            None => {}
+        }
+    }
+}
+
 pub struct Baker {
     gpu_context: Arc<blade_graphics::Context>,
     pending_operations: Mutex<PendingOperations>,
@@ -339,6 +370,81 @@ impl Baker {
             }
         }
     }
+
+    #[cfg(feature = "asset")]
+    fn cook_texture(
+        &self,
+        texture: gltf::texture::Texture,
+        meta: super::texture::Meta,
+        data_buffers: &[Vec<u8>],
+    ) -> TextureSource {
+        match texture.source().source() {
+            gltf::image::Source::View { view, mime_type } => {
+                let sub_cooker = Arc::new(blade_asset::Cooker::new_embedded());
+                let cooker = Arc::clone(&sub_cooker);
+                let baker = Arc::clone(&self.asset_textures.baker);
+                let buffer = &data_buffers[view.buffer().index()];
+                let data = buffer[view.offset()..view.offset() + view.length()].to_vec();
+                let extension = mime_type.split_once('/').unwrap().1.to_string();
+                let task =
+                    self.asset_textures
+                        .choir
+                        .spawn("embedded cook")
+                        .init(move |exe_ontext| {
+                            blade_asset::Baker::cook(
+                                baker.as_ref(),
+                                &data,
+                                &extension,
+                                meta,
+                                cooker,
+                                &exe_ontext,
+                            );
+                        });
+                TextureSource::Embedded(Some(task), sub_cooker)
+            }
+            gltf::image::Source::Uri { uri, mime_type: _ } => {
+                let relative = if let Some(_rest) = uri.strip_prefix("data:") {
+                    panic!("Data URL isn't supported for textures yet");
+                } else if let Some(rest) = uri.strip_prefix("file://") {
+                    rest
+                } else if let Some(rest) = uri.strip_prefix("file:") {
+                    rest
+                } else {
+                    uri
+                };
+                if PRELOAD_TEXTURES {
+                    self.asset_textures.load(relative, meta);
+                }
+                TextureSource::Path(relative.to_string())
+            }
+        }
+    }
+
+    fn serve_texture(
+        &self,
+        texture_ref: &TextureReference,
+        meta: super::texture::Meta,
+        exe_context: &choir::ExecutionContext,
+    ) -> Option<blade_asset::Handle<super::texture::Texture>> {
+        if !texture_ref.path.is_empty() {
+            let path_str = str::from_utf8(&texture_ref.path).unwrap();
+            let (handle, task) = self.asset_textures.load(path_str, meta);
+            exe_context.add_fork(&task);
+            Some(handle)
+        } else if !texture_ref.embedded_data.is_empty() {
+            let cooked = unsafe {
+                <super::texture::CookedImage<'_> as blade_asset::Flat>::read(
+                    texture_ref.embedded_data.as_ptr(),
+                )
+            };
+            Some(
+                self.asset_textures
+                    .load_cooked_inside_task(cooked, exe_context),
+            )
+        } else {
+            None
+        }
+    }
 }
 
 impl blade_asset::Baker for Baker {
@@ -352,7 +458,7 @@ impl blade_asset::Baker for Baker {
         extension: &str,
         meta: Meta,
         cooker: Arc<blade_asset::Cooker<Self>>,
-        exe_context: choir::ExecutionContext,
+        exe_context: &choir::ExecutionContext,
     ) {
         match extension {
             #[cfg(feature = "asset")]
@@ -384,30 +490,8 @@ impl blade_asset::Baker for Baker {
                     }
                     buffers.push(data);
                 }
-                let mut texture_paths = Vec::new();
-                for texture in document.textures() {
-                    let relative = match texture.source().source() {
-                        gltf::image::Source::Uri { uri, .. } => {
-                            if let Some(rest) = uri.strip_prefix("data:") {
-                                let (_before, after) = rest.split_once(";base64,").unwrap();
-                                let _data = ENCODING_ENGINE.decode(after).unwrap();
-                                panic!("Data URL isn't supported here yet");
-                            } else if let Some(rest) = uri.strip_prefix("file://") {
-                                rest
-                            } else if let Some(rest) = uri.strip_prefix("file:") {
-                                rest
-                            } else {
-                                uri
-                            }
-                        }
-                        gltf::image::Source::View { .. } => {
-                            panic!("Embedded images are not supported yet")
-                        }
-                    };
-                    let full = cooker.base_path().join(relative);
-                    texture_paths.push(full.to_str().unwrap().to_string());
-                }
 
+                let mut sources = slab::Slab::new();
                 let mut model = CookedModel {
                     name: &[],
                     materials: Vec::new(),
@@ -416,30 +500,33 @@ impl blade_asset::Baker for Baker {
                 for g_material in document.materials() {
                     let pbr = g_material.pbr_metallic_roughness();
                     model.materials.push(CookedMaterial {
-                        base_color_path: Cow::Owned(match pbr.base_color_texture() {
-                            Some(info) => {
-                                let path = &texture_paths[info.texture().index()];
-                                if PRELOAD_TEXTURES {
-                                    self.asset_textures.load(path, META_BASE_COLOR);
-                                }
-                                path.as_bytes().to_vec()
-                            }
-                            None => Vec::new(),
-                        }),
+                        base_color: TextureReference {
+                            source_index: match pbr.base_color_texture() {
+                                Some(info) => sources.insert(self.cook_texture(
+                                    info.texture(),
+                                    META_BASE_COLOR,
+                                    &buffers,
+                                )),
+                                None => !0,
+                            },
+                            ..Default::default()
+                        },
                         base_color_factor: pbr.base_color_factor(),
-                        normal_path: Cow::Owned(match g_material.normal_texture() {
-                            Some(info) => {
-                                let path = &texture_paths[info.texture().index()];
-                                if PRELOAD_TEXTURES {
-                                    self.asset_textures.load(path, META_BASE_COLOR);
-                                }
-                                path.as_bytes().to_vec()
-                            }
-                            None => Vec::new(),
-                        }),
+                        normal: TextureReference {
+                            source_index: match pbr.base_color_texture() {
+                                Some(info) => sources.insert(self.cook_texture(
+                                    info.texture(),
+                                    META_NORMAL,
+                                    &buffers,
+                                )),
+                                None => !0,
+                            },
+                            ..Default::default()
+                        },
                         transparent: g_material.alpha_mode() != gltf::material::AlphaMode::Opaque,
                     });
                 }
+
                 let mut flattened_geos = Vec::new();
                 for g_scene in document.scenes() {
                     for g_node in g_scene.nodes() {
@@ -476,39 +563,41 @@ impl blade_asset::Baker for Baker {
                         geo.indices = Cow::Owned(indices);
                     },
                 );
+
+                let mut dependencies = vec![gen_tangents];
+                for (_, source) in sources.iter_mut() {
+                    if let TextureSource::Embedded(ref mut task, _) = *source {
+                        dependencies.push(task.take().unwrap())
+                    }
+                }
+
                 let mut finish = exe_context.fork("finish").init(move |_| {
-                    let model = Arc::into_inner(model_shared).unwrap().into_inner().unwrap();
+                    let mut model = Arc::into_inner(model_shared).unwrap().into_inner().unwrap();
+                    for material in model.materials.iter_mut() {
+                        material.base_color.complete(&sources);
+                        material.normal.complete(&sources);
+                    }
                     cooker.finish(model);
                 });
-                finish.depend_on(&gen_tangents);
+                for dependency in dependencies {
+                    finish.depend_on(&dependency);
+                }
             }
             other => panic!("Unknown model extension: {}", other),
         }
     }
 
-    fn serve(&self, model: CookedModel<'_>, exe_context: choir::ExecutionContext) -> Self::Output {
+    fn serve(&self, model: CookedModel<'_>, exe_context: &choir::ExecutionContext) -> Self::Output {
         let mut materials = Vec::with_capacity(model.materials.len());
         for material in model.materials.iter() {
-            let base_color_texture = if material.base_color_path.is_empty() {
-                None
-            } else {
-                let path_str = str::from_utf8(&material.base_color_path).unwrap();
-                let (handle, task) = self.asset_textures.load(path_str, META_BASE_COLOR);
-                exe_context.add_fork(&task);
-                Some(handle)
-            };
-            let normal_texture = if material.normal_path.is_empty() {
-                None
-            } else {
-                let path_str = str::from_utf8(&material.normal_path).unwrap();
-                let (handle, task) = self.asset_textures.load(path_str, META_NORMAL);
-                exe_context.add_fork(&task);
-                Some(handle)
-            };
             materials.push(Material {
-                base_color_texture,
+                base_color_texture: self.serve_texture(
+                    &material.base_color,
+                    META_BASE_COLOR,
+                    exe_context,
+                ),
                 base_color_factor: material.base_color_factor,
-                normal_texture,
+                normal_texture: self.serve_texture(&material.normal, META_NORMAL, exe_context),
                 transparent: material.transparent,
             });
         }
