@@ -510,19 +510,17 @@ impl Example {
         let aspect = extent.width as f32 / extent.height as f32;
         let projection_matrix =
             glam::Mat4::perspective_rh(self.camera.fov_y, aspect, 1.0, self.camera.depth);
-        let model_matrix = mint::ColumnMatrix4::from({
-            let t = self.objects[obj_index].transform;
-            mint::RowMatrix4 {
-                x: t.x,
-                y: t.y,
-                z: t.z,
-                w: mint::Vector4 {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                    w: 1.0,
-                },
-            }
+        let t0 = &mut self.objects[obj_index].transform;
+        let model_matrix = mint::ColumnMatrix4::from(mint::RowMatrix4 {
+            x: t0.x,
+            y: t0.y,
+            z: t0.z,
+            w: mint::Vector4 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
         });
         let gizmo = egui_gizmo::Gizmo::new("Object")
             .view_matrix(mint::ColumnMatrix4::from(view_matrix))
@@ -532,13 +530,16 @@ impl Example {
             .orientation(egui_gizmo::GizmoOrientation::Global)
             .snapping(true);
         if let Some(response) = gizmo.interact(ui) {
-            let tc = TransformComponents {
+            let t1 = TransformComponents {
                 scale: response.scale,
                 rotation: response.rotation,
                 translation: response.translation,
-            };
-            self.objects[obj_index].transform = tc.to_blade();
-            self.have_objects_changed = true;
+            }
+            .to_blade();
+            if *t0 != t1 {
+                *t0 = t1;
+                self.have_objects_changed = true;
+            }
         }
     }
 
@@ -681,8 +682,8 @@ impl Example {
                                     .asset_hub
                                     .textures
                                     .get_main_source_path(handle)
-                                    .display()
-                                    .to_string();
+                                    .map(|path| path.display().to_string())
+                                    .unwrap_or_default();
                                 ui.colored_label(egui::Color32::WHITE, name);
                             }
                         });
@@ -693,8 +694,8 @@ impl Example {
                                     .asset_hub
                                     .textures
                                     .get_main_source_path(handle)
-                                    .display()
-                                    .to_string();
+                                    .map(|path| path.display().to_string())
+                                    .unwrap_or_default();
                                 ui.colored_label(egui::Color32::WHITE, name);
                             }
                         });

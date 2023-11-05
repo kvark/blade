@@ -123,7 +123,7 @@ impl blade_asset::Baker for Baker {
         extension: &str,
         _meta: Meta,
         cooker: Arc<blade_asset::Cooker<Self>>,
-        _exe_context: choir::ExecutionContext,
+        _exe_context: &choir::ExecutionContext,
     ) {
         assert_eq!(extension, "wgsl");
         let text_out = parse_shader(source, &cooker, &self.expansions);
@@ -131,7 +131,7 @@ impl blade_asset::Baker for Baker {
             data: text_out.as_bytes(),
         });
     }
-    fn serve(&self, cooked: CookedShader, _exe_context: choir::ExecutionContext) -> Shader {
+    fn serve(&self, cooked: CookedShader, _exe_context: &choir::ExecutionContext) -> Shader {
         let source = str::from_utf8(cooked.data).unwrap();
         let raw = self
             .gpu_context

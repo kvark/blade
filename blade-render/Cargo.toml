@@ -11,7 +11,7 @@ repository = "https://github.com/kvark/blade"
 
 [features]
 default = ["asset"]
-asset = ["gltf" , "base64", "exr", "mikktspace", "texpresso", "zune-core", "zune-jpeg", "zune-png", "zune-imageprocs"]
+asset = ["gltf" , "base64", "exr", "mikktspace", "slab", "texpresso", "zune-core", "zune-jpeg", "zune-png", "zune-imageprocs"]
 
 [dependencies]
 base64 = { workspace = true, optional = true }
@@ -28,6 +28,7 @@ log = { workspace = true }
 mikktspace = { package = "bevy_mikktspace", version = "0.10", optional = true }
 mint = { workspace = true }
 profiling = { workspace = true }
+slab = { workspace = true, optional = true }
 strum = { workspace = true }
 texpresso = { version = "2.0", optional = true }
 #zune-core = { version = "0.2", optional = true }

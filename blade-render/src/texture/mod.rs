@@ -111,7 +111,7 @@ impl blade_asset::Baker for Baker {
         extension: &str,
         meta: Meta,
         cooker: Arc<blade_asset::Cooker<Self>>,
-        exe_context: choir::ExecutionContext,
+        exe_context: &choir::ExecutionContext,
     ) {
         use blade_graphics::TextureFormat as Tf;
         enum PlainData {
@@ -340,7 +340,11 @@ impl blade_asset::Baker for Baker {
         }
     }
 
-    fn serve(&self, image: CookedImage<'_>, _exe_context: choir::ExecutionContext) -> Self::Output {
+    fn serve(
+        &self,
+        image: CookedImage<'_>,
+        _exe_context: &choir::ExecutionContext,
+    ) -> Self::Output {
         let name = str::from_utf8(image.name).unwrap();
         let base_extent = blade_graphics::Extent {
             width: image.extent[0],

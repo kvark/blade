@@ -20,13 +20,13 @@ impl blade_asset::Baker for Baker {
         _extension: &str,
         meta: u32,
         cooker: Arc<blade_asset::Cooker<Self>>,
-        _exe_context: choir::ExecutionContext,
+        _exe_context: &choir::ExecutionContext,
     ) {
         assert!(self.allow_cooking.load(Ordering::SeqCst));
         let _ = cooker.add_dependency("README.md".as_ref());
         cooker.finish(meta);
     }
-    fn serve(&self, cooked: u32, _exe_context: choir::ExecutionContext) -> usize {
+    fn serve(&self, cooked: u32, _exe_context: &choir::ExecutionContext) -> usize {
         cooked as usize
     }
     fn delete(&self, _output: usize) {}

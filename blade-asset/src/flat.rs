@@ -42,6 +42,7 @@ macro_rules! impl_basic {
 impl_basic!(bool);
 impl_basic!(u32);
 impl_basic!(u64);
+impl_basic!(usize);
 impl_basic!(f32);
 
 /*
