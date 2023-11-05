@@ -339,6 +339,7 @@ impl<B: Baker> AssetManager<B> {
         &self,
         slot: &'a mut Slot<B::Output>,
         file_name: &Path,
+        content: Option<&[u8]>,
     ) -> Option<(u32, &'a choir::RunningTask)> {
         use std::{hash::Hasher as _, io::Write as _};
 
@@ -355,6 +356,7 @@ impl<B: Baker> AssetManager<B> {
 
         let target_path = self.make_target_path(&slot.base_path, file_name, meta);
         let file_name = file_name.to_owned();
+        let content = content.map(Vec::from);
         let mut hasher = DefaultHasher::new();
         TypeId::of::<B::Data<'static>>().hash(&mut hasher);
 
@@ -420,8 +422,11 @@ impl<B: Baker> AssetManager<B> {
                 .init(move |exe_context| {
                     // Read the source file through the same mechanism as the
                     // dependencies, so that its modified time makes it into the hash.
-                    let source = cooker_arg.add_dependency(&file_name);
                     let extension = file_name.extension().unwrap().to_str().unwrap();
+                    let source = match content {
+                        Some(data) => data,
+                        None => cooker_arg.add_dependency(&file_name),
+                    };
                     baker.cook(&source, extension, meta, cooker_arg, exe_context);
                 });
 
@@ -469,11 +474,38 @@ impl<B: Baker> AssetManager<B> {
         slot.meta = Box::into_raw(Box::new(meta)) as *const _;
 
         let file_name = Path::new(source_path.file_name().unwrap());
-        let (version, _) = self.create_impl(slot, file_name).unwrap();
+        let (version, _) = self.create_impl(slot, file_name, None).unwrap();
         Handle {
             inner: handle,
             version,
         }
+    }
+
+    /// Load an asset given the data directly.
+    ///
+    /// The `name` must be a pretend file name, with a proper extension.
+    ///
+    /// Doesn't get cached by the manager, always goes through the cooking process.
+    pub fn load_data(
+        &self,
+        name: &Path,
+        data: &[u8],
+        meta: B::Meta,
+    ) -> (Handle<B::Output>, &choir::RunningTask) {
+        let (handle, slot_ptr) = self.slots.alloc_default();
+        let slot = unsafe { &mut *slot_ptr };
+        assert_eq!(slot.version, 0);
+        slot.base_path = Default::default();
+        slot.meta = Box::into_raw(Box::new(meta)) as *const _;
+
+        let (version, _) = self.create_impl(slot, name, Some(data)).unwrap();
+
+        let task = self.slots[handle].load_task.as_ref().unwrap();
+        let out_handle = Handle {
+            inner: handle,
+            version,
+        };
+        (out_handle, task)
     }
 
     /// Load an asset given the relative path.
@@ -525,10 +557,11 @@ impl<B: Baker> AssetManager<B> {
     pub fn hot_reload(&self, handle: &mut Handle<B::Output>) -> Option<&choir::RunningTask> {
         let slot = unsafe { &mut *self.slots.get_mut_ptr(handle.inner) };
         let file_name = slot.sources.first().unwrap().to_owned();
-        self.create_impl(slot, &file_name).map(|(version, task)| {
-            handle.version = version;
-            task
-        })
+        self.create_impl(slot, &file_name, None)
+            .map(|(version, task)| {
+                handle.version = version;
+                task
+            })
     }
 
     pub fn list_running_tasks(&self, list: &mut Vec<choir::RunningTask>) {
