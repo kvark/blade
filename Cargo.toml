@@ -75,3 +75,7 @@ web-sys = { workspace = true, features = ["Window"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dev-dependencies]
 renderdoc = "0.11"
+
+# This is too slow in Debug
+[profile.dev.package.texpresso]
+opt-level = 3
