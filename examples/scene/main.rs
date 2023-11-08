@@ -1150,13 +1150,13 @@ fn main() {
                             .draw_flags
                             .set(blade_render::DebugDrawFlags::SPACE, false);
                     }
-                    winit::event::WindowEvent::DroppedFile(file_path) => {
+                    winit::event::WindowEvent::DroppedFile(ref file_path) => {
                         example.is_file_hovered = false;
                         example
                             .debug
                             .draw_flags
                             .set(blade_render::DebugDrawFlags::SPACE, false);
-                        if !example.add_object(&file_path) {
+                        if !example.add_object(file_path) {
                             log::warn!(
                                 "Unable to drop {}, loading in progress",
                                 file_path.display()
@@ -1204,7 +1204,7 @@ fn main() {
                 });
 
                 //HACK: https://github.com/urholaukkarinen/egui-gizmo/issues/29
-                if example.have_objects_changed {
+                if example.have_objects_changed && egui_ctx.wants_pointer_input() {
                     drag_start = None;
                 }
 
