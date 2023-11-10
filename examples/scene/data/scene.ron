@@ -9,7 +9,7 @@
     average_luminocity: 0.3,
     objects: [
         (
-            path: "monkey.gltf",
+            path: "plane.glb",
         ),
     ],
 )
