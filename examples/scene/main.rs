@@ -132,7 +132,7 @@ struct Example {
     need_picked_selection_frames: usize,
     gizmo_mode: egui_gizmo::GizmoMode,
     have_objects_changed: bool,
-    have_fallback_scene: bool,
+    scene_revision: usize,
     camera: blade_render::Camera,
     fly_speed: f32,
     debug: blade_render::DebugConfig,
@@ -230,7 +230,7 @@ impl Example {
             need_picked_selection_frames: 0,
             gizmo_mode: egui_gizmo::GizmoMode::Translate,
             have_objects_changed: false,
-            have_fallback_scene: false,
+            scene_revision: 0,
             camera: blade_render::Camera {
                 pos: mint::Vector3 {
                     x: 0.0,
@@ -440,12 +440,14 @@ impl Example {
                 temp,
             );
             self.have_objects_changed = false;
-            self.have_fallback_scene = true;
+            self.scene_revision += 1;
         }
 
         // We should be able to update TLAS and render content
         // even while it's still being loaded.
-        if self.scene_load_task.is_none() || (RENDER_WHILE_LOADING && self.have_fallback_scene) {
+        let do_render =
+            self.scene_load_task.is_none() || (RENDER_WHILE_LOADING && self.scene_revision != 0);
+        if do_render {
             self.renderer.prepare(
                 command_encoder,
                 &self.camera,
@@ -481,7 +483,7 @@ impl Example {
                 physical_size: (physical_size.width, physical_size.height),
                 scale_factor,
             };
-            if self.scene_load_task.is_none() {
+            if do_render {
                 let mut debug_blit_array = [blade_render::DebugBlit::default()];
                 let debug_blits = match self.debug_blit {
                     Some(ref blit) => {
@@ -1026,6 +1028,7 @@ fn main() {
     let mut last_mouse_pos = [0i32; 2];
 
     event_loop.run(move |event, _, control_flow| {
+        example.choir.check_panic();
         *control_flow = winit::event_loop::ControlFlow::Poll;
         let delta = last_event.elapsed().as_secs_f32();
         last_event = time::Instant::now();

@@ -318,8 +318,8 @@ impl TextureReference<'_> {
             Some(&TextureSource::Embedded(ref _task, ref sub_cooker)) => {
                 self.embedded_data = Cow::Owned(sub_cooker.extract_embedded());
             }
-            Some(&TextureSource::Path(ref relative)) => {
-                self.path = Cow::Owned(relative.as_bytes().to_owned());
+            Some(&TextureSource::Path(ref full)) => {
+                self.path = Cow::Owned(full.as_bytes().to_owned());
             }
             None => {}
         }
@@ -376,6 +376,7 @@ impl Baker {
         &self,
         texture: gltf::texture::Texture,
         meta: super::texture::Meta,
+        parent_cooker: &blade_asset::Cooker<Baker>,
         data_buffers: &[Vec<u8>],
     ) -> TextureSource {
         match texture.source().source() {
@@ -412,10 +413,11 @@ impl Baker {
                 } else {
                     uri
                 };
+                let full = parent_cooker.base_path().join(relative);
                 if PRELOAD_TEXTURES {
-                    self.asset_textures.load(relative, meta);
+                    self.asset_textures.load(&full, meta);
                 }
-                TextureSource::Path(relative.to_string())
+                TextureSource::Path(full.to_str().unwrap().to_string())
             }
         }
     }
@@ -505,6 +507,7 @@ impl blade_asset::Baker for Baker {
                                 Some(info) => sources.insert(self.cook_texture(
                                     info.texture(),
                                     META_BASE_COLOR,
+                                    &cooker,
                                     &buffers,
                                 )),
                                 None => !0,
@@ -517,6 +520,7 @@ impl blade_asset::Baker for Baker {
                                 Some(info) => sources.insert(self.cook_texture(
                                     info.texture(),
                                     META_NORMAL,
+                                    &cooker,
                                     &buffers,
                                 )),
                                 None => !0,
