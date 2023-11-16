@@ -4,7 +4,7 @@ mod env_map;
 pub use dummy::DummyResources;
 pub use env_map::EnvironmentMap;
 
-use std::{collections::HashMap, mem, num::NonZeroU32, path::Path, ptr};
+use std::{cell::Cell, collections::HashMap, mem, num::NonZeroU32, path::Path, ptr};
 
 const MAX_RESOURCES: u32 = 1000;
 const RADIANCE_FORMAT: blade_graphics::TextureFormat = blade_graphics::TextureFormat::Rgba16Float;
@@ -60,6 +60,20 @@ pub struct DebugBlit {
     pub mip_level: u32,
     pub target_offset: [i32; 2],
     pub target_size: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DebugPoint {
+    pub pos: [f32; 3],
+    pub color: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DebugLine {
+    pub a: DebugPoint,
+    pub b: DebugPoint,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -157,14 +171,117 @@ struct DebugEntry {
 }
 
 struct DebugRender {
-    _capacity: u32,
+    capacity: u32,
     buffer: blade_graphics::Buffer,
     variance_buffer: blade_graphics::Buffer,
     entry_buffer: blade_graphics::Buffer,
+    cpu_lines_buffer: blade_graphics::Buffer,
+    //Note: allows immutable `add_lines`
+    cpu_lines_offset: Cell<u64>,
     draw_pipeline: blade_graphics::RenderPipeline,
     blit_pipeline: blade_graphics::RenderPipeline,
     line_size: u32,
     buffer_size: u32,
+}
+
+impl DebugRender {
+    fn destroy(&mut self, gpu: &blade_graphics::Context) {
+        gpu.destroy_buffer(self.buffer);
+        gpu.destroy_buffer(self.variance_buffer);
+        gpu.destroy_buffer(self.entry_buffer);
+        gpu.destroy_buffer(self.cpu_lines_buffer);
+    }
+
+    fn add_lines(&self, lines: &[DebugLine]) -> (blade_graphics::BufferPiece, u32) {
+        let required_size = lines.len() as u64 * self.line_size as u64;
+        let old_offset = self.cpu_lines_offset.get();
+        let (original_offset, count) =
+            if old_offset + required_size <= (self.capacity * self.line_size) as u64 {
+                (old_offset, lines.len())
+            } else {
+                let count = lines.len().min(self.capacity as usize);
+                if count < lines.len() {
+                    log::warn!("Reducing the debug lines from {} to {}", lines.len(), count);
+                }
+                (0, count)
+            };
+
+        unsafe {
+            ptr::copy_nonoverlapping(
+                lines.as_ptr(),
+                self.cpu_lines_buffer.data().add(original_offset as usize) as *mut DebugLine,
+                count,
+            );
+        }
+
+        self.cpu_lines_offset
+            .set(original_offset + count as u64 * self.line_size as u64);
+        (self.cpu_lines_buffer.at(original_offset), count as u32)
+    }
+
+    fn render_lines(
+        &self,
+        debug_lines: &[DebugLine],
+        fd: &FrameData,
+        pass: &mut blade_graphics::RenderCommandEncoder,
+    ) {
+        let mut pc = pass.with(&self.draw_pipeline);
+        let lines_offset = 32 + mem::size_of::<DebugVariance>() + mem::size_of::<DebugEntry>();
+        pc.bind(
+            0,
+            &DebugDrawData {
+                camera: fd.camera_params,
+                debug_lines: self.buffer.at(lines_offset as u64),
+                depth: fd.depth_view,
+            },
+        );
+        pc.draw_indirect(self.buffer.at(0));
+
+        if !debug_lines.is_empty() {
+            let (lines_buf, count) = self.add_lines(debug_lines);
+            pc.bind(
+                0,
+                &DebugDrawData {
+                    camera: fd.camera_params,
+                    debug_lines: lines_buf,
+                    depth: fd.depth_view,
+                },
+            );
+            pc.draw(0, 2, 0, count);
+        }
+    }
+
+    fn render_blits(
+        &self,
+        debug_blits: &[DebugBlit],
+        samp: blade_graphics::Sampler,
+        screen_size: blade_graphics::Extent,
+        pass: &mut blade_graphics::RenderCommandEncoder,
+    ) {
+        let mut pc = pass.with(&self.blit_pipeline);
+        for db in debug_blits {
+            pc.bind(
+                0,
+                &DebugBlitData {
+                    input: db.input,
+                    samp,
+                    params: DebugBlitParams {
+                        target_offset: [
+                            db.target_offset[0] as f32 / screen_size.width as f32,
+                            db.target_offset[1] as f32 / screen_size.height as f32,
+                        ],
+                        target_size: [
+                            db.target_size[0] as f32 / screen_size.width as f32,
+                            db.target_size[1] as f32 / screen_size.height as f32,
+                        ],
+                        mip_level: db.mip_level as f32,
+                        unused: 0,
+                    },
+                },
+            );
+            pc.draw(0, 4, 0, 1);
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -501,6 +618,22 @@ struct AtrousData {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct DebugLineParams {
+    target_offset: [f32; 2],
+    target_size: [f32; 2],
+    mip_level: f32,
+    unused: u32,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct DebugLinedata {
+    input: blade_graphics::TextureView,
+    output: blade_graphics::Sampler,
+    params: DebugBlitParams,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 struct ToneMapParams {
     enabled: u32,
@@ -521,7 +654,7 @@ struct PostProcData {
 #[derive(blade_macros::ShaderData)]
 struct DebugDrawData {
     camera: CameraParams,
-    debug_buf: blade_graphics::BufferPiece,
+    debug_lines: blade_graphics::BufferPiece,
     depth: blade_graphics::TextureView,
 }
 
@@ -679,6 +812,8 @@ impl ShaderPipelines {
         format: blade_graphics::TextureFormat,
         gpu: &blade_graphics::Context,
     ) -> blade_graphics::RenderPipeline {
+        shader.check_struct_size::<DebugPoint>();
+        shader.check_struct_size::<DebugLine>();
         let layout = <DebugDrawData as blade_graphics::ShaderData>::layout();
         gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
             name: "debug-draw",
@@ -786,7 +921,7 @@ impl Renderer {
         let sp = ShaderPipelines::init(&shaders, config, gpu, shader_man).unwrap();
 
         let debug = DebugRender {
-            _capacity: config.max_debug_lines,
+            capacity: config.max_debug_lines,
             buffer: gpu.create_buffer(blade_graphics::BufferDesc {
                 name: "debug",
                 size: (sp.debug_buffer_size + (config.max_debug_lines - 1) * sp.debug_line_size)
@@ -803,6 +938,12 @@ impl Renderer {
                 size: mem::size_of::<DebugEntry>() as u64,
                 memory: blade_graphics::Memory::Shared,
             }),
+            cpu_lines_buffer: gpu.create_buffer(blade_graphics::BufferDesc {
+                name: "CPU debug lines",
+                size: (config.max_debug_lines * sp.debug_line_size) as u64,
+                memory: blade_graphics::Memory::Shared,
+            }),
+            cpu_lines_offset: Cell::new(0),
             draw_pipeline: sp.debug_draw,
             blit_pipeline: sp.debug_blit,
             line_size: sp.debug_line_size,
@@ -917,16 +1058,13 @@ impl Renderer {
             gpu.destroy_buffer(self.hit_buffer);
         }
         gpu.destroy_acceleration_structure(self.acceleration_structure);
-        // env map, dummy
+        // env map, dummy, and debug
         self.env_map.destroy(gpu);
         self.dummy.destroy(gpu);
+        self.debug.destroy(gpu);
         // samplers
         gpu.destroy_sampler(self.samplers.nearest);
         gpu.destroy_sampler(self.samplers.linear);
-        // buffers
-        gpu.destroy_buffer(self.debug.buffer);
-        gpu.destroy_buffer(self.debug.variance_buffer);
-        gpu.destroy_buffer(self.debug.entry_buffer);
     }
 
     #[profiling::function]
@@ -1488,6 +1626,7 @@ impl Renderer {
         pass: &mut blade_graphics::RenderCommandEncoder,
         debug_config: DebugConfig,
         pp_config: PostProcConfig,
+        debug_lines: &[DebugLine],
         debug_blits: &[DebugBlit],
     ) {
         let cur = self.frame_data.first().unwrap();
@@ -1510,41 +1649,10 @@ impl Renderer {
             );
             pc.draw(0, 3, 0, 1);
         }
-        if let mut pc = pass.with(&self.debug.draw_pipeline) {
-            pc.bind(
-                0,
-                &DebugDrawData {
-                    camera: cur.camera_params,
-                    debug_buf: self.debug.buffer.into(),
-                    depth: cur.depth_view,
-                },
-            );
-            pc.draw_indirect(self.debug.buffer.at(0));
-        }
-        if let mut pc = pass.with(&self.debug.blit_pipeline) {
-            for db in debug_blits {
-                pc.bind(
-                    0,
-                    &DebugBlitData {
-                        input: db.input,
-                        samp: self.samplers.linear,
-                        params: DebugBlitParams {
-                            target_offset: [
-                                db.target_offset[0] as f32 / self.screen_size.width as f32,
-                                db.target_offset[1] as f32 / self.screen_size.height as f32,
-                            ],
-                            target_size: [
-                                db.target_size[0] as f32 / self.screen_size.width as f32,
-                                db.target_size[1] as f32 / self.screen_size.height as f32,
-                            ],
-                            mip_level: db.mip_level as f32,
-                            unused: 0,
-                        },
-                    },
-                );
-                pc.draw(0, 4, 0, 1);
-            }
-        }
+
+        self.debug.render_lines(debug_lines, cur, pass);
+        self.debug
+            .render_blits(debug_blits, self.samplers.linear, self.screen_size, pass);
     }
 
     #[profiling::function]

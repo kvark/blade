@@ -3,6 +3,7 @@
 #include "camera.inc.wgsl"
 
 var<uniform> camera: CameraParams;
+var<storage> debug_lines: array<DebugLine>;
 
 struct DebugVarying {
     @builtin(position) pos: vec4<f32>,
@@ -12,7 +13,7 @@ struct DebugVarying {
 
 @vertex
 fn debug_vs(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) instance_id: u32) -> DebugVarying {
-    let line = debug_buf.lines[instance_id];
+    let line = debug_lines[instance_id];
     var point = line.a;
     if (vertex_id != 0u) {
         point = line.b;

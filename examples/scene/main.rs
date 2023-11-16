@@ -492,8 +492,13 @@ impl Example {
                     }
                     None => &[],
                 };
-                self.renderer
-                    .post_proc(&mut pass, self.debug, self.post_proc_config, debug_blits);
+                self.renderer.post_proc(
+                    &mut pass,
+                    self.debug,
+                    self.post_proc_config,
+                    &[],
+                    debug_blits,
+                );
             }
             self.gui_painter
                 .paint(&mut pass, gui_primitives, &screen_desc, &self.context);
