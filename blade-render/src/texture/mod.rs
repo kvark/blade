@@ -114,9 +114,12 @@ impl blade_asset::Baker for Baker {
         exe_context: &choir::ExecutionContext,
     ) {
         use blade_graphics::TextureFormat as Tf;
+
+        type LdrTexel = [u8; 4];
+        type HdrTexel = [f32; 3];
         enum PlainData {
-            Ldr(Vec<[u8; 4]>),
-            Hdr(Vec<[f32; 4]>),
+            Ldr(Vec<LdrTexel>),
+            Hdr(Vec<HdrTexel>),
         }
         struct PlainImage {
             width: usize,
@@ -134,9 +137,11 @@ impl blade_asset::Baker for Baker {
                 decoder.decode_headers().unwrap();
                 let info = decoder.get_info().unwrap().clone();
                 let mut data = vec![[0u8; 4]; info.width * info.height];
+                let count = data.len() * data[0].len();
+                assert_eq!(count, decoder.output_buffer_size().unwrap());
                 decoder
                     .decode_into(unsafe {
-                        slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, data.len() * 4)
+                        slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, count)
                     })
                     .unwrap();
                 PlainImage {
@@ -154,9 +159,11 @@ impl blade_asset::Baker for Baker {
                 decoder.decode_headers().unwrap();
                 let info = decoder.info().unwrap();
                 let mut data = vec![[0u8; 4]; info.width as usize * info.height as usize];
+                let count = data.len() * data[0].len();
+                assert_eq!(count, decoder.output_buffer_size().unwrap());
                 decoder
                     .decode_into(unsafe {
-                        slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, data.len() * 4)
+                        slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, count)
                     })
                     .unwrap();
                 PlainImage {
@@ -166,12 +173,35 @@ impl blade_asset::Baker for Baker {
                 }
             }
             #[cfg(feature = "asset")]
+            "hdr" => {
+                profiling::scope!("decode hdr");
+                let options = zune_core::options::DecoderOptions::default();
+                let mut decoder = zune_hdr::HdrDecoder::new_with_options(source, options);
+                decoder.decode_headers().unwrap();
+                let (width, height) = decoder.get_dimensions().unwrap();
+                let colorspace = decoder.get_colorspace().unwrap();
+                assert_eq!(colorspace, zune_core::colorspace::ColorSpace::RGB);
+                let mut data = vec![[0f32; 3]; width * height];
+                let count = data.len() * data[0].len();
+                assert_eq!(count, decoder.output_buffer_size().unwrap());
+                decoder
+                    .decode_into(unsafe {
+                        slice::from_raw_parts_mut(data.as_mut_ptr() as *mut f32, count)
+                    })
+                    .unwrap();
+                PlainImage {
+                    width,
+                    height,
+                    data: PlainData::Hdr(data),
+                }
+            }
+            #[cfg(feature = "asset")]
             "exr" => {
                 use exr::prelude::{ReadChannels as _, ReadLayers as _};
                 profiling::scope!("decode exr");
                 struct RawImage {
                     width: usize,
-                    data: Vec<[f32; 4]>,
+                    data: Vec<HdrTexel>,
                 }
                 let image = exr::image::read::read()
                     .no_deep_data()
@@ -179,10 +209,10 @@ impl blade_asset::Baker for Baker {
                     .rgba_channels(
                         |size, _| RawImage {
                             width: size.width(),
-                            data: vec![[0f32; 4]; size.width() * size.height()],
+                            data: vec![[0f32; 3]; size.width() * size.height()],
                         },
-                        |image, position, (r, g, b, a): (f32, f32, f32, f32)| {
-                            image.data[position.y() * image.width + position.x()] = [r, g, b, a];
+                        |image, position, (r, g, b, _): (f32, f32, f32, f32)| {
+                            image.data[position.y() * image.width + position.x()] = [r, g, b];
                         },
                     )
                     .first_valid_layer()
@@ -262,7 +292,7 @@ impl blade_asset::Baker for Baker {
                 }
 
                 struct CompressTask {
-                    src: Vec<[u8; 4]>,
+                    src: Vec<LdrTexel>,
                     dst_ptr: *mut u8,
                 }
                 unsafe impl Send for CompressTask {}
@@ -321,15 +351,20 @@ impl blade_asset::Baker for Baker {
             }
             PlainData::Hdr(data) => {
                 //TODO: compress as BC6E
+                //Note: we convert RGB32 to RGBA32 here, for now
                 assert_eq!(meta.format, blade_graphics::TextureFormat::Rgba32Float);
-                let data_raw = unsafe {
-                    slice::from_raw_parts(
-                        data.as_ptr() as *const u8,
-                        data.len() * data[0].len() * mem::size_of::<f32>(),
-                    )
-                };
-                let mut buf = vec![0u8; data_raw.len()];
-                buf.copy_from_slice(data_raw);
+                let in_texel_elements = data[0].len();
+                let out_texel_size = 4 * mem::size_of::<f32>();
+                let mut buf = vec![0u8; data.len() * out_texel_size];
+                for (slice, texel) in buf.chunks_mut(out_texel_size).zip(data) {
+                    unsafe {
+                        ptr::copy_nonoverlapping(
+                            texel.as_ptr(),
+                            slice.as_mut_ptr() as *mut f32,
+                            in_texel_elements,
+                        )
+                    }
+                }
                 cooker.finish(CookedImage {
                     name: &[],
                     extent: [src.width as u32, src.height as u32, 1],

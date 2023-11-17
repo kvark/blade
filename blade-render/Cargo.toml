@@ -11,7 +11,7 @@ repository = "https://github.com/kvark/blade"
 
 [features]
 default = ["asset"]
-asset = ["gltf" , "base64", "exr", "mikktspace", "slab", "texpresso", "zune-core", "zune-jpeg", "zune-png", "zune-imageprocs"]
+asset = ["gltf" , "base64", "exr", "mikktspace", "slab", "texpresso", "zune-core", "zune-jpeg", "zune-png", "zune-hdr", "zune-imageprocs"]
 
 [dependencies]
 base64 = { workspace = true, optional = true }
@@ -37,4 +37,5 @@ texpresso = { version = "2.0", optional = true }
 zune-core = { git = "https://github.com/etemesi254/zune-image", optional = true }
 zune-jpeg = { git = "https://github.com/etemesi254/zune-image", optional = true }
 zune-png = { git = "https://github.com/etemesi254/zune-image", optional = true }
+zune-hdr = { git = "https://github.com/etemesi254/zune-image", optional = true }
 zune-imageprocs = { git = "https://github.com/etemesi254/zune-image", optional = true }
