@@ -1,6 +1,6 @@
 [package]
 name = "blade-macros"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Macros helpers for Blade users"
 keywords = ["proc-macro"]
@@ -16,6 +16,6 @@ proc-macro2 = "1"
 quote = "1.0"
 
 [dev-dependencies]
-blade-graphics = { version = "0.2", path = "../blade-graphics" }
-blade-asset = { version = "0.1", path = "../blade-asset" }
+blade-graphics = { version = "0.3", path = "../blade-graphics" }
+blade-asset = { version = "0.2", path = "../blade-asset" }
 bytemuck = { workspace = true }

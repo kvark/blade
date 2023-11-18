@@ -39,7 +39,7 @@ struct Sprite {
 
 struct Example {
     pipeline: gpu::RenderPipeline,
-    command_encoder: gpu::CommandEncoder,
+    command_encoder: Option<gpu::CommandEncoder>,
     prev_sync_point: Option<gpu::SyncPoint>,
     texture: gpu::Texture,
     view: gpu::TextureView,
@@ -169,7 +169,7 @@ impl Example {
 
         Self {
             pipeline,
-            command_encoder,
+            command_encoder: Some(command_encoder),
             prev_sync_point: None,
             texture,
             view,
@@ -223,10 +223,11 @@ impl Example {
     fn render(&mut self) {
         let frame = self.context.acquire_frame();
 
-        self.command_encoder.start();
-        self.command_encoder.init_texture(frame.texture());
+        let encoder = self.command_encoder.as_mut().unwrap();
+        encoder.start();
+        encoder.init_texture(frame.texture());
 
-        if let mut pass = self.command_encoder.render(gpu::RenderTargetSet {
+        if let mut pass = encoder.render(gpu::RenderTargetSet {
             colors: &[gpu::RenderTarget {
                 view: frame.texture_view(),
                 init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
@@ -258,8 +259,8 @@ impl Example {
                 rc.draw(0, 4, 0, 1);
             }
         }
-        self.command_encoder.present(frame);
-        let sync_point = self.context.submit(&mut self.command_encoder);
+        encoder.present(frame);
+        let sync_point = self.context.submit(encoder);
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);
         }
@@ -271,6 +272,8 @@ impl Example {
             self.context.wait_for(&sp, !0);
         }
         self.context.destroy_texture(self.texture);
+        self.context
+            .destroy_command_encoder(self.command_encoder.take().unwrap());
     }
 }
 

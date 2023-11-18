@@ -3,7 +3,8 @@
 [![Matrix](https://img.shields.io/static/v1?label=dev&message=%23blade&color=blueviolet&logo=matrix)](https://matrix.to/#/#blade-dev:matrix.org)
 [![Build Status](https://github.com/kvark/blade/workflows/check/badge.svg)](https://github.com/kvark/blade/actions)
 [![Docs](https://docs.rs/blade/badge.svg)](https://docs.rs/blade)
-[![Crates.io](https://img.shields.io/crates/v/blade.svg?maxAge=2592000)](https://crates.io/crates/blade)
+[![Crates.io](https://img.shields.io/crates/v/blade-graphics.svg?maxAge=2592000)](https://crates.io/crates/blade-graphics)
+[![Crates.io](https://img.shields.io/crates/v/blade-render.svg?maxAge=2592000)](https://crates.io/crates/blade-render)
 
 ![](logo.png)
 
