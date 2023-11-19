@@ -222,7 +222,8 @@ impl DebugRender {
     fn render_lines(
         &self,
         debug_lines: &[DebugLine],
-        fd: &FrameData,
+        camera: CameraParams,
+        depth: blade_graphics::TextureView,
         pass: &mut blade_graphics::RenderCommandEncoder,
     ) {
         let mut pc = pass.with(&self.draw_pipeline);
@@ -230,9 +231,9 @@ impl DebugRender {
         pc.bind(
             0,
             &DebugDrawData {
-                camera: fd.camera_params,
+                camera,
                 debug_lines: self.buffer.at(lines_offset as u64),
-                depth: fd.depth_view,
+                depth,
             },
         );
         pc.draw_indirect(self.buffer.at(0));
@@ -242,9 +243,9 @@ impl DebugRender {
             pc.bind(
                 0,
                 &DebugDrawData {
-                    camera: fd.camera_params,
+                    camera,
                     debug_lines: lines_buf,
-                    depth: fd.depth_view,
+                    depth,
                 },
             );
             pc.draw(0, 2, 0, count);
@@ -284,14 +285,11 @@ impl DebugRender {
     }
 }
 
-#[allow(dead_code)]
-struct DoubleRenderTarget {
+struct RenderTarget<const N: usize> {
     texture: blade_graphics::Texture,
-    views: [blade_graphics::TextureView; 2],
-    active: usize,
+    views: [blade_graphics::TextureView; N],
 }
-#[allow(dead_code)]
-impl DoubleRenderTarget {
+impl<const N: usize> RenderTarget<N> {
     fn new(
         name: &str,
         format: blade_graphics::TextureFormat,
@@ -304,15 +302,16 @@ impl DoubleRenderTarget {
             format,
             size,
             dimension: blade_graphics::TextureDimension::D2,
-            array_layer_count: 2,
+            array_layer_count: N as u32,
             mip_level_count: 1,
             usage: blade_graphics::TextureUsage::RESOURCE | blade_graphics::TextureUsage::STORAGE,
         });
         encoder.init_texture(texture);
-        let mut views = [blade_graphics::TextureView::default(); 2];
+
+        let mut views = [blade_graphics::TextureView::default(); N];
         for (i, view) in views.iter_mut().enumerate() {
             *view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
-                name: &format!("{name}-{i}"),
+                name: &format!("{name}{i}"),
                 texture,
                 format,
                 dimension: blade_graphics::ViewDimension::D2,
@@ -324,73 +323,29 @@ impl DoubleRenderTarget {
             });
         }
 
-        Self {
-            texture,
-            views,
-            active: 0,
-        }
+        Self { texture, views }
     }
 
-    fn destroy(&mut self, gpu: &blade_graphics::Context) {
+    fn destroy(&self, gpu: &blade_graphics::Context) {
         gpu.destroy_texture(self.texture);
-        for view in self.views.iter_mut() {
+        for view in self.views.iter() {
             gpu.destroy_texture_view(*view);
         }
     }
-
-    fn swap(&mut self) {
-        self.active = 1 - self.active;
-    }
-
-    fn cur(&self) -> blade_graphics::TextureView {
-        self.views[self.active]
-    }
-    fn prev(&self) -> blade_graphics::TextureView {
-        self.views[1 - self.active]
-    }
 }
 
-struct FrameData {
-    reservoir_buf: blade_graphics::Buffer,
-    depth: blade_graphics::Texture,
-    depth_view: blade_graphics::TextureView,
-    basis: blade_graphics::Texture,
-    basis_view: blade_graphics::TextureView,
-    flat_normal: blade_graphics::Texture,
-    flat_normal_view: blade_graphics::TextureView,
-    albedo: blade_graphics::Texture,
-    albedo_view: blade_graphics::TextureView,
-    light_diffuse: blade_graphics::Texture,
-    light_diffuse_view: blade_graphics::TextureView,
-    camera_params: CameraParams,
+struct RestirTargets {
+    reservoir_buf: [blade_graphics::Buffer; 2],
+    debug: RenderTarget<1>,
+    depth: RenderTarget<2>,
+    basis: RenderTarget<2>,
+    flat_normal: RenderTarget<2>,
+    albedo: RenderTarget<2>,
+    light_diffuse: RenderTarget<3>,
+    camera_params: [CameraParams; 2],
 }
 
-impl FrameData {
-    fn create_target(
-        name: &str,
-        format: blade_graphics::TextureFormat,
-        size: blade_graphics::Extent,
-        gpu: &blade_graphics::Context,
-    ) -> (blade_graphics::Texture, blade_graphics::TextureView) {
-        let texture = gpu.create_texture(blade_graphics::TextureDesc {
-            name,
-            format,
-            size,
-            dimension: blade_graphics::TextureDimension::D2,
-            array_layer_count: 1,
-            mip_level_count: 1,
-            usage: blade_graphics::TextureUsage::RESOURCE | blade_graphics::TextureUsage::STORAGE,
-        });
-        let view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
-            name,
-            texture,
-            format,
-            dimension: blade_graphics::ViewDimension::D2,
-            subresources: &blade_graphics::TextureSubresources::default(),
-        });
-        (texture, view)
-    }
-
+impl RestirTargets {
     fn new(
         size: blade_graphics::Extent,
         reservoir_size: u32,
@@ -398,72 +353,67 @@ impl FrameData {
         gpu: &blade_graphics::Context,
     ) -> Self {
         let total_reservoirs = size.width as usize * size.height as usize;
-        let reservoir_buf = gpu.create_buffer(blade_graphics::BufferDesc {
-            name: "reservoirs",
-            size: reservoir_size as u64 * total_reservoirs as u64,
-            memory: blade_graphics::Memory::Device,
-        });
-
-        let (depth, depth_view) =
-            Self::create_target("depth", blade_graphics::TextureFormat::R32Float, size, gpu);
-        encoder.init_texture(depth);
-
-        let (basis, basis_view) = Self::create_target(
-            "basis",
-            blade_graphics::TextureFormat::Rgba8Snorm,
-            size,
-            gpu,
-        );
-        encoder.init_texture(basis);
-
-        let (flat_normal, flat_normal_view) = Self::create_target(
-            "flat-normal",
-            blade_graphics::TextureFormat::Rgba8Snorm,
-            size,
-            gpu,
-        );
-        encoder.init_texture(flat_normal);
-
-        let (albedo, albedo_view) = Self::create_target(
-            "basis",
-            blade_graphics::TextureFormat::Rgba8Unorm,
-            size,
-            gpu,
-        );
-        encoder.init_texture(albedo);
-
-        let (light_diffuse, light_diffuse_view) =
-            Self::create_target("light-diffuse", RADIANCE_FORMAT, size, gpu);
-        encoder.init_texture(light_diffuse);
+        let mut reservoir_buf = [blade_graphics::Buffer::default(); 2];
+        for (i, rb) in reservoir_buf.iter_mut().enumerate() {
+            *rb = gpu.create_buffer(blade_graphics::BufferDesc {
+                name: &format!("reservoirs{i}"),
+                size: reservoir_size as u64 * total_reservoirs as u64,
+                memory: blade_graphics::Memory::Device,
+            });
+        }
 
         Self {
             reservoir_buf,
-            depth,
-            depth_view,
-            basis,
-            basis_view,
-            flat_normal,
-            flat_normal_view,
-            albedo,
-            albedo_view,
-            light_diffuse,
-            light_diffuse_view,
-            camera_params: CameraParams::default(),
+            debug: RenderTarget::new(
+                "deubg",
+                blade_graphics::TextureFormat::Rgba8Unorm,
+                size,
+                encoder,
+                gpu,
+            ),
+            depth: RenderTarget::new(
+                "depth",
+                blade_graphics::TextureFormat::R32Float,
+                size,
+                encoder,
+                gpu,
+            ),
+            basis: RenderTarget::new(
+                "basis",
+                blade_graphics::TextureFormat::Rgba8Snorm,
+                size,
+                encoder,
+                gpu,
+            ),
+            flat_normal: RenderTarget::new(
+                "flat-normal",
+                blade_graphics::TextureFormat::Rgba8Snorm,
+                size,
+                encoder,
+                gpu,
+            ),
+            albedo: RenderTarget::new(
+                "albedo",
+                blade_graphics::TextureFormat::Rgba8Unorm,
+                size,
+                encoder,
+                gpu,
+            ),
+            light_diffuse: RenderTarget::new("light-diffuse", RADIANCE_FORMAT, size, encoder, gpu),
+            camera_params: [CameraParams::default(); 2],
         }
     }
 
     fn destroy(&self, gpu: &blade_graphics::Context) {
-        gpu.destroy_buffer(self.reservoir_buf);
-        gpu.destroy_texture_view(self.depth_view);
-        gpu.destroy_texture(self.depth);
-        gpu.destroy_texture_view(self.basis_view);
-        gpu.destroy_texture(self.basis);
-        gpu.destroy_texture_view(self.flat_normal_view);
-        gpu.destroy_texture(self.flat_normal);
-        gpu.destroy_texture_view(self.albedo_view);
-        gpu.destroy_texture(self.albedo);
-        gpu.destroy_texture_view(self.light_diffuse_view);
-        gpu.destroy_texture(self.light_diffuse);
+        for rb in self.reservoir_buf.iter() {
+            gpu.destroy_buffer(*rb);
+        }
+        self.debug.destroy(gpu);
+        self.depth.destroy(gpu);
+        self.basis.destroy(gpu);
+        self.flat_normal.destroy(gpu);
+        self.albedo.destroy(gpu);
+        self.light_diffuse.destroy(gpu);
     }
 }
 
@@ -484,12 +434,8 @@ struct Blur {
 pub struct Renderer {
     config: RenderConfig,
     shaders: Shaders,
-    frame_data: [FrameData; 2],
-    light_temp_texture: blade_graphics::Texture,
-    light_temp_view: blade_graphics::TextureView,
-    post_proc_input: blade_graphics::TextureView,
-    debug_texture: blade_graphics::Texture,
-    debug_view: blade_graphics::TextureView,
+    targets: RestirTargets,
+    post_proc_input_index: usize,
     fill_pipeline: blade_graphics::ComputePipeline,
     main_pipeline: blade_graphics::ComputePipeline,
     post_proc_pipeline: blade_graphics::RenderPipeline,
@@ -505,7 +451,7 @@ pub struct Renderer {
     reservoir_size: u32,
     debug: DebugRender,
     screen_size: blade_graphics::Extent,
-    frame_index: u32,
+    frame_index: usize,
     //TODO: refactor `ResourceArray` to not carry the freelist logic
     // This way we can embed user info into the allocator.
     texture_resource_lookup:
@@ -612,8 +558,8 @@ struct TemporalAccumData {
 struct AtrousData {
     params: BlurParams,
     input: blade_graphics::TextureView,
-    t_flat_normal: blade_graphics::TextureView,
     t_depth: blade_graphics::TextureView,
+    t_flat_normal: blade_graphics::TextureView,
     output: blade_graphics::TextureView,
 }
 
@@ -976,22 +922,8 @@ impl Renderer {
             );
         }
 
-        let frame_data = [
-            FrameData::new(config.screen_size, sp.reservoir_size, encoder, gpu),
-            FrameData::new(config.screen_size, sp.reservoir_size, encoder, gpu),
-        ];
-        let (light_temp_texture, light_temp_view) =
-            FrameData::create_target("light-temp", RADIANCE_FORMAT, config.screen_size, gpu);
-        encoder.init_texture(light_temp_texture);
-
+        let targets = RestirTargets::new(config.screen_size, sp.reservoir_size, encoder, gpu);
         let dummy = DummyResources::new(encoder, gpu);
-        let (debug_texture, debug_view) = FrameData::create_target(
-            "debug",
-            blade_graphics::TextureFormat::Rgba8Unorm,
-            config.screen_size,
-            gpu,
-        );
-        encoder.init_texture(debug_texture);
 
         let samplers = Samplers {
             nearest: gpu.create_sampler(blade_graphics::SamplerDesc {
@@ -1015,12 +947,8 @@ impl Renderer {
         Self {
             config: *config,
             shaders,
-            frame_data,
-            light_temp_texture,
-            light_temp_view,
-            post_proc_input: blade_graphics::TextureView::default(),
-            debug_texture,
-            debug_view,
+            targets,
+            post_proc_input_index: 0,
             fill_pipeline: sp.fill,
             main_pipeline: sp.main,
             post_proc_pipeline: sp.post_proc,
@@ -1047,13 +975,7 @@ impl Renderer {
     /// Destroy all internally managed GPU resources.
     pub fn destroy(&mut self, gpu: &blade_graphics::Context) {
         // internal resources
-        for frame_data in self.frame_data.iter_mut() {
-            frame_data.destroy(gpu);
-        }
-        gpu.destroy_texture(self.light_temp_texture);
-        gpu.destroy_texture_view(self.light_temp_view);
-        gpu.destroy_texture(self.debug_texture);
-        gpu.destroy_texture_view(self.debug_view);
+        self.targets.destroy(gpu);
         if self.hit_buffer != blade_graphics::Buffer::default() {
             gpu.destroy_buffer(self.hit_buffer);
         }
@@ -1164,30 +1086,8 @@ impl Renderer {
         gpu: &blade_graphics::Context,
     ) {
         self.screen_size = size;
-        for frame_data in self.frame_data.iter_mut() {
-            frame_data.destroy(gpu);
-            *frame_data = FrameData::new(size, self.reservoir_size, encoder, gpu);
-        }
-
-        gpu.destroy_texture(self.light_temp_texture);
-        gpu.destroy_texture_view(self.light_temp_view);
-        let (light_temp_texture, light_temp_view) =
-            FrameData::create_target("light-temp", RADIANCE_FORMAT, size, gpu);
-        encoder.init_texture(light_temp_texture);
-        self.light_temp_texture = light_temp_texture;
-        self.light_temp_view = light_temp_view;
-
-        gpu.destroy_texture(self.debug_texture);
-        gpu.destroy_texture_view(self.debug_view);
-        let (debug_texture, debug_view) = FrameData::create_target(
-            "debug",
-            blade_graphics::TextureFormat::Rgba8Unorm,
-            size,
-            gpu,
-        );
-        encoder.init_texture(debug_texture);
-        self.debug_texture = debug_texture;
-        self.debug_view = debug_view;
+        self.targets.destroy(gpu);
+        self.targets = RestirTargets::new(size, self.reservoir_size, encoder, gpu);
     }
 
     #[profiling::function]
@@ -1381,6 +1281,33 @@ impl Renderer {
         temp.buffers.push(scratch_buf);
     }
 
+    fn make_debug_params(&self, config: &DebugConfig) -> DebugParams {
+        DebugParams {
+            view_mode: config.view_mode as u32,
+            draw_flags: config.draw_flags.bits(),
+            texture_flags: config.texture_flags.bits(),
+            unused: 0,
+            mouse_pos: match config.mouse_pos {
+                Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
+                None => [-1; 2],
+            },
+        }
+    }
+
+    fn make_camera_params(&self, camera: &super::Camera) -> CameraParams {
+        let fov_x = 2.0
+            * ((camera.fov_y * 0.5).tan() * self.screen_size.width as f32
+                / self.screen_size.height as f32)
+                .atan();
+        CameraParams {
+            position: camera.pos.into(),
+            depth: camera.depth,
+            orientation: camera.rot.into(),
+            fov: [fov_x, camera.fov_y],
+            target_size: [self.screen_size.width, self.screen_size.height],
+        }
+    }
+
     /// Prepare to render a frame.
     #[profiling::function]
     pub fn prepare(
@@ -1428,44 +1355,17 @@ impl Renderer {
                 transfer.fill_buffer(self.debug.buffer.at(4), 4, 0);
             }
             let total_reservoirs = self.screen_size.width as u64 * self.screen_size.height as u64;
+            let prev_reservoir_buf = self.targets.reservoir_buf[self.frame_index % 2];
             transfer.fill_buffer(
-                self.frame_data[0].reservoir_buf.into(),
+                prev_reservoir_buf.into(),
                 total_reservoirs * self.reservoir_size as u64,
                 0,
             );
         }
 
         self.frame_index += 1;
-        self.frame_data.swap(0, 1);
-        self.frame_data[0].camera_params = self.make_camera_params(camera);
-        self.post_proc_input = self.frame_data[0].light_diffuse_view;
-    }
-
-    fn make_debug_params(&self, config: &DebugConfig) -> DebugParams {
-        DebugParams {
-            view_mode: config.view_mode as u32,
-            draw_flags: config.draw_flags.bits(),
-            texture_flags: config.texture_flags.bits(),
-            unused: 0,
-            mouse_pos: match config.mouse_pos {
-                Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
-                None => [-1; 2],
-            },
-        }
-    }
-
-    fn make_camera_params(&self, camera: &super::Camera) -> CameraParams {
-        let fov_x = 2.0
-            * ((camera.fov_y * 0.5).tan() * self.screen_size.width as f32
-                / self.screen_size.height as f32)
-                .atan();
-        CameraParams {
-            position: camera.pos.into(),
-            depth: camera.depth,
-            orientation: camera.rot.into(),
-            fov: [fov_x, camera.fov_y],
-            target_size: [self.screen_size.width, self.screen_size.height],
-        }
+        self.targets.camera_params[self.frame_index % 2] = self.make_camera_params(camera);
+        self.post_proc_input_index = self.frame_index % 2;
     }
 
     /// Ray trace the scene.
@@ -1479,8 +1379,8 @@ impl Renderer {
         ray_config: RayConfig,
     ) {
         let debug = self.make_debug_params(&debug_config);
-        let cur = self.frame_data.first().unwrap();
-        let prev = self.frame_data.last().unwrap();
+        let cur = self.frame_index % 2;
+        let prev = cur ^ 1;
 
         if let mut pass = command_encoder.compute() {
             let mut pc = pass.with(&self.fill_pipeline);
@@ -1488,7 +1388,7 @@ impl Renderer {
             pc.bind(
                 0,
                 &FillData {
-                    camera: cur.camera_params,
+                    camera: self.targets.camera_params[cur],
                     debug,
                     acc_struct: self.acceleration_structure,
                     hit_entries: self.hit_buffer.into(),
@@ -1497,11 +1397,11 @@ impl Renderer {
                     textures: &self.textures,
                     sampler_linear: self.samplers.linear,
                     debug_buf: self.debug.buffer.into(),
-                    out_depth: cur.depth_view,
-                    out_basis: cur.basis_view,
-                    out_flat_normal: cur.flat_normal_view,
-                    out_albedo: cur.albedo_view,
-                    out_debug: self.debug_view,
+                    out_depth: self.targets.depth.views[cur],
+                    out_basis: self.targets.basis.views[cur],
+                    out_flat_normal: self.targets.flat_normal.views[cur],
+                    out_albedo: self.targets.albedo.views[cur],
+                    out_debug: self.targets.debug.views[0],
                 },
             );
             pc.dispatch(groups);
@@ -1513,11 +1413,11 @@ impl Renderer {
             pc.bind(
                 0,
                 &MainData {
-                    camera: cur.camera_params,
-                    prev_camera: prev.camera_params,
+                    camera: self.targets.camera_params[cur],
+                    prev_camera: self.targets.camera_params[prev],
                     debug,
                     parameters: MainParams {
-                        frame_index: self.frame_index,
+                        frame_index: self.frame_index as u32,
                         num_environment_samples: ray_config.num_environment_samples,
                         environment_importance_sampling: ray_config.environment_importance_sampling
                             as u32,
@@ -1531,17 +1431,17 @@ impl Renderer {
                     sampler_nearest: self.samplers.nearest,
                     env_map: self.env_map.main_view,
                     env_weights: self.env_map.weight_view,
-                    t_depth: cur.depth_view,
-                    t_prev_depth: prev.depth_view,
-                    t_basis: cur.basis_view,
-                    t_prev_basis: prev.basis_view,
-                    t_flat_normal: cur.flat_normal_view,
-                    t_prev_flat_normal: prev.flat_normal_view,
+                    t_depth: self.targets.depth.views[cur],
+                    t_prev_depth: self.targets.depth.views[prev],
+                    t_basis: self.targets.basis.views[cur],
+                    t_prev_basis: self.targets.basis.views[prev],
+                    t_flat_normal: self.targets.flat_normal.views[cur],
+                    t_prev_flat_normal: self.targets.flat_normal.views[prev],
                     debug_buf: self.debug.buffer.into(),
-                    reservoirs: cur.reservoir_buf.into(),
-                    prev_reservoirs: prev.reservoir_buf.into(),
-                    out_diffuse: cur.light_diffuse_view,
-                    out_debug: self.debug_view,
+                    reservoirs: self.targets.reservoir_buf[cur].into(),
+                    prev_reservoirs: self.targets.reservoir_buf[prev].into(),
+                    out_diffuse: self.targets.light_diffuse.views[cur],
+                    out_debug: self.targets.debug.views[0],
                 },
             );
             pc.dispatch(groups);
@@ -1560,62 +1460,53 @@ impl Renderer {
             temporal_weight: denoiser_config.temporal_weight,
             iteration: 0,
         };
-        if denoiser_config.temporal_weight < 1.0 {
-            let cur = self.frame_data.first().unwrap();
-            let prev = self.frame_data.last().unwrap();
-            if let mut pass = command_encoder.compute() {
-                let mut pc = pass.with(&self.blur.temporal_accum_pipeline);
-                let groups = self.blur.atrous_pipeline.get_dispatch_for(self.screen_size);
-                pc.bind(
-                    0,
-                    &TemporalAccumData {
-                        camera: cur.camera_params,
-                        prev_camera: prev.camera_params,
-                        params,
-                        input: cur.light_diffuse_view,
-                        prev_input: prev.light_diffuse_view,
-                        t_depth: cur.depth_view,
-                        t_prev_depth: prev.depth_view,
-                        t_flat_normal: cur.flat_normal_view,
-                        t_prev_flat_normal: prev.flat_normal_view,
-                        output: self.light_temp_view,
-                    },
-                );
-                pc.dispatch(groups);
-            }
+        let cur = self.frame_index % 2;
+        let prev = cur ^ 1;
+        let temp = 2;
 
-            // make it so `cur.light_diffuse_view` always contains the fresh reprojection result
-            let cur_mut = self.frame_data.first_mut().unwrap();
-            mem::swap(&mut self.light_temp_view, &mut cur_mut.light_diffuse_view);
-            mem::swap(&mut self.light_temp_texture, &mut cur_mut.light_diffuse);
+        if denoiser_config.temporal_weight < 1.0 {
+            let mut pass = command_encoder.compute();
+            let mut pc = pass.with(&self.blur.temporal_accum_pipeline);
+            let groups = self.blur.atrous_pipeline.get_dispatch_for(self.screen_size);
+            pc.bind(
+                0,
+                &TemporalAccumData {
+                    camera: self.targets.camera_params[cur],
+                    prev_camera: self.targets.camera_params[prev],
+                    params,
+                    input: self.targets.light_diffuse.views[cur],
+                    prev_input: self.targets.light_diffuse.views[prev],
+                    t_depth: self.targets.depth.views[cur],
+                    t_prev_depth: self.targets.depth.views[prev],
+                    t_flat_normal: self.targets.flat_normal.views[cur],
+                    t_prev_flat_normal: self.targets.flat_normal.views[prev],
+                    output: self.targets.light_diffuse.views[temp],
+                },
+            );
+            pc.dispatch(groups);
+            //Note: making `cur` contain the latest reprojection output
+            self.targets.light_diffuse.views.swap(cur, temp);
         }
 
-        {
-            let cur = self.frame_data.first().unwrap();
-            let prev = self.frame_data.last().unwrap();
-            self.post_proc_input = cur.light_diffuse_view;
-            //Note: we no longer need `prev.light_diffuse_view` so reusing it here
-            let mut targets = [self.light_temp_view, prev.light_diffuse_view];
-            for _ in 0..denoiser_config.num_passes {
-                if let mut pass = command_encoder.compute() {
-                    let mut pc = pass.with(&self.blur.atrous_pipeline);
-                    let groups = self.blur.atrous_pipeline.get_dispatch_for(self.screen_size);
-                    pc.bind(
-                        0,
-                        &AtrousData {
-                            params,
-                            input: self.post_proc_input,
-                            t_flat_normal: cur.flat_normal_view,
-                            t_depth: cur.depth_view,
-                            output: targets[0],
-                        },
-                    );
-                    pc.dispatch(groups);
-                    self.post_proc_input = targets[0];
-                    targets.swap(0, 1); // rotate the views
-                    params.iteration += 1;
-                }
-            }
+        let mut ping_pong = [temp, prev];
+        for _ in 0..denoiser_config.num_passes {
+            let mut pass = command_encoder.compute();
+            let mut pc = pass.with(&self.blur.atrous_pipeline);
+            let groups = self.blur.atrous_pipeline.get_dispatch_for(self.screen_size);
+            pc.bind(
+                0,
+                &AtrousData {
+                    params,
+                    input: self.targets.light_diffuse.views[self.post_proc_input_index],
+                    t_depth: self.targets.depth.views[cur],
+                    t_flat_normal: self.targets.flat_normal.views[cur],
+                    output: self.targets.light_diffuse.views[ping_pong[0]],
+                },
+            );
+            pc.dispatch(groups);
+            self.post_proc_input_index = ping_pong[0];
+            ping_pong.swap(0, 1);
+            params.iteration += 1;
         }
     }
 
@@ -1629,15 +1520,15 @@ impl Renderer {
         debug_lines: &[DebugLine],
         debug_blits: &[DebugBlit],
     ) {
-        let cur = self.frame_data.first().unwrap();
+        let cur = self.frame_index % 2;
         if let mut pc = pass.with(&self.post_proc_pipeline) {
             let debug_params = self.make_debug_params(&debug_config);
             pc.bind(
                 0,
                 &PostProcData {
-                    t_albedo: cur.albedo_view,
-                    light_diffuse: self.post_proc_input,
-                    t_debug: self.debug_view,
+                    t_albedo: self.targets.albedo.views[cur],
+                    light_diffuse: self.targets.light_diffuse.views[self.post_proc_input_index],
+                    t_debug: self.targets.debug.views[0],
                     tone_map_params: ToneMapParams {
                         enabled: 1,
                         average_lum: pp_config.average_luminocity,
@@ -1650,7 +1541,12 @@ impl Renderer {
             pc.draw(0, 3, 0, 1);
         }
 
-        self.debug.render_lines(debug_lines, cur, pass);
+        self.debug.render_lines(
+            debug_lines,
+            self.targets.camera_params[cur],
+            self.targets.depth.views[cur],
+            pass,
+        );
         self.debug
             .render_blits(debug_blits, self.samplers.linear, self.screen_size, pass);
     }
