@@ -5,7 +5,7 @@
 // Spatio-temporal variance-guided filtering
 // https://research.nvidia.com/sites/default/files/pubs/2017-07_Spatiotemporal-Variance-Guided-Filtering%3A//svgf_preprint.pdf
 
-// Note: using "ilm" in place of "illumination and the 2nd moment of its luminanc"
+// Note: using "ilm" in place of "illumination and the 2nd moment of its luminance"
 
 struct Params {
     extent: vec2<i32>,
@@ -16,15 +16,16 @@ struct Params {
 var<uniform> camera: CameraParams;
 var<uniform> prev_camera: CameraParams;
 var<uniform> params: Params;
-var t_flat_normal: texture_2d<f32>;
-var t_prev_flat_normal: texture_2d<f32>;
 var t_depth: texture_2d<f32>;
 var t_prev_depth: texture_2d<f32>;
+var t_flat_normal: texture_2d<f32>;
+var t_prev_flat_normal: texture_2d<f32>;
 var input: texture_2d<f32>;
 var prev_input: texture_2d<f32>;
 var output: texture_storage_2d<rgba16float, write>;
 
 const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
+const MIN_WEIGHT: f32 = 0.01;
 
 fn read_surface(pixel: vec2<i32>) -> Surface {
     var surface = Surface();
@@ -91,7 +92,7 @@ fn temporal_accum(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cur_illumination = textureLoad(input, pixel, 0).xyz;
     let cur_luminocity = dot(cur_illumination, LUMA);
     var mixed_ilm = vec4<f32>(cur_illumination, cur_luminocity * cur_luminocity);
-    if (sum_weight > 0.01) {
+    if (sum_weight > MIN_WEIGHT) {
         let prev_ilm = sum_ilm / w4(sum_weight);
         mixed_ilm = mix(mixed_ilm, prev_ilm, sum_weight * (1.0 - params.temporal_weight));
     }
@@ -145,6 +146,6 @@ fn atrous3x3(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    let filtered_ilm = sum_ilm / w4(sum_weight);
+    let filtered_ilm = select(center_ilm, sum_ilm / w4(sum_weight), sum_weight > MIN_WEIGHT);
     textureStore(output, global_id.xy, filtered_ilm);
 }
