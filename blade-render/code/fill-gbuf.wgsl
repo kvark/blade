@@ -33,6 +33,7 @@ struct HitEntry {
     geometry_to_world_rotation: u32,
     pad: u32,
     geometry_to_object: mat4x3<f32>,
+    prev_geometry_to_world: mat4x3<f32>,
     base_color_texture: u32,
     // packed color factor
     base_color_factor: u32,

@@ -41,15 +41,17 @@ pub struct Camera {
 }
 
 pub struct Object {
-    pub transform: blade_graphics::Transform,
     pub model: blade_asset::Handle<Model>,
+    pub transform: blade_graphics::Transform,
+    pub prev_transform: blade_graphics::Transform,
 }
 
 impl From<blade_asset::Handle<Model>> for Object {
     fn from(model: blade_asset::Handle<Model>) -> Self {
         Self {
-            transform: blade_graphics::IDENTITY_TRANSFORM,
             model,
+            transform: blade_graphics::IDENTITY_TRANSFORM,
+            prev_transform: blade_graphics::IDENTITY_TRANSFORM,
         }
     }
 }
