@@ -1,10 +1,14 @@
+mod debug;
 mod dummy;
 mod env_map;
 
+use debug::{DebugEntry, DebugRender, DebugVariance};
+
+pub use debug::{DebugBlit, DebugLine, DebugPoint};
 pub use dummy::DummyResources;
 pub use env_map::EnvironmentMap;
 
-use std::{cell::Cell, collections::HashMap, mem, num::NonZeroU32, path::Path, ptr};
+use std::{collections::HashMap, mem, num::NonZeroU32, path::Path, ptr};
 
 const MAX_RESOURCES: u32 = 1000;
 const RADIANCE_FORMAT: blade_graphics::TextureFormat = blade_graphics::TextureFormat::Rgba16Float;
@@ -73,28 +77,6 @@ bitflags::bitflags! {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct DebugBlit {
-    pub input: blade_graphics::TextureView,
-    pub mip_level: u32,
-    pub target_offset: [i32; 2],
-    pub target_size: [u32; 2],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DebugPoint {
-    pub pos: [f32; 3],
-    pub color: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DebugLine {
-    pub a: DebugPoint,
-    pub b: DebugPoint,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
 pub struct DebugConfig {
     pub view_mode: DebugMode,
     pub draw_flags: DebugDrawFlags,
@@ -158,147 +140,6 @@ impl Default for SelectionInfo {
             tex_coords: [0.0; 2].into(),
             base_color_texture: None,
             normal_texture: None,
-        }
-    }
-}
-
-// Has to match the shader!
-#[repr(C)]
-#[derive(Debug)]
-struct DebugVariance {
-    color_sum: [f32; 3],
-    pad: u32,
-    color2_sum: [f32; 3],
-    count: u32,
-}
-
-// Has to match the shader!
-#[repr(C)]
-#[derive(Debug)]
-struct DebugEntry {
-    custom_index: u32,
-    depth: f32,
-    tex_coords: [f32; 2],
-    base_color_texture: u32,
-    normal_texture: u32,
-    pad: [u32; 2],
-    position: [f32; 3],
-    position_w: f32,
-    normal: [f32; 3],
-    normal_w: f32,
-}
-
-struct DebugRender {
-    capacity: u32,
-    buffer: blade_graphics::Buffer,
-    variance_buffer: blade_graphics::Buffer,
-    entry_buffer: blade_graphics::Buffer,
-    cpu_lines_buffer: blade_graphics::Buffer,
-    //Note: allows immutable `add_lines`
-    cpu_lines_offset: Cell<u64>,
-    draw_pipeline: blade_graphics::RenderPipeline,
-    blit_pipeline: blade_graphics::RenderPipeline,
-    line_size: u32,
-    buffer_size: u32,
-}
-
-impl DebugRender {
-    fn destroy(&mut self, gpu: &blade_graphics::Context) {
-        gpu.destroy_buffer(self.buffer);
-        gpu.destroy_buffer(self.variance_buffer);
-        gpu.destroy_buffer(self.entry_buffer);
-        gpu.destroy_buffer(self.cpu_lines_buffer);
-    }
-
-    fn add_lines(&self, lines: &[DebugLine]) -> (blade_graphics::BufferPiece, u32) {
-        let required_size = lines.len() as u64 * self.line_size as u64;
-        let old_offset = self.cpu_lines_offset.get();
-        let (original_offset, count) =
-            if old_offset + required_size <= (self.capacity * self.line_size) as u64 {
-                (old_offset, lines.len())
-            } else {
-                let count = lines.len().min(self.capacity as usize);
-                if count < lines.len() {
-                    log::warn!("Reducing the debug lines from {} to {}", lines.len(), count);
-                }
-                (0, count)
-            };
-
-        unsafe {
-            ptr::copy_nonoverlapping(
-                lines.as_ptr(),
-                self.cpu_lines_buffer.data().add(original_offset as usize) as *mut DebugLine,
-                count,
-            );
-        }
-
-        self.cpu_lines_offset
-            .set(original_offset + count as u64 * self.line_size as u64);
-        (self.cpu_lines_buffer.at(original_offset), count as u32)
-    }
-
-    fn render_lines(
-        &self,
-        debug_lines: &[DebugLine],
-        camera: CameraParams,
-        depth: blade_graphics::TextureView,
-        pass: &mut blade_graphics::RenderCommandEncoder,
-    ) {
-        let mut pc = pass.with(&self.draw_pipeline);
-        let lines_offset = 32 + mem::size_of::<DebugVariance>() + mem::size_of::<DebugEntry>();
-        pc.bind(
-            0,
-            &DebugDrawData {
-                camera,
-                debug_lines: self.buffer.at(lines_offset as u64),
-                depth,
-            },
-        );
-        pc.draw_indirect(self.buffer.at(0));
-
-        if !debug_lines.is_empty() {
-            let (lines_buf, count) = self.add_lines(debug_lines);
-            pc.bind(
-                0,
-                &DebugDrawData {
-                    camera,
-                    debug_lines: lines_buf,
-                    depth,
-                },
-            );
-            pc.draw(0, 2, 0, count);
-        }
-    }
-
-    fn render_blits(
-        &self,
-        debug_blits: &[DebugBlit],
-        samp: blade_graphics::Sampler,
-        screen_size: blade_graphics::Extent,
-        pass: &mut blade_graphics::RenderCommandEncoder,
-    ) {
-        let mut pc = pass.with(&self.blit_pipeline);
-        for db in debug_blits {
-            pc.bind(
-                0,
-                &DebugBlitData {
-                    input: db.input,
-                    samp,
-                    params: DebugBlitParams {
-                        target_offset: [
-                            db.target_offset[0] as f32 / screen_size.width as f32,
-                            db.target_offset[1] as f32 / screen_size.height as f32,
-                        ],
-                        target_size: [
-                            db.target_size[0] as f32 / screen_size.width as f32,
-                            db.target_size[1] as f32 / screen_size.height as f32,
-                        ],
-                        mip_level: db.mip_level as f32,
-                        unused: 0,
-                    },
-                },
-            );
-            pc.draw(0, 4, 0, 1);
         }
     }
 }
@@ -582,22 +423,6 @@ struct AtrousData {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct DebugLineParams {
-    target_offset: [f32; 2],
-    target_size: [f32; 2],
-    mip_level: f32,
-    unused: u32,
-}
-
-#[derive(blade_macros::ShaderData)]
-struct DebugLinedata {
-    input: blade_graphics::TextureView,
-    output: blade_graphics::Sampler,
-    params: DebugBlitParams,
-}
-
-#[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 struct ToneMapParams {
     enabled: u32,
@@ -613,29 +438,6 @@ struct PostProcData {
     t_debug: blade_graphics::TextureView,
     tone_map_params: ToneMapParams,
     debug_params: DebugParams,
-}
-
-#[derive(blade_macros::ShaderData)]
-struct DebugDrawData {
-    camera: CameraParams,
-    debug_lines: blade_graphics::BufferPiece,
-    depth: blade_graphics::TextureView,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct DebugBlitParams {
-    target_offset: [f32; 2],
-    target_size: [f32; 2],
-    mip_level: f32,
-    unused: u32,
-}
-
-#[derive(blade_macros::ShaderData)]
-struct DebugBlitData {
-    input: blade_graphics::TextureView,
-    samp: blade_graphics::Sampler,
-    params: DebugBlitParams,
 }
 
 #[repr(C)]
@@ -689,11 +491,7 @@ struct ShaderPipelines {
     temporal_accum: blade_graphics::ComputePipeline,
     atrous: blade_graphics::ComputePipeline,
     post_proc: blade_graphics::RenderPipeline,
-    debug_draw: blade_graphics::RenderPipeline,
-    debug_blit: blade_graphics::RenderPipeline,
     env_prepare: blade_graphics::ComputePipeline,
-    debug_line_size: u32,
-    debug_buffer_size: u32,
     reservoir_size: u32,
 }
 
@@ -772,53 +570,6 @@ impl ShaderPipelines {
         })
     }
 
-    fn create_debug_draw(
-        shader: &blade_graphics::Shader,
-        format: blade_graphics::TextureFormat,
-        gpu: &blade_graphics::Context,
-    ) -> blade_graphics::RenderPipeline {
-        shader.check_struct_size::<DebugPoint>();
-        shader.check_struct_size::<DebugLine>();
-        let layout = <DebugDrawData as blade_graphics::ShaderData>::layout();
-        gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
-            name: "debug-draw",
-            data_layouts: &[&layout],
-            vertex: shader.at("debug_vs"),
-            primitive: blade_graphics::PrimitiveState {
-                topology: blade_graphics::PrimitiveTopology::LineList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            fragment: shader.at("debug_fs"),
-            color_targets: &[blade_graphics::ColorTargetState {
-                format,
-                blend: Some(blade_graphics::BlendState::ALPHA_BLENDING),
-                write_mask: blade_graphics::ColorWrites::all(),
-            }],
-        })
-    }
-
-    fn create_debug_blit(
-        shader: &blade_graphics::Shader,
-        format: blade_graphics::TextureFormat,
-        gpu: &blade_graphics::Context,
-    ) -> blade_graphics::RenderPipeline {
-        shader.check_struct_size::<DebugBlitParams>();
-        let layout = <DebugBlitData as blade_graphics::ShaderData>::layout();
-        gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
-            name: "debug-blit",
-            data_layouts: &[&layout],
-            vertex: shader.at("blit_vs"),
-            primitive: blade_graphics::PrimitiveState {
-                topology: blade_graphics::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            fragment: shader.at("blit_fs"),
-            color_targets: &[format.into()],
-        })
-    }
-
     fn init(
         shaders: &Shaders,
         config: &RenderConfig,
@@ -837,22 +588,10 @@ impl ShaderPipelines {
                 config.surface_format,
                 gpu,
             ),
-            debug_draw: Self::create_debug_draw(
-                shader_man[shaders.debug_draw].raw.as_ref().unwrap(),
-                config.surface_format,
-                gpu,
-            ),
-            debug_blit: Self::create_debug_blit(
-                shader_man[shaders.debug_blit].raw.as_ref().unwrap(),
-                config.surface_format,
-                gpu,
-            ),
             env_prepare: EnvironmentMap::init_pipeline(
                 shader_man[shaders.env_prepare].raw.as_ref().unwrap(),
                 gpu,
             )?,
-            debug_line_size: sh_main.get_struct_size("DebugLine"),
-            debug_buffer_size: sh_main.get_struct_size("DebugBuffer"),
             reservoir_size: sh_main.get_struct_size("StoredReservoir"),
         })
     }
@@ -884,62 +623,18 @@ impl Renderer {
             .contains(blade_graphics::ShaderVisibility::COMPUTE));
 
         let sp = ShaderPipelines::init(&shaders, config, gpu, shader_man).unwrap();
-
-        let debug = DebugRender {
-            capacity: config.max_debug_lines,
-            buffer: gpu.create_buffer(blade_graphics::BufferDesc {
-                name: "debug",
-                size: (sp.debug_buffer_size + (config.max_debug_lines - 1) * sp.debug_line_size)
-                    as u64,
-                memory: blade_graphics::Memory::Device,
-            }),
-            variance_buffer: gpu.create_buffer(blade_graphics::BufferDesc {
-                name: "variance",
-                size: mem::size_of::<DebugVariance>() as u64,
-                memory: blade_graphics::Memory::Shared,
-            }),
-            entry_buffer: gpu.create_buffer(blade_graphics::BufferDesc {
-                name: "debug entry",
-                size: mem::size_of::<DebugEntry>() as u64,
-                memory: blade_graphics::Memory::Shared,
-            }),
-            cpu_lines_buffer: gpu.create_buffer(blade_graphics::BufferDesc {
-                name: "CPU debug lines",
-                size: (config.max_debug_lines * sp.debug_line_size) as u64,
-                memory: blade_graphics::Memory::Shared,
-            }),
-            cpu_lines_offset: Cell::new(0),
-            draw_pipeline: sp.debug_draw,
-            blit_pipeline: sp.debug_blit,
-            line_size: sp.debug_line_size,
-            buffer_size: sp.debug_buffer_size,
+        let debug = {
+            let sh_draw = shader_man[shaders.debug_draw].raw.as_ref().unwrap();
+            let sh_blit = shader_man[shaders.debug_blit].raw.as_ref().unwrap();
+            DebugRender::init(
+                encoder,
+                gpu,
+                sh_draw,
+                sh_blit,
+                config.max_debug_lines,
+                config.surface_format,
+            )
         };
-
-        let debug_init_data = [2u32, 0, 0, 0, config.max_debug_lines];
-        let debug_init_size = debug_init_data.len() * mem::size_of::<u32>();
-        assert!(debug_init_size <= mem::size_of::<DebugEntry>());
-        unsafe {
-            ptr::write_bytes(
-                debug.variance_buffer.data(),
-                0,
-                mem::size_of::<DebugVariance>(),
-            );
-            ptr::write_bytes(debug.entry_buffer.data(), 0, mem::size_of::<DebugEntry>());
-            // piggyback on the staging buffers to upload the data
-            ptr::copy_nonoverlapping(
-                debug_init_data.as_ptr(),
-                debug.entry_buffer.data() as *mut u32,
-                debug_init_data.len(),
-            );
-        }
-        {
-            let mut transfers = encoder.transfer();
-            transfers.copy_buffer_to_buffer(
-                debug.entry_buffer.at(0),
-                debug.buffer.at(0),
-                debug_init_size as u64,
-            );
-        }
 
         let targets = RestirTargets::new(config.screen_size, sp.reservoir_size, encoder, gpu);
         let dummy = DummyResources::new(encoder, gpu);
@@ -1042,11 +737,6 @@ impl Renderer {
         }
         if self.shaders.ray_trace != old.ray_trace {
             if let Ok(ref shader) = asset_hub.shaders[self.shaders.ray_trace].raw {
-                assert_eq!(shader.get_struct_size("DebugLine"), self.debug.line_size);
-                assert_eq!(
-                    shader.get_struct_size("DebugBuffer"),
-                    self.debug.buffer_size
-                );
                 assert_eq!(
                     shader.get_struct_size("StoredReservoir"),
                     self.reservoir_size
@@ -1069,14 +759,12 @@ impl Renderer {
         }
         if self.shaders.debug_draw != old.debug_draw {
             if let Ok(ref shader) = asset_hub.shaders[self.shaders.debug_draw].raw {
-                self.debug.draw_pipeline =
-                    ShaderPipelines::create_debug_draw(shader, self.config.surface_format, gpu);
+                self.debug.recreate_draw_pipeline(shader, gpu);
             }
         }
         if self.shaders.debug_blit != old.debug_blit {
             if let Ok(ref shader) = asset_hub.shaders[self.shaders.debug_blit].raw {
-                self.debug.blit_pipeline =
-                    ShaderPipelines::create_debug_blit(shader, self.config.surface_format, gpu);
+                self.debug.recreate_blit_pipeline(shader, gpu);
             }
         }
 
@@ -1333,38 +1021,22 @@ impl Renderer {
         let mut transfer = command_encoder.transfer();
 
         if enable_debug_draw {
-            // reset the debug line count
-            transfer.fill_buffer(self.debug.buffer.at(4), 4, 0);
-            transfer.fill_buffer(self.debug.buffer.at(20), 4, 1);
+            self.debug.reset_lines(&mut transfer);
+            self.debug.enable_draw(&mut transfer, true);
         } else {
-            transfer.fill_buffer(self.debug.buffer.at(20), 4, 0);
+            self.debug.enable_draw(&mut transfer, false);
         }
 
         if reset_reservoirs || !accumulate_variance {
-            transfer.fill_buffer(
-                self.debug.buffer.at(32),
-                mem::size_of::<DebugVariance>() as u64,
-                0,
-            );
+            self.debug.reset_variance(&mut transfer);
         } else {
-            // copy the previous frame variance
-            transfer.copy_buffer_to_buffer(
-                self.debug.buffer.at(32),
-                self.debug.variance_buffer.into(),
-                mem::size_of::<DebugVariance>() as u64,
-            );
+            self.debug.update_variance(&mut transfer);
         }
-        transfer.copy_buffer_to_buffer(
-            self.debug
-                .buffer
-                .at(32 + mem::size_of::<DebugVariance>() as u64),
-            self.debug.entry_buffer.into(),
-            mem::size_of::<DebugEntry>() as u64,
-        );
+        self.debug.update_entry(&mut transfer);
 
         if reset_reservoirs {
             if !enable_debug_draw {
-                transfer.fill_buffer(self.debug.buffer.at(4), 4, 0);
+                self.debug.reset_lines(&mut transfer);
             }
             let total_reservoirs = self.screen_size.width as u64 * self.screen_size.height as u64;
             let prev_reservoir_buf = self.targets.reservoir_buf[self.frame_index % 2];
@@ -1408,7 +1080,7 @@ impl Renderer {
                     vertex_buffers: &self.vertex_buffers,
                     textures: &self.textures,
                     sampler_linear: self.samplers.linear,
-                    debug_buf: self.debug.buffer.into(),
+                    debug_buf: self.debug.buffer_resource(),
                     out_depth: self.targets.depth.views[cur],
                     out_basis: self.targets.basis.views[cur],
                     out_flat_normal: self.targets.flat_normal.views[cur],
@@ -1449,7 +1121,7 @@ impl Renderer {
                     t_prev_basis: self.targets.basis.views[prev],
                     t_flat_normal: self.targets.flat_normal.views[cur],
                     t_prev_flat_normal: self.targets.flat_normal.views[prev],
-                    debug_buf: self.debug.buffer.into(),
+                    debug_buf: self.debug.buffer_resource(),
                     reservoirs: self.targets.reservoir_buf[cur].into(),
                     prev_reservoirs: self.targets.reservoir_buf[prev].into(),
                     out_diffuse: self.targets.light_diffuse.views[cur],
@@ -1565,8 +1237,7 @@ impl Renderer {
 
     #[profiling::function]
     pub fn read_debug_selection_info(&self) -> SelectionInfo {
-        let db_v = unsafe { &*(self.debug.variance_buffer.data() as *const DebugVariance) };
-        let db_e = unsafe { &*(self.debug.entry_buffer.data() as *const DebugEntry) };
+        let (db_v, db_e) = self.debug.read_shared_data();
         SelectionInfo {
             std_deviation: if db_v.count == 0 {
                 [0.0; 3].into()
