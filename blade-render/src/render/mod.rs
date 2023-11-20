@@ -199,7 +199,7 @@ struct RestirTargets {
     depth: RenderTarget<2>,
     basis: RenderTarget<2>,
     flat_normal: RenderTarget<2>,
-    albedo: RenderTarget<2>,
+    albedo: RenderTarget<1>,
     light_diffuse: RenderTarget<3>,
     camera_params: [CameraParams; 2],
 }
@@ -1084,7 +1084,7 @@ impl Renderer {
                     out_depth: self.targets.depth.views[cur],
                     out_basis: self.targets.basis.views[cur],
                     out_flat_normal: self.targets.flat_normal.views[cur],
-                    out_albedo: self.targets.albedo.views[cur],
+                    out_albedo: self.targets.albedo.views[0],
                     out_debug: self.targets.debug.views[0],
                 },
             );
@@ -1210,7 +1210,7 @@ impl Renderer {
             pc.bind(
                 0,
                 &PostProcData {
-                    t_albedo: self.targets.albedo.views[cur],
+                    t_albedo: self.targets.albedo.views[0],
                     light_diffuse: self.targets.light_diffuse.views[self.post_proc_input_index],
                     t_debug: self.targets.debug.views[0],
                     tone_map_params: ToneMapParams {
