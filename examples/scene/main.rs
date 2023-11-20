@@ -343,8 +343,9 @@ impl Example {
             );
             load_finish.depend_on(model_task);
             self.objects.push(blade_render::Object {
-                transform: config_object.transform,
                 model,
+                transform: config_object.transform,
+                prev_transform: config_object.transform,
             });
             self.object_extras.push(ObjectExtra {
                 path: PathBuf::from(config_object.path),
@@ -517,17 +518,12 @@ impl Example {
         let aspect = extent.width as f32 / extent.height as f32;
         let projection_matrix =
             glam::Mat4::perspective_rh(self.camera.fov_y, aspect, 1.0, self.camera.depth);
-        let t0 = &mut self.objects[obj_index].transform;
+        let object = &mut self.objects[obj_index];
         let model_matrix = mint::ColumnMatrix4::from(mint::RowMatrix4 {
-            x: t0.x,
-            y: t0.y,
-            z: t0.z,
-            w: mint::Vector4 {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-                w: 1.0,
-            },
+            x: object.transform.x,
+            y: object.transform.y,
+            z: object.transform.z,
+            w: [0.0, 0.0, 0.0, 1.0].into(),
         });
         let gizmo = egui_gizmo::Gizmo::new("Object")
             .view_matrix(mint::ColumnMatrix4::from(view_matrix))
@@ -543,8 +539,9 @@ impl Example {
                 translation: response.translation,
             }
             .to_blade();
-            if *t0 != t1 {
-                *t0 = t1;
+            if object.transform != t1 {
+                object.prev_transform = object.transform;
+                object.transform = t1;
                 self.have_objects_changed = true;
             }
         }
@@ -982,7 +979,11 @@ impl Example {
             },
         );
         self.scene_load_task = Some(model_task.clone());
-        self.objects.push(blade_render::Object { transform, model });
+        self.objects.push(blade_render::Object {
+            model,
+            transform,
+            prev_transform: transform,
+        });
         self.object_extras.push(ObjectExtra {
             path: file_path.to_owned(),
         });

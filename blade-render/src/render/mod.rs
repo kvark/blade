@@ -9,6 +9,24 @@ use std::{cell::Cell, collections::HashMap, mem, num::NonZeroU32, path::Path, pt
 const MAX_RESOURCES: u32 = 1000;
 const RADIANCE_FORMAT: blade_graphics::TextureFormat = blade_graphics::TextureFormat::Rgba16Float;
 
+fn mat4_transform(t: &blade_graphics::Transform) -> glam::Mat4 {
+    glam::Mat4 {
+        x_axis: t.x.into(),
+        y_axis: t.y.into(),
+        z_axis: t.z.into(),
+        w_axis: glam::Vec4::W,
+    }
+    .transpose()
+}
+fn mat3_transform(t_orig: &blade_graphics::Transform) -> glam::Mat3 {
+    let t = mint::ColumnMatrix3x4::from(*t_orig);
+    glam::Mat3 {
+        x_axis: t.x.into(),
+        y_axis: t.y.into(),
+        z_axis: t.z.into(),
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RenderConfig {
     pub screen_size: blade_graphics::Extent,
@@ -630,6 +648,7 @@ struct HitEntry {
     //Note: it's technically `mat4x3` on WGSL side,
     // but it's aligned and sized the same way as `mat4`.
     geometry_to_object: mint::ColumnMatrix4<f32>,
+    prev_geometry_to_world: mint::ColumnMatrix4<f32>,
     base_color_texture: u32,
     base_color_factor: [u8; 4],
     normal_texture: u32,
@@ -1155,12 +1174,7 @@ impl Renderer {
         let mut texture_indices = HashMap::new();
 
         for object in objects {
-            let m3_object = glam::Mat3 {
-                x_axis: glam::Vec4::from(object.transform.x).truncate(),
-                y_axis: glam::Vec4::from(object.transform.y).truncate(),
-                z_axis: glam::Vec4::from(object.transform.z).truncate(),
-            };
-
+            let m3_object = mat3_transform(&object.transform);
             let model = &asset_hub.models[object.model];
             instances.push(blade_graphics::AccelerationStructureInstance {
                 acceleration_structure_index: blases.len() as u32,
@@ -1175,17 +1189,14 @@ impl Renderer {
                 let vertex_offset =
                     geometry.vertex_range.start as u64 * mem::size_of::<crate::Vertex>() as u64;
                 let geometry_to_world_rotation = {
-                    let colm = mint::ColumnMatrix3x4::from(geometry.transform);
-                    let m3_geo = glam::Mat3 {
-                        x_axis: colm.x.into(),
-                        y_axis: colm.y.into(),
-                        z_axis: colm.z.into(),
-                    };
+                    let m3_geo = mat3_transform(&geometry.transform);
                     let m3_normal = (m3_object * m3_geo).inverse().transpose();
                     let quat = glam::Quat::from_mat3(&m3_normal);
                     let qv = glam::Vec4::from(quat) * 127.0;
                     [qv.x as i8, qv.y as i8, qv.z as i8, qv.w as i8]
                 };
+                let prev_geometry_to_world =
+                    mat4_transform(&object.prev_transform) * mat4_transform(&geometry.transform);
 
                 let hit_entry = HitEntry {
                     index_buf: match geometry.index_type {
@@ -1205,6 +1216,7 @@ impl Renderer {
                         z: geometry.transform.z,
                         w: [0.0, 0.0, 0.0, 1.0].into(),
                     }),
+                    prev_geometry_to_world: prev_geometry_to_world.into(),
                     base_color_texture: match material.base_color_texture {
                         Some(handle) => *texture_indices.entry(handle).or_insert_with(|| {
                             let texture = &asset_hub.textures[handle];
