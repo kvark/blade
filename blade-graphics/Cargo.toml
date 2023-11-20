@@ -35,8 +35,7 @@ naga = { workspace = true, features = ["spv-out"] }
 slab = { workspace = true }
 
 [target.'cfg(any(gles, target_arch = "wasm32"))'.dependencies]
-# Version contains `glGetProgramResource`
-glow = "0.12.2"
+glow = "0.13"
 naga = { workspace = true, features = ["glsl-out"] }
 
 [target.'cfg(all(gles, not(target_arch = "wasm32")))'.dependencies]
