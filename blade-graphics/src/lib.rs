@@ -214,6 +214,8 @@ impl From<Texture> for TexturePiece {
 #[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
 pub enum TextureFormat {
     // color
+    Rg8Unorm,
+    Rg8Snorm,
     Rgba8Unorm,
     Rgba8UnormSrgb,
     Bgra8UnormSrgb,

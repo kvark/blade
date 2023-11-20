@@ -474,6 +474,8 @@ impl crate::traits::CommandDevice for Context {
 fn map_texture_format(format: crate::TextureFormat) -> vk::Format {
     use crate::TextureFormat as Tf;
     match format {
+        Tf::Rg8Unorm => vk::Format::R8G8_UNORM,
+        Tf::Rg8Snorm => vk::Format::R8G8_SNORM,
         Tf::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
         Tf::Rgba8UnormSrgb => vk::Format::R8G8B8A8_SRGB,
         Tf::Bgra8UnormSrgb => vk::Format::B8G8R8A8_SRGB,

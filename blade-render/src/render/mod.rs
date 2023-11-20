@@ -200,6 +200,7 @@ struct RestirTargets {
     basis: RenderTarget<2>,
     flat_normal: RenderTarget<2>,
     albedo: RenderTarget<1>,
+    motion: RenderTarget<1>,
     light_diffuse: RenderTarget<3>,
     camera_params: [CameraParams; 2],
 }
@@ -258,6 +259,13 @@ impl RestirTargets {
                 encoder,
                 gpu,
             ),
+            motion: RenderTarget::new(
+                "motion",
+                blade_graphics::TextureFormat::Rg8Snorm,
+                size,
+                encoder,
+                gpu,
+            ),
             light_diffuse: RenderTarget::new("light-diffuse", RADIANCE_FORMAT, size, encoder, gpu),
             camera_params: [CameraParams::default(); 2],
         }
@@ -272,6 +280,7 @@ impl RestirTargets {
         self.basis.destroy(gpu);
         self.flat_normal.destroy(gpu);
         self.albedo.destroy(gpu);
+        self.motion.destroy(gpu);
         self.light_diffuse.destroy(gpu);
     }
 }
@@ -291,7 +300,6 @@ struct Blur {
 ///   - manage or submit any command encoders
 ///   - know about the window to display on
 pub struct Renderer {
-    config: RenderConfig,
     shaders: Shaders,
     targets: RestirTargets,
     post_proc_input_index: usize,
@@ -310,6 +318,7 @@ pub struct Renderer {
     reservoir_size: u32,
     debug: DebugRender,
     screen_size: blade_graphics::Extent,
+    screen_format: blade_graphics::TextureFormat,
     frame_index: usize,
     //TODO: refactor `ResourceArray` to not carry the freelist logic
     // This way we can embed user info into the allocator.
@@ -659,7 +668,6 @@ impl Renderer {
         };
 
         Self {
-            config: *config,
             shaders,
             targets,
             post_proc_input_index: 0,
@@ -681,6 +689,7 @@ impl Renderer {
             reservoir_size: sp.reservoir_size,
             debug,
             screen_size: config.screen_size,
+            screen_format: config.surface_format,
             frame_index: 0,
             texture_resource_lookup: HashMap::default(),
         }
@@ -754,7 +763,7 @@ impl Renderer {
         if self.shaders.post_proc != old.post_proc {
             if let Ok(ref shader) = asset_hub.shaders[self.shaders.post_proc].raw {
                 self.post_proc_pipeline =
-                    ShaderPipelines::create_post_proc(shader, self.config.surface_format, gpu);
+                    ShaderPipelines::create_post_proc(shader, self.screen_format, gpu);
             }
         }
         if self.shaders.debug_draw != old.debug_draw {

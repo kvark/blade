@@ -278,6 +278,8 @@ fn map_texture_format(format: crate::TextureFormat) -> metal::MTLPixelFormat {
     use crate::TextureFormat as Tf;
     use metal::MTLPixelFormat::*;
     match format {
+        Tf::Rg8Unorm => RG8Unorm,
+        Tf::Rg8Snorm => RG8Snorm,
         Tf::Rgba8Unorm => RGBA8Unorm,
         Tf::Rgba8UnormSrgb => RGBA8Unorm_sRGB,
         Tf::Bgra8UnormSrgb => BGRA8Unorm_sRGB,

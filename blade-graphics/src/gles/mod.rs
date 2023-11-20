@@ -451,6 +451,8 @@ struct FormatInfo {
 fn describe_texture_format(format: crate::TextureFormat) -> FormatInfo {
     use crate::TextureFormat as Tf;
     let (internal, external, data_type) = match format {
+        Tf::Rg8Unorm => (glow::RG8, glow::RG, glow::UNSIGNED_BYTE),
+        Tf::Rg8Snorm => (glow::RG8, glow::RG, glow::BYTE),
         Tf::Rgba8Unorm => (glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
         Tf::Rgba8UnormSrgb => (glow::SRGB8_ALPHA8, glow::RGBA, glow::UNSIGNED_BYTE),
         Tf::Bgra8UnormSrgb => (glow::SRGB8_ALPHA8, glow::BGRA, glow::UNSIGNED_BYTE),
