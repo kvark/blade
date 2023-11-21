@@ -2,6 +2,7 @@
 #include "camera.inc.wgsl"
 #include "debug.inc.wgsl"
 #include "debug-param.inc.wgsl"
+#include "gbuf.inc.wgsl"
 
 //TODO: use proper WGSL
 const RAY_FLAG_CULL_NO_OPAQUE: u32 = 0x80u;
@@ -33,7 +34,7 @@ struct HitEntry {
     geometry_to_world_rotation: u32,
     pad: u32,
     geometry_to_object: mat4x3<f32>,
-    prev_geometry_to_world: mat4x3<f32>,
+    prev_object_to_world: mat4x3<f32>,
     base_color_texture: u32,
     // packed color factor
     base_color_factor: u32,
@@ -42,6 +43,7 @@ struct HitEntry {
 var<storage, read> hit_entries: array<HitEntry>;
 
 var<uniform> camera: CameraParams;
+var<uniform> prev_camera: CameraParams;
 var<uniform> debug: DebugParams;
 var acc_struct: acceleration_structure;
 
@@ -49,6 +51,7 @@ var out_depth: texture_storage_2d<r32float, write>;
 var out_flat_normal: texture_storage_2d<rgba8snorm, write>;
 var out_basis: texture_storage_2d<rgba8snorm, write>;
 var out_albedo: texture_storage_2d<rgba8unorm, write>;
+var out_motion: texture_storage_2d<rg8snorm, write>;
 var out_debug: texture_storage_2d<rgba8unorm, write>;
 
 fn decode_normal(raw: u32) -> vec3<f32> {
@@ -76,6 +79,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var basis = vec4<f32>(0.0);
     var flat_normal = vec3<f32>(0.0);
     var albedo = vec3<f32>(1.0);
+    var motion = vec2<f32>(0.0);
     let enable_debug = all(global_id.xy == debug.mouse_pos);
 
     if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
@@ -95,15 +99,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             (*vptr)[indices.z],
         );
 
-        let pos_object = entry.geometry_to_object * mat3x4(
+        let positions_object = entry.geometry_to_object * mat3x4(
             vec4<f32>(vertices[0].pos, 1.0), vec4<f32>(vertices[1].pos, 1.0), vec4<f32>(vertices[2].pos, 1.0)
         );
         let positions = intersection.object_to_world * mat3x4(
-            vec4<f32>(pos_object[0], 1.0), vec4<f32>(pos_object[1], 1.0), vec4<f32>(pos_object[2], 1.0)
+            vec4<f32>(positions_object[0], 1.0), vec4<f32>(positions_object[1], 1.0), vec4<f32>(positions_object[2], 1.0)
         );
         flat_normal = normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
 
         let barycentrics = vec3<f32>(1.0 - intersection.barycentrics.x - intersection.barycentrics.y, intersection.barycentrics);
+        let position_object = vec4<f32>(positions_object * barycentrics, 1.0);
         let tex_coords = mat3x2(vertices[0].tex_coords, vertices[1].tex_coords, vertices[2].tex_coords) * barycentrics;
         let normal_geo = normalize(mat3x3(decode_normal(vertices[0].normal), decode_normal(vertices[1].normal), decode_normal(vertices[2].normal)) * barycentrics);
         let tangent_geo = normalize(mat3x3(decode_normal(vertices[0].tangent), decode_normal(vertices[1].tangent), decode_normal(vertices[2].tangent)) * barycentrics);
@@ -164,12 +169,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let base_color_sample = textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tex_coords, lod);
             albedo = (base_color_factor * base_color_sample).xyz;
         }
+
         if (debug.view_mode == DebugMode_HitConsistency) {
             let reprojected = get_projected_pixel(camera, hit_position);
-            let barycentrics_pos_diff = positions * barycentrics - hit_position;
+            let barycentrics_pos_diff = (intersection.object_to_world * position_object).xyz - hit_position;
             let camera_projection_diff = vec2<f32>(global_id.xy) - vec2<f32>(reprojected);
             let consistency = vec4<f32>(length(barycentrics_pos_diff), length(camera_projection_diff), 0.0, 0.0);
             textureStore(out_debug, global_id.xy, consistency);
+        }
+
+        let prev_position = (entry.prev_object_to_world * position_object).xyz;
+        let prev_screen = get_projected_pixel_float(prev_camera, prev_position);
+        //TODO: consider just storing integers here?
+        motion = prev_screen - vec2<f32>(global_id.xy) - 0.5;
+        if (debug.view_mode == DebugMode_Motion) {
+            textureStore(out_debug, global_id.xy, vec4<f32>(motion * MOTION_SCALE + vec2<f32>(0.5), 0.0, 1.0));
         }
     } else {
         if (enable_debug) {
@@ -180,8 +194,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
+    // TODO: option to avoid writing data for the sky
     textureStore(out_depth, global_id.xy, vec4<f32>(depth, 0.0, 0.0, 0.0));
     textureStore(out_basis, global_id.xy, basis);
     textureStore(out_flat_normal, global_id.xy, vec4<f32>(flat_normal, 0.0));
     textureStore(out_albedo, global_id.xy, vec4<f32>(albedo, 0.0));
+    textureStore(out_motion, global_id.xy, vec4<f32>(motion * MOTION_SCALE, 0.0, 0.0));
 }

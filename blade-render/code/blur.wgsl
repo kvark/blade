@@ -1,4 +1,5 @@
 #include "camera.inc.wgsl"
+#include "gbuf.inc.wgsl"
 #include "quaternion.inc.wgsl"
 #include "surface.inc.wgsl"
 
@@ -20,6 +21,7 @@ var t_depth: texture_2d<f32>;
 var t_prev_depth: texture_2d<f32>;
 var t_flat_normal: texture_2d<f32>;
 var t_prev_flat_normal: texture_2d<f32>;
+var t_motion: texture_2d<f32>;
 var input: texture_2d<f32>;
 var prev_input: texture_2d<f32>;
 var output: texture_storage_2d<rgba16float, write>;
@@ -47,11 +49,11 @@ fn temporal_accum(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    //TODO: use motion vectors
     let surface = read_surface(pixel);
     let pos_world = camera.position + surface.depth * get_ray_direction(camera, pixel);
     // considering all samples in 2x2 quad, to help with edges
-    let center_pixel = get_projected_pixel_float(prev_camera, pos_world);
+    let motion = textureLoad(t_motion, pixel, 0).xy / MOTION_SCALE;
+    let center_pixel = vec2<f32>(pixel) + 0.5 + motion;
     var prev_pixels = array<vec2<i32>, 4>(
         vec2<i32>(vec2<f32>(center_pixel.x - 0.5, center_pixel.y - 0.5)),
         vec2<i32>(vec2<f32>(center_pixel.x + 0.5, center_pixel.y - 0.5)),

@@ -49,8 +49,9 @@ pub enum DebugMode {
     Final = 0,
     Depth = 1,
     Normal = 2,
-    HitConsistency = 3,
-    Variance = 4,
+    Motion = 3,
+    HitConsistency = 4,
+    Variance = 5,
 }
 
 impl Default for DebugMode {
@@ -361,6 +362,7 @@ struct MainParams {
 #[derive(blade_macros::ShaderData)]
 struct FillData<'a> {
     camera: CameraParams,
+    prev_camera: CameraParams,
     debug: DebugParams,
     acc_struct: blade_graphics::AccelerationStructure,
     hit_entries: blade_graphics::BufferPiece,
@@ -373,6 +375,7 @@ struct FillData<'a> {
     out_basis: blade_graphics::TextureView,
     out_flat_normal: blade_graphics::TextureView,
     out_albedo: blade_graphics::TextureView,
+    out_motion: blade_graphics::TextureView,
     out_debug: blade_graphics::TextureView,
 }
 
@@ -419,6 +422,7 @@ struct TemporalAccumData {
     t_prev_depth: blade_graphics::TextureView,
     t_flat_normal: blade_graphics::TextureView,
     t_prev_flat_normal: blade_graphics::TextureView,
+    t_motion: blade_graphics::TextureView,
     output: blade_graphics::TextureView,
 }
 
@@ -459,7 +463,7 @@ struct HitEntry {
     //Note: it's technically `mat4x3` on WGSL side,
     // but it's aligned and sized the same way as `mat4`.
     geometry_to_object: mint::ColumnMatrix4<f32>,
-    prev_geometry_to_world: mint::ColumnMatrix4<f32>,
+    prev_object_to_world: mint::ColumnMatrix4<f32>,
     base_color_texture: u32,
     base_color_factor: [u8; 4],
     normal_texture: u32,
@@ -892,8 +896,6 @@ impl Renderer {
                     let qv = glam::Vec4::from(quat) * 127.0;
                     [qv.x as i8, qv.y as i8, qv.z as i8, qv.w as i8]
                 };
-                let prev_geometry_to_world =
-                    mat4_transform(&object.prev_transform) * mat4_transform(&geometry.transform);
 
                 let hit_entry = HitEntry {
                     index_buf: match geometry.index_type {
@@ -913,7 +915,7 @@ impl Renderer {
                         z: geometry.transform.z,
                         w: [0.0, 0.0, 0.0, 1.0].into(),
                     }),
-                    prev_geometry_to_world: prev_geometry_to_world.into(),
+                    prev_object_to_world: mat4_transform(&object.prev_transform).into(),
                     base_color_texture: match material.base_color_texture {
                         Some(handle) => *texture_indices.entry(handle).or_insert_with(|| {
                             let texture = &asset_hub.textures[handle];
@@ -1082,6 +1084,7 @@ impl Renderer {
                 0,
                 &FillData {
                     camera: self.targets.camera_params[cur],
+                    prev_camera: self.targets.camera_params[prev],
                     debug,
                     acc_struct: self.acceleration_structure,
                     hit_entries: self.hit_buffer.into(),
@@ -1094,6 +1097,7 @@ impl Renderer {
                     out_basis: self.targets.basis.views[cur],
                     out_flat_normal: self.targets.flat_normal.views[cur],
                     out_albedo: self.targets.albedo.views[0],
+                    out_motion: self.targets.motion.views[0],
                     out_debug: self.targets.debug.views[0],
                 },
             );
@@ -1173,6 +1177,7 @@ impl Renderer {
                     t_prev_depth: self.targets.depth.views[prev],
                     t_flat_normal: self.targets.flat_normal.views[cur],
                     t_prev_flat_normal: self.targets.flat_normal.views[prev],
+                    t_motion: self.targets.motion.views[0],
                     output: self.targets.light_diffuse.views[temp],
                 },
             );
