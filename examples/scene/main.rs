@@ -384,6 +384,12 @@ impl Example {
         log::info!("Saving scene to: {}", scene_path.display());
     }
 
+    fn reset_object_motion(&mut self) {
+        for object in self.objects.iter_mut() {
+            object.prev_transform = object.transform;
+        }
+    }
+
     #[profiling::function]
     fn render(
         &mut self,
@@ -508,6 +514,8 @@ impl Example {
         command_encoder.present(frame);
         let sync_point = self.pacer.end_frame(&self.context);
         self.gui_painter.after_submit(sync_point);
+
+        self.reset_object_motion();
     }
 
     fn add_manipulation_gizmo(&mut self, obj_index: usize, ui: &mut egui::Ui) {
