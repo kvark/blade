@@ -12,6 +12,7 @@ struct Params {
     extent: vec2<i32>,
     temporal_weight: f32,
     iteration: u32,
+    use_motion_vectors: u32,
 }
 
 var<uniform> camera: CameraParams;
@@ -42,6 +43,15 @@ fn read_prev_surface(pixel: vec2<i32>) -> Surface {
     return surface;
 }
 
+fn get_prev_pixel(pixel: vec2<i32>, pos_world: vec3<f32>) -> vec2<f32> {
+    if (USE_MOTION_VECTORS && params.use_motion_vectors != 0u) {
+        let motion = textureLoad(t_motion, pixel, 0).xy / MOTION_SCALE;
+        return vec2<f32>(pixel) + 0.5 + motion;
+    } else {
+        return get_projected_pixel_float(prev_camera, pos_world);
+    }
+}
+
 @compute @workgroup_size(8, 8)
 fn temporal_accum(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pixel = vec2<i32>(global_id.xy);
@@ -52,8 +62,7 @@ fn temporal_accum(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let surface = read_surface(pixel);
     let pos_world = camera.position + surface.depth * get_ray_direction(camera, pixel);
     // considering all samples in 2x2 quad, to help with edges
-    let motion = textureLoad(t_motion, pixel, 0).xy / MOTION_SCALE;
-    let center_pixel = vec2<f32>(pixel) + 0.5 + motion;
+    var center_pixel = get_prev_pixel(pixel, pos_world);
     var prev_pixels = array<vec2<i32>, 4>(
         vec2<i32>(vec2<f32>(center_pixel.x - 0.5, center_pixel.y - 0.5)),
         vec2<i32>(vec2<f32>(center_pixel.x + 0.5, center_pixel.y - 0.5)),

@@ -321,6 +321,7 @@ pub struct Renderer {
     screen_size: blade_graphics::Extent,
     screen_format: blade_graphics::TextureFormat,
     frame_index: usize,
+    frame_scene_built: usize,
     //TODO: refactor `ResourceArray` to not carry the freelist logic
     // This way we can embed user info into the allocator.
     texture_resource_lookup:
@@ -357,6 +358,7 @@ struct MainParams {
     spatial_taps: u32,
     spatial_tap_history: u32,
     spatial_radius: u32,
+    use_motion_vectors: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -410,6 +412,8 @@ struct BlurParams {
     extent: [u32; 2],
     temporal_weight: f32,
     iteration: i32,
+    use_motion_vectors: u32,
+    pad: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -696,6 +700,7 @@ impl Renderer {
             screen_size: config.screen_size,
             screen_format: config.surface_format,
             frame_index: 0,
+            frame_scene_built: 0,
             texture_resource_lookup: HashMap::default(),
         }
     }
@@ -991,6 +996,7 @@ impl Renderer {
 
         temp.buffers.push(instance_buf);
         temp.buffers.push(scratch_buf);
+        self.frame_scene_built = self.frame_index + 1;
     }
 
     fn make_debug_params(&self, config: &DebugConfig) -> DebugParams {
@@ -1123,6 +1129,7 @@ impl Renderer {
                         spatial_taps: ray_config.spatial_taps,
                         spatial_tap_history: ray_config.spatial_tap_history,
                         spatial_radius: ray_config.spatial_radius,
+                        use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
                     },
                     acc_struct: self.acceleration_structure,
                     sampler_linear: self.samplers.linear,
@@ -1158,6 +1165,8 @@ impl Renderer {
             extent: [self.screen_size.width, self.screen_size.height],
             temporal_weight: denoiser_config.temporal_weight,
             iteration: 0,
+            use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
+            pad: 0,
         };
         let cur = self.frame_index % 2;
         let prev = cur ^ 1;

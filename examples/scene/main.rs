@@ -548,7 +548,6 @@ impl Example {
             }
             .to_blade();
             if object.transform != t1 {
-                object.prev_transform = object.transform;
                 object.transform = t1;
                 self.have_objects_changed = true;
             }
