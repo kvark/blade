@@ -1,1 +1,1 @@
-const MOTION_SCALE: f32 = 0.05;
+const MOTION_SCALE: f32 = 0.02;

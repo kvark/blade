@@ -1,5 +1,8 @@
 Changelog for Blade
 
+## (TBD)
+- support object motion
+
 ## blade-graphics-0.3, blade-render-0.2 (17 Nov 2023)
 - tangent space generation
 - spatio-temporal resampling
