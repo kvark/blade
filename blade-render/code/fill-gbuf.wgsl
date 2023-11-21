@@ -181,6 +181,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let prev_position = (entry.prev_object_to_world * position_object).xyz;
         let prev_screen = get_projected_pixel_float(prev_camera, prev_position);
         //TODO: consider just storing integers here?
+        //TODO: technically this "0.5" is just a waste compute on both packing and unpacking
         motion = prev_screen - vec2<f32>(global_id.xy) - 0.5;
         if (debug.view_mode == DebugMode_Motion) {
             textureStore(out_debug, global_id.xy, vec4<f32>(motion * MOTION_SCALE + vec2<f32>(0.5), 0.0, 1.0));

@@ -31,6 +31,7 @@ struct MainParams {
     spatial_taps: u32,
     spatial_tap_history: u32,
     spatial_radius: i32,
+    use_motion_vectors: u32,
 };
 
 var<uniform> camera: CameraParams;
@@ -252,6 +253,15 @@ fn evaluate_reflected_light(surface: Surface, light_index: u32, light_uv: vec2<f
     return radiance * brdf;
 }
 
+fn get_prev_pixel(pixel: vec2<i32>, pos_world: vec3<f32>) -> vec2<f32> {
+    if (USE_MOTION_VECTORS && parameters.use_motion_vectors != 0u) {
+        let motion = textureLoad(t_motion, pixel, 0).xy / MOTION_SCALE;
+        return vec2<f32>(pixel) + 0.5 + motion;
+    } else {
+        return get_projected_pixel_float(prev_camera, pos_world);
+    }
+}
+
 struct TargetScore {
     color: vec3<f32>,
     score: f32,
@@ -364,9 +374,8 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         }
     }
 
-    let motion = textureLoad(t_motion, pixel, 0).xy / MOTION_SCALE;
     //TODO: find best match in a 2x2 grid
-    let prev_pixel = pixel + vec2<i32>(motion + vec2<f32>(0.5));
+    let prev_pixel = vec2<i32>(get_prev_pixel(pixel, position));
 
     // First, gather the list of reservoirs to merge with
     var accepted_reservoir_indices = array<i32, MAX_RESERVOIRS>();
