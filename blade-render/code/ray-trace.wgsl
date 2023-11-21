@@ -5,6 +5,7 @@
 #include "debug-param.inc.wgsl"
 #include "camera.inc.wgsl"
 #include "surface.inc.wgsl"
+#include "gbuf.inc.wgsl"
 
 //TODO: use proper WGSL
 const RAY_FLAG_CULL_NO_OPAQUE: u32 = 0x80u;
@@ -141,6 +142,7 @@ var t_basis: texture_2d<f32>;
 var t_prev_basis: texture_2d<f32>;
 var t_flat_normal: texture_2d<f32>;
 var t_prev_flat_normal: texture_2d<f32>;
+var t_motion: texture_2d<f32>;
 var out_diffuse: texture_storage_2d<rgba16float, write>;
 var out_debug: texture_storage_2d<rgba8unorm, write>;
 
@@ -362,7 +364,9 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         }
     }
 
-    let prev_pixel = get_projected_pixel(prev_camera, position);
+    let motion = textureLoad(t_motion, pixel, 0).xy / MOTION_SCALE;
+    //TODO: find best match in a 2x2 grid
+    let prev_pixel = pixel + vec2<i32>(motion + vec2<f32>(0.5));
 
     // First, gather the list of reservoirs to merge with
     var accepted_reservoir_indices = array<i32, MAX_RESERVOIRS>();
