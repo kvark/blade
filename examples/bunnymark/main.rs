@@ -1,6 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
-use blade::graphics as gpu;
+use blade_graphics as gpu;
 use bytemuck::{Pod, Zeroable};
 use std::ptr;
 
@@ -16,7 +16,7 @@ struct Globals {
     pad: [f32; 2],
 }
 
-#[derive(blade::macros::ShaderData)]
+#[derive(blade_macros::ShaderData)]
 struct Params {
     globals: Globals,
     sprite_texture: gpu::TextureView,
@@ -32,7 +32,7 @@ struct Locals {
     pad: u32,
 }
 
-#[derive(blade::macros::ShaderData)]
+#[derive(blade_macros::ShaderData)]
 struct Sprite {
     locals: Locals,
 }
