@@ -40,34 +40,44 @@ readme = "docs/README.md"
 [features]
 
 [dependencies]
-blade-asset = { version = "0.2.0", path = "blade-asset" }
-blade-egui = { version = "0.2.0", path = "blade-egui" }
-blade-macros = { version = "0.2.1", path = "blade-macros" }
-blade-graphics = { version = "0.3.0", path = "blade-graphics" }
-blade-render = { version = "0.2.0", path = "blade-render" }
+blade-asset = { version = "0.2", path = "blade-asset" }
+blade-egui = { version = "0.2", path = "blade-egui" }
+blade-graphics = { version = "0.3", path = "blade-graphics" }
+blade-render = { version = "0.2", path = "blade-render" }
+choir = { workspace = true }
+colorsys = "0.6"
+egui = { workspace = true }
+nalgebra = { version = "0.32", features = ["mint"] }
+log = { workspace = true }
+mint = { workspace = true, features = ["serde"] }
+num_cpus = "1"
+profiling = { workspace = true }
+rapier3d = { version = "0.17", features = ["debug-render"] }
+serde = { version = "1", features = ["serde_derive"] }
+slab = "0.4"
+strum = { workspace = true }
+winit = "0.28"
 
 [dev-dependencies]
+blade-macros = { version = "0.2", path = "blade-macros" }
 bytemuck = { workspace = true }
 choir = { workspace = true }
 egui = { workspace = true }
-del-msh = "0.1"
+egui-gizmo = "0.12"
+egui_plot = "0.23"
+egui-winit = "0.23"
+env_logger = "0.10"
+# https://github.com/nobuyuki83/del-msh/issues/1
+del-msh = "=0.1.17"
 glam = { workspace = true }
 log = { workspace = true }
 mint = { workspace = true, features = ["serde"] }
 naga = { workspace = true }
 nanorand = { version = "0.7", default-features = false, features = ["wyrand"] }
-num_cpus = "1"
 profiling = { workspace = true }
 ron = "0.8"
 serde = { version = "1", features = ["serde_derive"] }
 strum = { workspace = true }
-winit = "0.28"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-egui-winit = "0.23"
-egui_plot = "0.23"
-egui-gizmo = "0.12"
-env_logger = "0.10"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 console_error_panic_hook = "0.1.7"

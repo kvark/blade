@@ -1,6 +1,7 @@
 Changelog for Blade
 
-## (TBD)
+## blade-0.2 (TBD)
+- high-level engine
 - support object motion
 
 ## blade-graphics-0.3, blade-render-0.2 (17 Nov 2023)
