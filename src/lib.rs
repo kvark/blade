@@ -582,7 +582,12 @@ impl Engine {
                         .expect("Unable to build convex full")
                 }
             };
-            let collider = builder.mass(cc.mass).position(isometry).build();
+            let collider = builder
+                .mass(cc.mass)
+                .friction(cc.friction)
+                .restitution(cc.restitution)
+                .position(isometry)
+                .build();
             let c_handle = self.physics.colliders.insert_with_parent(
                 collider,
                 rb_handle,
