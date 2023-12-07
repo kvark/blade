@@ -37,15 +37,16 @@ fn make_quaternion(degrees: mint::Vector3<f32>) -> nalgebra::geometry::UnitQuate
 }
 
 trait UiValue {
-    fn value(&mut self, v: String);
+    fn value(&mut self, v: f32);
+    fn value_vec3(&mut self, v3: &nalgebra::Vector3<f32>) {
+        for &v in v3.as_slice() {
+            self.value(v);
+        }
+    }
 }
 impl UiValue for egui::Ui {
-    fn value(&mut self, v: String) {
-        self.label(
-            egui::RichText::new(v)
-                .italics()
-                .background_color(egui::Color32::BLACK),
-        );
+    fn value(&mut self, v: f32) {
+        self.colored_label(egui::Color32::WHITE, format!("{v:.1}"));
     }
 }
 
@@ -499,32 +500,25 @@ impl Engine {
         if let Some(handle) = self.selected_object_index {
             let object = &self.objects[handle.0];
             let rigid_body = &self.physics.rigid_bodies[object.rigid_body];
-            let t = rigid_body.translation();
             ui.horizontal(|ui| {
                 ui.label(format!("Position:"));
-                ui.value(format!("{:.1}, {:.1}, {:.1}", t.x, t.y, t.z));
+                ui.value_vec3(&rigid_body.translation());
             });
             ui.horizontal(|ui| {
-                ui.label(format!("Linear damping:"));
-                ui.value(format!("{:.1}", rigid_body.linear_damping()));
+                ui.label(format!("Linear velocity:"));
+                ui.value_vec3(&rigid_body.linvel());
+                ui.label(format!("Damping:"));
+                ui.value(rigid_body.linear_damping());
             });
             ui.horizontal(|ui| {
-                ui.label(format!("Linvel:"));
-                let v = rigid_body.linvel();
-                ui.value(format!("{:.1}, {:.1}, {:.1}", v.x, v.y, v.z));
-            });
-            ui.horizontal(|ui| {
-                ui.label(format!("Angular damping:"));
-                ui.value(format!("{:.1}", rigid_body.angular_damping()));
-            });
-            ui.horizontal(|ui| {
-                ui.label(format!("Angvel:"));
-                let v = rigid_body.angvel();
-                ui.value(format!("{:.1}, {:.1}, {:.1}", v.x, v.y, v.z));
+                ui.label(format!("Angular velocity:"));
+                ui.value_vec3(&rigid_body.angvel());
+                ui.label(format!("Damping:"));
+                ui.value(rigid_body.angular_damping());
             });
             ui.horizontal(|ui| {
                 ui.label(format!("Kinematic energy:"));
-                ui.value(format!("{:.1}", rigid_body.kinetic_energy()));
+                ui.value(rigid_body.kinetic_energy());
             });
         }
     }
@@ -623,6 +617,10 @@ impl Engine {
 
     pub fn get_joint_mut(&mut self, handle: JointHandle) -> &mut rapier3d::dynamics::ImpulseJoint {
         self.physics.impulse_joints.get_mut(handle).unwrap()
+    }
+
+    pub fn get_joint_impulse(&self, handle: JointHandle) -> &rapier3d::math::SpacialVector<f32> {
+        &self.physics.impulse_joints.get(handle).unwrap().impulses
     }
 
     pub fn get_object_isometry(&self, handle: ObjectHandle) -> &nalgebra::Isometry3<f32> {
