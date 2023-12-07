@@ -34,10 +34,21 @@ pub enum Shape {
     ConvexHull { points: Vec<mint::Vector3<f32>> },
 }
 
+fn default_friction() -> f32 {
+    1.0
+}
+fn default_restitution() -> f32 {
+    0.0
+}
+
 #[derive(serde::Deserialize)]
 pub struct Collider {
     pub mass: f32,
     pub shape: Shape,
+    #[serde(default = "default_friction")]
+    pub friction: f32,
+    #[serde(default = "default_restitution")]
+    pub restitution: f32,
     #[serde(default = "default_vec")]
     pub pos: mint::Vector3<f32>,
     #[serde(default = "default_vec")]
