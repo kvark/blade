@@ -606,6 +606,12 @@ impl Engine {
         ObjectHandle(raw_handle)
     }
 
+    pub fn wake_up(&mut self, object: ObjectHandle) {
+        let rb_handle = self.objects[object.0].rigid_body;
+        let rb = self.physics.rigid_bodies.get_mut(rb_handle).unwrap();
+        rb.wake_up(true);
+    }
+
     pub fn add_joint(
         &mut self,
         a: ObjectHandle,
@@ -620,6 +626,9 @@ impl Engine {
         )
     }
 
+    pub fn get_joint(&self, handle: JointHandle) -> &rapier3d::dynamics::ImpulseJoint {
+        self.physics.impulse_joints.get(handle).unwrap()
+    }
     pub fn get_joint_mut(&mut self, handle: JointHandle) -> &mut rapier3d::dynamics::ImpulseJoint {
         self.physics.impulse_joints.get_mut(handle).unwrap()
     }
