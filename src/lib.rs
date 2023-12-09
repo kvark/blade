@@ -15,12 +15,21 @@
 )]
 
 use blade_graphics as gpu;
-use std::{path::Path, sync::Arc};
+use std::{ops, path::Path, sync::Arc};
 
 pub mod config;
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum JointKind {
+    Soft,
+    Hard,
+}
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum JointHandle {
+    Soft(rapier3d::dynamics::ImpulseJointHandle),
+    Hard(rapier3d::dynamics::MultibodyJointHandle),
+}
 //TODO: hide Rapier3D as a private dependency
-pub use rapier3d::dynamics::ImpulseJointHandle as JointHandle;
 pub use rapier3d::dynamics::RigidBodyType as BodyType;
 
 const MAX_DEPTH: f32 = 1e9;
@@ -186,6 +195,30 @@ pub struct Engine {
     track_hot_reloads: bool,
     workers: Vec<choir::WorkerHandle>,
     choir: Arc<choir::Choir>,
+}
+
+impl ops::Index<JointHandle> for Engine {
+    type Output = rapier3d::dynamics::GenericJoint;
+    fn index(&self, handle: JointHandle) -> &Self::Output {
+        match handle {
+            JointHandle::Soft(h) => &self.physics.impulse_joints.get(h).unwrap().data,
+            JointHandle::Hard(h) => {
+                let (multibody, link_index) = self.physics.multibody_joints.get(h).unwrap();
+                &multibody.link(link_index).unwrap().joint.data
+            }
+        }
+    }
+}
+impl ops::IndexMut<JointHandle> for Engine {
+    fn index_mut(&mut self, handle: JointHandle) -> &mut Self::Output {
+        match handle {
+            JointHandle::Soft(h) => &mut self.physics.impulse_joints.get_mut(h).unwrap().data,
+            JointHandle::Hard(h) => {
+                let (multibody, link_index) = self.physics.multibody_joints.get_mut(h).unwrap();
+                &mut multibody.link_mut(link_index).unwrap().joint.data
+            }
+        }
+    }
 }
 
 impl Engine {
@@ -416,7 +449,53 @@ impl Engine {
             }
         }
 
-        let debug_lines = self.physics.render_debug();
+        let mut debug_lines = self.physics.render_debug();
+        if let Some(handle) = self.selected_object_index {
+            let object = &self.objects[handle.0];
+            let rb = self.physics.rigid_bodies.get(object.rigid_body).unwrap();
+            for (_, joint) in self.physics.impulse_joints.iter() {
+                let local_frame = if joint.body1 == object.rigid_body {
+                    joint.data.local_frame1
+                } else if joint.body2 == object.rigid_body {
+                    joint.data.local_frame2
+                } else {
+                    continue;
+                };
+                let position = rb.position() * local_frame;
+                let length = 1.0;
+                let base = blade_render::DebugPoint {
+                    pos: position.translation.into(),
+                    color: 0xFFFFFF,
+                };
+                debug_lines.push(blade_render::DebugLine {
+                    a: base,
+                    b: blade_render::DebugPoint {
+                        pos: position
+                            .transform_point(&nalgebra::Point3::new(length, 0.0, 0.0))
+                            .into(),
+                        color: 0xFF0000,
+                    },
+                });
+                debug_lines.push(blade_render::DebugLine {
+                    a: base,
+                    b: blade_render::DebugPoint {
+                        pos: position
+                            .transform_point(&nalgebra::Point3::new(0.0, length, 0.0))
+                            .into(),
+                        color: 0x00FF00,
+                    },
+                });
+                debug_lines.push(blade_render::DebugLine {
+                    a: base,
+                    b: blade_render::DebugPoint {
+                        pos: position
+                            .transform_point(&nalgebra::Point3::new(0.0, 0.0, length))
+                            .into(),
+                        color: 0x0000FF,
+                    },
+                });
+            }
+        }
 
         let frame = self.gpu_context.acquire_frame();
         command_encoder.init_texture(frame.texture());
@@ -617,24 +696,21 @@ impl Engine {
         a: ObjectHandle,
         b: ObjectHandle,
         data: impl Into<rapier3d::dynamics::GenericJoint>,
+        kind: JointKind,
     ) -> JointHandle {
-        self.physics.impulse_joints.insert(
-            self.objects[a.0].rigid_body,
-            self.objects[b.0].rigid_body,
-            data,
-            true,
-        )
-    }
-
-    pub fn get_joint(&self, handle: JointHandle) -> &rapier3d::dynamics::ImpulseJoint {
-        self.physics.impulse_joints.get(handle).unwrap()
-    }
-    pub fn get_joint_mut(&mut self, handle: JointHandle) -> &mut rapier3d::dynamics::ImpulseJoint {
-        self.physics.impulse_joints.get_mut(handle).unwrap()
-    }
-
-    pub fn get_joint_impulse(&self, handle: JointHandle) -> &rapier3d::math::SpacialVector<f32> {
-        &self.physics.impulse_joints.get(handle).unwrap().impulses
+        let body1 = self.objects[a.0].rigid_body;
+        let body2 = self.objects[b.0].rigid_body;
+        match kind {
+            JointKind::Soft => {
+                JointHandle::Soft(self.physics.impulse_joints.insert(body1, body2, data, true))
+            }
+            JointKind::Hard => JointHandle::Hard(
+                self.physics
+                    .multibody_joints
+                    .insert(body1, body2, data, true)
+                    .unwrap(),
+            ),
+        }
     }
 
     pub fn get_object_isometry(&self, handle: ObjectHandle) -> &nalgebra::Isometry3<f32> {
