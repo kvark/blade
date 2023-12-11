@@ -16,6 +16,7 @@ bytemuck = { version = "1", features = ["derive"] }
 choir = "0.7"
 egui = "0.23"
 glam = { version = "0.24", features = ["mint"] }
+gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
 naga = { version = "0.14", features = ["wgsl-in", "span", "validate"] }
@@ -44,9 +45,11 @@ blade-asset = { version = "0.2", path = "blade-asset" }
 blade-egui = { version = "0.2", path = "blade-egui" }
 blade-graphics = { version = "0.3", path = "blade-graphics" }
 blade-render = { version = "0.2", path = "blade-render" }
+base64 = { workspace = true }
 choir = { workspace = true }
 colorsys = "0.6"
 egui = { workspace = true }
+gltf = { workspace = true }
 nalgebra = { version = "0.32", features = ["mint"] }
 log = { workspace = true }
 mint = { workspace = true, features = ["serde"] }

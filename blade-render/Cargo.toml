@@ -22,7 +22,7 @@ blade-macros = { version = "0.2.1", path = "../blade-macros" }
 bytemuck = { workspace = true }
 choir = { workspace = true }
 exr = { version = "1.6", optional = true }
-gltf = { version = "1.1", default-features = false, features = ["names", "utils"], optional = true }
+gltf = { workspace = true, features = ["names", "utils"], optional = true }
 glam = { workspace = true }
 log = { workspace = true }
 mikktspace = { package = "bevy_mikktspace", version = "0.10", optional = true }
