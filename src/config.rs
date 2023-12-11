@@ -83,4 +83,5 @@ pub struct Object {
 #[derive(serde::Deserialize)]
 pub struct Engine {
     pub shader_path: String,
+    pub data_path: String,
 }

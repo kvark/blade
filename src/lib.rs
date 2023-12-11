@@ -196,6 +196,7 @@ pub struct Engine {
     track_hot_reloads: bool,
     workers: Vec<choir::WorkerHandle>,
     choir: Arc<choir::Choir>,
+    data_path: String,
 }
 
 impl ops::Index<JointHandle> for Engine {
@@ -326,6 +327,7 @@ impl Engine {
             track_hot_reloads: false,
             workers,
             choir,
+            data_path: config.data_path.clone(),
         }
     }
 
@@ -617,7 +619,7 @@ impl Engine {
         let mut visuals = Vec::new();
         for visual in config.visuals.iter() {
             let (model, task) = self.asset_hub.models.load(
-                format!("data/{}", visual.model),
+                format!("{}/{}", self.data_path, visual.model),
                 blade_render::model::Meta {
                     generate_tangents: true,
                 },
@@ -673,7 +675,7 @@ impl Engine {
                     convex,
                     border_radius,
                 } => {
-                    let trimesh = trimesh::load(&format!("data/{}", model));
+                    let trimesh = trimesh::load(&format!("{}/{}", self.data_path, model));
                     if convex && border_radius != 0.0 {
                         ColliderBuilder::round_convex_mesh(
                             trimesh.points,
@@ -758,7 +760,7 @@ impl Engine {
         if path.is_empty() {
             self.environment_map = None;
         } else {
-            let full = format!("data/{}", path);
+            let full = format!("{}/{}", self.data_path, path);
             let (handle, task) = self.asset_hub.textures.load(
                 full,
                 blade_render::texture::Meta {
