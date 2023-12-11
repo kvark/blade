@@ -28,10 +28,28 @@ impl Default for Visual {
 
 #[derive(serde::Deserialize)]
 pub enum Shape {
-    Ball { radius: f32 },
-    Cylinder { half_height: f32, radius: f32 },
-    Cuboid { half: mint::Vector3<f32> },
-    ConvexHull { points: Vec<mint::Vector3<f32>> },
+    Ball {
+        radius: f32,
+    },
+    Cylinder {
+        half_height: f32,
+        radius: f32,
+    },
+    Cuboid {
+        half: mint::Vector3<f32>,
+    },
+    ConvexHull {
+        points: Vec<mint::Vector3<f32>>,
+        #[serde(default)]
+        border_radius: f32,
+    },
+    TriMesh {
+        model: String,
+        #[serde(default)]
+        convex: bool,
+        #[serde(default)]
+        border_radius: f32,
+    },
 }
 
 fn default_friction() -> f32 {

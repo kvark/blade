@@ -18,6 +18,7 @@ use blade_graphics as gpu;
 use std::{ops, path::Path, sync::Arc};
 
 pub mod config;
+mod trimesh;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum JointKind {
@@ -273,7 +274,7 @@ impl Engine {
         let render_config = blade_render::RenderConfig {
             screen_size,
             surface_format,
-            max_debug_lines: 1000,
+            max_debug_lines: 1 << 14,
         };
         let renderer = blade_render::Renderer::new(
             command_encoder,
@@ -639,26 +640,54 @@ impl Engine {
 
         let mut colliders = Vec::new();
         for cc in config.colliders.iter() {
+            use rapier3d::geometry::ColliderBuilder;
+
             let isometry = nalgebra::geometry::Isometry3::from_parts(
                 nalgebra::Vector3::from(cc.pos).into(),
                 make_quaternion(cc.rot),
             );
             let builder = match cc.shape {
-                config::Shape::Ball { radius } => rapier3d::geometry::ColliderBuilder::ball(radius),
+                config::Shape::Ball { radius } => ColliderBuilder::ball(radius),
                 config::Shape::Cylinder {
                     half_height,
                     radius,
-                } => rapier3d::geometry::ColliderBuilder::cylinder(half_height, radius),
-                config::Shape::Cuboid { half } => {
-                    rapier3d::geometry::ColliderBuilder::cuboid(half.x, half.y, half.z)
-                }
-                config::Shape::ConvexHull { ref points } => {
+                } => ColliderBuilder::cylinder(half_height, radius),
+                config::Shape::Cuboid { half } => ColliderBuilder::cuboid(half.x, half.y, half.z),
+                config::Shape::ConvexHull {
+                    ref points,
+                    border_radius,
+                } => {
                     let pv = points
                         .iter()
                         .map(|p| nalgebra::Vector3::from(*p).into())
                         .collect::<Vec<_>>();
-                    rapier3d::geometry::ColliderBuilder::convex_hull(&pv)
-                        .expect("Unable to build convex full")
+                    let result = if border_radius != 0.0 {
+                        ColliderBuilder::round_convex_hull(&pv, border_radius)
+                    } else {
+                        ColliderBuilder::convex_hull(&pv)
+                    };
+                    result.expect("Unable to build convex hull shape")
+                }
+                config::Shape::TriMesh {
+                    ref model,
+                    convex,
+                    border_radius,
+                } => {
+                    let trimesh = trimesh::load(&format!("data/{}", model));
+                    if convex && border_radius != 0.0 {
+                        ColliderBuilder::round_convex_mesh(
+                            trimesh.points,
+                            &trimesh.triangles,
+                            border_radius,
+                        )
+                        .expect("Unable to build rounded convex mesh")
+                    } else if convex {
+                        ColliderBuilder::convex_mesh(trimesh.points, &trimesh.triangles)
+                            .expect("Unable to build convex mesh")
+                    } else {
+                        assert_eq!(border_radius, 0.0);
+                        ColliderBuilder::trimesh(trimesh.points, trimesh.triangles)
+                    }
                 }
             };
             let collider = builder
