@@ -297,14 +297,12 @@ fn estimate_target_score_with_occlusion(
 
 fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debug_len: f32) -> f32 {
     let dir = map_equirect_uv_to_dir(ls.uv);
-    if (dot(dir, surface.flat_normal) <= 0.0)
-    {
+    if (dot(dir, surface.flat_normal) <= 0.0) {
         return 0.0;
     }
 
     let brdf = evaluate_brdf(surface, dir);
-    if (brdf <= 0.0)
-    {
+    if (brdf <= 0.0) {
         return 0.0;
     }
 

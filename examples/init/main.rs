@@ -179,12 +179,9 @@ fn main() {
             environment_map = Some(texture);
         } else if arg.ends_with(".gltf") {
             println!("\tmodels += {}", arg);
-            let (model, model_task) = asset_hub.models.load(
-                arg,
-                blade_render::model::Meta {
-                    generate_tangents: false,
-                },
-            );
+            let (model, model_task) = asset_hub
+                .models
+                .load(arg, blade_render::model::Meta::default());
             load_finish.depend_on(model_task);
             _object = Some(blade_render::Object::from(model));
         } else {

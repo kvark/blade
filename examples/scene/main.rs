@@ -339,6 +339,7 @@ impl Example {
                 parent.join(&config_object.path),
                 blade_render::model::Meta {
                     generate_tangents: true,
+                    ..Default::default()
                 },
             );
             load_finish.depend_on(model_task);
@@ -983,6 +984,7 @@ impl Example {
             file_path,
             blade_render::model::Meta {
                 generate_tangents: true,
+                ..Default::default()
             },
         );
         self.scene_load_task = Some(model_task.clone());
