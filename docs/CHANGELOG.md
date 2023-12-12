@@ -3,6 +3,7 @@ Changelog for Blade
 ## blade-0.2 (TBD)
 - high-level engine
 - support object motion
+- support clockwise mesh winding
 
 ## blade-graphics-0.3, blade-render-0.2 (17 Nov 2023)
 - tangent space generation

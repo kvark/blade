@@ -1,3 +1,14 @@
+#[derive(serde::Deserialize)]
+pub enum FrontFace {
+    Cw,
+    Ccw,
+}
+impl Default for FrontFace {
+    fn default() -> Self {
+        Self::Ccw
+    }
+}
+
 fn default_vec() -> mint::Vector3<f32> {
     [0.0; 3].into()
 }
@@ -8,6 +19,8 @@ fn default_scale() -> f32 {
 #[derive(serde::Deserialize)]
 pub struct Visual {
     pub model: String,
+    #[serde(default)]
+    pub front_face: FrontFace,
     #[serde(default = "default_vec")]
     pub pos: mint::Vector3<f32>,
     #[serde(default = "default_vec")]
@@ -19,6 +32,7 @@ impl Default for Visual {
     fn default() -> Self {
         Self {
             model: String::new(),
+            front_face: FrontFace::default(),
             pos: default_vec(),
             rot: default_vec(),
             scale: default_scale(),

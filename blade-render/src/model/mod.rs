@@ -50,6 +50,7 @@ pub struct Material {
 
 pub struct Model {
     pub name: String,
+    pub winding: f32,
     pub geometries: Vec<Geometry>,
     pub materials: Vec<Material>,
     pub vertex_buffer: blade_graphics::Buffer,
@@ -163,6 +164,7 @@ impl FlattenedGeometry {
 #[derive(blade_macros::Flat)]
 pub struct CookedModel<'a> {
     name: &'a [u8],
+    winding: f32,
     materials: Vec<CookedMaterial<'a>>,
     geometries: Vec<CookedGeometry<'a>>,
 }
@@ -272,14 +274,26 @@ impl CookedModel<'_> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FrontFace {
+    Clockwise,
+    CounterClockwise,
+}
+impl Default for FrontFace {
+    fn default() -> Self {
+        Self::CounterClockwise
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Meta {
     pub generate_tangents: bool,
+    pub front_face: FrontFace,
 }
 
 impl fmt::Display for Meta {
     fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        Ok(())
+        Ok(()) //TODO
     }
 }
 
@@ -496,6 +510,10 @@ impl blade_asset::Baker for Baker {
                 let mut sources = slab::Slab::new();
                 let mut model = CookedModel {
                     name: &[],
+                    winding: match meta.front_face {
+                        FrontFace::Clockwise => -1.0,
+                        FrontFace::CounterClockwise => 1.0,
+                    },
                     materials: Vec::new(),
                     geometries: Vec::new(),
                 };
@@ -756,6 +774,7 @@ impl blade_asset::Baker for Baker {
 
         Model {
             name: String::from_utf8_lossy(model.name).into_owned(),
+            winding: model.winding,
             geometries,
             materials,
             vertex_buffer,

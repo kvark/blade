@@ -30,9 +30,9 @@ var sampler_nearest: sampler;
 struct HitEntry {
     index_buf: u32,
     vertex_buf: u32,
+    winding: f32,
     // packed quaternion
     geometry_to_world_rotation: u32,
-    pad: u32,
     geometry_to_object: mat4x3<f32>,
     prev_object_to_world: mat4x3<f32>,
     base_color_texture: u32,
@@ -105,7 +105,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let positions = intersection.object_to_world * mat3x4(
             vec4<f32>(positions_object[0], 1.0), vec4<f32>(positions_object[1], 1.0), vec4<f32>(positions_object[2], 1.0)
         );
-        flat_normal = normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
+        flat_normal = entry.winding * normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
 
         let barycentrics = vec3<f32>(1.0 - intersection.barycentrics.x - intersection.barycentrics.y, intersection.barycentrics);
         let position_object = vec4<f32>(positions_object * barycentrics, 1.0);

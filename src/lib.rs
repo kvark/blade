@@ -622,6 +622,10 @@ impl Engine {
                 format!("{}/{}", self.data_path, visual.model),
                 blade_render::model::Meta {
                     generate_tangents: true,
+                    front_face: match visual.front_face {
+                        config::FrontFace::Cw => blade_render::model::FrontFace::Clockwise,
+                        config::FrontFace::Ccw => blade_render::model::FrontFace::CounterClockwise,
+                    },
                 },
             );
             visuals.push(Visual {

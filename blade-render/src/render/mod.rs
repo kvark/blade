@@ -463,8 +463,8 @@ struct PostProcData {
 struct HitEntry {
     index_buf: u32,
     vertex_buf: u32,
+    winding: f32,
     geometry_to_world_rotation: [i8; 4],
-    unused: u32,
     //Note: it's technically `mat4x3` on WGSL side,
     // but it's aligned and sized the same way as `mat4`.
     geometry_to_object: mint::ColumnMatrix4<f32>,
@@ -913,8 +913,8 @@ impl Renderer {
                     vertex_buf: self
                         .vertex_buffers
                         .alloc(model.vertex_buffer.at(vertex_offset)),
+                    winding: model.winding,
                     geometry_to_world_rotation,
-                    unused: 0,
                     geometry_to_object: mint::ColumnMatrix4::from(mint::RowMatrix4 {
                         x: geometry.transform.x,
                         y: geometry.transform.y,
