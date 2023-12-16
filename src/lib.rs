@@ -646,7 +646,7 @@ impl Engine {
 
         let mut colliders = Vec::new();
         for cc in config.colliders.iter() {
-            use rapier3d::geometry::ColliderBuilder;
+            use rapier3d::geometry::{ColliderBuilder, TriMeshFlags};
 
             let isometry = nalgebra::geometry::Isometry3::from_parts(
                 nalgebra::Vector3::from(cc.pos).into(),
@@ -692,7 +692,12 @@ impl Engine {
                             .expect("Unable to build convex mesh")
                     } else {
                         assert_eq!(border_radius, 0.0);
-                        ColliderBuilder::trimesh(trimesh.points, trimesh.triangles)
+                        let flags = TriMeshFlags::empty();
+                        ColliderBuilder::trimesh_with_flags(
+                            trimesh.points,
+                            trimesh.triangles,
+                            flags,
+                        )
                     }
                 }
             };
@@ -758,6 +763,14 @@ impl Engine {
         let object = &self.objects[handle.0];
         let body = &mut self.physics.rigid_bodies[object.rigid_body];
         body.apply_impulse(impulse, false)
+    }
+
+    pub fn teleport_object(&mut self, handle: ObjectHandle, isometry: nalgebra::Isometry3<f32>) {
+        let object = &self.objects[handle.0];
+        let body = &mut self.physics.rigid_bodies[object.rigid_body];
+        body.set_linvel(Default::default(), false);
+        body.set_angvel(Default::default(), false);
+        body.set_position(isometry, true);
     }
 
     pub fn set_environment_map(&mut self, path: &str) {

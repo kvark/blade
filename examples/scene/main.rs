@@ -678,13 +678,19 @@ impl Example {
                             );
                         });
                         ui.horizontal(|ui| {
+                            let tc = &selection.tex_coords;
                             ui.label("Texture coords:");
                             ui.colored_label(
                                 egui::Color32::WHITE,
-                                format!(
-                                    "{:.2} {:.2}",
-                                    selection.tex_coords.x, selection.tex_coords.y
-                                ),
+                                format!("{:.2} {:.2}", tc.x, tc.y),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            let wp = &selection.position;
+                            ui.label("World pos:");
+                            ui.colored_label(
+                                egui::Color32::WHITE,
+                                format!("{:.2} {:.2} {:.2}", wp.x, wp.y, wp.z),
                             );
                         });
                         ui.horizontal(|ui| {
