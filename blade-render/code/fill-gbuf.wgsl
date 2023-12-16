@@ -125,7 +125,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let n_xy = textureSampleLevel(textures[entry.normal_texture], sampler_linear, tex_coords, lod).xy;
             normal_local = vec3<f32>(n_xy, sqrt(max(0.0, 1.0 - dot(n_xy.xy, n_xy.xy))));
         }
-        let normal = qrot(geo_to_world_rot, tangent_space_geo * normal_local);
+        var normal = qrot(geo_to_world_rot, tangent_space_geo * normal_local);
+        if (dot(normal, normal) == 0.0) {
+            normal = flat_normal; // fallback
+        }
         basis = shortest_arc_quat(vec3<f32>(0.0, 0.0, 1.0), normalize(normal));
 
         let hit_position = camera.position + intersection.t * ray_dir;
