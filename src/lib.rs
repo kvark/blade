@@ -116,11 +116,12 @@ struct Physics {
     gravity: rapier3d::math::Vector<f32>,
     pipeline: rapier3d::pipeline::PhysicsPipeline,
     debug_pipeline: rapier3d::pipeline::DebugRenderPipeline,
+    last_time: f32,
 }
 
 impl Physics {
-    fn step(&mut self, dt: f32) {
-        self.integration_params.dt = dt;
+    fn step(&mut self) {
+        let query_pipeline = None;
         let physics_hooks = ();
         let event_handler = ();
         self.pipeline.step(
@@ -134,10 +135,11 @@ impl Physics {
             &mut self.impulse_joints,
             &mut self.multibody_joints,
             &mut self.solver,
-            None, // query pipeline
+            query_pipeline,
             &physics_hooks,
             &event_handler,
         );
+        self.last_time += self.integration_params.dt;
     }
     fn render_debug(&mut self) -> Vec<blade_render::DebugLine> {
         let mut backend = DebugPhysicsRender::default();
@@ -197,6 +199,7 @@ pub struct Engine {
     workers: Vec<choir::WorkerHandle>,
     choir: Arc<choir::Choir>,
     data_path: String,
+    time_ahead: f32,
 }
 
 impl ops::Index<JointHandle> for Engine {
@@ -290,6 +293,7 @@ impl Engine {
         let gui_painter = blade_egui::GuiPainter::new(surface_format, &gpu_context);
         let mut physics = Physics::default();
         physics.debug_pipeline.mode = rapier3d::pipeline::DebugRenderMode::empty();
+        physics.integration_params.dt = config.time_step;
 
         Self {
             pacer,
@@ -328,6 +332,7 @@ impl Engine {
             workers,
             choir,
             data_path: config.data_path.clone(),
+            time_ahead: 0.0,
         }
     }
 
@@ -342,7 +347,11 @@ impl Engine {
     #[profiling::function]
     pub fn update(&mut self, dt: f32) {
         self.choir.check_panic();
-        self.physics.step(dt);
+        self.time_ahead += dt;
+        while self.time_ahead >= self.physics.integration_params.dt {
+            self.physics.step();
+            self.time_ahead -= self.physics.integration_params.dt;
+        }
     }
 
     #[profiling::function]
@@ -396,7 +405,8 @@ impl Engine {
                     .rigid_bodies
                     .get(object.rigid_body)
                     .unwrap()
-                    .position();
+                    .predict_position_using_velocity_and_forces(self.time_ahead);
+
                 for visual in object.visuals.iter() {
                     let mc = (isometry * visual.similarity).to_homogeneous().transpose();
                     let mp = (object.prev_isometry * visual.similarity)
@@ -416,7 +426,7 @@ impl Engine {
                         model: visual.model,
                     });
                 }
-                object.prev_isometry = *isometry;
+                object.prev_isometry = isometry;
             }
 
             // Rebuilding every frame
@@ -753,7 +763,15 @@ impl Engine {
         }
     }
 
-    pub fn get_object_isometry(&self, handle: ObjectHandle) -> &nalgebra::Isometry3<f32> {
+    pub fn get_object_isometry(&self, handle: ObjectHandle) -> nalgebra::Isometry3<f32> {
+        let object = &self.objects[handle.0];
+        let body = &self.physics.rigid_bodies[object.rigid_body];
+        body.predict_position_using_velocity_and_forces(self.time_ahead)
+    }
+
+    /// Returns the position of the object within the "time_step" of precision.
+    /// Faster than the main `get_object_isometry`.
+    pub fn get_object_isometry_approx(&self, handle: ObjectHandle) -> &nalgebra::Isometry3<f32> {
         let object = &self.objects[handle.0];
         let body = &self.physics.rigid_bodies[object.rigid_body];
         body.position()

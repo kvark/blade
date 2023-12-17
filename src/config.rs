@@ -94,8 +94,14 @@ pub struct Object {
     pub colliders: Vec<Collider>,
 }
 
+fn default_time_step() -> f32 {
+    0.01
+}
+
 #[derive(serde::Deserialize)]
 pub struct Engine {
     pub shader_path: String,
     pub data_path: String,
+    #[serde(default = "default_time_step")]
+    pub time_step: f32,
 }
