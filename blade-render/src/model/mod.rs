@@ -27,9 +27,7 @@ fn pack4x8snorm(v: [f32; 4]) -> u32 {
 }
 
 fn encode_normal(v: [f32; 3]) -> u32 {
-    let raw = pack4x8snorm([v[0], v[1], v[2], 0.0]);
-    assert_ne!(raw, 0, "Zero normal detected");
-    raw
+    pack4x8snorm([v[0], v[1], v[2], 0.0])
 }
 
 pub struct Geometry {
@@ -258,6 +256,7 @@ impl CookedModel<'_> {
                         );
                         for (v, normal) in pre_vertices.iter_mut().zip(iter) {
                             v.normal = normal;
+                            assert_ne!(encode_normal(normal), 0);
                         }
                     } else {
                         log::warn!("No normals in {name}");
@@ -589,10 +588,6 @@ impl blade_asset::Baker for Baker {
                         if meta.generate_tangents {
                             let ok = mikktspace::generate_tangents(&mut fg);
                             assert!(ok, "MikkTSpace failed");
-                        } else {
-                            for v in fg.0.iter_mut() {
-                                v.tangent = [1.0, 0.0, 0.0, 0.0];
-                            }
                         }
                         let (indices, vertices) = fg.reconstruct_indices();
                         let mut model = model_clone.lock().unwrap();
