@@ -27,7 +27,9 @@ fn pack4x8snorm(v: [f32; 4]) -> u32 {
 }
 
 fn encode_normal(v: [f32; 3]) -> u32 {
-    pack4x8snorm([v[0], v[1], v[2], 0.0])
+    let raw = pack4x8snorm([v[0], v[1], v[2], 0.0]);
+    assert_ne!(raw, 0, "Zero normal detected");
+    raw
 }
 
 pub struct Geometry {
@@ -84,12 +86,22 @@ struct CookedGeometry<'a> {
     material_index: u32,
 }
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, PartialEq)]
 struct GltfVertex {
     position: [f32; 3],
     normal: [f32; 3],
     tangent: [f32; 4],
     tex_coords: [f32; 2],
+}
+impl Default for GltfVertex {
+    fn default() -> Self {
+        Self {
+            position: [0.0; 3],
+            normal: [0.0, 1.0, 0.0],
+            tangent: [1.0, 0.0, 0.0, 0.0],
+            tex_coords: [0.0; 2],
+        }
+    }
 }
 impl Eq for GltfVertex {}
 impl hash::Hash for GltfVertex {
@@ -144,12 +156,13 @@ impl FlattenedGeometry {
                 Entry::Occupied(e) => *e.get(),
                 Entry::Vacant(e) => {
                     let i = vertices.len() as u32;
+                    let t = &v.tangent;
                     vertices.push(crate::Vertex {
                         position: v.position,
-                        bitangent_sign: v.tangent[3],
+                        bitangent_sign: t[3],
                         tex_coords: v.tex_coords,
                         normal: encode_normal(v.normal),
-                        tangent: encode_normal([v.tangent[0], v.tangent[1], v.tangent[2]]),
+                        tangent: encode_normal([t[0], t[1], t[2]]),
                     });
                     *e.insert(i)
                 }
