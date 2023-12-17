@@ -238,6 +238,9 @@ impl CookedModel<'_> {
                         .iter_mut()
                         .zip(reader.read_positions().unwrap())
                     {
+                        for component in pos {
+                            assert!(component.is_finite());
+                        }
                         v.position = pos;
                     }
                     if let Some(iter) = reader.read_tex_coords(0) {
