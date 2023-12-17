@@ -783,6 +783,12 @@ impl Engine {
         body.apply_impulse(impulse, false)
     }
 
+    pub fn apply_torque_impulse(&mut self, handle: ObjectHandle, impulse: nalgebra::Vector3<f32>) {
+        let object = &self.objects[handle.0];
+        let body = &mut self.physics.rigid_bodies[object.rigid_body];
+        body.apply_torque_impulse(impulse, false)
+    }
+
     pub fn teleport_object(&mut self, handle: ObjectHandle, isometry: nalgebra::Isometry3<f32>) {
         let object = &self.objects[handle.0];
         let body = &mut self.physics.rigid_bodies[object.rigid_body];
