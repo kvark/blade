@@ -186,7 +186,8 @@ pub struct Engine {
     gpu_context: Arc<gpu::Context>,
     environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
     objects: slab::Slab<Object>,
-    selected_object_index: Option<ObjectHandle>,
+    selected_object_handle: Option<ObjectHandle>,
+    selected_collider: Option<rapier3d::geometry::ColliderHandle>,
     render_objects: Vec<blade_render::Object>,
     debug: blade_render::DebugConfig,
     need_accumulation_reset: bool,
@@ -305,7 +306,8 @@ impl Engine {
             gpu_context,
             environment_map: None,
             objects: slab::Slab::new(),
-            selected_object_index: None,
+            selected_object_handle: None,
+            selected_collider: None,
             render_objects: Vec::new(),
             debug: blade_render::DebugConfig::default(),
             need_accumulation_reset: true,
@@ -463,7 +465,7 @@ impl Engine {
         }
 
         let mut debug_lines = self.physics.render_debug();
-        if let Some(handle) = self.selected_object_index {
+        if let Some(handle) = self.selected_object_handle {
             let object = &self.objects[handle.0];
             let rb = self.physics.rigid_bodies.get(object.rigid_body).unwrap();
             for (_, joint) in self.physics.impulse_joints.iter() {
@@ -583,36 +585,88 @@ impl Engine {
             .show(ui, |ui| {
                 for (handle, object) in self.objects.iter() {
                     ui.selectable_value(
-                        &mut self.selected_object_index,
+                        &mut self.selected_object_handle,
                         Some(ObjectHandle(handle)),
                         &object.name,
                     );
                 }
+
+                if let Some(handle) = self.selected_object_handle {
+                    let object = &self.objects[handle.0];
+                    let rigid_body = &self.physics.rigid_bodies[object.rigid_body];
+                    if ui.button("Unselect").clicked() {
+                        self.selected_object_handle = None;
+                        self.selected_collider = None;
+                    }
+                    egui::CollapsingHeader::new("Stats")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Position:"));
+                                ui.value_vec3(&rigid_body.translation());
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Linear velocity:"));
+                                ui.value_vec3(&rigid_body.linvel());
+                                ui.label(format!("Damping:"));
+                                ui.value(rigid_body.linear_damping());
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Angular velocity:"));
+                                ui.value_vec3(&rigid_body.angvel());
+                                ui.label(format!("Damping:"));
+                                ui.value(rigid_body.angular_damping());
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Kinematic energy:"));
+                                ui.value(rigid_body.kinetic_energy());
+                            });
+                        });
+                    ui.heading("Colliders");
+                    for &collider in rigid_body.colliders() {
+                        let name = "collider";
+                        ui.selectable_value(&mut self.selected_collider, Some(collider), name);
+                    }
+                }
+
+                if let Some(collider_handle) = self.selected_collider {
+                    ui.heading("Properties");
+                    let collider = self.physics.colliders.get_mut(collider_handle).unwrap();
+                    let mut mass = collider.mass();
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut mass)
+                                .prefix("Mass: ")
+                                .clamp_range(0.0..=1e6),
+                        )
+                        .changed()
+                    {
+                        collider.set_mass(mass);
+                    }
+                    let mut friction = collider.friction();
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut friction)
+                                .prefix("Friction: ")
+                                .clamp_range(0.0..=2.0),
+                        )
+                        .changed()
+                    {
+                        collider.set_friction(friction);
+                    }
+                    let mut restitution = collider.restitution();
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut restitution)
+                                .prefix("Restituion: ")
+                                .clamp_range(0.0..=1.0),
+                        )
+                        .changed()
+                    {
+                        collider.set_restitution(restitution);
+                    }
+                }
             });
-        if let Some(handle) = self.selected_object_index {
-            let object = &self.objects[handle.0];
-            let rigid_body = &self.physics.rigid_bodies[object.rigid_body];
-            ui.horizontal(|ui| {
-                ui.label(format!("Position:"));
-                ui.value_vec3(&rigid_body.translation());
-            });
-            ui.horizontal(|ui| {
-                ui.label(format!("Linear velocity:"));
-                ui.value_vec3(&rigid_body.linvel());
-                ui.label(format!("Damping:"));
-                ui.value(rigid_body.linear_damping());
-            });
-            ui.horizontal(|ui| {
-                ui.label(format!("Angular velocity:"));
-                ui.value_vec3(&rigid_body.angvel());
-                ui.label(format!("Damping:"));
-                ui.value(rigid_body.angular_damping());
-            });
-            ui.horizontal(|ui| {
-                ui.label(format!("Kinematic energy:"));
-                ui.value(rigid_body.kinetic_energy());
-            });
-        }
     }
 
     pub fn screen_aspect(&self) -> f32 {
