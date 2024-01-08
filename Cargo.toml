@@ -70,8 +70,7 @@ egui-gizmo = "0.12"
 egui_plot = "0.23"
 egui-winit = "0.23"
 env_logger = "0.10"
-# https://github.com/nobuyuki83/del-msh/issues/1
-del-msh = "=0.1.17"
+del-msh = "0.1.22"
 glam = { workspace = true }
 log = { workspace = true }
 mint = { workspace = true, features = ["serde"] }

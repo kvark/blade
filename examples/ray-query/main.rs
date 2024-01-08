@@ -113,7 +113,7 @@ impl Example {
         });
 
         let (indices_usize, vertex_values) =
-            del_msh::primitive::torus_tri3(TORUS_RADIUS, 1.0, 100, 20);
+            del_msh::trimesh3_primitive::from_torus(TORUS_RADIUS, 1.0, 100, 20);
         let vertex_buf = context.create_buffer(gpu::BufferDesc {
             name: "vertices",
             size: (vertex_values.len() * mem::size_of::<f32>()) as u64,
