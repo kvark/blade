@@ -75,7 +75,7 @@ fn default_restitution() -> f32 {
 
 #[derive(serde::Deserialize)]
 pub struct Collider {
-    pub mass: f32,
+    pub density: f32,
     pub shape: Shape,
     #[serde(default = "default_friction")]
     pub friction: f32,
@@ -88,10 +88,18 @@ pub struct Collider {
 }
 
 #[derive(serde::Deserialize)]
+pub struct AdditionalMass {
+    pub density: f32,
+    pub shape: Shape,
+}
+
+#[derive(serde::Deserialize)]
 pub struct Object {
     pub name: String,
     pub visuals: Vec<Visual>,
     pub colliders: Vec<Collider>,
+    #[serde(default)]
+    pub additional_mass: Option<AdditionalMass>,
 }
 
 fn default_time_step() -> f32 {

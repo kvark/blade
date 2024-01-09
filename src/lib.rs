@@ -164,7 +164,7 @@ struct Object {
     name: String,
     rigid_body: rapier3d::dynamics::RigidBodyHandle,
     prev_isometry: nalgebra::Isometry3<f32>,
-    _colliders: Vec<rapier3d::geometry::ColliderHandle>,
+    colliders: Vec<rapier3d::geometry::ColliderHandle>,
     visuals: Vec<Visual>,
 }
 
@@ -488,7 +488,7 @@ impl Engine {
                         pos: position
                             .transform_point(&nalgebra::Point3::new(length, 0.0, 0.0))
                             .into(),
-                        color: 0xFF0000,
+                        color: 0x0000FF,
                     },
                 });
                 debug_lines.push(blade_render::DebugLine {
@@ -506,7 +506,7 @@ impl Engine {
                         pos: position
                             .transform_point(&nalgebra::Point3::new(0.0, 0.0, length))
                             .into(),
-                        color: 0x0000FF,
+                        color: 0xFF0000,
                     },
                 });
             }
@@ -593,7 +593,7 @@ impl Engine {
 
                 if let Some(handle) = self.selected_object_handle {
                     let object = &self.objects[handle.0];
-                    let rigid_body = &self.physics.rigid_bodies[object.rigid_body];
+                    let rigid_body = &mut self.physics.rigid_bodies[object.rigid_body];
                     if ui.button("Unselect").clicked() {
                         self.selected_object_handle = None;
                         self.selected_collider = None;
@@ -608,13 +608,17 @@ impl Engine {
                             ui.horizontal(|ui| {
                                 ui.label(format!("Linear velocity:"));
                                 ui.value_vec3(&rigid_body.linvel());
-                                ui.label(format!("Damping:"));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Linear Damping:"));
                                 ui.value(rigid_body.linear_damping());
                             });
                             ui.horizontal(|ui| {
                                 ui.label(format!("Angular velocity:"));
                                 ui.value_vec3(&rigid_body.angvel());
-                                ui.label(format!("Damping:"));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Angular Damping:"));
                                 ui.value(rigid_body.angular_damping());
                             });
                             ui.horizontal(|ui| {
@@ -623,32 +627,38 @@ impl Engine {
                             });
                         });
                     ui.heading("Colliders");
-                    for &collider in rigid_body.colliders() {
-                        let name = "collider";
-                        ui.selectable_value(&mut self.selected_collider, Some(collider), name);
+                    for &collider_handle in rigid_body.colliders() {
+                        let collider = &self.physics.colliders[collider_handle];
+                        let name = format!("{:?}", collider.shape().shape_type());
+                        ui.selectable_value(
+                            &mut self.selected_collider,
+                            Some(collider_handle),
+                            name,
+                        );
                     }
                 }
 
                 if let Some(collider_handle) = self.selected_collider {
                     ui.heading("Properties");
                     let collider = self.physics.colliders.get_mut(collider_handle).unwrap();
-                    let mut mass = collider.mass();
+                    let mut density = collider.density();
                     if ui
                         .add(
-                            egui::DragValue::new(&mut mass)
-                                .prefix("Mass: ")
-                                .clamp_range(0.0..=1e6),
+                            egui::DragValue::new(&mut density)
+                                .prefix("Density: ")
+                                .clamp_range(0.1..=1e6),
                         )
                         .changed()
                     {
-                        collider.set_mass(mass);
+                        collider.set_density(density);
                     }
                     let mut friction = collider.friction();
                     if ui
                         .add(
                             egui::DragValue::new(&mut friction)
                                 .prefix("Friction: ")
-                                .clamp_range(0.0..=2.0),
+                                .clamp_range(0.0..=5.0)
+                                .speed(0.01),
                         )
                         .changed()
                     {
@@ -659,7 +669,8 @@ impl Engine {
                         .add(
                             egui::DragValue::new(&mut restitution)
                                 .prefix("Restituion: ")
-                                .clamp_range(0.0..=1.0),
+                                .clamp_range(0.0..=1.0)
+                                .speed(0.01),
                         )
                         .changed()
                     {
@@ -680,6 +691,11 @@ impl Engine {
         isometry: nalgebra::Isometry3<f32>,
         body_type: BodyType,
     ) -> ObjectHandle {
+        use rapier3d::{
+            dynamics::MassProperties,
+            geometry::{ColliderBuilder, TriMeshFlags},
+        };
+
         let mut visuals = Vec::new();
         for visual in config.visuals.iter() {
             let (model, task) = self.asset_hub.models.load(
@@ -703,15 +719,31 @@ impl Engine {
             self.load_tasks.push(task.clone());
         }
 
+        let add_mass_properties = match config.additional_mass {
+            Some(ref am) => match am.shape {
+                config::Shape::Ball { radius } => MassProperties::from_ball(am.density, radius),
+                config::Shape::Cylinder {
+                    half_height,
+                    radius,
+                } => MassProperties::from_cylinder(am.density, half_height, radius),
+                config::Shape::Cuboid { half } => {
+                    MassProperties::from_cuboid(am.density, half.into())
+                }
+                config::Shape::ConvexHull { .. } | config::Shape::TriMesh { .. } => {
+                    unimplemented!()
+                }
+            },
+            None => Default::default(),
+        };
+
         let rigid_body = rapier3d::dynamics::RigidBodyBuilder::new(body_type)
             .position(isometry)
+            .additional_mass_properties(add_mass_properties)
             .build();
         let rb_handle = self.physics.rigid_bodies.insert(rigid_body);
 
         let mut colliders = Vec::new();
         for cc in config.colliders.iter() {
-            use rapier3d::geometry::{ColliderBuilder, TriMeshFlags};
-
             let isometry = nalgebra::geometry::Isometry3::from_parts(
                 nalgebra::Vector3::from(cc.pos).into(),
                 make_quaternion(cc.rot),
@@ -766,7 +798,7 @@ impl Engine {
                 }
             };
             let collider = builder
-                .mass(cc.mass)
+                .density(cc.density)
                 .friction(cc.friction)
                 .restitution(cc.restitution)
                 .position(isometry)
@@ -783,7 +815,7 @@ impl Engine {
             name: config.name.clone(),
             rigid_body: rb_handle,
             prev_isometry: nalgebra::Isometry3::default(),
-            _colliders: colliders,
+            colliders,
             visuals,
         });
         ObjectHandle(raw_handle)
@@ -821,6 +853,19 @@ impl Engine {
         let object = &self.objects[handle.0];
         let body = &self.physics.rigid_bodies[object.rigid_body];
         body.predict_position_using_velocity_and_forces(self.time_ahead)
+    }
+
+    pub fn get_object_bounds(&self, handle: ObjectHandle) -> rapier3d::geometry::Aabb {
+        let object = &self.objects[handle.0];
+        let mut aabb = rapier3d::geometry::Aabb::new_invalid();
+        for &collider_handle in object.colliders.iter() {
+            let collider = &self.physics.colliders[collider_handle];
+            //TODO: use `merge` - https://github.com/dimforge/rapier/issues/574
+            for point in collider.compute_aabb().vertices() {
+                aabb.take_point(point);
+            }
+        }
+        aabb
     }
 
     /// Returns the position of the object within the "time_step" of precision.
