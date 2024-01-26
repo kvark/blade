@@ -11,7 +11,7 @@
 
 Blade is an innovative rendering solution for Rust. It starts with a lean [low-level GPU abstraction](https://youtu.be/63dnzjw4azI?t=623) focused at ergonomics and fun. It then grows into a high-level rendering library that utilizes hardware ray-tracing. Finally, a [task-parallel asset pipeline](https://youtu.be/1DiA3OYqvqU) together with [egui](https://www.egui.rs/) support turn it into a minimal rendering engine.
 
-![architecture](architecture.png)
+![architecture](https://raw.githubusercontent.com/kvark/blade/main/docs/architecture2.png)
 
 ## Examples
 
