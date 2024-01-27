@@ -1041,7 +1041,7 @@ fn main() {
     example.load_scene(Path::new(&path_to_scene));
 
     struct Drag {
-        screen_pos: glam::IVec2,
+        _screen_pos: glam::IVec2,
         rotation: glam::Quat,
     }
     let mut drag_start = None::<Drag>;
@@ -1125,7 +1125,7 @@ fn main() {
                     } => {
                         drag_start = match state {
                             winit::event::ElementState::Pressed => Some(Drag {
-                                screen_pos: last_mouse_pos.into(),
+                                _screen_pos: last_mouse_pos.into(),
                                 rotation: example.camera.rot.into(),
                             }),
                             winit::event::ElementState::Released => None,
