@@ -381,7 +381,7 @@ impl crate::traits::CommandDevice for Context {
         }
     }
 
-    fn destroy_command_encoder(&self, _command_encoder: CommandEncoder) {}
+    fn destroy_command_encoder(&self, _command_encoder: &mut CommandEncoder) {}
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         {

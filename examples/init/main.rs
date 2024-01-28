@@ -223,7 +223,7 @@ fn main() {
     let sync_point = context.submit(&mut command_encoder);
 
     context.wait_for(&sync_point, !0);
-    context.destroy_command_encoder(command_encoder);
+    context.destroy_command_encoder(&mut command_encoder);
     for buffer in temp_buffers {
         context.destroy_buffer(buffer);
     }
