@@ -5,7 +5,7 @@ use blade_graphics as gpu;
 mod particle;
 
 struct Example {
-    command_encoder: Option<gpu::CommandEncoder>,
+    command_encoder: gpu::CommandEncoder,
     prev_sync_point: Option<gpu::SyncPoint>,
     context: gpu::Context,
     gui_painter: blade_egui::GuiPainter,
@@ -54,7 +54,7 @@ impl Example {
         let sync_point = context.submit(&mut command_encoder);
 
         Self {
-            command_encoder: Some(command_encoder),
+            command_encoder,
             prev_sync_point: Some(sync_point),
             context,
             gui_painter,
@@ -66,8 +66,8 @@ impl Example {
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);
         }
-        let encoder = self.command_encoder.take().unwrap();
-        self.context.destroy_command_encoder(encoder);
+        self.context
+            .destroy_command_encoder(&mut self.command_encoder);
         self.gui_painter.destroy(&self.context);
         self.particle_system.destroy(&self.context);
     }
@@ -79,17 +79,15 @@ impl Example {
         screen_desc: &blade_egui::ScreenDescriptor,
     ) {
         let frame = self.context.acquire_frame();
-        let encoder = self.command_encoder.as_mut().unwrap();
-
-        encoder.start();
-        encoder.init_texture(frame.texture());
+        self.command_encoder.start();
+        self.command_encoder.init_texture(frame.texture());
 
         self.gui_painter
-            .update_textures(encoder, gui_textures, &self.context);
+            .update_textures(&mut self.command_encoder, gui_textures, &self.context);
 
-        self.particle_system.update(encoder);
+        self.particle_system.update(&mut self.command_encoder);
 
-        if let mut pass = encoder.render(gpu::RenderTargetSet {
+        if let mut pass = self.command_encoder.render(gpu::RenderTargetSet {
             colors: &[gpu::RenderTarget {
                 view: frame.texture_view(),
                 init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
@@ -101,8 +99,8 @@ impl Example {
             self.gui_painter
                 .paint(&mut pass, gui_primitives, screen_desc, &self.context);
         }
-        encoder.present(frame);
-        let sync_point = self.context.submit(encoder);
+        self.command_encoder.present(frame);
+        let sync_point = self.context.submit(&mut self.command_encoder);
         self.gui_painter.after_submit(&sync_point);
 
         if let Some(sp) = self.prev_sync_point.take() {

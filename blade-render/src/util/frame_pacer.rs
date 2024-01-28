@@ -8,7 +8,7 @@ pub struct FramePacer {
     frame_index: usize,
     prev_resources: FrameResources,
     prev_sync_point: Option<blade_graphics::SyncPoint>,
-    command_encoder: Option<blade_graphics::CommandEncoder>,
+    command_encoder: blade_graphics::CommandEncoder,
     next_resources: FrameResources,
 }
 
@@ -22,7 +22,7 @@ impl FramePacer {
             frame_index: 0,
             prev_resources: FrameResources::default(),
             prev_sync_point: None,
-            command_encoder: Some(encoder),
+            command_encoder: encoder,
             next_resources: FrameResources::default(),
         }
     }
@@ -46,17 +46,16 @@ impl FramePacer {
 
     pub fn destroy(&mut self, context: &blade_graphics::Context) {
         self.wait_for_previous_frame(context);
-        context.destroy_command_encoder(self.command_encoder.take().unwrap());
+        context.destroy_command_encoder(&mut self.command_encoder);
     }
 
     pub fn begin_frame(&mut self) -> (&mut blade_graphics::CommandEncoder, &mut FrameResources) {
-        let encoder = self.command_encoder.as_mut().unwrap();
-        encoder.start();
-        (encoder, &mut self.next_resources)
+        self.command_encoder.start();
+        (&mut self.command_encoder, &mut self.next_resources)
     }
 
     pub fn end_frame(&mut self, context: &blade_graphics::Context) -> &blade_graphics::SyncPoint {
-        let sync_point = context.submit(self.command_encoder.as_mut().unwrap());
+        let sync_point = context.submit(&mut self.command_encoder);
         self.frame_index += 1;
         // Wait for the previous frame immediately - this ensures that we are
         // only processing one frame at a time, and yet not stalling.

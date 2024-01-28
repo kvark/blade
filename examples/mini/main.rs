@@ -167,7 +167,7 @@ fn main() {
     let answer = unsafe { *(result_buffer.data() as *mut u32) };
     println!("Output: 0x{:x}", answer);
 
-    context.destroy_command_encoder(command_encoder);
+    context.destroy_command_encoder(&mut command_encoder);
     context.destroy_buffer(result_buffer);
     context.destroy_buffer(upload_buffer);
     for view in views {

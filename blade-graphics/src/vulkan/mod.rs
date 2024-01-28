@@ -380,7 +380,7 @@ impl crate::traits::CommandDevice for Context {
         }
     }
 
-    fn destroy_command_encoder(&self, command_encoder: CommandEncoder) {
+    fn destroy_command_encoder(&self, command_encoder: &mut CommandEncoder) {
         for cmd_buf in command_encoder.buffers.iter() {
             let raw_cmd_buffers = [cmd_buf.raw];
             unsafe {
@@ -397,7 +397,7 @@ impl crate::traits::CommandDevice for Context {
                 .core
                 .destroy_command_pool(command_encoder.pool, None)
         };
-        if let Some(crash_handler) = command_encoder.crash_handler {
+        if let Some(crash_handler) = command_encoder.crash_handler.take() {
             self.destroy_buffer(crash_handler.marker_buf);
         };
     }
