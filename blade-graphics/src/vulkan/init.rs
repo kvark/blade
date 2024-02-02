@@ -287,6 +287,11 @@ impl super::Context {
                 &entry,
                 &core_instance,
             ),
+            surface: if surface_handles.is_some() {
+                Some(khr::Surface::new(&entry, &core_instance))
+            } else {
+                None
+            },
             core: core_instance,
         };
 
@@ -536,7 +541,7 @@ impl super::Context {
                 last_progress,
             }),
             surface,
-            _physical_device: physical_device,
+            physical_device,
             naga_flags,
             instance,
             _entry: entry,
@@ -587,7 +592,34 @@ impl super::Context {
 
 impl super::Context {
     pub fn resize(&self, config: crate::SurfaceConfig) -> crate::TextureFormat {
+        let surface_khr = self.instance.surface.as_ref().unwrap();
         let mut surface = self.surface.as_ref().unwrap().lock().unwrap();
+
+        let capabilities = unsafe {
+            surface_khr
+                .get_physical_device_surface_capabilities(self.physical_device, surface.raw)
+                .unwrap()
+        };
+        if config.size.width < capabilities.min_image_extent.width
+            || config.size.width > capabilities.max_image_extent.width
+            || config.size.height < capabilities.min_image_extent.height
+            || config.size.height > capabilities.max_image_extent.height
+        {
+            log::warn!(
+                "Requested size {}x{} is outside of surface capabilities",
+                config.size.width,
+                config.size.height
+            );
+        }
+        if config.frame_count < capabilities.min_image_count
+            || config.frame_count > capabilities.max_image_count
+        {
+            log::warn!(
+                "Requested frame count {} is outside of surface capabilities",
+                config.frame_count
+            );
+        }
+
         let queue_families = [self.queue_family_index];
         let format = crate::TextureFormat::Bgra8UnormSrgb;
         let vk_format = super::map_texture_format(format);

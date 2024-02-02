@@ -13,6 +13,7 @@ struct Instance {
     core: ash::Instance,
     debug_utils: ext::DebugUtils,
     get_physical_device_properties2: khr::GetPhysicalDeviceProperties2,
+    surface: Option<khr::Surface>,
 }
 
 #[derive(Clone)]
@@ -101,7 +102,7 @@ pub struct Context {
     queue_family_index: u32,
     queue: Mutex<Queue>,
     surface: Option<Mutex<Surface>>,
-    _physical_device: vk::PhysicalDevice,
+    physical_device: vk::PhysicalDevice,
     naga_flags: naga::back::spv::WriterFlags,
     instance: Instance,
     _entry: ash::Entry,
