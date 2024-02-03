@@ -70,7 +70,7 @@ egui-gizmo = "0.12"
 egui_plot = "0.23"
 egui-winit = "0.23"
 env_logger = "0.10"
-del-msh = "0.1.22"
+del-msh = "=0.1.24" # not following semver :(
 glam = { workspace = true }
 log = { workspace = true }
 mint = { workspace = true, features = ["serde"] }
