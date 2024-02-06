@@ -418,9 +418,9 @@ impl super::CommandEncoder {
         }
     }
 
-    pub(super) fn check_gpu_crash<T>(&self, ret: Result<T, vk::Result>) -> T {
+    pub(super) fn check_gpu_crash<T>(&self, ret: Result<T, vk::Result>) -> Option<T> {
         match ret {
-            Ok(value) => value,
+            Ok(value) => Some(value),
             Err(vk::Result::ERROR_DEVICE_LOST) => match self.crash_handler {
                 Some(ref ch) => {
                     let last_id = unsafe { *(ch.marker_buf.data() as *mut u32) };
@@ -435,6 +435,10 @@ impl super::CommandEncoder {
                     panic!("GPU has crashed, and no debug information is available.");
                 }
             },
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                log::warn!("GPU frame is out of date");
+                None
+            }
             Err(other) => panic!("GPU error {}", other),
         }
     }
