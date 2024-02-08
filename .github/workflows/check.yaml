@@ -60,6 +60,15 @@ jobs:
         command: test
         args: --workspace --all-features
 
+    - name: Test GLES
+      if: matrix.name == 'Linux'
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --example bunnymark
+      env:
+        RUSTFLAGS: "--cfg gles"
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

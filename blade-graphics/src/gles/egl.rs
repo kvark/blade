@@ -737,7 +737,7 @@ impl EglContext {
         &self,
         desc: &crate::ContextDesc,
     ) -> (glow::Context, super::Capabilities, super::Limits) {
-        let gl = glow::Context::from_loader_function(|name| {
+        let mut gl = glow::Context::from_loader_function(|name| {
             self.instance
                 .get_proc_address(name)
                 .map_or(ptr::null(), |p| p as *const _)
