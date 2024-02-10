@@ -10,6 +10,7 @@ const EGL_CONTEXT_FLAGS_KHR: i32 = 0x30FC;
 const EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR: i32 = 0x0001;
 const EGL_PLATFORM_WAYLAND_KHR: u32 = 0x31D8;
 const EGL_PLATFORM_X11_KHR: u32 = 0x31D5;
+const EGL_PLATFORM_XCB_EXT: u32 = 0x31DC;
 const EGL_PLATFORM_ANGLE_ANGLE: u32 = 0x3202;
 const EGL_PLATFORM_ANGLE_TYPE_ANGLE: u32 = 0x3203;
 const EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE: u32 = 0x3489;
@@ -255,12 +256,25 @@ impl Context {
                 (display, None)
             }
             Rdh::Xlib(display_handle) => {
-                log::info!("Using X11 platform");
+                log::info!("Using X11 (xlib) platform");
                 let display_attributes = [egl::ATTRIB_NONE];
                 let display = egl1_5
                     .get_platform_display(
                         EGL_PLATFORM_X11_KHR,
                         display_handle.display,
+                        &display_attributes,
+                    )
+                    .unwrap();
+                let library = find_x_library().unwrap();
+                (display, Some(library))
+            }
+            Rdh::Xcb(display_handle) => {
+                log::info!("Using X11 (xcb) platform");
+                let display_attributes = [egl::ATTRIB_NONE];
+                let display = egl1_5
+                    .get_platform_display(
+                        EGL_PLATFORM_XCB_EXT,
+                        display_handle.connection,
                         &display_attributes,
                     )
                     .unwrap();

@@ -18,6 +18,8 @@ impl super::Context {
 
         let naga_options = glsl::Options {
             version: glsl::Version::Embedded {
+                //Note: using this version doesn't require the bindings to be assigned
+                // so we are using the shader modules directly.
                 version: 300,
                 is_webgl: cfg!(target_arch = "wasm32"),
             },
