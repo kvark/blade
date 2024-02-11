@@ -105,12 +105,12 @@ struct WindowSystemInterface {
     window_handle: raw_window_handle::RawWindowHandle,
     renderbuf: glow::Renderbuffer,
     framebuf: glow::Framebuffer,
-    surface_format: crate::TextureFormat,
 }
 
 struct Swapchain {
     surface: egl::Surface,
     extent: crate::Extent,
+    format: crate::TextureFormat,
 }
 
 struct ContextInner {
@@ -316,7 +316,6 @@ impl Context {
                 window_handle: window.raw_window_handle(),
                 renderbuf,
                 framebuf,
-                surface_format: crate::TextureFormat::Rgba8Unorm,
             }),
             inner: Mutex::new(ContextInner {
                 egl: egl_context,
@@ -389,6 +388,8 @@ impl Context {
                 egl::SINGLE_BUFFER
             },
         ];
+
+        //TODO: detect if linear color space is supported
         match inner.egl.srgb_kind {
             SrgbFrameBufferKind::None => {}
             SrgbFrameBufferKind::Core => {
@@ -401,6 +402,11 @@ impl Context {
             }
         }
         attributes.push(egl::ATTRIB_NONE as i32);
+
+        let format = match config.color_space {
+            crate::ColorSpace::Linear => crate::TextureFormat::Rgba8UnormSrgb,
+            crate::ColorSpace::Srgb => crate::TextureFormat::Rgba8Unorm,
+        };
 
         // Careful, we can still be in 1.4 version even if `upcast` succeeds
         let surface = match inner.egl.instance.upcast::<egl::EGL1_5>() {
@@ -434,9 +440,10 @@ impl Context {
         inner.swapchain = Some(Swapchain {
             surface,
             extent: config.size,
+            format,
         });
 
-        let format_desc = super::describe_texture_format(wsi.surface_format);
+        let format_desc = super::describe_texture_format(format);
         inner.egl.make_current();
         unsafe {
             let gl = &inner.glow;
@@ -459,7 +466,7 @@ impl Context {
         };
         inner.egl.unmake_current();
 
-        wsi.surface_format
+        format
     }
 
     pub fn acquire_frame(&self) -> super::Frame {
@@ -470,7 +477,7 @@ impl Context {
             texture: super::Texture {
                 inner: super::TextureInner::Renderbuffer { raw: wsi.renderbuf },
                 target_size: [sc.extent.width as u16, sc.extent.height as u16],
-                format: wsi.surface_format,
+                format: sc.format,
             },
         }
     }

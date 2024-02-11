@@ -63,15 +63,23 @@ impl super::Surface {
         Self {
             view: msg_send![view, retain],
             render_layer: mem::transmute::<_, &metal::MetalLayerRef>(raw_layer).to_owned(),
-            format: crate::TextureFormat::Bgra8UnormSrgb,
         }
     }
 
-    fn reconfigure(&mut self, device: &metal::DeviceRef, config: crate::SurfaceConfig) {
+    fn reconfigure(
+        &mut self,
+        device: &metal::DeviceRef,
+        config: crate::SurfaceConfig,
+    ) -> crate::TextureFormat {
+        let format = match config.color_space {
+            crate::ColorSpace::Linear => crate::TextureFormat::Bgra8UnormSrgb,
+            crate::ColorSpace::Srgb => crate::TextureFormat::Bgra8Unorm,
+        };
+
         self.render_layer.set_opaque(true);
         self.render_layer.set_device(device);
         self.render_layer
-            .set_pixel_format(super::map_texture_format(self.format));
+            .set_pixel_format(super::map_texture_format(format));
         self.render_layer
             .set_framebuffer_only(config.usage == crate::TextureUsage::TARGET);
         self.render_layer
@@ -83,14 +91,15 @@ impl super::Surface {
         unsafe {
             let () = msg_send![self.render_layer, setDisplaySyncEnabled: true];
         }
+
+        format
     }
 }
 
 impl super::Context {
     pub fn resize(&self, config: crate::SurfaceConfig) -> crate::TextureFormat {
         let mut surface = self.surface.as_ref().unwrap().lock().unwrap();
-        surface.reconfigure(&*self.device.lock().unwrap(), config);
-        surface.format
+        surface.reconfigure(&*self.device.lock().unwrap(), config)
     }
 
     pub fn acquire_frame(&self) -> super::Frame {

@@ -72,6 +72,7 @@ impl Example {
             },
             usage: gpu::TextureUsage::TARGET,
             frame_count: 3,
+            color_space: gpu::ColorSpace::Linear,
         });
 
         let global_layout = <Params as gpu::ShaderData>::layout();
