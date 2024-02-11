@@ -44,7 +44,10 @@ impl crate::traits::ResourceDevice for super::Context {
         let usage = match desc.memory {
             crate::Memory::Device => glow::STATIC_DRAW,
             crate::Memory::Shared => {
-                map_flags = glow::MAP_READ_BIT | glow::MAP_WRITE_BIT | glow::MAP_UNSYNCHRONIZED_BIT;
+                map_flags = glow::MAP_READ_BIT
+                    | glow::MAP_WRITE_BIT
+                    | glow::MAP_PERSISTENT_BIT
+                    | glow::MAP_UNSYNCHRONIZED_BIT;
                 storage_flags = glow::MAP_PERSISTENT_BIT
                     | glow::MAP_COHERENT_BIT
                     | glow::MAP_READ_BIT
@@ -52,7 +55,8 @@ impl crate::traits::ResourceDevice for super::Context {
                 glow::STREAM_READ
             }
             crate::Memory::Upload => {
-                map_flags = glow::MAP_WRITE_BIT | glow::MAP_UNSYNCHRONIZED_BIT;
+                map_flags =
+                    glow::MAP_WRITE_BIT | glow::MAP_PERSISTENT_BIT | glow::MAP_UNSYNCHRONIZED_BIT;
                 storage_flags =
                     glow::MAP_PERSISTENT_BIT | glow::MAP_COHERENT_BIT | glow::MAP_WRITE_BIT;
                 glow::DYNAMIC_DRAW
