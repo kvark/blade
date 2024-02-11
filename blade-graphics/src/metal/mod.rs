@@ -15,7 +15,6 @@ mod surface;
 struct Surface {
     view: *mut objc::runtime::Object,
     render_layer: metal::MetalLayer,
-    format: crate::TextureFormat,
 }
 
 unsafe impl Send for Surface {}

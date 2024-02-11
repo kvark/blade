@@ -88,6 +88,7 @@ impl Example {
             size: screen_size,
             usage: gpu::TextureUsage::TARGET,
             frame_count: 3,
+            color_space: gpu::ColorSpace::Linear,
         });
 
         let source = std::fs::read_to_string("examples/ray-query/shader.wgsl").unwrap();

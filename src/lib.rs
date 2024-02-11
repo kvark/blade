@@ -237,6 +237,7 @@ impl Engine {
             },
             usage: gpu::TextureUsage::TARGET,
             frame_count: 3,
+            color_space: gpu::ColorSpace::Linear,
         }
     }
 

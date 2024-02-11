@@ -959,11 +959,25 @@ pub struct RenderTargetSet<'a> {
     pub depth_stencil: Option<RenderTarget>,
 }
 
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+pub enum ColorSpace {
+    #[default]
+    Linear,
+    Srgb,
+}
+
 #[derive(Debug)]
 pub struct SurfaceConfig {
     pub size: Extent,
     pub usage: TextureUsage,
     pub frame_count: u32,
+    /// The color space that render output colors are expected to be in.
+    ///
+    /// This will affect the surface format returned by the `Context`.
+    ///
+    /// For example, if the display expects sRGB space and we render
+    /// in `ColorSpace::Linear` space, the returned format will be sRGB.
+    pub color_space: ColorSpace,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -34,6 +34,7 @@ impl Example {
             },
             usage: gpu::TextureUsage::TARGET,
             frame_count: 3,
+            color_space: gpu::ColorSpace::Linear,
         });
         let gui_painter = blade_egui::GuiPainter::new(surface_format, &context);
         let particle_system = particle::System::new(

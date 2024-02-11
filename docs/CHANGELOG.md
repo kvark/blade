@@ -5,6 +5,9 @@ Changelog for Blade
 - support object motion
 - support clockwise mesh winding
 
+## blade-graphics-0.4 (TBD)
+- color space configuration for surfaces
+
 ## blade-graphics-0.3, blade-render-0.2 (17 Nov 2023)
 - tangent space generation
 - spatio-temporal resampling

@@ -621,7 +621,11 @@ impl super::Context {
         }
 
         let queue_families = [self.queue_family_index];
-        let format = crate::TextureFormat::Bgra8UnormSrgb;
+        //TODO: consider supported color spaces by Vulkan
+        let format = match config.color_space {
+            crate::ColorSpace::Linear => crate::TextureFormat::Bgra8UnormSrgb,
+            crate::ColorSpace::Srgb => crate::TextureFormat::Bgra8Unorm,
+        };
         let vk_format = super::map_texture_format(format);
         let create_info = vk::SwapchainCreateInfoKHR::builder()
             .surface(surface.raw)
