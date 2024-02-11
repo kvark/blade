@@ -406,6 +406,14 @@ impl Context {
             },
         }
     }
+
+    /// Get the CALayerMetal for this surface, if any.
+    /// This is platform specific API.
+    pub fn metal_layer(&self) -> Option<metal::MetalLayer> {
+        self.surface
+            .as_ref()
+            .map(|suf| suf.lock().unwrap().render_layer.clone())
+    }
 }
 
 #[hidden_trait::expose]
