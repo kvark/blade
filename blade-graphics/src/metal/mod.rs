@@ -122,7 +122,7 @@ impl TextureView {
 
     /// Create a TextureView from a raw Metal Texture.
     /// Does not keep a reference, need not being destoryed.
-    pub fn from_metal_texture(&self, raw: &metal::TextureRef) -> Self {
+    pub fn from_metal_texture(raw: &metal::TextureRef) -> Self {
         Self { raw: raw.as_ptr() }
     }
 }
