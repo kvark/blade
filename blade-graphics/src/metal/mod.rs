@@ -119,6 +119,12 @@ impl TextureView {
     fn as_ref(&self) -> &metal::TextureRef {
         unsafe { metal::TextureRef::from_ptr(self.raw) }
     }
+
+    /// Create a TextureView from a raw Metal Texture.
+    /// Does not keep a reference, need not being destoryed.
+    pub fn from_external(&self, raw: &metal::TextureRef) -> Self {
+        Self { raw: raw.as_ptr() }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
