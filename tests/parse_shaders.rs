@@ -19,12 +19,16 @@ fn parse_wgsl() {
         let example = match sub_entry {
             Ok(entry) => entry.path(),
             Err(e) => {
-                println!("Skipping example: {:?}", e);
+                println!("Skipping non-example: {:?}", e);
                 continue;
             }
         };
+        let dir = match example.read_dir() {
+            Ok(dir) => dir,
+            Err(_) => continue,
+        };
 
-        for file in example.read_dir().unwrap() {
+        for file in dir {
             let path = match file {
                 Ok(entry) => entry.path(),
                 Err(e) => {
@@ -35,7 +39,7 @@ fn parse_wgsl() {
             let shader_raw = match path.extension() {
                 Some(ostr) if &*ostr == "wgsl" => {
                     println!("Validating {:?}", path);
-                    fs::read(path).unwrap_or_default()
+                    fs::read(&path).unwrap_or_default()
                 }
                 _ => continue,
             };
