@@ -122,7 +122,7 @@ impl TextureView {
 
     /// Create a TextureView from a raw Metal Texture.
     /// Does not keep a reference, need not being destoryed.
-    pub fn from_external(&self, raw: &metal::TextureRef) -> Self {
+    pub fn from_metal_texture(&self, raw: &metal::TextureRef) -> Self {
         Self { raw: raw.as_ptr() }
     }
 }
@@ -419,6 +419,12 @@ impl Context {
         self.surface
             .as_ref()
             .map(|suf| suf.lock().unwrap().render_layer.clone())
+    }
+
+    /// Get an MTLDevice of this context.
+    /// This is platform specific API.
+    pub fn metal_device(&self) -> metal::Device {
+        self.device.lock().unwrap().clone()
     }
 }
 
