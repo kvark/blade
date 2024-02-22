@@ -5,7 +5,7 @@ use ash::{
 use naga::back::spv;
 use std::{ffi, mem, sync::Mutex};
 
-const OPTIONAL_LAYERS: &[&[u8]] = &[b"VK_LAYER_NV_optimus\0"];
+const OPTIONAL_LAYERS: &[&[u8]] = &[];
 
 const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
     vk::ExtInlineUniformBlockFn::name(),
@@ -18,6 +18,7 @@ const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
 struct AdapterCapabilities {
     api_version: u32,
     properties: vk::PhysicalDeviceProperties,
+    queue_family_index: u32,
     layered: bool,
     ray_tracing: bool,
     buffer_marker: bool,
@@ -28,6 +29,7 @@ unsafe fn inspect_adapter(
     phd: vk::PhysicalDevice,
     instance: &super::Instance,
     driver_api_version: u32,
+    surface: Option<vk::SurfaceKHR>,
 ) -> Option<AdapterCapabilities> {
     let supported_extension_properties = instance
         .core
@@ -44,6 +46,17 @@ unsafe fn inspect_adapter(
                 extension
             );
             return None;
+        }
+    }
+
+    let queue_family_index = 0; //TODO
+    if let Some(surface) = surface {
+        if let Some(ref khr) = instance.surface {
+            if khr.get_physical_device_surface_support(phd, queue_family_index, surface) != Ok(true)
+            {
+                log::warn!("Rejected for not presenting to the window surface");
+                return None;
+            }
         }
     }
 
@@ -180,6 +193,7 @@ unsafe fn inspect_adapter(
     Some(AdapterCapabilities {
         api_version,
         properties,
+        queue_family_index,
         layered: portability_subset_properties.min_vertex_input_binding_stride_alignment != 0,
         ray_tracing,
         buffer_marker,
@@ -310,6 +324,10 @@ impl super::Context {
             entry.create_instance(&create_info, None).unwrap()
         };
 
+        let vk_surface = surface_handles.map(|(rwh, rdh)| {
+            ash_window::create_surface(&entry, &core_instance, rdh, rwh, None).unwrap()
+        });
+
         let instance = super::Instance {
             debug_utils: ext::DebugUtils::new(&entry, &core_instance),
             get_physical_device_properties2: khr::GetPhysicalDeviceProperties2::new(
@@ -328,16 +346,16 @@ impl super::Context {
         let (physical_device, capabilities) = physical_devices
             .into_iter()
             .find_map(|phd| {
-                inspect_adapter(phd, &instance, driver_api_version).map(|caps| (phd, caps))
+                inspect_adapter(phd, &instance, driver_api_version, vk_surface)
+                    .map(|caps| (phd, caps))
             })
             .ok_or(crate::NotSupportedError)?;
 
         log::debug!("Adapter {:#?}", capabilities);
-        let queue_family_index = 0; //TODO
 
         let device_core = {
             let family_info = vk::DeviceQueueCreateInfo::builder()
-                .queue_family_index(queue_family_index)
+                .queue_family_index(capabilities.queue_family_index)
                 .queue_priorities(&[1.0])
                 .build();
             let family_infos = [family_info];
@@ -514,7 +532,9 @@ impl super::Context {
             }
         };
 
-        let queue = device.core.get_device_queue(queue_family_index, 0);
+        let queue = device
+            .core
+            .get_device_queue(capabilities.queue_family_index, 0);
         let last_progress = 0;
         let mut timeline_info = vk::SemaphoreTypeCreateInfo::builder()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
@@ -535,9 +555,8 @@ impl super::Context {
                 .unwrap()
         };
 
-        let surface = surface_handles.map(|(rwh, rdh)| {
+        let surface = vk_surface.map(|raw| {
             let extension = khr::Swapchain::new(&instance.core, &device.core);
-            let raw = ash_window::create_surface(&entry, &instance.core, rdh, rwh, None).unwrap();
             let semaphore_create_info = vk::SemaphoreCreateInfo::builder();
             let next_semaphore = unsafe {
                 device
@@ -562,7 +581,7 @@ impl super::Context {
         Ok(super::Context {
             memory: Mutex::new(memory_manager),
             device,
-            queue_family_index,
+            queue_family_index: capabilities.queue_family_index,
             queue: Mutex::new(super::Queue {
                 raw: queue,
                 timeline_semaphore,
