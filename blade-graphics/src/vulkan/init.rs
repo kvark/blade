@@ -5,6 +5,8 @@ use ash::{
 use naga::back::spv;
 use std::{ffi, mem, sync::Mutex};
 
+const OPTIONAL_LAYERS: &[&[u8]] = &[b"VK_LAYER_NV_optimus\0"];
+
 const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
     vk::ExtInlineUniformBlockFn::name(),
     vk::KhrTimelineSemaphoreFn::name(),
@@ -210,18 +212,45 @@ impl super::Context {
             }
         };
 
-        let _supported_layers = match entry.enumerate_instance_layer_properties() {
-            Ok(layers) => layers,
-            Err(err) => {
-                log::error!("enumerate_instance_layer_properties: {:?}", err);
-                return Err(crate::NotSupportedError);
-            }
-        };
+        let layers = {
+            let supported_layers = match entry.enumerate_instance_layer_properties() {
+                Ok(layers) => layers,
+                Err(err) => {
+                    log::error!("enumerate_instance_layer_properties: {:?}", err);
+                    return Err(crate::NotSupportedError);
+                }
+            };
+            let supported_layer_names = supported_layers
+                .iter()
+                .map(|properties| ffi::CStr::from_ptr(properties.layer_name.as_ptr()))
+                .collect::<Vec<_>>();
 
-        let mut layers: Vec<&'static ffi::CStr> = Vec::new();
-        if desc.validation {
-            layers.push(ffi::CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0").unwrap());
-        }
+            let mut layers: Vec<&'static ffi::CStr> = Vec::new();
+            let mut required_layers = Vec::new();
+
+            if desc.validation {
+                required_layers.push(b"VK_LAYER_KHRONOS_validation\0");
+            }
+
+            for required in required_layers {
+                let name = ffi::CStr::from_bytes_with_nul(required).unwrap();
+                if supported_layer_names.contains(&name) {
+                    layers.push(name);
+                } else {
+                    log::error!("Required layer is not found: {:?}", name);
+                }
+            }
+
+            for &optional in OPTIONAL_LAYERS {
+                let name = ffi::CStr::from_bytes_with_nul(optional).unwrap();
+                if supported_layer_names.contains(&name) {
+                    log::info!("Enabling optional layer: {:?}", name);
+                    layers.push(name);
+                }
+            }
+
+            layers
+        };
 
         let supported_instance_extension_properties =
             match entry.enumerate_instance_extension_properties(None) {
