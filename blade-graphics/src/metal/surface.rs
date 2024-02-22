@@ -89,7 +89,7 @@ impl super::Surface {
             config.size.height as f64,
         ));
         unsafe {
-            let () = msg_send![self.render_layer, setDisplaySyncEnabled: true];
+            let () = msg_send![self.render_layer, setDisplaySyncEnabled: !config.allow_tearing];
         }
 
         format

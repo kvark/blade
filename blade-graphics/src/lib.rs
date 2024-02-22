@@ -971,6 +971,7 @@ pub struct SurfaceConfig {
     pub size: Extent,
     pub usage: TextureUsage,
     pub frame_count: u32,
+    pub allow_tearing: bool,
     /// The color space that render output colors are expected to be in.
     ///
     /// This will affect the surface format returned by the `Context`.

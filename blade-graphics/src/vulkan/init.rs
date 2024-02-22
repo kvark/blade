@@ -675,6 +675,28 @@ impl super::Context {
             );
         }
 
+        let present_modes = unsafe {
+            surface_khr
+                .get_physical_device_surface_present_modes(self.physical_device, surface.raw)
+                .unwrap()
+        };
+        let preference_order = if config.allow_tearing {
+            [
+                vk::PresentModeKHR::IMMEDIATE,
+                vk::PresentModeKHR::FIFO_RELAXED,
+                vk::PresentModeKHR::MAILBOX,
+                vk::PresentModeKHR::FIFO,
+            ]
+            .as_slice()
+        } else {
+            [vk::PresentModeKHR::MAILBOX, vk::PresentModeKHR::FIFO].as_slice()
+        };
+        let present_mode = *preference_order
+            .iter()
+            .find(|mode| present_modes.contains(mode))
+            .unwrap();
+        log::info!("Using surface present mode {:?}", present_mode);
+
         let queue_families = [self.queue_family_index];
         //TODO: consider supported color spaces by Vulkan
         let format = match config.color_space {
@@ -698,7 +720,7 @@ impl super::Context {
             .queue_family_indices(&queue_families)
             .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .present_mode(vk::PresentModeKHR::FIFO)
+            .present_mode(present_mode)
             .old_swapchain(surface.swapchain);
         let new_swapchain = unsafe {
             surface

@@ -162,6 +162,7 @@ impl Example {
             },
             usage: gpu::TextureUsage::TARGET,
             frame_count: 3,
+            allow_tearing: false,
             color_space: gpu::ColorSpace::Linear,
         }
     }
