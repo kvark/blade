@@ -611,12 +611,19 @@ impl super::Context {
                 config.size.height
             );
         }
-        if config.frame_count < capabilities.min_image_count
-            || config.frame_count > capabilities.max_image_count
-        {
+
+        let effective_frame_count = config.frame_count.max(capabilities.min_image_count).min(
+            if capabilities.max_image_count != 0 {
+                capabilities.max_image_count
+            } else {
+                !0
+            },
+        );
+        if effective_frame_count != config.frame_count {
             log::warn!(
-                "Requested frame count {} is outside of surface capabilities",
-                config.frame_count
+                "Requested frame count {} is outside of surface capabilities, clamping to {}",
+                config.frame_count,
+                effective_frame_count,
             );
         }
 
@@ -629,7 +636,7 @@ impl super::Context {
         let vk_format = super::map_texture_format(format);
         let create_info = vk::SwapchainCreateInfoKHR::builder()
             .surface(surface.raw)
-            .min_image_count(config.frame_count)
+            .min_image_count(effective_frame_count)
             .image_format(vk_format)
             .image_extent(vk::Extent2D {
                 width: config.size.width,
