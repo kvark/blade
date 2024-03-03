@@ -176,6 +176,7 @@ impl Example {
                 gpu::ContextDesc {
                     validation: cfg!(debug_assertions),
                     capture: false,
+                    overlay: false,
                 },
             )
             .unwrap()

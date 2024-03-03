@@ -5,8 +5,6 @@ use ash::{
 use naga::back::spv;
 use std::{ffi, mem, sync::Mutex};
 
-const OPTIONAL_LAYERS: &[&[u8]] = &[];
-
 const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
     vk::ExtInlineUniformBlockFn::name(),
     vk::KhrTimelineSemaphoreFn::name(),
@@ -240,26 +238,21 @@ impl super::Context {
                 .collect::<Vec<_>>();
 
             let mut layers: Vec<&'static ffi::CStr> = Vec::new();
-            let mut required_layers = Vec::new();
+            let mut requested_layers = Vec::<&[u8]>::new();
 
             if desc.validation {
-                required_layers.push(b"VK_LAYER_KHRONOS_validation\0");
+                requested_layers.push(b"VK_LAYER_KHRONOS_validation\0");
+            }
+            if desc.overlay {
+                requested_layers.push(b"VK_LAYER_MESA_overlay\0");
             }
 
-            for required in required_layers {
+            for required in requested_layers {
                 let name = ffi::CStr::from_bytes_with_nul(required).unwrap();
                 if supported_layer_names.contains(&name) {
                     layers.push(name);
                 } else {
                     log::error!("Required layer is not found: {:?}", name);
-                }
-            }
-
-            for &optional in OPTIONAL_LAYERS {
-                let name = ffi::CStr::from_bytes_with_nul(optional).unwrap();
-                if supported_layer_names.contains(&name) {
-                    log::info!("Enabling optional layer: {:?}", name);
-                    layers.push(name);
                 }
             }
 
