@@ -5,7 +5,7 @@ use ash::{
 use naga::back::spv;
 use std::{ffi, mem, sync::Mutex};
 
-const OPTIONAL_LAYERS: &[&[u8]] = &[];
+const OPTIONAL_LAYERS: &[&[u8]] = &[b"VK_LAYER_MESA_device_select\0"];
 
 const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
     vk::ExtInlineUniformBlockFn::name(),
