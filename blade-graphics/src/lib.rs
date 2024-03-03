@@ -74,10 +74,15 @@ pub use hal::*;
 
 use std::{fmt, num::NonZeroU32};
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ContextDesc {
+    /// Enable validation of the GAPI, shaders,
+    /// and insert crash markers into command buffers.
     pub validation: bool,
+    /// Enable capture support with GAPI tools.
     pub capture: bool,
+    /// Enable GAPI overlay.
+    pub overlay: bool,
 }
 
 #[derive(Debug)]

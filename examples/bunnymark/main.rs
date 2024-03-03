@@ -57,8 +57,9 @@ impl Example {
             gpu::Context::init_windowed(
                 window,
                 gpu::ContextDesc {
-                    validation: cfg!(debug_assertions),
+                    validation: false,
                     capture: false,
+                    overlay: true,
                 },
             )
             .unwrap()

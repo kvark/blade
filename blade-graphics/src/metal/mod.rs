@@ -346,6 +346,10 @@ impl Context {
         if desc.validation {
             std::env::set_var("METAL_DEVICE_WRAPPER_TYPE", "1");
         }
+        if desc.overlay {
+            std::env::set_var("MTL_HUD_ENABLED", "1");
+        }
+
         let device = metal::Device::system_default().ok_or(super::NotSupportedError)?;
         let queue = device.new_command_queue();
 
