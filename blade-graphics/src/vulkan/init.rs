@@ -5,6 +5,21 @@ use ash::{
 use naga::back::spv;
 use std::{ffi, mem, sync::Mutex};
 
+mod db {
+    pub mod intel {
+        pub const VENDOR: u32 = 0x8086;
+    }
+}
+mod layer {
+    use std::ffi::CStr;
+    pub const KHRONOS_VALIDATION: &CStr =
+        unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_KHRONOS_validation\0") };
+    pub const MESA_OVERLAY: &CStr =
+        unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_MESA_overlay\0") };
+    pub const NV_OPTIMUS: &CStr =
+        unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_NV_optimus\0") };
+}
+
 const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
     vk::ExtInlineUniformBlockFn::name(),
     vk::KhrTimelineSemaphoreFn::name(),
@@ -27,6 +42,7 @@ unsafe fn inspect_adapter(
     phd: vk::PhysicalDevice,
     instance: &super::Instance,
     driver_api_version: u32,
+    supported_layers: &[&ffi::CStr],
     surface: Option<vk::SurfaceKHR>,
 ) -> Option<AdapterCapabilities> {
     let supported_extension_properties = instance
@@ -44,17 +60,6 @@ unsafe fn inspect_adapter(
                 extension
             );
             return None;
-        }
-    }
-
-    let queue_family_index = 0; //TODO
-    if let Some(surface) = surface {
-        if let Some(ref khr) = instance.surface {
-            if khr.get_physical_device_surface_support(phd, queue_family_index, surface) != Ok(true)
-            {
-                log::warn!("Rejected for not presenting to the window surface");
-                return None;
-            }
         }
     }
 
@@ -85,6 +90,23 @@ unsafe fn inspect_adapter(
     if api_version < vk::API_VERSION_1_1 {
         log::warn!("\tRejected for API version {}", api_version);
         return None;
+    }
+
+    let queue_family_index = 0; //TODO
+    if let Some(surface) = surface {
+        let khr = instance.surface.as_ref()?;
+        if khr.get_physical_device_surface_support(phd, queue_family_index, surface) != Ok(true) {
+            log::warn!("Rejected for not presenting to the window surface");
+            return None;
+        }
+        if cfg!(target_os = "linux")
+            && properties2_khr.properties.vendor_id == db::intel::VENDOR
+            && supported_layers.contains(&layer::NV_OPTIMUS)
+        {
+            // https://gitlab.freedesktop.org/mesa/mesa/-/issues/4688
+            log::warn!("Rejecting Intel for not presenting when Nvidia is present (on Linux)");
+            return None;
+        }
     }
 
     let mut inline_uniform_block_features =
@@ -224,40 +246,33 @@ impl super::Context {
             }
         };
 
-        let layers = {
-            let supported_layers = match entry.enumerate_instance_layer_properties() {
-                Ok(layers) => layers,
-                Err(err) => {
-                    log::error!("enumerate_instance_layer_properties: {:?}", err);
-                    return Err(crate::NotSupportedError);
-                }
-            };
-            let supported_layer_names = supported_layers
-                .iter()
-                .map(|properties| ffi::CStr::from_ptr(properties.layer_name.as_ptr()))
-                .collect::<Vec<_>>();
-
-            let mut layers: Vec<&'static ffi::CStr> = Vec::new();
-            let mut requested_layers = Vec::<&[u8]>::new();
-
-            if desc.validation {
-                requested_layers.push(b"VK_LAYER_KHRONOS_validation\0");
+        let supported_layers = match entry.enumerate_instance_layer_properties() {
+            Ok(layers) => layers,
+            Err(err) => {
+                log::error!("enumerate_instance_layer_properties: {:?}", err);
+                return Err(crate::NotSupportedError);
             }
-            if desc.overlay {
-                requested_layers.push(b"VK_LAYER_MESA_overlay\0");
-            }
-
-            for required in requested_layers {
-                let name = ffi::CStr::from_bytes_with_nul(required).unwrap();
-                if supported_layer_names.contains(&name) {
-                    layers.push(name);
-                } else {
-                    log::error!("Required layer is not found: {:?}", name);
-                }
-            }
-
-            layers
         };
+        let supported_layer_names = supported_layers
+            .iter()
+            .map(|properties| ffi::CStr::from_ptr(properties.layer_name.as_ptr()))
+            .collect::<Vec<_>>();
+
+        let mut layers: Vec<&'static ffi::CStr> = Vec::new();
+        let mut requested_layers = Vec::<&ffi::CStr>::new();
+        if desc.validation {
+            requested_layers.push(layer::KHRONOS_VALIDATION);
+        }
+        if desc.overlay {
+            requested_layers.push(layer::MESA_OVERLAY);
+        }
+        for name in requested_layers {
+            if supported_layer_names.contains(&name) {
+                layers.push(name);
+            } else {
+                log::warn!("Requested layer is not found: {:?}", name);
+            }
+        }
 
         let supported_instance_extension_properties =
             match entry.enumerate_instance_extension_properties(None) {
@@ -339,8 +354,14 @@ impl super::Context {
         let (physical_device, capabilities) = physical_devices
             .into_iter()
             .find_map(|phd| {
-                inspect_adapter(phd, &instance, driver_api_version, vk_surface)
-                    .map(|caps| (phd, caps))
+                inspect_adapter(
+                    phd,
+                    &instance,
+                    driver_api_version,
+                    &supported_layer_names,
+                    vk_surface,
+                )
+                .map(|caps| (phd, caps))
             })
             .ok_or(crate::NotSupportedError)?;
 
