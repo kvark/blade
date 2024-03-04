@@ -7,6 +7,8 @@ Changelog for Blade
 
 ## blade-graphics-0.4 (TBD)
 - color space configuration for surfaces
+- work around Intel+Nvidia presentation bug
+- overlay support
 
 ## blade-graphics-0.3, blade-render-0.2 (17 Nov 2023)
 - tangent space generation
