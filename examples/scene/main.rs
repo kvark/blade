@@ -545,9 +545,9 @@ impl Example {
             .snapping(true);
         if let Some(response) = gizmo.interact(ui) {
             let t1 = TransformComponents {
-                scale: response.scale,
-                rotation: response.rotation,
-                translation: response.translation,
+                scale: response.scale.into(),
+                rotation: response.rotation.into(),
+                translation: response.translation.into(),
             }
             .to_blade();
             if object.transform != t1 {
@@ -1023,16 +1023,16 @@ impl Example {
 
 fn main() {
     env_logger::init();
-    //let _ = profiling::tracy_client::Client::start();
 
-    let event_loop = winit::event_loop::EventLoop::new();
+    let event_loop = winit::event_loop::EventLoop::new().unwrap();
     let window = winit::window::WindowBuilder::new()
         .with_title("blade-scene")
         .build(&event_loop)
         .unwrap();
 
     let egui_ctx = egui::Context::default();
-    let mut egui_winit = egui_winit::State::new(&event_loop);
+    let viewport_id = egui_ctx.viewport_id();
+    let mut egui_winit = egui_winit::State::new(egui_ctx, viewport_id, &window, None, None);
 
     let mut args = std::env::args();
     let path_to_scene = args
@@ -1050,216 +1050,222 @@ fn main() {
     let mut last_event = time::Instant::now();
     let mut last_mouse_pos = [0i32; 2];
 
-    event_loop.run(move |event, _, control_flow| {
-        example.choir.check_panic();
-        *control_flow = winit::event_loop::ControlFlow::Poll;
-        let delta = last_event.elapsed().as_secs_f32();
-        last_event = time::Instant::now();
-        let move_speed = example.fly_speed * delta;
-        let rotate_speed = 0.01f32;
-        let rotate_speed_z = 1000.0 * delta;
+    event_loop
+        .run(|event, target| {
+            example.choir.check_panic();
+            target.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
-        match event {
-            winit::event::Event::RedrawEventsCleared => {
-                window.request_redraw();
-            }
-            winit::event::Event::WindowEvent { event, .. } => {
-                let response = egui_winit.on_event(&egui_ctx, &event);
-                if response.consumed {
-                    return;
-                }
-                if response.repaint {
+            let delta = last_event.elapsed().as_secs_f32();
+            last_event = time::Instant::now();
+            let move_speed = example.fly_speed * delta;
+            let rotate_speed = 0.01f32;
+            let rotate_speed_z = 1000.0 * delta;
+
+            match event {
+                winit::event::Event::AboutToWait => {
                     window.request_redraw();
                 }
+                winit::event::Event::WindowEvent { event, .. } => {
+                    let response = egui_winit.on_window_event(&window, &event);
+                    if response.repaint {
+                        window.request_redraw();
+                    }
+                    if response.consumed {
+                        return;
+                    }
 
-                match event {
-                    winit::event::WindowEvent::KeyboardInput {
-                        input:
-                            winit::event::KeyboardInput {
-                                virtual_keycode: Some(key_code),
-                                state: winit::event::ElementState::Pressed,
-                                ..
-                            },
-                        ..
-                    } => match key_code {
-                        winit::event::VirtualKeyCode::Escape => {
-                            *control_flow = winit::event_loop::ControlFlow::Exit;
+                    match event {
+                        winit::event::WindowEvent::KeyboardInput {
+                            event:
+                                winit::event::KeyEvent {
+                                    physical_key: winit::keyboard::PhysicalKey::Code(key_code),
+                                    state: winit::event::ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } => match key_code {
+                            winit::keyboard::KeyCode::Escape => {
+                                target.exit();
+                            }
+                            winit::keyboard::KeyCode::KeyW => {
+                                example.move_camera_by(glam::Vec3::new(0.0, 0.0, -move_speed));
+                            }
+                            winit::keyboard::KeyCode::KeyS => {
+                                example.move_camera_by(glam::Vec3::new(0.0, 0.0, move_speed));
+                            }
+                            winit::keyboard::KeyCode::KeyA => {
+                                example.move_camera_by(glam::Vec3::new(-move_speed, 0.0, 0.0));
+                            }
+                            winit::keyboard::KeyCode::KeyD => {
+                                example.move_camera_by(glam::Vec3::new(move_speed, 0.0, 0.0));
+                            }
+                            winit::keyboard::KeyCode::KeyZ => {
+                                example.move_camera_by(glam::Vec3::new(0.0, -move_speed, 0.0));
+                            }
+                            winit::keyboard::KeyCode::KeyX => {
+                                example.move_camera_by(glam::Vec3::new(0.0, move_speed, 0.0));
+                            }
+                            winit::keyboard::KeyCode::KeyQ => {
+                                let rot = example.rotate_camera_z_by(rotate_speed_z);
+                                if let Some(ref mut drag) = drag_start {
+                                    drag.rotation *= rot;
+                                }
+                            }
+                            winit::keyboard::KeyCode::KeyE => {
+                                let rot = example.rotate_camera_z_by(-rotate_speed_z);
+                                if let Some(ref mut drag) = drag_start {
+                                    drag.rotation *= rot;
+                                }
+                            }
+                            _ => {}
+                        },
+                        winit::event::WindowEvent::CloseRequested => {
+                            target.exit();
                         }
-                        winit::event::VirtualKeyCode::W => {
-                            example.move_camera_by(glam::Vec3::new(0.0, 0.0, -move_speed));
+                        winit::event::WindowEvent::MouseInput {
+                            state,
+                            button: winit::event::MouseButton::Left,
+                            ..
+                        } => {
+                            drag_start = match state {
+                                winit::event::ElementState::Pressed => Some(Drag {
+                                    _screen_pos: last_mouse_pos.into(),
+                                    rotation: example.camera.rot.into(),
+                                }),
+                                winit::event::ElementState::Released => None,
+                            };
                         }
-                        winit::event::VirtualKeyCode::S => {
-                            example.move_camera_by(glam::Vec3::new(0.0, 0.0, move_speed));
+                        winit::event::WindowEvent::MouseInput {
+                            state: winit::event::ElementState::Pressed,
+                            button: winit::event::MouseButton::Right,
+                            ..
+                        } => {
+                            example.is_point_selected = true;
+                            example.need_picked_selection_frames = 3;
                         }
-                        winit::event::VirtualKeyCode::A => {
-                            example.move_camera_by(glam::Vec3::new(-move_speed, 0.0, 0.0));
+                        winit::event::WindowEvent::MouseInput {
+                            state: winit::event::ElementState::Released,
+                            button: winit::event::MouseButton::Right,
+                            ..
+                        } => {
+                            example.is_point_selected = false;
                         }
-                        winit::event::VirtualKeyCode::D => {
-                            example.move_camera_by(glam::Vec3::new(move_speed, 0.0, 0.0));
+                        winit::event::WindowEvent::CursorMoved { position, .. } => {
+                            if let Some(_) = drag_start {
+                                let prev = glam::Quat::from(example.camera.rot);
+                                let rotation = glam::Quat::from_euler(
+                                    glam::EulerRot::ZYX,
+                                    0.0,
+                                    (last_mouse_pos[0] as f32 - position.x as f32) * rotate_speed,
+                                    (last_mouse_pos[1] as f32 - position.y as f32) * rotate_speed,
+                                );
+                                example.camera.rot = (prev * rotation).into();
+                                example.debug.mouse_pos = None;
+                            }
+                            last_mouse_pos = [position.x as i32, position.y as i32];
                         }
-                        winit::event::VirtualKeyCode::Z => {
-                            example.move_camera_by(glam::Vec3::new(0.0, -move_speed, 0.0));
+                        winit::event::WindowEvent::HoveredFile(_) => {
+                            example.is_file_hovered = true;
+                            example
+                                .debug
+                                .draw_flags
+                                .set(blade_render::DebugDrawFlags::SPACE, true);
                         }
-                        winit::event::VirtualKeyCode::X => {
-                            example.move_camera_by(glam::Vec3::new(0.0, move_speed, 0.0));
+                        winit::event::WindowEvent::HoveredFileCancelled => {
+                            example.is_file_hovered = false;
+                            example
+                                .debug
+                                .draw_flags
+                                .set(blade_render::DebugDrawFlags::SPACE, false);
                         }
-                        winit::event::VirtualKeyCode::Q => {
-                            let rot = example.rotate_camera_z_by(rotate_speed_z);
-                            if let Some(ref mut drag) = drag_start {
-                                drag.rotation *= rot;
+                        winit::event::WindowEvent::DroppedFile(ref file_path) => {
+                            example.is_file_hovered = false;
+                            example
+                                .debug
+                                .draw_flags
+                                .set(blade_render::DebugDrawFlags::SPACE, false);
+                            if !example.add_object(file_path) {
+                                log::warn!(
+                                    "Unable to drop {}, loading in progress",
+                                    file_path.display()
+                                );
                             }
                         }
-                        winit::event::VirtualKeyCode::E => {
-                            let rot = example.rotate_camera_z_by(-rotate_speed_z);
-                            if let Some(ref mut drag) = drag_start {
-                                drag.rotation *= rot;
+                        winit::event::WindowEvent::RedrawRequested => {
+                            let raw_input = egui_winit.take_egui_input(&window);
+                            let egui_output = egui_winit.egui_ctx().run(raw_input, |egui_ctx| {
+                                let frame = {
+                                    let mut frame = egui::Frame::side_top_panel(&egui_ctx.style());
+                                    let mut fill = frame.fill.to_array();
+                                    for f in fill.iter_mut() {
+                                        *f = (*f as u32 * 7 / 8) as u8;
+                                    }
+                                    frame.fill = egui::Color32::from_rgba_premultiplied(
+                                        fill[0], fill[1], fill[2], fill[3],
+                                    );
+                                    frame
+                                };
+                                egui::SidePanel::right("view")
+                                    .frame(frame)
+                                    .show(egui_ctx, |ui| {
+                                        example.populate_view(ui);
+                                    });
+                                egui::SidePanel::left("content").frame(frame).show(
+                                    egui_ctx,
+                                    |ui| {
+                                        example.populate_content(ui);
+                                        ui.separator();
+                                        if ui.button("Quit").clicked() {
+                                            target.exit();
+                                        }
+                                    },
+                                );
+                            });
+
+                            //HACK: https://github.com/urholaukkarinen/egui-gizmo/issues/29
+                            if example.have_objects_changed
+                                && egui_winit.egui_ctx().wants_pointer_input()
+                            {
+                                drag_start = None;
                             }
+
+                            egui_winit.handle_platform_output(&window, egui_output.platform_output);
+                            let repaint_delay =
+                                egui_output.viewport_output[&viewport_id].repaint_delay;
+                            let primitives = egui_winit
+                                .egui_ctx()
+                                .tessellate(egui_output.shapes, egui_output.pixels_per_point);
+
+                            let control_flow = if let Some(repaint_after_instant) =
+                                std::time::Instant::now().checked_add(repaint_delay)
+                            {
+                                winit::event_loop::ControlFlow::WaitUntil(repaint_after_instant)
+                            } else {
+                                winit::event_loop::ControlFlow::Wait
+                            };
+                            target.set_control_flow(control_flow);
+
+                            example.render(
+                                &primitives,
+                                &egui_output.textures_delta,
+                                window.inner_size(),
+                                window.scale_factor() as f32,
+                            );
+                            profiling::finish_frame!();
                         }
                         _ => {}
-                    },
-                    winit::event::WindowEvent::CloseRequested => {
-                        *control_flow = winit::event_loop::ControlFlow::Exit;
                     }
-                    winit::event::WindowEvent::MouseInput {
-                        state,
-                        button: winit::event::MouseButton::Left,
-                        ..
-                    } => {
-                        drag_start = match state {
-                            winit::event::ElementState::Pressed => Some(Drag {
-                                _screen_pos: last_mouse_pos.into(),
-                                rotation: example.camera.rot.into(),
-                            }),
-                            winit::event::ElementState::Released => None,
-                        };
+
+                    if example.is_point_selected || example.is_file_hovered {
+                        //TODO: unfortunately winit doesn't update cursor position during a drag
+                        // https://github.com/rust-windowing/winit/issues/1550
+                        example.debug.mouse_pos = Some(last_mouse_pos);
                     }
-                    winit::event::WindowEvent::MouseInput {
-                        state: winit::event::ElementState::Pressed,
-                        button: winit::event::MouseButton::Right,
-                        ..
-                    } => {
-                        example.is_point_selected = true;
-                        example.need_picked_selection_frames = 3;
-                    }
-                    winit::event::WindowEvent::MouseInput {
-                        state: winit::event::ElementState::Released,
-                        button: winit::event::MouseButton::Right,
-                        ..
-                    } => {
-                        example.is_point_selected = false;
-                    }
-                    winit::event::WindowEvent::CursorMoved { position, .. } => {
-                        if let Some(_) = drag_start {
-                            let prev = glam::Quat::from(example.camera.rot);
-                            let rotation = glam::Quat::from_euler(
-                                glam::EulerRot::ZYX,
-                                0.0,
-                                (last_mouse_pos[0] as f32 - position.x as f32) * rotate_speed,
-                                (last_mouse_pos[1] as f32 - position.y as f32) * rotate_speed,
-                            );
-                            example.camera.rot = (prev * rotation).into();
-                            example.debug.mouse_pos = None;
-                        }
-                        last_mouse_pos = [position.x as i32, position.y as i32];
-                    }
-                    winit::event::WindowEvent::HoveredFile(_) => {
-                        example.is_file_hovered = true;
-                        example
-                            .debug
-                            .draw_flags
-                            .set(blade_render::DebugDrawFlags::SPACE, true);
-                    }
-                    winit::event::WindowEvent::HoveredFileCancelled => {
-                        example.is_file_hovered = false;
-                        example
-                            .debug
-                            .draw_flags
-                            .set(blade_render::DebugDrawFlags::SPACE, false);
-                    }
-                    winit::event::WindowEvent::DroppedFile(ref file_path) => {
-                        example.is_file_hovered = false;
-                        example
-                            .debug
-                            .draw_flags
-                            .set(blade_render::DebugDrawFlags::SPACE, false);
-                        if !example.add_object(file_path) {
-                            log::warn!(
-                                "Unable to drop {}, loading in progress",
-                                file_path.display()
-                            );
-                        }
-                    }
-                    _ => {}
                 }
-
-                if example.is_point_selected || example.is_file_hovered {
-                    //TODO: unfortunately winit doesn't update cursor position during a drag
-                    // https://github.com/rust-windowing/winit/issues/1550
-                    example.debug.mouse_pos = Some(last_mouse_pos);
-                }
+                _ => {}
             }
-            winit::event::Event::RedrawRequested(_) => {
-                let mut quit = false;
-                let raw_input = egui_winit.take_egui_input(&window);
-                let egui_output = egui_ctx.run(raw_input, |egui_ctx| {
-                    let frame = {
-                        let mut frame = egui::Frame::side_top_panel(&egui_ctx.style());
-                        let mut fill = frame.fill.to_array();
-                        for f in fill.iter_mut() {
-                            *f = (*f as u32 * 7 / 8) as u8;
-                        }
-                        frame.fill = egui::Color32::from_rgba_premultiplied(
-                            fill[0], fill[1], fill[2], fill[3],
-                        );
-                        frame
-                    };
-                    egui::SidePanel::right("view")
-                        .frame(frame)
-                        .show(egui_ctx, |ui| {
-                            example.populate_view(ui);
-                        });
-                    egui::SidePanel::left("content")
-                        .frame(frame)
-                        .show(egui_ctx, |ui| {
-                            example.populate_content(ui);
-                            ui.separator();
-                            if ui.button("Quit").clicked() {
-                                quit = true;
-                            }
-                        });
-                });
+        })
+        .unwrap();
 
-                //HACK: https://github.com/urholaukkarinen/egui-gizmo/issues/29
-                if example.have_objects_changed && egui_ctx.wants_pointer_input() {
-                    drag_start = None;
-                }
-
-                egui_winit.handle_platform_output(&window, &egui_ctx, egui_output.platform_output);
-
-                let primitives = egui_ctx.tessellate(egui_output.shapes);
-
-                *control_flow = if quit {
-                    winit::event_loop::ControlFlow::Exit
-                } else if let Some(repaint_after_instant) =
-                    std::time::Instant::now().checked_add(egui_output.repaint_after)
-                {
-                    winit::event_loop::ControlFlow::WaitUntil(repaint_after_instant)
-                } else {
-                    winit::event_loop::ControlFlow::Wait
-                };
-
-                example.render(
-                    &primitives,
-                    &egui_output.textures_delta,
-                    window.inner_size(),
-                    egui_ctx.pixels_per_point(),
-                );
-                profiling::finish_frame!();
-            }
-            winit::event::Event::LoopDestroyed => {
-                example.destroy();
-            }
-            _ => {}
-        }
-    })
+    example.destroy();
 }

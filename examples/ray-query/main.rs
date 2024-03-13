@@ -323,48 +323,49 @@ impl Example {
 fn main() {
     env_logger::init();
 
-    let event_loop = winit::event_loop::EventLoop::new();
+    let event_loop = winit::event_loop::EventLoop::new().unwrap();
     let window = winit::window::WindowBuilder::new()
         .with_title("blade-ray-query")
         .build(&event_loop)
         .unwrap();
 
-    let mut example = Some(Example::new(&window));
+    let mut example = Example::new(&window);
 
-    event_loop.run(move |event, _, control_flow| {
-        *control_flow = winit::event_loop::ControlFlow::Poll;
-        match event {
-            winit::event::Event::RedrawEventsCleared => {
-                window.request_redraw();
-            }
-            winit::event::Event::WindowEvent { event, .. } => match event {
-                winit::event::WindowEvent::KeyboardInput {
-                    input:
-                        winit::event::KeyboardInput {
-                            virtual_keycode: Some(key_code),
-                            state: winit::event::ElementState::Pressed,
-                            ..
-                        },
-                    ..
-                } => match key_code {
-                    winit::event::VirtualKeyCode::Escape => {
-                        *control_flow = winit::event_loop::ControlFlow::Exit;
+    event_loop
+        .run(|event, target| {
+            target.set_control_flow(winit::event_loop::ControlFlow::Poll);
+            match event {
+                winit::event::Event::AboutToWait => {
+                    window.request_redraw();
+                }
+                winit::event::Event::WindowEvent { event, .. } => match event {
+                    winit::event::WindowEvent::KeyboardInput {
+                        event:
+                            winit::event::KeyEvent {
+                                physical_key: winit::keyboard::PhysicalKey::Code(key_code),
+                                state: winit::event::ElementState::Pressed,
+                                ..
+                            },
+                        ..
+                    } => match key_code {
+                        winit::keyboard::KeyCode::Escape => {
+                            target.exit();
+                        }
+                        _ => {}
+                    },
+                    winit::event::WindowEvent::RedrawRequested => {
+                        target.set_control_flow(winit::event_loop::ControlFlow::Wait);
+                        example.render();
+                    }
+                    winit::event::WindowEvent::CloseRequested => {
+                        target.exit();
                     }
                     _ => {}
                 },
-                winit::event::WindowEvent::CloseRequested => {
-                    *control_flow = winit::event_loop::ControlFlow::Exit;
-                }
                 _ => {}
-            },
-            winit::event::Event::RedrawRequested(_) => {
-                *control_flow = winit::event_loop::ControlFlow::Wait;
-                example.as_mut().unwrap().render();
             }
-            winit::event::Event::LoopDestroyed => {
-                example.take().unwrap().delete();
-            }
-            _ => {}
-        }
-    })
+        })
+        .unwrap();
+
+    example.delete();
 }
