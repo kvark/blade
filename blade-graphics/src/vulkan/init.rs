@@ -3,7 +3,7 @@ use ash::{
     vk,
 };
 use naga::back::spv;
-use std::{ffi, mem, sync::Mutex};
+use std::{ffi, fs, mem, sync::Mutex};
 
 mod db {
     pub mod intel {
@@ -16,8 +16,6 @@ mod layer {
         unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_KHRONOS_validation\0") };
     pub const MESA_OVERLAY: &CStr =
         unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_MESA_overlay\0") };
-    pub const NV_OPTIMUS: &CStr =
-        unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_NV_optimus\0") };
 }
 
 const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
@@ -41,6 +39,14 @@ struct AdapterCapabilities {
 struct SystemBugs {
     /// https://gitlab.freedesktop.org/mesa/mesa/-/issues/4688
     intel_unable_to_present_on_xorg: bool,
+}
+
+// See https://github.com/canonical/nvidia-prime/blob/587c5012be9dddcc17ab4d958f10a24fa3342b4d/prime-select#L56
+fn is_nvidia_prime_forced() -> bool {
+    match fs::read_to_string("/etc/prime-discrete") {
+        Ok(contents) => contents == "on\n",
+        Err(_) => false,
+    }
 }
 
 unsafe fn inspect_adapter(
@@ -341,8 +347,7 @@ impl super::Context {
             _ => false,
         };
         let bugs = SystemBugs {
-            intel_unable_to_present_on_xorg: is_xorg
-                && supported_layer_names.contains(&layer::NV_OPTIMUS),
+            intel_unable_to_present_on_xorg: is_xorg && is_nvidia_prime_forced(),
         };
 
         let vk_surface = surface_handles.map(|(rwh, rdh)| {
