@@ -38,11 +38,16 @@ struct AdapterCapabilities {
     shader_info: bool,
 }
 
+struct SystemBugs {
+    /// https://gitlab.freedesktop.org/mesa/mesa/-/issues/4688
+    intel_unable_to_present_on_xorg: bool,
+}
+
 unsafe fn inspect_adapter(
     phd: vk::PhysicalDevice,
     instance: &super::Instance,
     driver_api_version: u32,
-    supported_layers: &[&ffi::CStr],
+    bugs: &SystemBugs,
     surface: Option<vk::SurfaceKHR>,
 ) -> Option<AdapterCapabilities> {
     let supported_extension_properties = instance
@@ -99,11 +104,9 @@ unsafe fn inspect_adapter(
             log::warn!("Rejected for not presenting to the window surface");
             return None;
         }
-        if cfg!(target_os = "linux")
+        if bugs.intel_unable_to_present_on_xorg
             && properties2_khr.properties.vendor_id == db::intel::VENDOR
-            && supported_layers.contains(&layer::NV_OPTIMUS)
         {
-            // https://gitlab.freedesktop.org/mesa/mesa/-/issues/4688
             log::warn!("Rejecting Intel for not presenting when Nvidia is present (on Linux)");
             return None;
         }
@@ -332,6 +335,16 @@ impl super::Context {
             entry.create_instance(&create_info, None).unwrap()
         };
 
+        let is_xorg = match surface_handles {
+            Some((_, raw_window_handle::RawDisplayHandle::Xlib(_))) => true,
+            Some((_, raw_window_handle::RawDisplayHandle::Xcb(_))) => true,
+            _ => false,
+        };
+        let bugs = SystemBugs {
+            intel_unable_to_present_on_xorg: is_xorg
+                && supported_layer_names.contains(&layer::NV_OPTIMUS),
+        };
+
         let vk_surface = surface_handles.map(|(rwh, rdh)| {
             ash_window::create_surface(&entry, &core_instance, rdh, rwh, None).unwrap()
         });
@@ -354,14 +367,8 @@ impl super::Context {
         let (physical_device, capabilities) = physical_devices
             .into_iter()
             .find_map(|phd| {
-                inspect_adapter(
-                    phd,
-                    &instance,
-                    driver_api_version,
-                    &supported_layer_names,
-                    vk_surface,
-                )
-                .map(|caps| (phd, caps))
+                inspect_adapter(phd, &instance, driver_api_version, &bugs, vk_surface)
+                    .map(|caps| (phd, caps))
             })
             .ok_or(crate::NotSupportedError)?;
 
