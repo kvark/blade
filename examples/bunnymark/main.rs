@@ -282,7 +282,7 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     env_logger::init();
 
-    let event_loop = winit::event_loop::EventLoop::new();
+    let event_loop = winit::event_loop::EventLoop::new().unwrap();
     let window = winit::window::WindowBuilder::new()
         .with_title("blade-bunnymark")
         .build(&event_loop)
@@ -315,56 +315,56 @@ fn main() {
     }
     let mut frame_count = 0;
 
-    event_loop.run(move |event, _, control_flow| {
-        let _ = &window; // force ownership by the closure
-        *control_flow = winit::event_loop::ControlFlow::Poll;
-        match event {
-            winit::event::Event::RedrawEventsCleared => {
-                window.request_redraw();
-            }
-            winit::event::Event::WindowEvent { event, .. } => match event {
-                #[cfg(not(target_arch = "wasm32"))]
-                winit::event::WindowEvent::KeyboardInput {
-                    input:
-                        winit::event::KeyboardInput {
-                            virtual_keycode: Some(key_code),
-                            state: winit::event::ElementState::Pressed,
-                            ..
-                        },
-                    ..
-                } => match key_code {
-                    winit::event::VirtualKeyCode::Escape => {
-                        *control_flow = winit::event_loop::ControlFlow::Exit;
+    event_loop
+        .run(|event, target| {
+            target.set_control_flow(winit::event_loop::ControlFlow::Poll);
+            match event {
+                winit::event::Event::AboutToWait => {
+                    window.request_redraw();
+                }
+                winit::event::Event::WindowEvent { event, .. } => match event {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    winit::event::WindowEvent::KeyboardInput {
+                        event:
+                            winit::event::KeyEvent {
+                                physical_key: winit::keyboard::PhysicalKey::Code(key_code),
+                                state: winit::event::ElementState::Pressed,
+                                ..
+                            },
+                        ..
+                    } => match key_code {
+                        winit::keyboard::KeyCode::Escape => {
+                            target.exit();
+                        }
+                        winit::keyboard::KeyCode::Space => {
+                            example.increase();
+                        }
+                        _ => {}
+                    },
+                    winit::event::WindowEvent::CloseRequested => {
+                        target.exit();
                     }
-                    winit::event::VirtualKeyCode::Space => {
-                        example.increase();
+                    winit::event::WindowEvent::RedrawRequested => {
+                        frame_count += 1;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if frame_count == 100 {
+                            let accum_time = last_snapshot.elapsed().as_secs_f32();
+                            println!(
+                                "Avg frame time {}ms",
+                                accum_time * 1000.0 / frame_count as f32
+                            );
+                            last_snapshot = std::time::Instant::now();
+                            frame_count = 0;
+                        }
+                        example.step(0.01);
+                        example.render();
                     }
                     _ => {}
                 },
-                winit::event::WindowEvent::CloseRequested => {
-                    *control_flow = winit::event_loop::ControlFlow::Exit;
-                }
                 _ => {}
-            },
-            winit::event::Event::RedrawRequested(_) => {
-                frame_count += 1;
-                #[cfg(not(target_arch = "wasm32"))]
-                if frame_count == 100 {
-                    let accum_time = last_snapshot.elapsed().as_secs_f32();
-                    println!(
-                        "Avg frame time {}ms",
-                        accum_time * 1000.0 / frame_count as f32
-                    );
-                    last_snapshot = std::time::Instant::now();
-                    frame_count = 0;
-                }
-                example.step(0.01);
-                example.render();
             }
-            winit::event::Event::LoopDestroyed => {
-                example.deinit();
-            }
-            _ => {}
-        }
-    })
+        })
+        .unwrap();
+
+    example.deinit();
 }
