@@ -1,0 +1,25 @@
+(
+    environment: "",
+    gravity: 9.81,
+    average_luminocity: 0.1,
+    spawn_pos: (0, 2, 0),
+    ground: (
+        name: "ground",
+        visuals: [
+            (
+                model: "ground.glb",
+                pos: (0, 1, 0),
+                scale: 60,
+            ),
+        ],
+        colliders: [
+            (
+                density: 1.0,
+                friction: 1.0,
+                shape: Cuboid(
+                    half: (1000, 1.0, 1000),
+                ),
+            ),
+        ],
+    ),
+)
