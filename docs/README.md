@@ -16,7 +16,8 @@ Blade is an innovative rendering solution for Rust. It starts with a lean [low-l
 ## Examples
 
 ![scene editor](../blade-egui/etc/scene-editor.jpg)
-![particles example](../blade-graphics/etc/particles.png)
+![particle example](../blade-graphics/etc/particles.png)
+![vehicle example](vehicle-colliders.jpg)
 ![sponza scene](../blade-render/etc/sponza.jpg)
 
 ## Instructions

@@ -1,6 +1,6 @@
 # Blade Examples
 
-| Example   | graphics    | macros | egui   | asset  | render | lib    | 
+| Example   | graphics    | macros | egui   | asset  | render | lib    |
 | --------- | ----------- | ------ | ------ | ------ | ------ | ------ |
 | mini      | :star:      |        |        |        |        |        |
 | init      | :star:      | :star: |        |        |        |        |
