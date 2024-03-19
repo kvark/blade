@@ -297,6 +297,7 @@ impl super::CommandEncoder {
 
     pub fn present(&mut self, frame: super::Frame) {
         assert_eq!(self.present, None);
+        let wa = &self.device.workarounds;
         self.present = Some(super::Presentation {
             image_index: frame.image_index,
             acquire_semaphore: frame.acquire_semaphore,
@@ -313,12 +314,13 @@ impl super::CommandEncoder {
                 base_array_layer: 0,
                 layer_count: 1,
             })
+            .src_access_mask(vk::AccessFlags::MEMORY_WRITE | wa.extra_sync_src_access)
             .build();
         unsafe {
             self.device.core.cmd_pipeline_barrier(
                 self.buffers[0].raw,
-                vk::PipelineStageFlags::TOP_OF_PIPE,
                 vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
                 vk::DependencyFlags::empty(),
                 &[],
                 &[],
