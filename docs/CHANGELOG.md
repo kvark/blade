@@ -2,6 +2,7 @@ Changelog for Blade
 
 ## blade-0.2 (TBD)
 - high-level engine
+- built-in physics via Rapier3D
 - support object motion
 - support clockwise mesh winding
 

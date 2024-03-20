@@ -20,18 +20,163 @@ use std::{ops, path::Path, sync::Arc};
 pub mod config;
 mod trimesh;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum JointKind {
-    Soft,
-    Hard,
+const ZERO_V3: mint::Vector3<f32> = mint::Vector3 {
+    x: 0.0,
+    y: 0.0,
+    z: 0.0,
+};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Transform {
+    pub position: mint::Vector3<f32>,
+    pub orientation: mint::Quaternion<f32>,
 }
+impl Default for Transform {
+    fn default() -> Self {
+        Self {
+            position: ZERO_V3,
+            orientation: mint::Quaternion { s: 1.0, v: ZERO_V3 },
+        }
+    }
+}
+impl From<nalgebra::Isometry3<f32>> for Transform {
+    fn from(isometry: nalgebra::Isometry3<f32>) -> Self {
+        Self {
+            position: isometry.translation.vector.into(),
+            orientation: isometry.rotation.into(),
+        }
+    }
+}
+impl Into<nalgebra::Isometry3<f32>> for Transform {
+    fn into(self) -> nalgebra::Isometry3<f32> {
+        nalgebra::Isometry3 {
+            translation: nalgebra::Translation {
+                vector: self.position.into(),
+            },
+            rotation: nalgebra::Unit::new_unchecked(self.orientation.into()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoundingBox {
+    pub center: mint::Vector3<f32>,
+    pub half: mint::Vector3<f32>,
+}
+
+/// Type of prediction to be made about the object transformation.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum Prediction {
+    /// Report the last known transform. It always makes sense,
+    /// but it could be out of date.
+    #[default]
+    LastKnown,
+    /// Integrate using velocity only.
+    IntegrateVelocity,
+    /// Integrate using velocity and forces affecting the object.
+    IntegrateVelocityAndForces,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum DynamicInput {
+    /// Object is not controllable, it's static.
+    Empty,
+    /// Object is controlled by user setting the position.
+    SetPosition,
+    /// Object is controlled by user setting the velocity.
+    SetVelocity,
+    /// Object is affected by all forces around.
+    #[default]
+    Full,
+}
+impl Into<rapier3d::dynamics::RigidBodyType> for DynamicInput {
+    fn into(self) -> rapier3d::dynamics::RigidBodyType {
+        use rapier3d::dynamics::RigidBodyType as Rbt;
+        match self {
+            Self::Empty => Rbt::Fixed,
+            Self::SetPosition => Rbt::KinematicPositionBased,
+            Self::SetVelocity => Rbt::KinematicVelocityBased,
+            Self::Full => Rbt::Dynamic,
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum JointAxis {
+    LinearX = 0,
+    LinearY = 1,
+    LinearZ = 2,
+    AngularX = 3,
+    AngularY = 4,
+    AngularZ = 5,
+}
+impl Into<rapier3d::dynamics::JointAxis> for JointAxis {
+    fn into(self) -> rapier3d::dynamics::JointAxis {
+        use rapier3d::dynamics::JointAxis as Ja;
+        match self {
+            Self::LinearX => Ja::X,
+            Self::LinearY => Ja::Y,
+            Self::LinearZ => Ja::Z,
+            Self::AngularX => Ja::AngX,
+            Self::AngularY => Ja::AngY,
+            Self::AngularZ => Ja::AngZ,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum JointHandle {
     Soft(rapier3d::dynamics::ImpulseJointHandle),
     Hard(rapier3d::dynamics::MultibodyJointHandle),
 }
-//TODO: hide Rapier3D as a private dependency
-pub use rapier3d::dynamics::RigidBodyType as BodyType;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MotorDesc {
+    pub damping: f32,
+    pub stiffness: f32,
+    pub max_force: f32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FreedomAxis {
+    pub limits: Option<ops::Range<f32>>,
+    pub motor: Option<MotorDesc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct JointDesc {
+    pub parent_anchor: Transform,
+    pub child_anchor: Transform,
+    pub linear: mint::Vector3<Option<FreedomAxis>>,
+    pub angular: mint::Vector3<Option<FreedomAxis>>,
+    /// Allow the contacts to happen between A and B
+    pub allow_contacts: bool,
+    /// Hard joints guarantee the releation between
+    /// objects, while soft joints only try to get there.
+    pub is_hard: bool,
+}
+impl Default for JointDesc {
+    fn default() -> Self {
+        Self {
+            parent_anchor: Transform::default(),
+            child_anchor: Transform::default(),
+            linear: mint::Vector3 {
+                x: None,
+                y: None,
+                z: None,
+            },
+            angular: mint::Vector3 {
+                x: None,
+                y: None,
+                z: None,
+            },
+            allow_contacts: false,
+            is_hard: false,
+        }
+    }
+}
 
 const MAX_DEPTH: f32 = 1e9;
 
@@ -155,6 +300,30 @@ impl Physics {
     }
 }
 
+impl ops::Index<JointHandle> for Physics {
+    type Output = rapier3d::dynamics::GenericJoint;
+    fn index(&self, handle: JointHandle) -> &Self::Output {
+        match handle {
+            JointHandle::Soft(h) => &self.impulse_joints.get(h).unwrap().data,
+            JointHandle::Hard(h) => {
+                let (multibody, link_index) = self.multibody_joints.get(h).unwrap();
+                &multibody.link(link_index).unwrap().joint.data
+            }
+        }
+    }
+}
+impl ops::IndexMut<JointHandle> for Physics {
+    fn index_mut(&mut self, handle: JointHandle) -> &mut Self::Output {
+        match handle {
+            JointHandle::Soft(h) => &mut self.impulse_joints.get_mut(h).unwrap().data,
+            JointHandle::Hard(h) => {
+                let (multibody, link_index) = self.multibody_joints.get_mut(h).unwrap();
+                &mut multibody.link_mut(link_index).unwrap().joint.data
+            }
+        }
+    }
+}
+
 struct Visual {
     model: blade_asset::Handle<blade_render::Model>,
     similarity: nalgebra::geometry::Similarity3<f32>,
@@ -168,8 +337,9 @@ struct Object {
     visuals: Vec<Visual>,
 }
 
-pub struct Camera {
-    pub isometry: nalgebra::Isometry3<f32>,
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameCamera {
+    pub transform: Transform,
     pub fov_y: f32,
 }
 
@@ -201,30 +371,6 @@ pub struct Engine {
     choir: Arc<choir::Choir>,
     data_path: String,
     time_ahead: f32,
-}
-
-impl ops::Index<JointHandle> for Engine {
-    type Output = rapier3d::dynamics::GenericJoint;
-    fn index(&self, handle: JointHandle) -> &Self::Output {
-        match handle {
-            JointHandle::Soft(h) => &self.physics.impulse_joints.get(h).unwrap().data,
-            JointHandle::Hard(h) => {
-                let (multibody, link_index) = self.physics.multibody_joints.get(h).unwrap();
-                &multibody.link(link_index).unwrap().joint.data
-            }
-        }
-    }
-}
-impl ops::IndexMut<JointHandle> for Engine {
-    fn index_mut(&mut self, handle: JointHandle) -> &mut Self::Output {
-        match handle {
-            JointHandle::Soft(h) => &mut self.physics.impulse_joints.get_mut(h).unwrap().data,
-            JointHandle::Hard(h) => {
-                let (multibody, link_index) = self.physics.multibody_joints.get_mut(h).unwrap();
-                &mut multibody.link_mut(link_index).unwrap().joint.data
-            }
-        }
-    }
 }
 
 impl Engine {
@@ -361,7 +507,7 @@ impl Engine {
     #[profiling::function]
     pub fn render(
         &mut self,
-        camera: &Camera,
+        camera: &FrameCamera,
         gui_primitives: &[egui::ClippedPrimitive],
         gui_textures: &egui::TexturesDelta,
         physical_size: winit::dpi::PhysicalSize<u32>,
@@ -446,8 +592,8 @@ impl Engine {
             self.renderer.prepare(
                 command_encoder,
                 &blade_render::Camera {
-                    pos: camera.isometry.translation.vector.into(),
-                    rot: camera.isometry.rotation.into(),
+                    pos: camera.transform.position,
+                    rot: camera.transform.orientation,
                     fov_y: camera.fov_y,
                     depth: MAX_DEPTH,
                 },
@@ -690,8 +836,8 @@ impl Engine {
     pub fn add_object(
         &mut self,
         config: &config::Object,
-        isometry: nalgebra::Isometry3<f32>,
-        body_type: BodyType,
+        transform: Transform,
+        dynamic_input: DynamicInput,
     ) -> ObjectHandle {
         use rapier3d::{
             dynamics::MassProperties,
@@ -738,8 +884,8 @@ impl Engine {
             None => Default::default(),
         };
 
-        let rigid_body = rapier3d::dynamics::RigidBodyBuilder::new(body_type)
-            .position(isometry)
+        let rigid_body = rapier3d::dynamics::RigidBodyBuilder::new(dynamic_input.into())
+            .position(transform.into())
             .additional_mass_properties(add_mass_properties)
             .build();
         let rb_handle = self.physics.rigid_bodies.insert(rigid_body);
@@ -831,71 +977,127 @@ impl Engine {
 
     pub fn add_joint(
         &mut self,
-        a: ObjectHandle,
-        b: ObjectHandle,
-        data: impl Into<rapier3d::dynamics::GenericJoint>,
-        kind: JointKind,
+        parent: ObjectHandle,
+        child: ObjectHandle,
+        desc: JointDesc,
     ) -> JointHandle {
-        let body1 = self.objects[a.0].rigid_body;
-        let body2 = self.objects[b.0].rigid_body;
-        match kind {
-            JointKind::Soft => {
-                JointHandle::Soft(self.physics.impulse_joints.insert(body1, body2, data, true))
+        let data = {
+            let mut locked_axes = rapier3d::dynamics::JointAxesMask::empty();
+            let freedoms = [
+                (JointAxis::LinearX, &desc.linear.x),
+                (JointAxis::LinearY, &desc.linear.y),
+                (JointAxis::LinearZ, &desc.linear.z),
+                (JointAxis::AngularX, &desc.angular.x),
+                (JointAxis::AngularY, &desc.angular.y),
+                (JointAxis::AngularZ, &desc.angular.z),
+            ];
+            let mut joint_builder =
+                rapier3d::dynamics::GenericJointBuilder::new(Default::default())
+                    .local_frame1(desc.parent_anchor.into())
+                    .local_frame2(desc.child_anchor.into())
+                    .contacts_enabled(desc.allow_contacts);
+            for &(axis, ref maybe_freedom) in freedoms.iter() {
+                match *maybe_freedom {
+                    Some(freedom) => {
+                        if let Some(ref limits) = freedom.limits {
+                            joint_builder =
+                                joint_builder.limits(axis.into(), [limits.start, limits.end]);
+                        }
+                        if let Some(ref motor) = freedom.motor {
+                            joint_builder = joint_builder
+                                .motor_position(axis.into(), 0.0, motor.stiffness, motor.damping)
+                                .motor_max_force(axis.into(), motor.max_force);
+                        }
+                    }
+                    None => {
+                        locked_axes |= rapier3d::dynamics::JointAxesMask::from(Into::<
+                            rapier3d::dynamics::JointAxis,
+                        >::into(
+                            axis
+                        ));
+                    }
+                }
             }
-            JointKind::Hard => JointHandle::Hard(
+            joint_builder.locked_axes(locked_axes).0
+        };
+
+        let body1 = self.objects[parent.0].rigid_body;
+        let body2 = self.objects[child.0].rigid_body;
+        if desc.is_hard {
+            JointHandle::Hard(
                 self.physics
                     .multibody_joints
                     .insert(body1, body2, data, true)
                     .unwrap(),
-            ),
+            )
+        } else {
+            JointHandle::Soft(self.physics.impulse_joints.insert(body1, body2, data, true))
         }
     }
 
-    pub fn get_object_isometry(&self, handle: ObjectHandle) -> nalgebra::Isometry3<f32> {
+    /// Get the current object transform.
+    ///
+    /// Since the simulation is done at fixed key frames, the position specifically
+    /// at the current time needs to be predicted.
+    pub fn get_object_transform(&self, handle: ObjectHandle, prediction: Prediction) -> Transform {
         let object = &self.objects[handle.0];
         let body = &self.physics.rigid_bodies[object.rigid_body];
-        body.predict_position_using_velocity_and_forces(self.time_ahead)
+        let isometry = match prediction {
+            Prediction::LastKnown => *body.position(),
+            Prediction::IntegrateVelocity => unimplemented!(),
+            Prediction::IntegrateVelocityAndForces => {
+                body.predict_position_using_velocity_and_forces(self.time_ahead)
+            }
+        };
+        isometry.into()
     }
 
-    pub fn get_object_bounds(&self, handle: ObjectHandle) -> rapier3d::geometry::Aabb {
+    pub fn get_object_bounds(&self, handle: ObjectHandle) -> BoundingBox {
         let object = &self.objects[handle.0];
         let mut aabb = rapier3d::geometry::Aabb::new_invalid();
         for &collider_handle in object.colliders.iter() {
             let collider = &self.physics.colliders[collider_handle];
-            //TODO: use `merge` - https://github.com/dimforge/rapier/issues/574
-            for point in collider.compute_aabb().vertices() {
-                aabb.take_point(point);
-            }
+            rapier3d::geometry::BoundingVolume::merge(&mut aabb, &collider.compute_aabb());
         }
-        aabb
+        BoundingBox {
+            //TODO: proper Point3 -> Mint conversion?
+            center: (aabb.center() - nalgebra::Point3::default()).into(),
+            half: aabb.half_extents().into(),
+        }
     }
 
-    /// Returns the position of the object within the "time_step" of precision.
-    /// Faster than the main `get_object_isometry`.
-    pub fn get_object_isometry_approx(&self, handle: ObjectHandle) -> &nalgebra::Isometry3<f32> {
-        let object = &self.objects[handle.0];
-        let body = &self.physics.rigid_bodies[object.rigid_body];
-        body.position()
-    }
-
-    pub fn apply_impulse(&mut self, handle: ObjectHandle, impulse: nalgebra::Vector3<f32>) {
+    pub fn apply_linear_impulse(&mut self, handle: ObjectHandle, impulse: mint::Vector3<f32>) {
         let object = &self.objects[handle.0];
         let body = &mut self.physics.rigid_bodies[object.rigid_body];
-        body.apply_impulse(impulse, false)
+        body.apply_impulse(impulse.into(), false)
     }
 
-    pub fn apply_torque_impulse(&mut self, handle: ObjectHandle, impulse: nalgebra::Vector3<f32>) {
+    pub fn apply_angular_impulse(&mut self, handle: ObjectHandle, impulse: mint::Vector3<f32>) {
         let object = &self.objects[handle.0];
         let body = &mut self.physics.rigid_bodies[object.rigid_body];
-        body.apply_torque_impulse(impulse, false)
+        body.apply_torque_impulse(impulse.into(), false)
     }
 
-    pub fn teleport_object(&mut self, handle: ObjectHandle, isometry: nalgebra::Isometry3<f32>) {
+    pub fn teleport_object(&mut self, handle: ObjectHandle, transform: Transform) {
         let object = &self.objects[handle.0];
         let body = &mut self.physics.rigid_bodies[object.rigid_body];
         body.set_linvel(Default::default(), false);
         body.set_angvel(Default::default(), false);
-        body.set_position(isometry, true);
+        body.set_position(transform.into(), true);
+    }
+
+    pub fn set_joint_motor(
+        &mut self,
+        handle: JointHandle,
+        axis: JointAxis,
+        target_pos: f32,
+        target_vel: f32,
+    ) {
+        let joint = &mut self.physics[handle];
+        let &rapier3d::dynamics::JointMotor {
+            damping, stiffness, ..
+        } = joint.motor(axis.into()).unwrap();
+        joint.set_motor(axis.into(), target_pos, target_vel, stiffness, damping);
     }
 
     pub fn set_environment_map(&mut self, path: &str) {
