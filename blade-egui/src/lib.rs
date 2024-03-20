@@ -42,6 +42,7 @@ struct Locals {
     r_texture: blade_graphics::TextureView,
 }
 
+#[derive(Debug, PartialEq)]
 pub struct ScreenDescriptor {
     pub physical_size: (u32, u32),
     pub scale_factor: f32,
