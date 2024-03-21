@@ -234,7 +234,9 @@ enum InvalidDependency {
 enum CookReason {
     NoTarget,
     BadHeader,
+    #[allow(dead_code)]
     TooManyDependencies(usize),
+    #[allow(dead_code)]
     Dependency(usize, InvalidDependency),
     Outdated,
     WrongDataOffset,

@@ -134,13 +134,6 @@ impl Buffer {
 unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct BlockInfo {
-    bytes: u8,
-    width: u8,
-    height: u8,
-}
-
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Texture {
     raw: vk::Image,

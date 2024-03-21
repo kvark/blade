@@ -36,3 +36,6 @@ zune-jpeg = { version = "0.4", optional = true }
 zune-png = { version = "0.4", optional = true }
 zune-hdr = { version = "0.4", optional = true }
 zune-imageprocs = { version = "0.4", optional = true }
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["bitflags::*", "blade_asset::*", "blade_graphics::*", "bytemuck::*", "choir::*", "epaint::*", "mint::*", "strum::*"]

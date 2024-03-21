@@ -92,3 +92,7 @@ renderdoc = "0.11"
 # This is too slow in Debug
 [profile.dev.package.texpresso]
 opt-level = 3
+
+[package.metadata.cargo_check_external_types]
+#TODO: reconsider `egui`/`epaint` and `winit` here
+allowed_external_types = ["egui::*", "epaint::*", "mint::*", "profiling::*", "serde::*", "winit::*"]

@@ -39,16 +39,14 @@ impl Default for Transform {
         }
     }
 }
-impl From<nalgebra::Isometry3<f32>> for Transform {
-    fn from(isometry: nalgebra::Isometry3<f32>) -> Self {
+impl Transform {
+    fn from_isometry(isometry: nalgebra::Isometry3<f32>) -> Self {
         Self {
             position: isometry.translation.vector.into(),
             orientation: isometry.rotation.into(),
         }
     }
-}
-impl Into<nalgebra::Isometry3<f32>> for Transform {
-    fn into(self) -> nalgebra::Isometry3<f32> {
+    fn into_isometry(self) -> nalgebra::Isometry3<f32> {
         nalgebra::Isometry3 {
             translation: nalgebra::Translation {
                 vector: self.position.into(),
@@ -90,8 +88,8 @@ pub enum DynamicInput {
     #[default]
     Full,
 }
-impl Into<rapier3d::dynamics::RigidBodyType> for DynamicInput {
-    fn into(self) -> rapier3d::dynamics::RigidBodyType {
+impl DynamicInput {
+    fn into_rapier(self) -> rapier3d::dynamics::RigidBodyType {
         use rapier3d::dynamics::RigidBodyType as Rbt;
         match self {
             Self::Empty => Rbt::Fixed,
@@ -112,8 +110,8 @@ pub enum JointAxis {
     AngularY = 4,
     AngularZ = 5,
 }
-impl Into<rapier3d::dynamics::JointAxis> for JointAxis {
-    fn into(self) -> rapier3d::dynamics::JointAxis {
+impl JointAxis {
+    fn into_rapier(self) -> rapier3d::dynamics::JointAxis {
         use rapier3d::dynamics::JointAxis as Ja;
         match self {
             Self::LinearX => Ja::X,
@@ -128,8 +126,8 @@ impl Into<rapier3d::dynamics::JointAxis> for JointAxis {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum JointHandle {
-    Soft(rapier3d::dynamics::ImpulseJointHandle),
-    Hard(rapier3d::dynamics::MultibodyJointHandle),
+    Soft(#[doc(hidden)] rapier3d::dynamics::ImpulseJointHandle),
+    Hard(#[doc(hidden)] rapier3d::dynamics::MultibodyJointHandle),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -300,6 +298,7 @@ impl Physics {
     }
 }
 
+#[doc(hidden)]
 impl ops::Index<JointHandle> for Physics {
     type Output = rapier3d::dynamics::GenericJoint;
     fn index(&self, handle: JointHandle) -> &Self::Output {
@@ -884,8 +883,8 @@ impl Engine {
             None => Default::default(),
         };
 
-        let rigid_body = rapier3d::dynamics::RigidBodyBuilder::new(dynamic_input.into())
-            .position(transform.into())
+        let rigid_body = rapier3d::dynamics::RigidBodyBuilder::new(dynamic_input.into_rapier())
+            .position(transform.into_isometry())
             .additional_mass_properties(add_mass_properties)
             .build();
         let rb_handle = self.physics.rigid_bodies.insert(rigid_body);
@@ -993,28 +992,25 @@ impl Engine {
             ];
             let mut joint_builder =
                 rapier3d::dynamics::GenericJointBuilder::new(Default::default())
-                    .local_frame1(desc.parent_anchor.into())
-                    .local_frame2(desc.child_anchor.into())
+                    .local_frame1(desc.parent_anchor.into_isometry())
+                    .local_frame2(desc.child_anchor.into_isometry())
                     .contacts_enabled(desc.allow_contacts);
             for &(axis, ref maybe_freedom) in freedoms.iter() {
+                let rapier_axis = axis.into_rapier();
                 match *maybe_freedom {
                     Some(freedom) => {
                         if let Some(ref limits) = freedom.limits {
                             joint_builder =
-                                joint_builder.limits(axis.into(), [limits.start, limits.end]);
+                                joint_builder.limits(rapier_axis, [limits.start, limits.end]);
                         }
                         if let Some(ref motor) = freedom.motor {
                             joint_builder = joint_builder
-                                .motor_position(axis.into(), 0.0, motor.stiffness, motor.damping)
-                                .motor_max_force(axis.into(), motor.max_force);
+                                .motor_position(rapier_axis, 0.0, motor.stiffness, motor.damping)
+                                .motor_max_force(rapier_axis, motor.max_force);
                         }
                     }
                     None => {
-                        locked_axes |= rapier3d::dynamics::JointAxesMask::from(Into::<
-                            rapier3d::dynamics::JointAxis,
-                        >::into(
-                            axis
-                        ));
+                        locked_axes |= rapier3d::dynamics::JointAxesMask::from(rapier_axis);
                     }
                 }
             }
@@ -1049,7 +1045,7 @@ impl Engine {
                 body.predict_position_using_velocity_and_forces(self.time_ahead)
             }
         };
-        isometry.into()
+        Transform::from_isometry(isometry)
     }
 
     pub fn get_object_bounds(&self, handle: ObjectHandle) -> BoundingBox {
@@ -1083,7 +1079,7 @@ impl Engine {
         let body = &mut self.physics.rigid_bodies[object.rigid_body];
         body.set_linvel(Default::default(), false);
         body.set_angvel(Default::default(), false);
-        body.set_position(transform.into(), true);
+        body.set_position(transform.into_isometry(), true);
     }
 
     pub fn set_joint_motor(
@@ -1094,10 +1090,11 @@ impl Engine {
         target_vel: f32,
     ) {
         let joint = &mut self.physics[handle];
+        let rapier_axis = axis.into_rapier();
         let &rapier3d::dynamics::JointMotor {
             damping, stiffness, ..
-        } = joint.motor(axis.into()).unwrap();
-        joint.set_motor(axis.into(), target_pos, target_vel, stiffness, damping);
+        } = joint.motor(rapier_axis).unwrap();
+        joint.set_motor(rapier_axis, target_pos, target_vel, stiffness, damping);
     }
 
     pub fn set_environment_map(&mut self, path: &str) {
