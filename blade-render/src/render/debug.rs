@@ -22,22 +22,6 @@ pub struct DebugLine {
     pub b: DebugPoint,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct DebugLineParams {
-    target_offset: [f32; 2],
-    target_size: [f32; 2],
-    mip_level: f32,
-    unused: u32,
-}
-
-#[derive(blade_macros::ShaderData)]
-struct DebugLinedata {
-    input: blade_graphics::TextureView,
-    output: blade_graphics::Sampler,
-    params: DebugBlitParams,
-}
-
 #[derive(blade_macros::ShaderData)]
 struct DebugDrawData {
     camera: super::CameraParams,
