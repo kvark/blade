@@ -112,6 +112,7 @@ struct Swapchain {
     surface: egl::Surface,
     extent: crate::Extent,
     format: crate::TextureFormat,
+    swap_interval: i32,
 }
 
 struct ContextInner {
@@ -455,6 +456,10 @@ impl Context {
             surface,
             extent: config.size,
             format,
+            swap_interval: match config.display_sync {
+                crate::DisplaySync::Block => 1,
+                crate::DisplaySync::Recent | crate::DisplaySync::Tear => 0,
+            },
         });
 
         let format_desc = super::describe_texture_format(format);
@@ -520,6 +525,10 @@ impl ContextInner {
                 Some(sc.surface),
                 Some(self.egl.raw),
             )
+            .unwrap();
+        self.egl
+            .instance
+            .swap_interval(self.egl.display, sc.swap_interval)
             .unwrap();
 
         let gl = &self.glow;

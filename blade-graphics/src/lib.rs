@@ -964,6 +964,19 @@ pub struct RenderTargetSet<'a> {
     pub depth_stencil: Option<RenderTarget>,
 }
 
+/// Mechanism used to acquire frames and display them on screen.
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+pub enum DisplaySync {
+    /// Block until the oldest frame is released.
+    #[default]
+    Block,
+    /// Display the most recently presented frame.
+    /// Falls back to `Tear` if unsupported.
+    Recent,
+    /// Tear the currently displayed frame when presenting a new one.
+    Tear,
+}
+
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
 pub enum ColorSpace {
     #[default]
@@ -975,7 +988,7 @@ pub enum ColorSpace {
 pub struct SurfaceConfig {
     pub size: Extent,
     pub usage: TextureUsage,
-    pub frame_count: u32,
+    pub display_sync: DisplaySync,
     /// The color space that render output colors are expected to be in.
     ///
     /// This will affect the surface format returned by the `Context`.

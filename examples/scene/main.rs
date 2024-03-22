@@ -161,7 +161,7 @@ impl Example {
                 depth: 1,
             },
             usage: gpu::TextureUsage::TARGET,
-            frame_count: 3,
+            display_sync: gpu::DisplaySync::Block,
             color_space: gpu::ColorSpace::Linear,
         }
     }

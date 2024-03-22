@@ -75,6 +75,10 @@ impl super::Surface {
             crate::ColorSpace::Linear => crate::TextureFormat::Bgra8UnormSrgb,
             crate::ColorSpace::Srgb => crate::TextureFormat::Bgra8Unorm,
         };
+        let vsync = match config.display_sync {
+            crate::DisplaySync::Block => true,
+            crate::DisplaySync::Recent | crate::DisplaySync::Tear => false,
+        };
 
         self.render_layer.set_opaque(true);
         self.render_layer.set_device(device);
@@ -82,14 +86,13 @@ impl super::Surface {
             .set_pixel_format(super::map_texture_format(format));
         self.render_layer
             .set_framebuffer_only(config.usage == crate::TextureUsage::TARGET);
-        self.render_layer
-            .set_maximum_drawable_count(config.frame_count as u64);
+        self.render_layer.set_maximum_drawable_count(3);
         self.render_layer.set_drawable_size(CGSize::new(
             config.size.width as f64,
             config.size.height as f64,
         ));
         unsafe {
-            let () = msg_send![self.render_layer, setDisplaySyncEnabled: true];
+            let () = msg_send![self.render_layer, setDisplaySyncEnabled: vsync];
         }
 
         format
