@@ -1,6 +1,6 @@
 mod config;
 
-use std::{f32::consts, fs, mem, path::PathBuf, time};
+use std::{f32::consts, fs, mem, ops, path::PathBuf, time};
 
 #[derive(Clone)]
 struct Wheel {
@@ -22,7 +22,7 @@ struct Game {
     engine: blade::Engine,
     last_physics_update: time::Instant,
     last_camera_update: time::Instant,
-    last_camera_base_quat: nalgebra::UnitQuaternion<f32>,
+    last_camera_base_quat: glam::Quat,
     is_paused: bool,
     // windowing
     window: winit::window::Window,
@@ -32,25 +32,46 @@ struct Game {
     _ground_handle: blade::ObjectHandle,
     vehicle: Vehicle,
     cam_config: config::Camera,
-    spawn_pos: nalgebra::Vector3<f32>,
+    spawn_pos: glam::Vec3,
 }
 
-fn make_transform(isometry: nalgebra::Isometry3<f32>) -> blade::Transform {
-    blade::Transform {
-        position: isometry.translation.vector.into(),
-        orientation: isometry.rotation.into(),
+#[derive(Clone, Debug, PartialEq)]
+struct Isometry {
+    position: glam::Vec3,
+    orientation: glam::Quat,
+}
+impl From<blade::Transform> for Isometry {
+    fn from(transform: blade::Transform) -> Self {
+        Self {
+            position: transform.position.into(),
+            orientation: transform.orientation.into(),
+        }
     }
 }
-fn get_isometry(transform: blade::Transform) -> nalgebra::Isometry3<f32> {
-    let quat = nalgebra::Unit::new_normalize(nalgebra::Quaternion::from(transform.orientation));
-    nalgebra::Isometry3::new(transform.position.into(), quat.scaled_axis())
+impl Isometry {
+    fn inverse(&self) -> Self {
+        let orientation = self.orientation.inverse();
+        Self {
+            position: orientation * -self.position,
+            orientation,
+        }
+    }
+
+    fn to_blade(&self) -> blade::Transform {
+        blade::Transform {
+            position: self.position.into(),
+            orientation: self.orientation.into(),
+        }
+    }
 }
-fn get_direction(
-    transform: blade::Transform,
-    local: nalgebra::UnitVector3<f32>,
-) -> nalgebra::Vector3<f32> {
-    (nalgebra::Unit::new_normalize(nalgebra::Quaternion::from(transform.orientation)) * local)
-        .into_inner()
+impl ops::Mul<Isometry> for Isometry {
+    type Output = Self;
+    fn mul(self, other: Self) -> Self {
+        Self {
+            position: self.orientation * other.position + self.position,
+            orientation: self.orientation * other.orientation,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -114,7 +135,7 @@ impl Game {
             colliders: vec![veh_config.body.collider],
             additional_mass: None,
         };
-        let spawn_pos = nalgebra::Vector3::from(lev_config.spawn_pos);
+        let spawn_pos = glam::Vec3::from(lev_config.spawn_pos);
         let mut vehicle = Vehicle {
             body_handle: engine.add_object(
                 &body_config,
@@ -144,14 +165,11 @@ impl Game {
         //Note: in the vehicle coordinate system X=left, Y=up, Z=forward
         for ac in veh_config.axles {
             for wheel_x in ac.x_wheels {
-                let offset = nalgebra::Vector3::new(wheel_x, ac.y, ac.z);
+                let offset = glam::Vec3::new(wheel_x, ac.y, ac.z);
                 let rotation = if wheel_x > 0.0 {
-                    nalgebra::UnitQuaternion::from_axis_angle(
-                        &nalgebra::Vector3::y_axis(),
-                        consts::PI,
-                    )
+                    glam::Quat::from_rotation_y(consts::PI)
                 } else {
-                    nalgebra::UnitQuaternion::default()
+                    glam::Quat::IDENTITY
                 };
 
                 let wheel_handle = engine.add_object(
@@ -345,24 +363,19 @@ impl Game {
         }
     }
 
-    fn teleport_object_rel(
-        &mut self,
-        handle: blade::ObjectHandle,
-        transform: &nalgebra::Isometry3<f32>,
-    ) {
-        let prev = get_isometry(
-            self.engine
-                .get_object_transform(handle, blade::Prediction::LastKnown),
-        );
-        let next = transform * prev;
-        self.engine.teleport_object(handle, make_transform(next));
+    fn teleport_object_rel(&mut self, handle: blade::ObjectHandle, isometry: &Isometry) {
+        let prev_transform = self
+            .engine
+            .get_object_transform(handle, blade::Prediction::LastKnown);
+        let next = isometry.clone() * Isometry::from(prev_transform);
+        self.engine.teleport_object(handle, next.to_blade());
     }
 
-    fn teleport(&mut self, position: nalgebra::Vector3<f32>) {
+    fn teleport(&mut self, position: glam::Vec3) {
         let old_transform = self
             .engine
             .get_object_transform(self.vehicle.body_handle, blade::Prediction::LastKnown);
-        let old_isometry_inv = get_isometry(old_transform).inverse();
+        let old_isometry_inv = Isometry::from(old_transform).inverse();
         let new_transform = blade::Transform {
             position: position.into(),
             ..Default::default()
@@ -370,7 +383,7 @@ impl Game {
         self.engine
             .teleport_object(self.vehicle.body_handle, new_transform.clone());
 
-        let relative = get_isometry(new_transform) * old_isometry_inv;
+        let relative = Isometry::from(new_transform) * old_isometry_inv;
         let wheels = mem::take(&mut self.vehicle.wheels);
         for wheel in wheels.iter() {
             if let Some(suspender) = wheel.suspender {
@@ -432,7 +445,7 @@ impl Game {
                         self.vehicle.body_handle,
                         blade::Prediction::LastKnown,
                     );
-                    let forward = get_direction(transform, nalgebra::Vector3::z_axis());
+                    let forward = glam::Quat::from(transform.orientation) * glam::Vec3::Z;
                     self.engine.apply_angular_impulse(
                         self.vehicle.body_handle,
                         (-self.vehicle.roll_impulse * forward).into(),
@@ -443,7 +456,7 @@ impl Game {
                         self.vehicle.body_handle,
                         blade::Prediction::LastKnown,
                     );
-                    let forward = get_direction(transform, nalgebra::Vector3::z_axis());
+                    let forward = glam::Quat::from(transform.orientation) * glam::Vec3::Z;
                     self.engine.apply_angular_impulse(
                         self.vehicle.body_handle,
                         (self.vehicle.roll_impulse * forward).into(),
@@ -454,7 +467,7 @@ impl Game {
                         self.vehicle.body_handle,
                         blade::Prediction::LastKnown,
                     );
-                    let mut up = get_direction(transform, nalgebra::Vector3::y_axis());
+                    let mut up = glam::Quat::from(transform.orientation) * glam::Vec3::Y;
                     up.y = up.y.abs();
                     self.engine.apply_linear_impulse(
                         self.vehicle.body_handle,
@@ -551,12 +564,9 @@ impl Game {
                             self.vehicle.body_handle,
                             blade::Prediction::LastKnown,
                         );
-                        let pos = nalgebra::Vector3::from(transform.position);
+                        let pos = glam::Vec3::from(transform.position);
                         let bounds = self.engine.get_object_bounds(self.vehicle.body_handle);
-                        self.teleport(
-                            pos + nalgebra::Vector3::from(bounds.half)
-                                .component_mul(&nalgebra::Vector3::y_axis()),
-                        );
+                        self.teleport(pos + glam::Vec3::from(bounds.half) * glam::Vec3::Y);
                     }
                     if ui.button("Respawn").clicked() {
                         self.teleport(self.spawn_pos);
@@ -602,47 +612,40 @@ impl Game {
                 self.vehicle.body_handle,
                 blade::Prediction::IntegrateVelocityAndForces,
             );
-            let veh_isometry = get_isometry(veh_transform);
+            let veh_isometry = Isometry::from(veh_transform);
             // Projection of the rotation of the vehicle on the Y axis
-            let projection = veh_isometry
-                .rotation
-                .quaternion()
-                .imag()
-                .dot(&nalgebra::Vector3::y_axis());
-            let base_quat_nonorm = nalgebra::Quaternion::from_parts(
-                veh_isometry.rotation.quaternion().w,
-                nalgebra::Vector3::y_axis().scale(projection),
-            );
-            let validity = base_quat_nonorm.norm();
-            let base_quat = nalgebra::UnitQuaternion::new_normalize(base_quat_nonorm);
+            let projection = veh_isometry.orientation.xyz().dot(glam::Vec3::Y);
+            let base_quat_nonorm =
+                glam::Quat::from_xyzw(0.0, projection, 0.0, veh_isometry.orientation.w);
+            let validity = base_quat_nonorm.length();
+            let base_quat = base_quat_nonorm / validity;
 
             let camera_dt = self.last_camera_update.elapsed().as_secs_f32();
             self.last_physics_update = time::Instant::now();
 
             let cc = &self.cam_config;
             let smooth_t = (-camera_dt * cc.speed * validity).exp();
-            let smooth_quat = nalgebra::UnitQuaternion::new_normalize(
-                base_quat.lerp(&self.last_camera_base_quat, smooth_t),
-            );
-            let base =
-                nalgebra::geometry::Isometry3::from_parts(veh_isometry.translation, smooth_quat);
+            let smooth_quat = base_quat.lerp(self.last_camera_base_quat, smooth_t);
+            let base = Isometry {
+                position: veh_isometry.position,
+                orientation: smooth_quat,
+            };
             self.last_camera_base_quat = smooth_quat;
 
-            //TODO: `nalgebra::Point3::from(mint::Vector3)` doesn't exist?
-            let source = nalgebra::Vector3::from(cc.target)
-                + nalgebra::Vector3::new(
-                    -cc.azimuth.sin() * cc.altitude.cos(),
-                    cc.altitude.sin(),
-                    -cc.azimuth.cos() * cc.altitude.cos(),
-                )
-                .scale(cc.distance);
-            let local = nalgebra::geometry::Isometry3::look_at_rh(
-                &source.into(),
-                &nalgebra::Vector3::from(cc.target).into(),
-                &nalgebra::Vector3::y_axis(),
-            );
+            let source = glam::Vec3::from(cc.target)
+                + cc.distance
+                    * glam::Vec3::new(
+                        -cc.azimuth.sin() * cc.altitude.cos(),
+                        cc.altitude.sin(),
+                        -cc.azimuth.cos() * cc.altitude.cos(),
+                    );
+            let local_affine = glam::Affine3A::look_at_rh(source, cc.target.into(), glam::Vec3::Y);
+            let local = Isometry {
+                position: local_affine.translation.into(),
+                orientation: glam::Quat::from_affine3(&local_affine),
+            };
             blade::FrameCamera {
-                transform: make_transform(base * local.inverse()),
+                transform: (base * local.inverse()).to_blade(),
                 fov_y: cc.fov,
             }
         };
