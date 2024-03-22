@@ -10,7 +10,8 @@ Changelog for Blade
   - fixed mipmap generation
 - update to egui-0.26 and winit-0.29
 - graphics:
-  - color space configuration for surfaces
+  - display sync configuration
+  - color space configuration
   - work around Intel+Nvidia presentation bug
   - overlay support
 

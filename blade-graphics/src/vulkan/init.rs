@@ -685,20 +685,31 @@ impl super::Context {
             );
         }
 
-        let effective_frame_count = config.frame_count.max(capabilities.min_image_count).min(
-            if capabilities.max_image_count != 0 {
-                capabilities.max_image_count
-            } else {
-                !0
-            },
-        );
-        if effective_frame_count != config.frame_count {
-            log::warn!(
-                "Requested frame count {} is outside of surface capabilities, clamping to {}",
-                config.frame_count,
-                effective_frame_count,
-            );
-        }
+        let (requested_frame_count, mode_preferences) = match config.display_sync {
+            crate::DisplaySync::Block => (3, [vk::PresentModeKHR::FIFO].as_slice()),
+            crate::DisplaySync::Recent => (
+                3,
+                [
+                    vk::PresentModeKHR::MAILBOX,
+                    vk::PresentModeKHR::FIFO_RELAXED,
+                    vk::PresentModeKHR::IMMEDIATE,
+                ]
+                .as_slice(),
+            ),
+            crate::DisplaySync::Tear => (2, [vk::PresentModeKHR::IMMEDIATE].as_slice()),
+        };
+        let effective_frame_count = requested_frame_count.max(capabilities.min_image_count);
+
+        let present_modes = unsafe {
+            surface_khr
+                .get_physical_device_surface_present_modes(self.physical_device, surface.raw)
+                .unwrap()
+        };
+        let present_mode = *mode_preferences
+            .iter()
+            .find(|mode| present_modes.contains(mode))
+            .unwrap();
+        log::info!("Using surface present mode {:?}", present_mode);
 
         let queue_families = [self.queue_family_index];
         //TODO: consider supported color spaces by Vulkan
@@ -723,7 +734,7 @@ impl super::Context {
             .queue_family_indices(&queue_families)
             .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .present_mode(vk::PresentModeKHR::FIFO)
+            .present_mode(present_mode)
             .old_swapchain(surface.swapchain);
         let new_swapchain = unsafe {
             surface

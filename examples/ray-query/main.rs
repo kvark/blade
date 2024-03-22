@@ -88,7 +88,7 @@ impl Example {
         let surface_format = context.resize(gpu::SurfaceConfig {
             size: screen_size,
             usage: gpu::TextureUsage::TARGET,
-            frame_count: 3,
+            display_sync: gpu::DisplaySync::Block,
             color_space: gpu::ColorSpace::Linear,
         });
 
