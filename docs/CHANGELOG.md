@@ -1,15 +1,18 @@
 Changelog for Blade
 
-## blade-0.2 (TBD)
-- high-level engine
-- built-in physics via Rapier3D
-- support object motion
-- support clockwise mesh winding
-
-## blade-graphics-0.4 (TBD)
-- color space configuration for surfaces
-- work around Intel+Nvidia presentation bug
-- overlay support
+## blade-graphics-0.4, blade-render-0.3, blade-0.2 (22 Mar 2024)
+- crate: `blade` for high-level engine
+  - built-in physics via Rapier3D
+- examples: "vehicle"
+- render:
+  - support object motion
+  - support clockwise mesh winding
+  - fixed mipmap generation
+- update to egui-0.26 and winit-0.29
+- graphics:
+  - color space configuration for surfaces
+  - work around Intel+Nvidia presentation bug
+  - overlay support
 
 ## blade-graphics-0.3, blade-render-0.2 (17 Nov 2023)
 - tangent space generation
@@ -30,11 +33,11 @@ Changelog for Blade
 - crate: `blade-egui` for egui integration
 - crate: `blade-asset` for asset pipeline
 - crate: `blade-render` for ray-traced renderer
-    - load models: `gltf`
+  - load models: `gltf`
 	- load textures: `png`, `jpg`
 
 ## blade-graphics-0.1 (25 Jan 2023)
 - backends: Vulkan, Metal, OpenGL ES + WebGL2
 - examples: "mini", "bunnymark", "particle"
-- crate `blade-graphics` for GPU abstracting GPU operations
-- crate `blade-macros` for `ShaderData` derivation
+- crate: `blade-graphics` for GPU abstracting GPU operations
+- crate: `blade-macros` for `ShaderData` derivation
