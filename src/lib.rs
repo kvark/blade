@@ -132,8 +132,8 @@ pub enum JointHandle {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MotorDesc {
-    pub damping: f32,
     pub stiffness: f32,
+    pub damping: f32,
     pub max_force: f32,
 }
 
@@ -1091,10 +1091,14 @@ impl Engine {
     ) {
         let joint = &mut self.physics[handle];
         let rapier_axis = axis.into_rapier();
-        let &rapier3d::dynamics::JointMotor {
-            damping, stiffness, ..
-        } = joint.motor(rapier_axis).unwrap();
-        joint.set_motor(rapier_axis, target_pos, target_vel, stiffness, damping);
+        match joint.motor(rapier_axis) {
+            Some(&rapier3d::dynamics::JointMotor {
+                damping, stiffness, ..
+            }) => {
+                joint.set_motor(rapier_axis, target_pos, target_vel, stiffness, damping);
+            }
+            None => panic!("Axis {:?} of {:?} is not motorized", axis, handle),
+        }
     }
 
     pub fn set_environment_map(&mut self, path: &str) {
