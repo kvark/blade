@@ -42,9 +42,9 @@ readme = "docs/README.md"
 
 [dependencies]
 blade-asset = { version = "0.2", path = "blade-asset" }
-blade-egui = { version = "0.2", path = "blade-egui" }
-blade-graphics = { version = "0.3", path = "blade-graphics" }
-blade-render = { version = "0.2", path = "blade-render" }
+blade-egui = { version = "0.3", path = "blade-egui" }
+blade-graphics = { version = "0.4", path = "blade-graphics" }
+blade-render = { version = "0.3", path = "blade-render" }
 base64 = { workspace = true }
 choir = { workspace = true }
 colorsys = "0.6"
