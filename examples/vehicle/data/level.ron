@@ -7,9 +7,8 @@
         name: "ground",
         visuals: [
             (
-                model: "ground.glb",
+                model: "ground.gltf",
                 pos: (0, 1, 0),
-                scale: 60,
             ),
         ],
         colliders: [
@@ -17,8 +16,44 @@
                 density: 1.0,
                 friction: 1.0,
                 shape: Cuboid(
-                    half: (1000, 1.0, 1000),
+                    half: (20, 1, 20),
                 ),
+            ),
+            (
+                density: 1.0,
+                friction: 1.0,
+                shape: Cuboid(
+                    half: (20, 1, 1),
+                ),
+                pos: (21, 2, 0),
+                rot: (0, 90, 0),
+            ),
+            (
+                density: 1.0,
+                friction: 1.0,
+                shape: Cuboid(
+                    half: (20, 1, 1),
+                ),
+                pos: (-21, 2, 0),
+                rot: (0, 90, 0),
+            ),
+            (
+                density: 1.0,
+                friction: 1.0,
+                shape: Cuboid(
+                    half: (20, 1, 1),
+                ),
+                pos: (0, 2, 21),
+                rot: (0, 0, 0),
+            ),
+            (
+                density: 1.0,
+                friction: 1.0,
+                shape: Cuboid(
+                    half: (20, 1, 1),
+                ),
+                pos: (0, 2, -21),
+                rot: (0, 0, 0),
             ),
         ],
     ),
