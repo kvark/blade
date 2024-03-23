@@ -35,6 +35,7 @@ struct Locals {
 #[derive(blade_macros::ShaderData)]
 struct Sprite {
     locals: Locals,
+    vertices: gpu::BufferPiece,
 }
 
 struct Example {
@@ -48,6 +49,7 @@ struct Example {
     bunnies: Vec<Sprite>,
     rng: nanorand::WyRand,
     context: gpu::Context,
+    vertex_buf: gpu::Buffer,
 }
 
 impl Example {
@@ -130,7 +132,7 @@ impl Example {
             size: (extent.width * extent.height) as u64 * 4,
             memory: gpu::Memory::Upload,
         });
-        let texture_data = vec![0xFFu8; 4];
+        let texture_data = [0xFFu8; 4];
         unsafe {
             ptr::copy_nonoverlapping(
                 texture_data.as_ptr(),
@@ -145,6 +147,20 @@ impl Example {
             ..Default::default()
         });
 
+        let vertex_buf = context.create_buffer(gpu::BufferDesc {
+            name: "vertex",
+            size: 4 * 2 * 4,
+            memory: gpu::Memory::Shared,
+        });
+        let vertex_data = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        unsafe {
+            ptr::copy_nonoverlapping(
+                vertex_data.as_ptr(),
+                vertex_buf.data() as *mut f32,
+                vertex_data.len(),
+            );
+        }
+
         let mut bunnies = Vec::new();
         bunnies.push(Sprite {
             locals: Locals {
@@ -153,6 +169,7 @@ impl Example {
                 color: 0xFFFFFFFF,
                 pad: 0,
             },
+            vertices: vertex_buf.into(),
         });
 
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
@@ -180,6 +197,7 @@ impl Example {
             bunnies,
             rng: nanorand::WyRand::new_seed(73),
             context,
+            vertex_buf,
         }
     }
 
@@ -195,6 +213,7 @@ impl Example {
                     color: self.rng.generate::<u32>(),
                     pad: 0,
                 },
+                vertices: self.vertex_buf.into(),
             });
         }
         println!("Population: {} bunnies", self.bunnies.len());
@@ -272,6 +291,7 @@ impl Example {
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);
         }
+        self.context.destroy_buffer(self.vertex_buf);
         self.context.destroy_texture(self.texture);
         self.context
             .destroy_command_encoder(&mut self.command_encoder);
