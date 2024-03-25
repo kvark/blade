@@ -83,6 +83,7 @@ fn create_draw_pipeline(
         name: "debug-draw",
         data_layouts: &[&layout],
         vertex: shader.at("debug_vs"),
+        vertex_fetches: &[],
         primitive: blade_graphics::PrimitiveState {
             topology: blade_graphics::PrimitiveTopology::LineList,
             ..Default::default()
@@ -108,6 +109,7 @@ fn create_blit_pipeline(
         name: "debug-blit",
         data_layouts: &[&layout],
         vertex: shader.at("blit_vs"),
+        vertex_fetches: &[],
         primitive: blade_graphics::PrimitiveState {
             topology: blade_graphics::PrimitiveTopology::TriangleStrip,
             ..Default::default()

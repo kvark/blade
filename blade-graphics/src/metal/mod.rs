@@ -337,7 +337,14 @@ fn map_index_type(ty: crate::IndexType) -> metal::MTLIndexType {
 
 fn map_attribute_format(format: crate::VertexFormat) -> metal::MTLAttributeFormat {
     match format {
+        crate::VertexFormat::F32 => metal::MTLAttributeFormat::Float,
+        crate::VertexFormat::F32Vec2 => metal::MTLAttributeFormat::Float2,
         crate::VertexFormat::F32Vec3 => metal::MTLAttributeFormat::Float3,
+        crate::VertexFormat::F32Vec4 => metal::MTLAttributeFormat::Float4,
+        crate::VertexFormat::U32 => metal::MTLAttributeFormat::UInt,
+        crate::VertexFormat::U32Vec2 => metal::MTLAttributeFormat::UInt2,
+        crate::VertexFormat::U32Vec3 => metal::MTLAttributeFormat::UInt3,
+        crate::VertexFormat::U32Vec4 => metal::MTLAttributeFormat::UInt4,
     }
 }
 

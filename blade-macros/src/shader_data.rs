@@ -20,7 +20,7 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
         let name = field.ident.as_ref().unwrap();
         let ty = &field.ty;
         bindings.push(quote! {
-            (stringify!(#name), <#ty as blade_graphics::HasShaderBinding>::TYPE)
+            (stringify!(#name), <#ty as blade_graphics::derive::HasShaderBinding>::TYPE)
         });
         assignments.push(quote! {
             self.#name.bind_to(&mut ctx, #index);

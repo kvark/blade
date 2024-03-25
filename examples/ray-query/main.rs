@@ -109,6 +109,7 @@ impl Example {
                 ..Default::default()
             },
             vertex: shader.at("draw_vs"),
+            vertex_fetches: &[],
             fragment: shader.at("draw_fs"),
             color_targets: &[surface_format.into()],
             depth_stencil: None,
