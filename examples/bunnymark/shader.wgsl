@@ -14,7 +14,6 @@ var<uniform> locals: Locals;
 struct Vertex {
     pos: vec2<f32>,
 };
-var<storage, read> vertices: array<Vertex>;
 
 var sprite_texture: texture_2d<f32>;
 var sprite_sampler: sampler;
@@ -32,9 +31,8 @@ fn unpack_color(raw: u32) -> vec4<f32> {
 }
 
 @vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
-    //let tc = vec2<f32>(f32(vi & 1u), 0.5 * f32(vi & 2u));
-    let tc = vertices[vi].pos;
+fn vs_main(vertex: Vertex) -> VertexOutput {
+    let tc = vertex.pos;
     let offset = tc * globals.sprite_size;
     let pos = globals.mvp_transform * vec4<f32>(locals.position + offset, 0.0, 1.0);
     let color = unpack_color(locals.color);

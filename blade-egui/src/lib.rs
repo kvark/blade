@@ -133,6 +133,7 @@ impl GuiPainter {
             name: "gui",
             data_layouts: &[&globals_layout, &locals_layout],
             vertex: shader.at("vs_main"),
+            vertex_fetches: &[],
             primitive: blade_graphics::PrimitiveState {
                 topology: blade_graphics::PrimitiveTopology::TriangleList,
                 ..Default::default()

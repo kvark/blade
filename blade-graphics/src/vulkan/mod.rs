@@ -561,7 +561,14 @@ fn map_index_type(index_type: crate::IndexType) -> vk::IndexType {
 fn map_vertex_format(vertex_format: crate::VertexFormat) -> vk::Format {
     use crate::VertexFormat as Vf;
     match vertex_format {
+        Vf::F32 => vk::Format::R32_SFLOAT,
+        Vf::F32Vec2 => vk::Format::R32G32_SFLOAT,
         Vf::F32Vec3 => vk::Format::R32G32B32_SFLOAT,
+        Vf::F32Vec4 => vk::Format::R32G32B32A32_SFLOAT,
+        Vf::U32 => vk::Format::R32_UINT,
+        Vf::U32Vec2 => vk::Format::R32G32_UINT,
+        Vf::U32Vec3 => vk::Format::R32G32B32_UINT,
+        Vf::U32Vec4 => vk::Format::R32G32B32A32_UINT,
     }
 }
 

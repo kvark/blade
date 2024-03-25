@@ -47,6 +47,7 @@ pub const IDENTITY_TRANSFORM: Transform = mint::RowMatrix3x4 {
     },
 };
 
+pub mod derive;
 #[cfg_attr(
     all(not(vulkan), not(gles), any(target_os = "ios", target_os = "macos")),
     path = "metal/mod.rs"
@@ -460,7 +461,14 @@ pub struct AccelerationStructureDesc<'a> {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
 pub enum VertexFormat {
+    F32,
+    F32Vec2,
     F32Vec3,
+    F32Vec4,
+    U32,
+    U32Vec2,
+    U32Vec3,
+    U32Vec4,
 }
 
 #[derive(Clone, Debug)]
@@ -529,33 +537,6 @@ pub trait ShaderBindable: Clone + Copy {
     fn bind_to(&self, context: &mut PipelineContext, index: u32);
 }
 
-pub trait HasShaderBinding: ShaderBindable {
-    const TYPE: ShaderBinding;
-}
-impl<T: bytemuck::Pod> HasShaderBinding for T {
-    const TYPE: ShaderBinding = ShaderBinding::Plain {
-        size: std::mem::size_of::<T>() as u32,
-    };
-}
-impl HasShaderBinding for TextureView {
-    const TYPE: ShaderBinding = ShaderBinding::Texture;
-}
-impl HasShaderBinding for Sampler {
-    const TYPE: ShaderBinding = ShaderBinding::Sampler;
-}
-impl HasShaderBinding for BufferPiece {
-    const TYPE: ShaderBinding = ShaderBinding::Buffer;
-}
-impl<'a, const N: ResourceIndex> HasShaderBinding for &'a BufferArray<N> {
-    const TYPE: ShaderBinding = ShaderBinding::BufferArray { count: N };
-}
-impl<'a, const N: ResourceIndex> HasShaderBinding for &'a TextureArray<N> {
-    const TYPE: ShaderBinding = ShaderBinding::TextureArray { count: N };
-}
-impl HasShaderBinding for AccelerationStructure {
-    const TYPE: ShaderBinding = ShaderBinding::AccelerationStructure;
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShaderDataLayout {
     pub bindings: Vec<(&'static str, ShaderBinding)>,
@@ -570,6 +551,28 @@ impl ShaderDataLayout {
 pub trait ShaderData {
     fn layout() -> ShaderDataLayout;
     fn fill(&self, context: PipelineContext);
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct VertexAttribute {
+    pub offset: u32,
+    pub format: VertexFormat,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VertexLayout {
+    pub attributes: Vec<VertexAttribute>,
+    pub stride: u32,
+}
+
+pub trait Vertex {
+    fn layout() -> VertexLayout;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VertexFetchState<'a> {
+    pub layout: &'a VertexLayout,
+    pub instanced: bool,
 }
 
 pub struct ShaderDesc<'a> {
@@ -931,6 +934,7 @@ pub struct RenderPipelineDesc<'a> {
     pub name: &'a str,
     pub data_layouts: &'a [&'a ShaderDataLayout],
     pub vertex: ShaderFunction<'a>,
+    pub vertex_fetches: &'a [VertexFetchState<'a>],
     pub primitive: PrimitiveState,
     pub depth_stencil: Option<DepthStencilState>,
     pub fragment: ShaderFunction<'a>,
