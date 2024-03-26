@@ -525,6 +525,15 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
         self.encoder.set_scissor_rect(scissor);
     }
 
+    fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
+        //TODO: figure out the binding slot
+        self.encoder.set_vertex_buffer(
+            index as u64 + 9999,
+            Some(vertex_buf.buffer.as_ref()),
+            vertex_buf.offset,
+        );
+    }
+
     fn draw(
         &mut self,
         first_vertex: u32,
