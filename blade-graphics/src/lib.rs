@@ -559,9 +559,14 @@ pub struct VertexAttribute {
     pub format: VertexFormat,
 }
 
+struct VertexAttributeMapping {
+    buffer_index: usize,
+    attribute_index: usize,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct VertexLayout {
-    pub attributes: Vec<VertexAttribute>,
+    pub attributes: Vec<(&'static str, VertexAttribute)>,
     pub stride: u32,
 }
 

@@ -19,3 +19,4 @@ quote = "1.0"
 blade-graphics = { version = "0.4", path = "../blade-graphics" }
 blade-asset = { version = "0.2", path = "../blade-asset" }
 bytemuck = { workspace = true }
+mint = { workspace = true }

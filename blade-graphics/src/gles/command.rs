@@ -362,6 +362,15 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
         self.commands.push(super::Command::SetScissor(rect.clone()));
     }
 
+    fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
+        /*self.commands.push(super::Command::BindBuffer {
+            target: glow::SHADER_STORAGE_BUFFER,
+            slot,
+            buffer: vertex_buf.into(),
+        });*/
+        unimplemented!()
+    }
+
     fn draw(
         &mut self,
         start_vertex: u32,
