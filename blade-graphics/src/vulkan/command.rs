@@ -756,6 +756,17 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
         };
     }
 
+    fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
+        unsafe {
+            self.device.core.cmd_bind_vertex_buffers(
+                self.cmd_buf.raw,
+                index,
+                &[vertex_buf.buffer.raw],
+                &[vertex_buf.offset],
+            );
+        }
+    }
+
     fn draw(
         &mut self,
         start_vertex: u32,

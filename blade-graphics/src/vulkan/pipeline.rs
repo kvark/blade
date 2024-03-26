@@ -8,6 +8,7 @@ struct CompiledShader {
     vk_module: vk::ShaderModule,
     _entry_point: ffi::CString,
     create_info: vk::PipelineShaderStageCreateInfo,
+    attribute_mappings: Vec<crate::VertexAttributeMapping>,
     wg_size: [u32; 3],
 }
 
@@ -71,12 +72,15 @@ impl super::Context {
         naga_options: &spv::Options,
         group_layouts: &[&crate::ShaderDataLayout],
         group_infos: &mut [BindGroupInfo],
+        vertex_fetch_states: &[crate::VertexFetchState],
     ) -> CompiledShader {
         let ep_index = sf.entry_point_index();
         let ep_info = sf.shader.info.get_entry_point(ep_index);
         let ep = &sf.shader.module.entry_points[ep_index];
-
         let mut module = sf.shader.module.clone();
+        let attribute_mappings =
+            crate::Shader::fill_vertex_locations(&mut module, ep, vertex_fetch_states);
+
         let mut layouter = naga::proc::Layouter::default();
         layouter.update(module.to_ctx()).unwrap();
 
@@ -226,6 +230,7 @@ impl super::Context {
             vk_module,
             _entry_point: entry_point,
             create_info,
+            attribute_mappings,
             wg_size: ep.workgroup_size,
         }
     }
@@ -392,7 +397,13 @@ impl super::Context {
             .collect::<Vec<_>>();
 
         let options = self.make_spv_options(desc.data_layouts);
-        let cs = self.load_shader(desc.compute, &options, desc.data_layouts, &mut group_infos);
+        let cs = self.load_shader(
+            desc.compute,
+            &options,
+            desc.data_layouts,
+            &mut group_infos,
+            &[],
+        );
 
         let layout = self.create_pipeline_layout(desc.data_layouts, &group_infos);
 
@@ -455,18 +466,64 @@ impl super::Context {
             .collect::<Vec<_>>();
 
         let options = self.make_spv_options(desc.data_layouts);
-        let vs = self.load_shader(desc.vertex, &options, desc.data_layouts, &mut group_infos);
-        let fs = self.load_shader(desc.fragment, &options, desc.data_layouts, &mut group_infos);
-
-        let layout = self.create_pipeline_layout(desc.data_layouts, &group_infos);
+        let vs = self.load_shader(
+            desc.vertex,
+            &options,
+            desc.data_layouts,
+            &mut group_infos,
+            desc.vertex_fetches,
+        );
+        let fs = self.load_shader(
+            desc.fragment,
+            &options,
+            desc.data_layouts,
+            &mut group_infos,
+            &[],
+        );
 
         let stages = [vs.create_info, fs.create_info];
-        let vk_vertex_input = vk::PipelineVertexInputStateCreateInfo::builder().build();
+        let layout = self.create_pipeline_layout(desc.data_layouts, &group_infos);
+
+        let vertex_buffers = desc
+            .vertex_fetches
+            .iter()
+            .enumerate()
+            .map(|(i, vf)| vk::VertexInputBindingDescription {
+                binding: i as u32,
+                stride: vf.layout.stride,
+                input_rate: if vf.instanced {
+                    vk::VertexInputRate::INSTANCE
+                } else {
+                    vk::VertexInputRate::VERTEX
+                },
+            })
+            .collect::<Vec<_>>();
+        let vertex_attributes = vs
+            .attribute_mappings
+            .into_iter()
+            .enumerate()
+            .map(|(index, mapping)| {
+                let (_, ref at) = desc.vertex_fetches[mapping.buffer_index].layout.attributes
+                    [mapping.attribute_index];
+                vk::VertexInputAttributeDescription {
+                    location: index as u32,
+                    binding: mapping.buffer_index as u32,
+                    format: super::map_vertex_format(at.format),
+                    offset: at.offset,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let vk_vertex_input = vk::PipelineVertexInputStateCreateInfo::builder()
+            .vertex_binding_descriptions(&vertex_buffers)
+            .vertex_attribute_descriptions(&vertex_attributes)
+            .build();
         let (raw_topology, supports_restart) = map_primitive_topology(desc.primitive.topology);
         let vk_input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
             .topology(raw_topology)
             .primitive_restart_enable(supports_restart)
             .build();
+
         let mut vk_rasterization = vk::PipelineRasterizationStateCreateInfo::builder()
             .polygon_mode(if desc.primitive.wireframe {
                 vk::PolygonMode::LINE

@@ -303,6 +303,7 @@ impl Example {
 
             for sprite in self.bunnies.iter() {
                 rc.bind(1, &sprite.data);
+                rc.bind_vertex(0, sprite.vertex_buf);
                 rc.draw(0, 4, 0, 1);
             }
         }
