@@ -93,6 +93,7 @@ pub trait ComputePipelineEncoder: PipelineEncoder {
 pub trait RenderPipelineEncoder: PipelineEncoder {
     //TODO: reconsider exposing this here
     fn set_scissor_rect(&mut self, rect: &super::ScissorRect);
+    fn bind_vertex(&mut self, index: u32, vertex_buf: super::BufferPiece);
     fn draw(
         &mut self,
         first_vertex: u32,

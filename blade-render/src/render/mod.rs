@@ -582,6 +582,7 @@ impl ShaderPipelines {
                 ..Default::default()
             },
             vertex: shader.at("blit_vs"),
+            vertex_fetches: &[],
             fragment: shader.at("blit_fs"),
             color_targets: &[format.into()],
             depth_stencil: None,

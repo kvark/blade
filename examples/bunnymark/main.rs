@@ -2,7 +2,7 @@
 
 use blade_graphics as gpu;
 use bytemuck::{Pod, Zeroable};
-use std::ptr;
+use std::{mem, ptr};
 
 const BUNNY_SIZE: f32 = 0.15 * 256.0;
 const GRAVITY: f32 = -9.8 * 100.0;
@@ -33,8 +33,16 @@ struct Locals {
 }
 
 #[derive(blade_macros::ShaderData)]
-struct Sprite {
+struct SpriteData {
     locals: Locals,
+}
+#[derive(blade_macros::Vertex)]
+struct SpriteVertex {
+    pos: [f32; 2],
+}
+struct Sprite {
+    data: SpriteData,
+    vertex_buf: gpu::BufferPiece,
 }
 
 struct Example {
@@ -48,6 +56,7 @@ struct Example {
     bunnies: Vec<Sprite>,
     rng: nanorand::WyRand,
     context: gpu::Context,
+    vertex_buf: gpu::Buffer,
 }
 
 impl Example {
@@ -77,7 +86,7 @@ impl Example {
         });
 
         let global_layout = <Params as gpu::ShaderData>::layout();
-        let local_layout = <Sprite as gpu::ShaderData>::layout();
+        let local_layout = <SpriteData as gpu::ShaderData>::layout();
         #[cfg(target_arch = "wasm32")]
         let shader_source = include_str!("shader.wgsl");
         #[cfg(not(target_arch = "wasm32"))]
@@ -90,6 +99,10 @@ impl Example {
             name: "main",
             data_layouts: &[&global_layout, &local_layout],
             vertex: shader.at("vs_main"),
+            vertex_fetches: &[gpu::VertexFetchState {
+                layout: &<SpriteVertex as gpu::Vertex>::layout(),
+                instanced: false,
+            }],
             primitive: gpu::PrimitiveState {
                 topology: gpu::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
@@ -130,7 +143,7 @@ impl Example {
             size: (extent.width * extent.height) as u64 * 4,
             memory: gpu::Memory::Upload,
         });
-        let texture_data = vec![0xFFu8; 4];
+        let texture_data = [0xFFu8; 4];
         unsafe {
             ptr::copy_nonoverlapping(
                 texture_data.as_ptr(),
@@ -145,14 +158,36 @@ impl Example {
             ..Default::default()
         });
 
+        let vertex_data = [
+            SpriteVertex { pos: [0.0, 0.0] },
+            SpriteVertex { pos: [1.0, 0.0] },
+            SpriteVertex { pos: [0.0, 1.0] },
+            SpriteVertex { pos: [1.0, 1.0] },
+        ];
+        let vertex_buf = context.create_buffer(gpu::BufferDesc {
+            name: "vertex",
+            size: (vertex_data.len() * mem::size_of::<SpriteVertex>()) as u64,
+            memory: gpu::Memory::Shared,
+        });
+        unsafe {
+            ptr::copy_nonoverlapping(
+                vertex_data.as_ptr(),
+                vertex_buf.data() as *mut SpriteVertex,
+                vertex_data.len(),
+            );
+        }
+
         let mut bunnies = Vec::new();
         bunnies.push(Sprite {
-            locals: Locals {
-                position: [-100.0, 100.0],
-                velocity: [10.0, 0.0],
-                color: 0xFFFFFFFF,
-                pad: 0,
+            data: SpriteData {
+                locals: Locals {
+                    position: [-100.0, 100.0],
+                    velocity: [10.0, 0.0],
+                    color: 0xFFFFFFFF,
+                    pad: 0,
+                },
             },
+            vertex_buf: vertex_buf.into(),
         });
 
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
@@ -180,6 +215,7 @@ impl Example {
             bunnies,
             rng: nanorand::WyRand::new_seed(73),
             context,
+            vertex_buf,
         }
     }
 
@@ -189,12 +225,15 @@ impl Example {
         for _ in 0..spawn_count {
             let speed = self.rng.generate_range(-MAX_VELOCITY..=MAX_VELOCITY) as f32;
             self.bunnies.push(Sprite {
-                locals: Locals {
-                    position: [0.0, 0.5 * (self.window_size.height as f32)],
-                    velocity: [speed, 0.0],
-                    color: self.rng.generate::<u32>(),
-                    pad: 0,
+                data: SpriteData {
+                    locals: Locals {
+                        position: [0.0, 0.5 * (self.window_size.height as f32)],
+                        velocity: [speed, 0.0],
+                        color: self.rng.generate::<u32>(),
+                        pad: 0,
+                    },
                 },
+                vertex_buf: self.vertex_buf.into(),
             });
         }
         println!("Population: {} bunnies", self.bunnies.len());
@@ -202,11 +241,18 @@ impl Example {
 
     fn step(&mut self, delta: f32) {
         for bunny in self.bunnies.iter_mut() {
-            let Locals {
-                position: ref mut pos,
-                velocity: ref mut vel,
+            let Sprite {
+                data:
+                    SpriteData {
+                        locals:
+                            Locals {
+                                position: ref mut pos,
+                                velocity: ref mut vel,
+                                ..
+                            },
+                    },
                 ..
-            } = bunny.locals;
+            } = *bunny;
 
             pos[0] += vel[0] * delta;
             pos[1] += vel[1] * delta;
@@ -256,7 +302,8 @@ impl Example {
             );
 
             for sprite in self.bunnies.iter() {
-                rc.bind(1, sprite);
+                rc.bind(1, &sprite.data);
+                rc.bind_vertex(0, sprite.vertex_buf);
                 rc.draw(0, 4, 0, 1);
             }
         }
@@ -272,6 +319,7 @@ impl Example {
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);
         }
+        self.context.destroy_buffer(self.vertex_buf);
         self.context.destroy_texture(self.texture);
         self.context
             .destroy_command_encoder(&mut self.command_encoder);

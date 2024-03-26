@@ -1,6 +1,7 @@
 mod as_primitive;
 mod flat;
 mod shader_data;
+mod vertex;
 
 use proc_macro::TokenStream;
 
@@ -17,6 +18,26 @@ use proc_macro::TokenStream;
 #[proc_macro_derive(ShaderData)]
 pub fn shader_data_derive(input: TokenStream) -> TokenStream {
     let stream = match shader_data::generate(input) {
+        Ok(tokens) => tokens,
+        Err(err) => err.into_compile_error(),
+    };
+    stream.into()
+}
+
+/// Derive the `Vertex` trait for a struct.
+///
+/// ## Example
+///
+/// ```rust
+/// #[derive(blade_macros::Vertex)]
+/// struct Test {
+///   pos: [f32; 3],
+///   tc: mint::Vector2<f32>,
+/// }
+/// ```
+#[proc_macro_derive(Vertex)]
+pub fn vertex_derive(input: TokenStream) -> TokenStream {
+    let stream = match vertex::generate(input) {
         Ok(tokens) => tokens,
         Err(err) => err.into_compile_error(),
     };

@@ -75,4 +75,74 @@ impl super::Shader {
             "Host struct '{name}' size doesn't match the shader"
         );
     }
+
+    pub(crate) fn fill_vertex_locations(
+        module: &mut naga::Module,
+        ep: &naga::EntryPoint,
+        fetch_states: &[crate::VertexFetchState],
+    ) -> Vec<crate::VertexAttributeMapping> {
+        if ep.stage != naga::ShaderStage::Vertex {
+            assert!(fetch_states.is_empty());
+            return Vec::new();
+        }
+        let mut attribute_mappings = Vec::new();
+        for argument in ep.function.arguments.iter() {
+            if argument.binding.is_some() {
+                continue;
+            }
+
+            let arg_name = match argument.name {
+                Some(ref name) => name.as_str(),
+                None => "?",
+            };
+            log::debug!("Processing vertex argument: {}", arg_name);
+            let mut ty = module.types[argument.ty].clone();
+            let members = match ty.inner {
+                naga::TypeInner::Struct {
+                    ref mut members, ..
+                } => members,
+                ref other => {
+                    log::error!("Unexpected type for {}: {:?}", arg_name, other);
+                    continue;
+                }
+            };
+
+            'member: for member in members.iter_mut() {
+                let member_name = match member.name {
+                    Some(ref name) => name.as_str(),
+                    None => "?",
+                };
+                if let Some(ref binding) = member.binding {
+                    log::warn!("Member '{}' alread has binding: {:?}", member_name, binding);
+                    continue;
+                }
+                let binding = naga::Binding::Location {
+                    location: attribute_mappings.len() as u32,
+                    second_blend_source: false,
+                    interpolation: None,
+                    sampling: None,
+                };
+                for (buffer_index, vertex_fetch) in fetch_states.iter().enumerate() {
+                    for (attribute_index, &(at_name, _)) in
+                        vertex_fetch.layout.attributes.iter().enumerate()
+                    {
+                        if at_name == member_name {
+                            member.binding = Some(binding);
+                            attribute_mappings.push(crate::VertexAttributeMapping {
+                                buffer_index,
+                                attribute_index,
+                            });
+                            continue 'member;
+                        }
+                    }
+                }
+                assert_ne!(
+                    member.binding, None,
+                    "Field {} is not covered by the vertex fetch layouts!",
+                    member_name
+                );
+            }
+        }
+        attribute_mappings
+    }
 }
