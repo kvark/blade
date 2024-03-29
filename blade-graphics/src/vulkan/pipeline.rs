@@ -75,12 +75,12 @@ impl super::Context {
         vertex_fetch_states: &[crate::VertexFetchState],
     ) -> CompiledShader {
         let ep_index = sf.entry_point_index();
-        let ep_info = sf.shader.info.get_entry_point(ep_index);
-        let ep = &sf.shader.module.entry_points[ep_index];
         let mut module = sf.shader.module.clone();
         let attribute_mappings =
-            crate::Shader::fill_vertex_locations(&mut module, ep, vertex_fetch_states);
+            crate::Shader::fill_vertex_locations(&mut module, ep_index, vertex_fetch_states);
 
+        let ep_info = sf.shader.info.get_entry_point(ep_index);
+        let ep = &sf.shader.module.entry_points[ep_index];
         let mut layouter = naga::proc::Layouter::default();
         layouter.update(module.to_ctx()).unwrap();
 

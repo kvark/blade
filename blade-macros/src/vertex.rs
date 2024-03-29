@@ -37,12 +37,12 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
         //TODO: use this when MSRV gets to 1.77
         // `std::mem::offset_of!(#full_struct_name, #name)
         attributes.push(quote! {
-            blade_graphics::VertexAttribute {
+            (stringify!(#name), blade_graphics::VertexAttribute {
                 offset: unsafe {
                     (&(*base_ptr).#name as *const _ as *const u8).offset_from(base_ptr as *const u8) as u32
                 },
                 format: <#ty as blade_graphics::derive::HasVertexAttribute>::FORMAT,
-            }
+            })
         });
     }
 

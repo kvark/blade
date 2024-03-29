@@ -78,69 +78,96 @@ impl super::Shader {
 
     pub(crate) fn fill_vertex_locations(
         module: &mut naga::Module,
-        ep: &naga::EntryPoint,
+        selected_ep_index: usize,
         fetch_states: &[crate::VertexFetchState],
     ) -> Vec<crate::VertexAttributeMapping> {
-        if ep.stage != naga::ShaderStage::Vertex {
-            assert!(fetch_states.is_empty());
-            return Vec::new();
-        }
         let mut attribute_mappings = Vec::new();
-        for argument in ep.function.arguments.iter() {
-            if argument.binding.is_some() {
+        for (ep_index, ep) in module.entry_points.iter().enumerate() {
+            let mut location = 0;
+            if ep.stage != naga::ShaderStage::Vertex {
                 continue;
             }
 
-            let arg_name = match argument.name {
-                Some(ref name) => name.as_str(),
-                None => "?",
-            };
-            log::debug!("Processing vertex argument: {}", arg_name);
-            let mut ty = module.types[argument.ty].clone();
-            let members = match ty.inner {
-                naga::TypeInner::Struct {
-                    ref mut members, ..
-                } => members,
-                ref other => {
-                    log::error!("Unexpected type for {}: {:?}", arg_name, other);
+            for argument in ep.function.arguments.iter() {
+                if argument.binding.is_some() {
                     continue;
                 }
-            };
 
-            'member: for member in members.iter_mut() {
-                let member_name = match member.name {
+                let arg_name = match argument.name {
                     Some(ref name) => name.as_str(),
                     None => "?",
                 };
-                if let Some(ref binding) = member.binding {
-                    log::warn!("Member '{}' alread has binding: {:?}", member_name, binding);
-                    continue;
-                }
-                let binding = naga::Binding::Location {
-                    location: attribute_mappings.len() as u32,
-                    second_blend_source: false,
-                    interpolation: None,
-                    sampling: None,
+                let mut ty = module.types[argument.ty].clone();
+                let members = match ty.inner {
+                    naga::TypeInner::Struct {
+                        ref mut members, ..
+                    } => members,
+                    ref other => {
+                        log::error!("Unexpected type for '{}': {:?}", arg_name, other);
+                        continue;
+                    }
                 };
-                for (buffer_index, vertex_fetch) in fetch_states.iter().enumerate() {
-                    for (attribute_index, &(at_name, _)) in
-                        vertex_fetch.layout.attributes.iter().enumerate()
-                    {
-                        if at_name == member_name {
-                            member.binding = Some(binding);
-                            attribute_mappings.push(crate::VertexAttributeMapping {
-                                buffer_index,
-                                attribute_index,
+
+                if ep_index == selected_ep_index {
+                    log::debug!("Processing vertex argument: {}", arg_name);
+
+                    'member: for member in members.iter_mut() {
+                        let member_name = match member.name {
+                            Some(ref name) => name.as_str(),
+                            None => "?",
+                        };
+                        if let Some(ref binding) = member.binding {
+                            log::warn!(
+                                "Member '{}' alread has binding: {:?}",
+                                member_name,
+                                binding
+                            );
+                            continue;
+                        }
+                        let binding = naga::Binding::Location {
+                            location: attribute_mappings.len() as u32,
+                            second_blend_source: false,
+                            interpolation: None,
+                            sampling: None,
+                        };
+                        for (buffer_index, vertex_fetch) in fetch_states.iter().enumerate() {
+                            for (attribute_index, &(at_name, _)) in
+                                vertex_fetch.layout.attributes.iter().enumerate()
+                            {
+                                if at_name == member_name {
+                                    log::debug!("Assigning location({}) for member '{}' to be using input {}:{}",
+                                        attribute_mappings.len(), member_name, buffer_index, attribute_index);
+                                    member.binding = Some(binding);
+                                    attribute_mappings.push(crate::VertexAttributeMapping {
+                                        buffer_index,
+                                        attribute_index,
+                                    });
+                                    continue 'member;
+                                }
+                            }
+                        }
+                        assert_ne!(
+                            member.binding, None,
+                            "Field {} is not covered by the vertex fetch layouts!",
+                            member_name
+                        );
+                    }
+                } else {
+                    // Just fill out the locations for the module to be valid
+                    for member in members.iter_mut() {
+                        if member.binding.is_none() {
+                            member.binding = Some(naga::Binding::Location {
+                                location,
+                                second_blend_source: false,
+                                interpolation: None,
+                                sampling: None,
                             });
-                            continue 'member;
+                            location += 1;
                         }
                     }
                 }
-                assert_ne!(
-                    member.binding, None,
-                    "Field {} is not covered by the vertex fetch layouts!",
-                    member_name
-                );
+
+                module.types.replace(argument.ty, ty);
             }
         }
         attribute_mappings
