@@ -345,6 +345,10 @@ fn map_attribute_format(format: crate::VertexFormat) -> metal::MTLAttributeForma
         crate::VertexFormat::U32Vec2 => metal::MTLAttributeFormat::UInt2,
         crate::VertexFormat::U32Vec3 => metal::MTLAttributeFormat::UInt3,
         crate::VertexFormat::U32Vec4 => metal::MTLAttributeFormat::UInt4,
+        crate::VertexFormat::I32 => metal::MTLAttributeFormat::Int,
+        crate::VertexFormat::I32Vec2 => metal::MTLAttributeFormat::Int2,
+        crate::VertexFormat::I32Vec3 => metal::MTLAttributeFormat::Int3,
+        crate::VertexFormat::I32Vec4 => metal::MTLAttributeFormat::Int4,
     }
 }
 

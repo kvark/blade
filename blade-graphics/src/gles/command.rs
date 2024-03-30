@@ -442,6 +442,10 @@ impl crate::VertexFormat {
             Self::U32Vec2 => (2, glow::UNSIGNED_INT),
             Self::U32Vec3 => (3, glow::UNSIGNED_INT),
             Self::U32Vec4 => (4, glow::UNSIGNED_INT),
+            Self::I32 => (1, glow::INT),
+            Self::I32Vec2 => (2, glow::INT),
+            Self::I32Vec3 => (3, glow::INT),
+            Self::I32Vec4 => (4, glow::INT),
         }
     }
 }
