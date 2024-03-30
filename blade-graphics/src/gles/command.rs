@@ -207,6 +207,7 @@ impl super::PassEncoder<'_, super::ComputePipeline> {
             bind_group_infos: &pipeline.inner.bind_group_infos,
             topology: 0,
             limits: self.limits,
+            vertex_attributes: &[],
         }
     }
 }
@@ -224,6 +225,7 @@ impl super::PassEncoder<'_, super::RenderPipeline> {
             bind_group_infos: &pipeline.inner.bind_group_infos,
             topology: map_primitive_topology(pipeline.topology),
             limits: self.limits,
+            vertex_attributes: &pipeline.inner.vertex_attribute_infos,
         }
     }
 }
@@ -363,12 +365,20 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
     }
 
     fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
-        /*self.commands.push(super::Command::BindBuffer {
-            target: glow::SHADER_STORAGE_BUFFER,
-            slot,
-            buffer: vertex_buf.into(),
-        });*/
-        unimplemented!()
+        self.commands.push(super::Command::BindVertex {
+            buffer: vertex_buf.buffer.raw,
+        });
+        for (i, info) in self.vertex_attributes.iter().enumerate() {
+            self.commands.push(super::Command::SetVertexAttribute {
+                index: i as u32,
+                format: info.attrib.format,
+                offset: (vertex_buf.offset + info.attrib.offset as u64)
+                    .try_into()
+                    .unwrap(),
+                stride: info.stride,
+                instanced: info.instanced,
+            });
+        }
     }
 
     fn draw(
@@ -418,6 +428,21 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
         _indirect_buf: crate::BufferPiece,
     ) {
         unimplemented!()
+    }
+}
+
+impl crate::VertexFormat {
+    fn describe(&self) -> (i32, u32) {
+        match *self {
+            Self::F32 => (1, glow::FLOAT),
+            Self::F32Vec2 => (2, glow::FLOAT),
+            Self::F32Vec3 => (3, glow::FLOAT),
+            Self::F32Vec4 => (4, glow::FLOAT),
+            Self::U32 => (1, glow::UNSIGNED_INT),
+            Self::U32Vec2 => (2, glow::UNSIGNED_INT),
+            Self::U32Vec3 => (3, glow::UNSIGNED_INT),
+            Self::U32Vec4 => (4, glow::UNSIGNED_INT),
+        }
     }
 }
 
@@ -786,6 +811,34 @@ impl super::Command {
                     offset as i32,
                     size as i32,
                 );
+            }
+            Self::BindVertex { buffer } => {
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+            }
+            Self::SetVertexAttribute {
+                index,
+                format,
+                offset,
+                stride,
+                instanced,
+            } => {
+                let (data_size, data_type) = format.describe();
+                match data_type {
+                    glow::FLOAT => gl.vertex_attrib_pointer_f32(
+                        index, data_size, data_type, false, stride, offset,
+                    ),
+                    glow::INT | glow::UNSIGNED_INT => {
+                        gl.vertex_attrib_pointer_i32(index, data_size, data_type, stride, offset)
+                    }
+                    _ => unreachable!(),
+                }
+                gl.vertex_attrib_divisor(index, if instanced { 1 } else { 0 });
+                gl.enable_vertex_attrib_array(index);
+            }
+            Self::DisableVertexAttributes { count } => {
+                for index in 0..count {
+                    gl.disable_vertex_attrib_array(index);
+                }
             }
             Self::BindBuffer {
                 target,

@@ -89,9 +89,17 @@ struct BindGroupInfo {
     targets: Box<[SlotList]>,
 }
 
+struct VertexAttributeInfo {
+    attrib: crate::VertexAttribute,
+    buffer_index: u32,
+    stride: i32,
+    instanced: bool,
+}
+
 struct PipelineInner {
     program: glow::Program,
     bind_group_infos: Box<[BindGroupInfo]>,
+    vertex_attribute_infos: Box<[VertexAttributeInfo]>,
 }
 
 pub struct ComputePipeline {
@@ -287,10 +295,23 @@ enum Command {
         offset: u32,
         size: u32,
     },
+    BindVertex {
+        buffer: glow::Buffer,
+    },
     BindBuffer {
         target: BindTarget,
         slot: u32,
         buffer: BufferPart,
+    },
+    SetVertexAttribute {
+        index: u32,
+        format: crate::VertexFormat,
+        offset: i32,
+        stride: i32,
+        instanced: bool,
+    },
+    DisableVertexAttributes {
+        count: u32,
     },
     BindSampler {
         slot: u32,
@@ -341,6 +362,17 @@ pub struct PipelineEncoder<'a> {
     bind_group_infos: &'a [BindGroupInfo],
     topology: u32,
     limits: &'a Limits,
+    vertex_attributes: &'a [VertexAttributeInfo],
+}
+
+impl Drop for PipelineEncoder<'_> {
+    fn drop(&mut self) {
+        if !self.vertex_attributes.is_empty() {
+            let count = self.vertex_attributes.len() as u32;
+            self.commands
+                .push(Command::DisableVertexAttributes { count });
+        }
+    }
 }
 
 pub struct PipelineContext<'a> {

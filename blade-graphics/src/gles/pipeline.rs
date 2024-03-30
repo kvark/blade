@@ -6,6 +6,7 @@ impl super::Context {
         &self,
         shaders: &[crate::ShaderFunction],
         group_layouts: &[&crate::ShaderDataLayout],
+        vertex_fetch_states: &[crate::VertexFetchState],
         name: &str,
     ) -> super::PipelineInner {
         let gl = self.lock();
@@ -27,9 +28,24 @@ impl super::Context {
         };
 
         let mut baked_shaders = Vec::with_capacity(shaders.len());
+        let mut attributes = Vec::new();
 
         for &sf in shaders {
             let ep_index = sf.entry_point_index();
+            let mut module = sf.shader.module.clone();
+            let attribute_mappings =
+                crate::Shader::fill_vertex_locations(&mut module, ep_index, vertex_fetch_states);
+            for (index, mapping) in attribute_mappings.into_iter().enumerate() {
+                let vf = &vertex_fetch_states[mapping.buffer_index];
+                let (_, attrib) = vf.layout.attributes[mapping.attribute_index];
+                attributes.push(super::VertexAttributeInfo {
+                    attrib,
+                    buffer_index: mapping.buffer_index as u32,
+                    stride: vf.layout.stride as i32,
+                    instanced: vf.instanced,
+                });
+            }
+
             let ep = &sf.shader.module.entry_points[ep_index];
             let pipeline_options = glsl::PipelineOptions {
                 shader_stage: ep.stage,
@@ -39,7 +55,7 @@ impl super::Context {
             let mut source = String::new();
             let mut writer = glsl::Writer::new(
                 &mut source,
-                &sf.shader.module,
+                &module,
                 &sf.shader.info,
                 &naga_options,
                 &pipeline_options,
@@ -183,6 +199,7 @@ impl super::Context {
         super::PipelineInner {
             program,
             bind_group_infos,
+            vertex_attribute_infos: attributes.into_boxed_slice(),
         }
     }
 
@@ -192,13 +209,19 @@ impl super::Context {
     ) -> super::ComputePipeline {
         let wg_size = desc.compute.shader.module.entry_points[desc.compute.entry_point_index()]
             .workgroup_size;
-        let inner = unsafe { self.create_pipeline(&[desc.compute], desc.data_layouts, desc.name) };
+        let inner =
+            unsafe { self.create_pipeline(&[desc.compute], desc.data_layouts, &[], desc.name) };
         super::ComputePipeline { inner, wg_size }
     }
 
     pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
         let inner = unsafe {
-            self.create_pipeline(&[desc.vertex, desc.fragment], desc.data_layouts, desc.name)
+            self.create_pipeline(
+                &[desc.vertex, desc.fragment],
+                desc.data_layouts,
+                desc.vertex_fetches,
+                desc.name,
+            )
         };
         super::RenderPipeline {
             inner,
