@@ -66,7 +66,7 @@ impl Example {
             gpu::Context::init_windowed(
                 window,
                 gpu::ContextDesc {
-                    validation: false,
+                    validation: cfg!(debug_assertions),
                     capture: false,
                     overlay: true,
                 },
@@ -176,6 +176,7 @@ impl Example {
                 vertex_data.len(),
             );
         }
+        context.sync_buffer(vertex_buf);
 
         let mut bunnies = Vec::new();
         bunnies.push(Sprite {
@@ -302,6 +303,9 @@ impl Example {
             );
 
             for sprite in self.bunnies.iter() {
+                //Note: technically, we could get away with either of those bindings
+                // but not them together. However, the purpose of this test is to
+                // mimic a real world draw call, not a super optimized ideal.
                 rc.bind(1, &sprite.data);
                 rc.bind_vertex(0, sprite.vertex_buf);
                 rc.draw(0, 4, 0, 1);
@@ -343,13 +347,11 @@ fn main() {
         std::panic::set_hook(Box::new(console_error_panic_hook::hook));
         console_log::init().expect("could not initialize logger");
         // On wasm, append the canvas to the document body
+        let canvas = window.canvas().unwrap();
         web_sys::window()
             .and_then(|win| win.document())
             .and_then(|doc| doc.body())
-            .and_then(|body| {
-                body.append_child(&web_sys::Element::from(window.canvas()))
-                    .ok()
-            })
+            .and_then(|body| body.append_child(&web_sys::Element::from(canvas)).ok())
             .expect("couldn't append canvas to document body");
     }
 

@@ -44,10 +44,7 @@ impl crate::traits::ResourceDevice for super::Context {
         let usage = match desc.memory {
             crate::Memory::Device => glow::STATIC_DRAW,
             crate::Memory::Shared => {
-                map_flags = glow::MAP_READ_BIT
-                    | glow::MAP_WRITE_BIT
-                    | glow::MAP_PERSISTENT_BIT
-                    | glow::MAP_UNSYNCHRONIZED_BIT;
+                map_flags = glow::MAP_READ_BIT | glow::MAP_WRITE_BIT | glow::MAP_PERSISTENT_BIT;
                 storage_flags = glow::MAP_PERSISTENT_BIT
                     | glow::MAP_COHERENT_BIT
                     | glow::MAP_READ_BIT
@@ -72,6 +69,7 @@ impl crate::traits::ResourceDevice for super::Context {
                 gl.buffer_storage(glow::ARRAY_BUFFER, desc.size as _, None, storage_flags);
                 if map_flags != 0 {
                     data = gl.map_buffer_range(glow::ARRAY_BUFFER, 0, desc.size as _, map_flags);
+                    assert!(!data.is_null());
                 }
             } else {
                 gl.buffer_data_size(glow::ARRAY_BUFFER, desc.size as _, usage);

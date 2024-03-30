@@ -6,6 +6,7 @@ members = [
     "blade-graphics",
     "blade-macros",
     "blade-render",
+    "run-wasm",
 ]
 exclude = []
 
@@ -44,7 +45,6 @@ readme = "docs/README.md"
 blade-asset = { version = "0.2", path = "blade-asset" }
 blade-egui = { version = "0.3", path = "blade-egui" }
 blade-graphics = { version = "0.4", path = "blade-graphics" }
-blade-render = { version = "0.3", path = "blade-render" }
 base64 = { workspace = true }
 choir = { workspace = true }
 colorsys = "0.6"
@@ -61,6 +61,9 @@ slab = "0.4"
 strum = { workspace = true }
 winit = { version = "0.29", features = ["rwh_05"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+blade-render = { version = "0.3", path = "blade-render" }
+
 [dev-dependencies]
 blade-macros = { version = "0.2", path = "blade-macros" }
 bytemuck = { workspace = true }
@@ -68,7 +71,6 @@ choir = { workspace = true }
 egui = { workspace = true }
 egui-gizmo = "0.16"
 egui_plot = "0.26"
-egui-winit = "0.26"
 env_logger = "0.10"
 del-msh = "=0.1.25" # not following semver :(
 glam = { workspace = true }
@@ -81,10 +83,15 @@ ron = "0.8"
 serde = { version = "1", features = ["serde_derive"] }
 strum = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# see https://github.com/emilk/egui/issues/4270
+egui-winit = "0.26"
+
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 console_error_panic_hook = "0.1.7"
 console_log = "1"
 web-sys = { workspace = true, features = ["Window"] }
+getrandom = { version = "0.2", features = ["js"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dev-dependencies]
 renderdoc = "0.11"
