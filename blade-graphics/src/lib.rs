@@ -469,6 +469,10 @@ pub enum VertexFormat {
     U32Vec2,
     U32Vec3,
     U32Vec4,
+    I32,
+    I32Vec2,
+    I32Vec3,
+    I32Vec4,
 }
 
 #[derive(Clone, Debug)]
