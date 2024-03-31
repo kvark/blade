@@ -335,20 +335,55 @@ fn map_index_type(ty: crate::IndexType) -> metal::MTLIndexType {
     }
 }
 
-fn map_attribute_format(format: crate::VertexFormat) -> metal::MTLAttributeFormat {
+fn map_vertex_format(
+    format: crate::VertexFormat,
+) -> (metal::MTLVertexFormat, metal::MTLAttributeFormat) {
     match format {
-        crate::VertexFormat::F32 => metal::MTLAttributeFormat::Float,
-        crate::VertexFormat::F32Vec2 => metal::MTLAttributeFormat::Float2,
-        crate::VertexFormat::F32Vec3 => metal::MTLAttributeFormat::Float3,
-        crate::VertexFormat::F32Vec4 => metal::MTLAttributeFormat::Float4,
-        crate::VertexFormat::U32 => metal::MTLAttributeFormat::UInt,
-        crate::VertexFormat::U32Vec2 => metal::MTLAttributeFormat::UInt2,
-        crate::VertexFormat::U32Vec3 => metal::MTLAttributeFormat::UInt3,
-        crate::VertexFormat::U32Vec4 => metal::MTLAttributeFormat::UInt4,
-        crate::VertexFormat::I32 => metal::MTLAttributeFormat::Int,
-        crate::VertexFormat::I32Vec2 => metal::MTLAttributeFormat::Int2,
-        crate::VertexFormat::I32Vec3 => metal::MTLAttributeFormat::Int3,
-        crate::VertexFormat::I32Vec4 => metal::MTLAttributeFormat::Int4,
+        crate::VertexFormat::F32 => (
+            metal::MTLVertexFormat::Float,
+            metal::MTLAttributeFormat::Float,
+        ),
+        crate::VertexFormat::F32Vec2 => (
+            metal::MTLVertexFormat::Float2,
+            metal::MTLAttributeFormat::Float2,
+        ),
+        crate::VertexFormat::F32Vec3 => (
+            metal::MTLVertexFormat::Float3,
+            metal::MTLAttributeFormat::Float3,
+        ),
+        crate::VertexFormat::F32Vec4 => (
+            metal::MTLVertexFormat::Float4,
+            metal::MTLAttributeFormat::Float4,
+        ),
+        crate::VertexFormat::U32 => (
+            metal::MTLVertexFormat::UInt,
+            metal::MTLAttributeFormat::UInt,
+        ),
+        crate::VertexFormat::U32Vec2 => (
+            metal::MTLVertexFormat::UInt2,
+            metal::MTLAttributeFormat::UInt2,
+        ),
+        crate::VertexFormat::U32Vec3 => (
+            metal::MTLVertexFormat::UInt3,
+            metal::MTLAttributeFormat::UInt3,
+        ),
+        crate::VertexFormat::U32Vec4 => (
+            metal::MTLVertexFormat::UInt4,
+            metal::MTLAttributeFormat::UInt4,
+        ),
+        crate::VertexFormat::I32 => (metal::MTLVertexFormat::Int, metal::MTLAttributeFormat::Int),
+        crate::VertexFormat::I32Vec2 => (
+            metal::MTLVertexFormat::Int2,
+            metal::MTLAttributeFormat::Int2,
+        ),
+        crate::VertexFormat::I32Vec3 => (
+            metal::MTLVertexFormat::Int3,
+            metal::MTLAttributeFormat::Int3,
+        ),
+        crate::VertexFormat::I32Vec4 => (
+            metal::MTLVertexFormat::Int4,
+            metal::MTLAttributeFormat::Int4,
+        ),
     }
 }
 
@@ -507,7 +542,8 @@ fn make_bottom_level_acceleration_structure_desc(
         }
         //TODO: requires macOS-13 ?
         if false {
-            descriptor.set_vertex_format(map_attribute_format(mesh.vertex_format));
+            let (_, attribute_format) = map_vertex_format(mesh.vertex_format);
+            descriptor.set_vertex_format(attribute_format);
             if !mesh.transform_data.buffer.raw.is_null() {
                 descriptor
                     .set_transformation_matrix_buffer(Some(mesh.transform_data.buffer.as_ref()));
