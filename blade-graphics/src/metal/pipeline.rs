@@ -100,6 +100,7 @@ fn create_depth_stencil_desc(state: &crate::DepthStencilState) -> metal::DepthSt
 struct CompiledShader {
     library: metal::Library,
     function: metal::Function,
+    attribute_mappings: Vec<crate::VertexAttributeMapping>,
     wg_size: metal::MTLSize,
 }
 
@@ -119,57 +120,58 @@ fn _align_to(offset: u32, alignment: u32) -> u32 {
     }
 }
 
-impl super::PipelineLayout {
-    fn new(bind_group_layouts: &[&crate::ShaderDataLayout]) -> Self {
-        let mut bind_group_infos = Vec::with_capacity(bind_group_layouts.len());
-        let mut unsized_buffer_count = 0;
-        let mut num_textures = 0u32;
-        let mut num_samplers = 0u32;
-        let mut num_buffers = 0u32;
-        for layout in bind_group_layouts.iter() {
-            let mut targets = Vec::with_capacity(layout.bindings.len());
-            for &(_, ref binding) in layout.bindings.iter() {
-                targets.push(match *binding {
-                    crate::ShaderBinding::Texture => {
-                        num_textures += 1;
-                        num_textures - 1
-                    }
-                    crate::ShaderBinding::Sampler => {
-                        num_samplers += 1;
-                        num_samplers - 1
-                    }
-                    crate::ShaderBinding::Buffer => {
-                        unsized_buffer_count += 1;
-                        num_buffers += 1;
-                        num_buffers - 1
-                    }
-                    crate::ShaderBinding::TextureArray { .. }
-                    | crate::ShaderBinding::BufferArray { .. } => unimplemented!(),
-                    crate::ShaderBinding::AccelerationStructure => {
-                        num_buffers += 1;
-                        num_buffers - 1
-                    }
-                    crate::ShaderBinding::Plain { .. } => {
-                        num_buffers += 1;
-                        num_buffers - 1
-                    }
-                });
-            }
-
-            bind_group_infos.push(super::BindGroupInfo {
-                visibility: crate::ShaderVisibility::empty(),
-                targets: targets.into_boxed_slice(),
+fn make_pipeline_layout(
+    bind_group_layouts: &[&crate::ShaderDataLayout],
+    reserver_vertex_buffers: u32,
+) -> super::PipelineLayout {
+    let mut bind_group_infos = Vec::with_capacity(bind_group_layouts.len());
+    let mut unsized_buffer_count = 0;
+    let mut num_textures = 0u32;
+    let mut num_samplers = 0u32;
+    let mut num_buffers = reserver_vertex_buffers;
+    for layout in bind_group_layouts.iter() {
+        let mut targets = Vec::with_capacity(layout.bindings.len());
+        for &(_, ref binding) in layout.bindings.iter() {
+            targets.push(match *binding {
+                crate::ShaderBinding::Texture => {
+                    num_textures += 1;
+                    num_textures - 1
+                }
+                crate::ShaderBinding::Sampler => {
+                    num_samplers += 1;
+                    num_samplers - 1
+                }
+                crate::ShaderBinding::Buffer => {
+                    unsized_buffer_count += 1;
+                    num_buffers += 1;
+                    num_buffers - 1
+                }
+                crate::ShaderBinding::TextureArray { .. }
+                | crate::ShaderBinding::BufferArray { .. } => unimplemented!(),
+                crate::ShaderBinding::AccelerationStructure => {
+                    num_buffers += 1;
+                    num_buffers - 1
+                }
+                crate::ShaderBinding::Plain { .. } => {
+                    num_buffers += 1;
+                    num_buffers - 1
+                }
             });
         }
 
-        super::PipelineLayout {
-            bind_groups: bind_group_infos.into_boxed_slice(),
-            sizes_buffer_slot: if unsized_buffer_count != 0 {
-                Some(num_buffers)
-            } else {
-                None
-            },
-        }
+        bind_group_infos.push(super::BindGroupInfo {
+            visibility: crate::ShaderVisibility::empty(),
+            targets: targets.into_boxed_slice(),
+        });
+    }
+
+    super::PipelineLayout {
+        bind_groups: bind_group_infos.into_boxed_slice(),
+        sizes_buffer_slot: if unsized_buffer_count != 0 {
+            Some(num_buffers)
+        } else {
+            None
+        },
     }
 }
 
@@ -178,6 +180,7 @@ impl super::Context {
         &self,
         sf: crate::ShaderFunction,
         bind_group_layouts: &[&crate::ShaderDataLayout],
+        vertex_fetch_states: &[crate::VertexFetchState],
         layout: &mut super::PipelineLayout,
         flags: ShaderFlags,
     ) -> CompiledShader {
@@ -187,9 +190,12 @@ impl super::Context {
         }
 
         let ep_index = sf.entry_point_index();
+        let mut module = sf.shader.module.clone();
+        let attribute_mappings =
+            crate::Shader::fill_vertex_locations(&mut module, ep_index, vertex_fetch_states);
+
         let ep_info = sf.shader.info.get_entry_point(ep_index);
         let naga_stage = sf.shader.module.entry_points[ep_index].stage;
-        let mut module = sf.shader.module.clone();
         let mut layouter = naga::proc::Layouter::default();
         layouter.update(module.to_ctx()).unwrap();
 
@@ -340,6 +346,7 @@ impl super::Context {
         CompiledShader {
             library,
             function,
+            attribute_mappings,
             wg_size,
         }
     }
@@ -348,7 +355,7 @@ impl super::Context {
         &self,
         desc: crate::ComputePipelineDesc,
     ) -> super::ComputePipeline {
-        let mut layout = super::PipelineLayout::new(desc.data_layouts);
+        let mut layout = make_pipeline_layout(desc.data_layouts, 0);
 
         objc::rc::autoreleasepool(|| {
             let descriptor = metal::ComputePipelineDescriptor::new();
@@ -356,6 +363,7 @@ impl super::Context {
             let cs = self.load_shader(
                 desc.compute,
                 desc.data_layouts,
+                &[],
                 &mut layout,
                 ShaderFlags::empty(),
             );
@@ -383,7 +391,7 @@ impl super::Context {
     }
 
     pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
-        let mut layout = super::PipelineLayout::new(desc.data_layouts);
+        let mut layout = make_pipeline_layout(desc.data_layouts, desc.vertex_fetches.len() as u32);
 
         let triangle_fill_mode = match desc.primitive.wireframe {
             false => metal::MTLTriangleFillMode::Fill,
@@ -419,6 +427,7 @@ impl super::Context {
             let vs = self.load_shader(
                 desc.vertex,
                 desc.data_layouts,
+                desc.vertex_fetches,
                 &mut layout,
                 match primitive_class {
                     metal::MTLPrimitiveTopologyClass::Point => ShaderFlags::ALLOW_POINT_SIZE,
@@ -431,10 +440,32 @@ impl super::Context {
             let fs = self.load_shader(
                 desc.fragment,
                 desc.data_layouts,
+                &[],
                 &mut layout,
                 ShaderFlags::empty(),
             );
             descriptor.set_fragment_function(Some(&fs.function));
+
+            let vertex_descriptor = metal::VertexDescriptor::new();
+            for (i, vf) in desc.vertex_fetches.iter().enumerate() {
+                let buffer_desc = vertex_descriptor.layouts().object_at(i as u64).unwrap();
+                buffer_desc.set_stride(vf.layout.stride as u64);
+                buffer_desc.set_step_function(if vf.instanced {
+                    metal::MTLVertexStepFunction::PerInstance
+                } else {
+                    metal::MTLVertexStepFunction::PerVertex
+                });
+            }
+            for (i, mapping) in vs.attribute_mappings.into_iter().enumerate() {
+                let attribute_desc = vertex_descriptor.attributes().object_at(i as u64).unwrap();
+                let vf = &desc.vertex_fetches[mapping.buffer_index];
+                let (_, attrib) = vf.layout.attributes[mapping.attribute_index];
+                let (vertex_format, _) = super::map_vertex_format(attrib.format);
+                attribute_desc.set_format(vertex_format);
+                attribute_desc.set_buffer_index(mapping.buffer_index as u64);
+                attribute_desc.set_offset(attrib.offset as u64);
+            }
+            descriptor.set_vertex_descriptor(Some(vertex_descriptor));
 
             for (i, ct) in desc.color_targets.iter().enumerate() {
                 let at_descriptor = descriptor.color_attachments().object_at(i as u64).unwrap();
