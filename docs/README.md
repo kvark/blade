@@ -9,7 +9,7 @@
 
 ![](logo.png)
 
-Blade is an innovative rendering solution for Rust. It starts with a lean [low-level GPU abstraction](https://youtu.be/63dnzjw4azI?t=623) focused at ergonomics and fun. It then grows into a high-level rendering library that utilizes hardware ray-tracing. Finally, a [task-parallel asset pipeline](https://youtu.be/1DiA3OYqvqU) together with [egui](https://www.egui.rs/) support turn it into a minimal rendering engine.
+Blade is an innovative rendering solution for Rust. It starts with a lean [low-level GPU abstraction](https://youtu.be/63dnzjw4azI?t=623) focused at ergonomics and fun. It then grows into a high-level rendering library that utilizes hardware ray-tracing. It's accompanied by a [task-parallel asset pipeline](https://youtu.be/1DiA3OYqvqU) together with [egui](https://www.egui.rs/) support, turning into a minimal rendering engine. Finally, the top-level Blade engine combines all of this with Rapier3D-based physics and hides them behind a concise API.
 
 ![architecture](https://raw.githubusercontent.com/kvark/blade/main/docs/architecture2.png)
 
@@ -23,6 +23,7 @@ Blade is an innovative rendering solution for Rust. It starts with a lean [low-l
 ## Instructions
 
 Just the usual :crab: workflow. E.g. to run the bunny-mark benchmark run:
+
 ```bash
 cargo run --release --example bunnymark
 ```
