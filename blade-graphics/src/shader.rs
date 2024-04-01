@@ -76,6 +76,109 @@ impl super::Shader {
         );
     }
 
+    pub(crate) fn fill_resource_bindings(
+        module: &mut naga::Module,
+        sd_infos: &mut [crate::ShaderDataInfo],
+        naga_stage: naga::ShaderStage,
+        ep_info: &naga::valid::FunctionInfo,
+        group_layouts: &[&crate::ShaderDataLayout],
+    ) {
+        let mut layouter = naga::proc::Layouter::default();
+        layouter.update(module.to_ctx()).unwrap();
+
+        for (handle, var) in module.global_variables.iter_mut() {
+            if ep_info[handle].is_empty() {
+                continue;
+            }
+            let var_access = match var.space {
+                naga::AddressSpace::Storage { access } => access,
+                naga::AddressSpace::Uniform | naga::AddressSpace::Handle => {
+                    naga::StorageAccess::empty()
+                }
+                _ => continue,
+            };
+
+            assert_eq!(var.binding, None);
+            let var_name = var.name.as_ref().unwrap();
+            for (group_index, (&layout, info)) in
+                group_layouts.iter().zip(sd_infos.iter_mut()).enumerate()
+            {
+                if let Some((binding_index, &(_, proto_binding))) = layout
+                    .bindings
+                    .iter()
+                    .enumerate()
+                    .find(|&(_, &(name, _))| name == var_name)
+                {
+                    let (expected_proto, access) = match module.types[var.ty].inner {
+                        naga::TypeInner::Image {
+                            class: naga::ImageClass::Storage { access, format: _ },
+                            ..
+                        } => (crate::ShaderBinding::Texture, access),
+                        naga::TypeInner::Image { .. } => {
+                            (crate::ShaderBinding::Texture, naga::StorageAccess::empty())
+                        }
+                        naga::TypeInner::Sampler { .. } => {
+                            (crate::ShaderBinding::Sampler, naga::StorageAccess::empty())
+                        }
+                        naga::TypeInner::AccelerationStructure => (
+                            crate::ShaderBinding::AccelerationStructure,
+                            naga::StorageAccess::empty(),
+                        ),
+                        naga::TypeInner::BindingArray { base, size: _ } => {
+                            //Note: we could extract the count from `size` for more rigor
+                            let count = match proto_binding {
+                                crate::ShaderBinding::TextureArray { count } => count,
+                                crate::ShaderBinding::BufferArray { count } => count,
+                                _ => 0,
+                            };
+                            let proto = match module.types[base].inner {
+                                naga::TypeInner::Image { .. } => {
+                                    crate::ShaderBinding::TextureArray { count }
+                                }
+                                naga::TypeInner::Struct { .. } => {
+                                    crate::ShaderBinding::BufferArray { count }
+                                }
+                                ref other => panic!("Unsupported binding array for {:?}", other),
+                            };
+                            (proto, var_access)
+                        }
+                        _ => {
+                            let type_layout = &layouter[var.ty];
+                            let proto = if var_access.is_empty() {
+                                crate::ShaderBinding::Plain {
+                                    size: type_layout.size,
+                                }
+                            } else {
+                                crate::ShaderBinding::Buffer
+                            };
+                            (proto, var_access)
+                        }
+                    };
+                    assert_eq!(
+                        proto_binding, expected_proto,
+                        "Mismatched type for binding '{}'",
+                        var_name
+                    );
+                    assert_eq!(var.binding, None);
+                    var.binding = Some(naga::ResourceBinding {
+                        group: group_index as u32,
+                        binding: binding_index as u32,
+                    });
+                    info.visibility |= naga_stage.into();
+                    info.binding_access[binding_index] |= access;
+                    break;
+                }
+            }
+
+            assert!(
+                var.binding.is_some(),
+                "Unable to resolve binding for '{}' in stage '{:?}'",
+                var_name,
+                naga_stage,
+            );
+        }
+    }
+
     pub(crate) fn fill_vertex_locations(
         module: &mut naga::Module,
         selected_ep_index: usize,
