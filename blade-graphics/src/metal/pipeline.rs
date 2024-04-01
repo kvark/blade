@@ -122,13 +122,13 @@ fn _align_to(offset: u32, alignment: u32) -> u32 {
 
 fn make_pipeline_layout(
     bind_group_layouts: &[&crate::ShaderDataLayout],
-    reserver_vertex_buffers: u32,
+    reserved_vertex_buffers: u32,
 ) -> super::PipelineLayout {
-    let mut bind_group_infos = Vec::with_capacity(bind_group_layouts.len());
+    let mut group_mappings = Vec::with_capacity(bind_group_layouts.len());
     let mut unsized_buffer_count = 0;
     let mut num_textures = 0u32;
     let mut num_samplers = 0u32;
-    let mut num_buffers = reserver_vertex_buffers;
+    let mut num_buffers = reserved_vertex_buffers;
     for layout in bind_group_layouts.iter() {
         let mut targets = Vec::with_capacity(layout.bindings.len());
         for &(_, ref binding) in layout.bindings.iter() {
@@ -159,14 +159,18 @@ fn make_pipeline_layout(
             });
         }
 
-        bind_group_infos.push(super::BindGroupInfo {
+        group_mappings.push(super::ShaderDataMapping {
             visibility: crate::ShaderVisibility::empty(),
             targets: targets.into_boxed_slice(),
         });
     }
 
     super::PipelineLayout {
-        bind_groups: bind_group_infos.into_boxed_slice(),
+        group_mappings: group_mappings.into_boxed_slice(),
+        group_infos: bind_group_layouts
+            .iter()
+            .map(|layout| layout.to_info())
+            .collect(),
         sizes_buffer_slot: if unsized_buffer_count != 0 {
             Some(num_buffers)
         } else {
@@ -181,114 +185,72 @@ impl super::Context {
         sf: crate::ShaderFunction,
         bind_group_layouts: &[&crate::ShaderDataLayout],
         vertex_fetch_states: &[crate::VertexFetchState],
-        layout: &mut super::PipelineLayout,
+        pipeline_layout: &mut super::PipelineLayout,
         flags: ShaderFlags,
     ) -> CompiledShader {
-        let mut naga_resources = msl::EntryPointResources::default();
-        if let Some(slot) = layout.sizes_buffer_slot {
-            naga_resources.sizes_buffer = Some(slot as _);
-        }
-
         let ep_index = sf.entry_point_index();
+        let ep = &sf.shader.module.entry_points[ep_index];
+        let ep_info = sf.shader.info.get_entry_point(ep_index);
+
         let mut module = sf.shader.module.clone();
+        crate::Shader::fill_resource_bindings(
+            &mut module,
+            &mut pipeline_layout.group_infos,
+            ep.stage,
+            ep_info,
+            bind_group_layouts,
+        );
         let attribute_mappings =
             crate::Shader::fill_vertex_locations(&mut module, ep_index, vertex_fetch_states);
 
-        let ep_info = sf.shader.info.get_entry_point(ep_index);
-        let naga_stage = sf.shader.module.entry_points[ep_index].stage;
-        let mut layouter = naga::proc::Layouter::default();
-        layouter.update(module.to_ctx()).unwrap();
+        // copy the visibility for convenience
+        for (group_mapping, group_info) in pipeline_layout
+            .group_mappings
+            .iter_mut()
+            .zip(pipeline_layout.group_infos.iter())
+        {
+            group_mapping.visibility = group_info.visibility;
+        }
 
-        for (handle, var) in module.global_variables.iter_mut() {
-            if ep_info[handle].is_empty() {
-                continue;
-            }
-            let access = match var.space {
-                naga::AddressSpace::Storage { access } => access,
-                naga::AddressSpace::Uniform | naga::AddressSpace::Handle => {
-                    naga::StorageAccess::empty()
-                }
-                _ => continue,
-            };
-
-            assert_eq!(var.binding, None);
-            let var_name = var.name.as_ref().unwrap();
-            for (group_index, (bgl, bgi)) in bind_group_layouts
+        let mut naga_resources = msl::EntryPointResources::default();
+        if let Some(slot) = pipeline_layout.sizes_buffer_slot {
+            naga_resources.sizes_buffer = Some(slot as _);
+        }
+        for (group_index, (group_layout, group_mapping)) in bind_group_layouts
+            .iter()
+            .zip(pipeline_layout.group_mappings.iter_mut())
+            .enumerate()
+        {
+            for (binding_index, (&(_, proto), &slot)) in group_layout
+                .bindings
                 .iter()
-                .zip(layout.bind_groups.iter_mut())
+                .zip(group_mapping.targets.iter())
                 .enumerate()
             {
-                if let Some((binding_index, (&(_, proto_binding), &resource_index))) = bgl
-                    .bindings
-                    .iter()
-                    .zip(bgi.targets.iter())
-                    .enumerate()
-                    .find(|(_, (&(name, _), _))| name == var_name)
-                {
-                    let res_binding = naga::ResourceBinding {
-                        group: group_index as u32,
-                        binding: binding_index as u32,
-                    };
-                    let (expected_proto, bind_target) = match module.types[var.ty].inner {
-                        naga::TypeInner::Image { .. } => (
-                            crate::ShaderBinding::Texture,
-                            msl::BindTarget {
-                                texture: Some(resource_index as _),
-                                ..Default::default()
-                            },
-                        ),
-                        naga::TypeInner::Sampler { .. } => (
-                            crate::ShaderBinding::Sampler,
-                            msl::BindTarget {
-                                sampler: Some(msl::BindSamplerTarget::Resource(
-                                    resource_index as _,
-                                )),
-                                ..Default::default()
-                            },
-                        ),
-                        naga::TypeInner::AccelerationStructure => (
-                            crate::ShaderBinding::AccelerationStructure,
-                            msl::BindTarget {
-                                buffer: Some(resource_index as _),
-                                ..Default::default()
-                            },
-                        ),
-                        _ => {
-                            let type_layout = &layouter[var.ty];
-                            let expected_proto = if access.is_empty() {
-                                crate::ShaderBinding::Plain {
-                                    size: type_layout.size,
-                                }
-                            } else {
-                                crate::ShaderBinding::Buffer
-                            };
-                            (
-                                expected_proto,
-                                msl::BindTarget {
-                                    buffer: Some(resource_index as _),
-                                    ..Default::default()
-                                },
-                            )
-                        }
-                    };
-                    assert_eq!(
-                        proto_binding, expected_proto,
-                        "Mismatched type for binding '{}'",
-                        var_name
-                    );
-                    assert_eq!(var.binding, None);
-                    var.binding = Some(res_binding.clone());
-                    naga_resources.resources.insert(res_binding, bind_target);
-                    bgi.visibility |= naga_stage.into();
-                    break;
-                }
+                let res_binding = naga::ResourceBinding {
+                    group: group_index as u32,
+                    binding: binding_index as u32,
+                };
+                let bind_target = match proto {
+                    crate::ShaderBinding::Texture => msl::BindTarget {
+                        texture: Some(slot as _),
+                        ..Default::default()
+                    },
+                    crate::ShaderBinding::Sampler => msl::BindTarget {
+                        sampler: Some(msl::BindSamplerTarget::Resource(slot as _)),
+                        ..Default::default()
+                    },
+                    crate::ShaderBinding::Buffer
+                    | crate::ShaderBinding::Plain { .. }
+                    | crate::ShaderBinding::AccelerationStructure => msl::BindTarget {
+                        buffer: Some(slot as _),
+                        ..Default::default()
+                    },
+                    crate::ShaderBinding::TextureArray { .. }
+                    | crate::ShaderBinding::BufferArray { .. } => todo!(),
+                };
+                naga_resources.resources.insert(res_binding, bind_target);
             }
-
-            assert!(
-                var.binding.is_some(),
-                "Unable to resolve binding for '{}'",
-                var_name
-            );
         }
 
         let naga_options = msl::Options {
@@ -315,7 +277,7 @@ impl super::Context {
         log::debug!(
             "Naga generated shader for entry point '{}' and stage {:?}\n{}",
             sf.entry_point,
-            naga_stage,
+            ep.stage,
             &source
         );
 

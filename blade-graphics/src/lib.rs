@@ -541,6 +541,7 @@ pub trait ShaderBindable: Clone + Copy {
     fn bind_to(&self, context: &mut PipelineContext, index: u32);
 }
 
+#[derive(Debug)]
 struct ShaderDataInfo {
     visibility: ShaderVisibility,
     binding_access: Box<[StorageAccess]>,

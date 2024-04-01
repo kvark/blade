@@ -85,7 +85,7 @@ pub struct AccelerationStructure {}
 
 type SlotList = Vec<u32>;
 
-struct BindGroupInfo {
+struct ShaderDataMapping {
     targets: Box<[SlotList]>,
 }
 
@@ -98,7 +98,7 @@ struct VertexAttributeInfo {
 
 struct PipelineInner {
     program: glow::Program,
-    bind_group_infos: Box<[BindGroupInfo]>,
+    group_mappings: Box<[ShaderDataMapping]>,
     vertex_attribute_infos: Box<[VertexAttributeInfo]>,
 }
 
@@ -359,7 +359,7 @@ pub type RenderCommandEncoder<'a> = PassEncoder<'a, RenderPipeline>;
 pub struct PipelineEncoder<'a> {
     commands: &'a mut Vec<Command>,
     plain_data: &'a mut Vec<u8>,
-    bind_group_infos: &'a [BindGroupInfo],
+    group_mappings: &'a [ShaderDataMapping],
     topology: u32,
     limits: &'a Limits,
     vertex_attributes: &'a [VertexAttributeInfo],

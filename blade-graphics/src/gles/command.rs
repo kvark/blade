@@ -204,7 +204,7 @@ impl super::PassEncoder<'_, super::ComputePipeline> {
         super::PipelineEncoder {
             commands: self.commands,
             plain_data: self.plain_data,
-            bind_group_infos: &pipeline.inner.bind_group_infos,
+            group_mappings: &pipeline.inner.group_mappings,
             topology: 0,
             limits: self.limits,
             vertex_attributes: &[],
@@ -222,7 +222,7 @@ impl super::PassEncoder<'_, super::RenderPipeline> {
         super::PipelineEncoder {
             commands: self.commands,
             plain_data: self.plain_data,
-            bind_group_infos: &pipeline.inner.bind_group_infos,
+            group_mappings: &pipeline.inner.group_mappings,
             topology: map_primitive_topology(pipeline.topology),
             limits: self.limits,
             vertex_attributes: &pipeline.inner.vertex_attribute_infos,
@@ -345,7 +345,7 @@ impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_> {
         data.fill(super::PipelineContext {
             commands: self.commands,
             plain_data: self.plain_data,
-            targets: &self.bind_group_infos[group as usize].targets,
+            targets: &self.group_mappings[group as usize].targets,
             limits: self.limits,
         });
     }
