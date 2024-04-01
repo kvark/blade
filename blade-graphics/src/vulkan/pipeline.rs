@@ -12,20 +12,6 @@ struct CompiledShader {
     wg_size: [u32; 3],
 }
 
-struct BindGroupInfo {
-    visibility: crate::ShaderVisibility,
-    binding_access: Vec<naga::StorageAccess>,
-}
-
-impl BindGroupInfo {
-    fn new(layout: &crate::ShaderDataLayout) -> Self {
-        Self {
-            visibility: crate::ShaderVisibility::empty(),
-            binding_access: vec![naga::StorageAccess::empty(); layout.bindings.len()],
-        }
-    }
-}
-
 impl super::Context {
     fn make_spv_options(&self, data_layouts: &[&crate::ShaderDataLayout]) -> spv::Options {
         // collect all the array bindings into overrides
@@ -71,111 +57,23 @@ impl super::Context {
         sf: crate::ShaderFunction,
         naga_options: &spv::Options,
         group_layouts: &[&crate::ShaderDataLayout],
-        group_infos: &mut [BindGroupInfo],
+        group_infos: &mut [crate::ShaderDataInfo],
         vertex_fetch_states: &[crate::VertexFetchState],
     ) -> CompiledShader {
         let ep_index = sf.entry_point_index();
+        let ep = &sf.shader.module.entry_points[ep_index];
+        let ep_info = sf.shader.info.get_entry_point(ep_index);
+
         let mut module = sf.shader.module.clone();
+        crate::Shader::fill_resource_bindings(
+            &mut module,
+            group_infos,
+            ep.stage,
+            ep_info,
+            group_layouts,
+        );
         let attribute_mappings =
             crate::Shader::fill_vertex_locations(&mut module, ep_index, vertex_fetch_states);
-
-        let ep_info = sf.shader.info.get_entry_point(ep_index);
-        let ep = &sf.shader.module.entry_points[ep_index];
-        let mut layouter = naga::proc::Layouter::default();
-        layouter.update(module.to_ctx()).unwrap();
-
-        for (handle, var) in module.global_variables.iter_mut() {
-            if ep_info[handle].is_empty() {
-                continue;
-            }
-            let var_access = match var.space {
-                naga::AddressSpace::Storage { access } => access,
-                naga::AddressSpace::Uniform | naga::AddressSpace::Handle => {
-                    naga::StorageAccess::empty()
-                }
-                _ => continue,
-            };
-
-            assert_eq!(var.binding, None);
-            let var_name = var.name.as_ref().unwrap();
-            for (group_index, (&layout, info)) in
-                group_layouts.iter().zip(group_infos.iter_mut()).enumerate()
-            {
-                if let Some((binding_index, &(_, proto_binding))) = layout
-                    .bindings
-                    .iter()
-                    .enumerate()
-                    .find(|&(_, &(name, _))| name == var_name)
-                {
-                    let res_binding = naga::ResourceBinding {
-                        group: group_index as u32,
-                        binding: binding_index as u32,
-                    };
-                    let (expected_proto, access) = match module.types[var.ty].inner {
-                        naga::TypeInner::Image {
-                            class: naga::ImageClass::Storage { access, format: _ },
-                            ..
-                        } => (crate::ShaderBinding::Texture, access),
-                        naga::TypeInner::Image { .. } => {
-                            (crate::ShaderBinding::Texture, naga::StorageAccess::empty())
-                        }
-                        naga::TypeInner::Sampler { .. } => {
-                            (crate::ShaderBinding::Sampler, naga::StorageAccess::empty())
-                        }
-                        naga::TypeInner::AccelerationStructure => (
-                            crate::ShaderBinding::AccelerationStructure,
-                            naga::StorageAccess::empty(),
-                        ),
-                        naga::TypeInner::BindingArray { base, size: _ } => {
-                            //Note: we could extract the count from `size` for more rigor
-                            let count = match proto_binding {
-                                crate::ShaderBinding::TextureArray { count } => count,
-                                crate::ShaderBinding::BufferArray { count } => count,
-                                _ => 0,
-                            };
-                            let proto = match module.types[base].inner {
-                                naga::TypeInner::Image { .. } => {
-                                    crate::ShaderBinding::TextureArray { count }
-                                }
-                                naga::TypeInner::Struct { .. } => {
-                                    crate::ShaderBinding::BufferArray { count }
-                                }
-                                ref other => panic!("Unsupported binding array for {:?}", other),
-                            };
-                            (proto, var_access)
-                        }
-                        _ => {
-                            let type_layout = &layouter[var.ty];
-                            let proto = if var_access.is_empty() {
-                                crate::ShaderBinding::Plain {
-                                    size: type_layout.size,
-                                }
-                            } else {
-                                crate::ShaderBinding::Buffer
-                            };
-                            (proto, var_access)
-                        }
-                    };
-                    assert_eq!(
-                        proto_binding, expected_proto,
-                        "Mismatched type for binding '{}'",
-                        var_name
-                    );
-                    assert_eq!(var.binding, None);
-                    var.binding = Some(res_binding.clone());
-                    info.visibility |= ep.stage.into();
-                    info.binding_access[binding_index] |= access;
-                    break;
-                }
-            }
-
-            assert!(
-                var.binding.is_some(),
-                "Unable to resolve binding for '{}' in the entry point '{}'",
-                var_name,
-                sf.entry_point,
-            );
-        }
 
         let pipeline_options = spv::PipelineOptions {
             shader_stage: ep.stage,
@@ -238,7 +136,7 @@ impl super::Context {
     fn create_descriptor_set_layout(
         &self,
         layout: &crate::ShaderDataLayout,
-        info: &BindGroupInfo,
+        info: &crate::ShaderDataInfo,
     ) -> super::DescriptorSetLayout {
         if info.visibility.is_empty() {
             return super::DescriptorSetLayout::default();
@@ -361,7 +259,7 @@ impl super::Context {
     fn create_pipeline_layout(
         &self,
         group_layouts: &[&crate::ShaderDataLayout],
-        group_infos: &[BindGroupInfo],
+        group_infos: &[crate::ShaderDataInfo],
     ) -> super::PipelineLayout {
         let mut descriptor_set_layouts = Vec::with_capacity(group_layouts.len());
         let mut vk_set_layouts = Vec::with_capacity(group_layouts.len());
@@ -392,8 +290,7 @@ impl super::Context {
         let mut group_infos = desc
             .data_layouts
             .iter()
-            .cloned()
-            .map(BindGroupInfo::new)
+            .map(|layout| layout.to_info())
             .collect::<Vec<_>>();
 
         let options = self.make_spv_options(desc.data_layouts);
@@ -461,8 +358,7 @@ impl super::Context {
         let mut group_infos = desc
             .data_layouts
             .iter()
-            .cloned()
-            .map(BindGroupInfo::new)
+            .map(|layout| layout.to_info())
             .collect::<Vec<_>>();
 
         let options = self.make_spv_options(desc.data_layouts);

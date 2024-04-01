@@ -541,15 +541,26 @@ pub trait ShaderBindable: Clone + Copy {
     fn bind_to(&self, context: &mut PipelineContext, index: u32);
 }
 
+struct ShaderDataInfo {
+    visibility: ShaderVisibility,
+    binding_access: Box<[StorageAccess]>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShaderDataLayout {
     pub bindings: Vec<(&'static str, ShaderBinding)>,
 }
-
 impl ShaderDataLayout {
     pub const EMPTY: &'static Self = &Self {
         bindings: Vec::new(),
     };
+
+    fn to_info(&self) -> ShaderDataInfo {
+        ShaderDataInfo {
+            visibility: ShaderVisibility::empty(),
+            binding_access: vec![StorageAccess::empty(); self.bindings.len()].into_boxed_slice(),
+        }
+    }
 }
 
 pub trait ShaderData {
