@@ -10,6 +10,7 @@ impl super::Context {
         name: &str,
     ) -> super::PipelineInner {
         let gl = self.lock();
+        let use_explicit_bindings = false; //TODO
 
         let program = gl.create_program().unwrap();
         #[cfg(not(target_arch = "wasm32"))]
@@ -19,22 +20,37 @@ impl super::Context {
 
         let naga_options = glsl::Options {
             version: glsl::Version::Embedded {
-                //Note: using this version doesn't require the bindings to be assigned
-                // so we are using the shader modules directly.
-                version: 300,
+                version: if use_explicit_bindings { 320 } else { 300 },
                 is_webgl: cfg!(target_arch = "wasm32"),
             },
             ..Default::default()
         };
 
         let mut baked_shaders = Vec::with_capacity(shaders.len());
+        let mut group_infos = group_layouts
+            .iter()
+            .map(|layout| layout.to_info())
+            .collect::<Vec<_>>();
         let mut attributes = Vec::new();
 
         for &sf in shaders {
             let ep_index = sf.entry_point_index();
+            let ep = &sf.shader.module.entry_points[ep_index];
+
             let mut module = sf.shader.module.clone();
+            if use_explicit_bindings {
+                let ep_info = sf.shader.info.get_entry_point(ep_index);
+                crate::Shader::fill_resource_bindings(
+                    &mut module,
+                    &mut group_infos,
+                    ep.stage,
+                    ep_info,
+                    group_layouts,
+                );
+            }
             let attribute_mappings =
                 crate::Shader::fill_vertex_locations(&mut module, ep_index, vertex_fetch_states);
+
             for (index, mapping) in attribute_mappings.into_iter().enumerate() {
                 let vf = &vertex_fetch_states[mapping.buffer_index];
                 let (_, attrib) = vf.layout.attributes[mapping.attribute_index];
@@ -46,7 +62,6 @@ impl super::Context {
                 });
             }
 
-            let ep = &sf.shader.module.entry_points[ep_index];
             let pipeline_options = glsl::PipelineOptions {
                 shader_stage: ep.stage,
                 entry_point: sf.entry_point.to_string(),
@@ -96,11 +111,9 @@ impl super::Context {
         assert!(linked_ok, "Link: {}", msg);
         gl.use_program(Some(program));
 
-        //type NameList = Vec<String>;
-        //type BindingNames = Vec<NameList>;
-        let mut bind_group_infos = group_layouts
+        let mut group_mappings = group_layouts
             .iter()
-            .map(|layout| super::BindGroupInfo {
+            .map(|layout| super::ShaderDataMapping {
                 targets: vec![Vec::new(); layout.bindings.len()].into_boxed_slice(),
             })
             .collect::<Box<[_]>>();
@@ -135,7 +148,7 @@ impl super::Context {
                         panic!("Shader variable {} is not found in the bindings", var_name)
                     });
 
-                let targets = &mut bind_group_infos[group_index].targets[binding_index];
+                let targets = &mut group_mappings[group_index].targets[binding_index];
                 match group_layouts[group_index].bindings[binding_index].1 {
                     crate::ShaderBinding::Texture | crate::ShaderBinding::Sampler => {
                         if let Some(ref location) = gl.get_uniform_location(program, glsl_name) {
@@ -198,7 +211,7 @@ impl super::Context {
 
         super::PipelineInner {
             program,
-            bind_group_infos,
+            group_mappings,
             vertex_attribute_infos: attributes.into_boxed_slice(),
         }
     }

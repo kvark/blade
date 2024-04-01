@@ -387,8 +387,8 @@ impl super::ComputeCommandEncoder<'_> {
 
         super::ComputePipelineContext {
             encoder: &mut self.raw,
-            bind_groups: &pipeline.layout.bind_groups,
             wg_size: pipeline.wg_size,
+            group_mappings: &pipeline.layout.group_mappings,
         }
     }
 }
@@ -444,7 +444,7 @@ impl super::RenderCommandEncoder<'_> {
         super::RenderPipelineContext {
             encoder: &mut self.raw,
             primitive_type: pipeline.primitive_type,
-            bind_groups: &pipeline.layout.bind_groups,
+            group_mappings: &pipeline.layout.group_mappings,
         }
     }
 }
@@ -458,7 +458,7 @@ impl Drop for super::RenderCommandEncoder<'_> {
 #[hidden_trait::expose]
 impl crate::traits::PipelineEncoder for super::ComputePipelineContext<'_> {
     fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
-        let info = &self.bind_groups[group as usize];
+        let info = &self.group_mappings[group as usize];
 
         data.fill(super::PipelineContext {
             cs_encoder: if info.visibility.contains(crate::ShaderVisibility::COMPUTE) {
@@ -494,7 +494,7 @@ impl Drop for super::ComputePipelineContext<'_> {
 #[hidden_trait::expose]
 impl crate::traits::PipelineEncoder for super::RenderPipelineContext<'_> {
     fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
-        let info = &self.bind_groups[group as usize];
+        let info = &self.group_mappings[group as usize];
 
         data.fill(super::PipelineContext {
             cs_encoder: None,

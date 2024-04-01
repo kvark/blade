@@ -185,14 +185,15 @@ pub struct CommandEncoder {
 }
 
 #[derive(Debug)]
-struct BindGroupInfo {
+struct ShaderDataMapping {
     visibility: crate::ShaderVisibility,
     targets: Box<[u32]>,
 }
 
 #[derive(Debug)]
 struct PipelineLayout {
-    bind_groups: Box<[BindGroupInfo]>,
+    group_mappings: Box<[ShaderDataMapping]>,
+    group_infos: Box<[crate::ShaderDataInfo]>,
     sizes_buffer_slot: Option<u32>,
 }
 
@@ -269,14 +270,14 @@ pub struct PipelineContext<'a> {
 pub struct ComputePipelineContext<'a> {
     encoder: &'a mut metal::ComputeCommandEncoder,
     wg_size: metal::MTLSize,
-    bind_groups: &'a [BindGroupInfo],
+    group_mappings: &'a [ShaderDataMapping],
 }
 
 #[derive(Debug)]
 pub struct RenderPipelineContext<'a> {
     encoder: &'a mut metal::RenderCommandEncoder,
     primitive_type: metal::MTLPrimitiveType,
-    bind_groups: &'a [BindGroupInfo],
+    group_mappings: &'a [ShaderDataMapping],
 }
 
 fn map_texture_format(format: crate::TextureFormat) -> metal::MTLPixelFormat {
