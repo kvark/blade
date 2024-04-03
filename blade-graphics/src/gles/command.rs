@@ -60,6 +60,7 @@ impl crate::ShaderBindable for crate::BufferPiece {
                 target: glow::SHADER_STORAGE_BUFFER,
                 slot,
                 buffer: (*self).into(),
+                size: (self.buffer.size - self.offset) as u32,
             });
         }
     }
@@ -156,6 +157,13 @@ impl super::CommandEncoder {
             size: target_size,
             depth: 0.0..1.0,
         });
+        self.commands
+            .push(super::Command::SetScissor(crate::ScissorRect {
+                x: 0,
+                y: 0,
+                w: target_size[0] as u32,
+                h: target_size[1] as u32,
+            }));
 
         // issue the clears
         for (i, rt) in targets.colors.iter().enumerate() {
@@ -780,7 +788,9 @@ impl super::Command {
                 gl.viewport(0, 0, size[0] as i32, size[1] as i32);
                 gl.depth_range_f32(depth.start, depth.end);
             }
-            Self::SetScissor(ref rect) => unimplemented!(),
+            Self::SetScissor(ref rect) => {
+                gl.scissor(rect.x, rect.y, rect.w as i32, rect.h as i32);
+            }
             Self::SetStencilFunc {
                 face,
                 function,
@@ -848,7 +858,16 @@ impl super::Command {
                 target,
                 slot,
                 ref buffer,
-            } => unimplemented!(),
+                size,
+            } => {
+                gl.bind_buffer_range(
+                    target,
+                    slot,
+                    Some(buffer.raw),
+                    buffer.offset as i32,
+                    size as i32,
+                );
+            }
             Self::BindSampler { slot, sampler } => {
                 gl.bind_sampler(slot, Some(sampler));
             }

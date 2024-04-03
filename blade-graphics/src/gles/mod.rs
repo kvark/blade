@@ -302,6 +302,7 @@ enum Command {
         target: BindTarget,
         slot: u32,
         buffer: BufferPart,
+        size: u32,
     },
     SetVertexAttribute {
         index: u32,
