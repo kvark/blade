@@ -4,6 +4,8 @@ Changelog for Blade
 
 - vertex buffers support
 - configuration for disabling exclusive fullscreen
+- GLES: support for storage buffer and compute
+- GLES: scissor rects, able to run "particle" example
 
 ## blade-graphics-0.4, blade-render-0.3, blade-0.2 (22 Mar 2024)
 
