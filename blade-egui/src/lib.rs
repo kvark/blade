@@ -302,16 +302,16 @@ impl GuiPainter {
             // Make sure clip rect can fit within an `u32`.
             let clip_min_x = (sd.scale_factor * clip_rect.min.x)
                 .clamp(0.0, sd.physical_size.0 as f32)
-                .trunc() as u32;
+                .trunc() as i32;
             let clip_min_y = (sd.scale_factor * clip_rect.min.y)
                 .clamp(0.0, sd.physical_size.1 as f32)
-                .trunc() as u32;
+                .trunc() as i32;
             let clip_max_x = (sd.scale_factor * clip_rect.max.x)
                 .clamp(0.0, sd.physical_size.0 as f32)
-                .ceil() as u32;
+                .ceil() as i32;
             let clip_max_y = (sd.scale_factor * clip_rect.max.y)
                 .clamp(0.0, sd.physical_size.1 as f32)
-                .ceil() as u32;
+                .ceil() as i32;
 
             if clip_max_x <= clip_min_x || clip_max_y == clip_min_y {
                 continue;
@@ -320,8 +320,8 @@ impl GuiPainter {
             pc.set_scissor_rect(&blade_graphics::ScissorRect {
                 x: clip_min_x,
                 y: clip_min_y,
-                w: clip_max_x - clip_min_x,
-                h: clip_max_y - clip_min_y,
+                w: (clip_max_x - clip_min_x) as u32,
+                h: (clip_max_y - clip_min_y) as u32,
             });
 
             if let egui::epaint::Primitive::Mesh(ref mesh) = clipped_prim.primitive {

@@ -1031,8 +1031,8 @@ pub enum IndexType {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScissorRect {
-    pub x: u32,
-    pub y: u32,
+    pub x: i32,
+    pub y: i32,
     pub w: u32,
     pub h: u32,
 }

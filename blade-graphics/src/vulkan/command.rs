@@ -636,8 +636,8 @@ impl<'a> super::RenderCommandEncoder<'a> {
     pub fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
         let vk_scissor = vk::Rect2D {
             offset: vk::Offset2D {
-                x: rect.x as i32,
-                y: rect.y as i32,
+                x: rect.x,
+                y: rect.y,
             },
             extent: vk::Extent2D {
                 width: rect.w,
@@ -741,8 +741,8 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
     fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
         let vk_scissor = vk::Rect2D {
             offset: vk::Offset2D {
-                x: rect.x as i32,
-                y: rect.y as i32,
+                x: rect.x,
+                y: rect.y,
             },
             extent: vk::Extent2D {
                 width: rect.w,
