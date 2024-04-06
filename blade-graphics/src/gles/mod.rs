@@ -384,7 +384,10 @@ pub struct PipelineContext<'a> {
 }
 
 #[derive(Clone, Debug)]
-pub struct SyncPoint {}
+pub struct SyncPoint {
+    fence: glow::Fence,
+}
+//TODO: destructor
 
 struct ExecutionContext {
     framebuf: glow::Framebuffer,
@@ -417,9 +420,9 @@ impl crate::traits::CommandDevice for Context {
     fn destroy_command_encoder(&self, _command_encoder: &mut CommandEncoder) {}
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
-        {
-            use glow::HasContext as _;
+        use glow::HasContext as _;
 
+        let fence = {
             let gl = self.lock();
             let push_group = !encoder.name.is_empty() && gl.supports_debug();
             let ec = unsafe {
@@ -453,16 +456,33 @@ impl crate::traits::CommandDevice for Context {
                 if push_group {
                     gl.pop_debug_group();
                 }
+                gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0).unwrap()
             }
-        }
+        };
         if encoder.has_present {
             self.present();
         }
-        SyncPoint {}
+        SyncPoint { fence }
     }
 
-    fn wait_for(&self, _sp: &SyncPoint, _timeout_ms: u32) -> bool {
-        false //TODO
+    fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
+        use glow::HasContext as _;
+
+        let gl = self.lock();
+        let timeout_ns = if timeout_ms == !0 {
+            !0
+        } else {
+            timeout_ms as u64 * 1_000_000
+        };
+        //TODO: https://github.com/grovesNL/glow/issues/287
+        let timeout_ns_i32 = timeout_ns.min(std::i32::MAX as u64) as i32;
+
+        let status =
+            unsafe { gl.client_wait_sync(sp.fence, glow::SYNC_FLUSH_COMMANDS_BIT, timeout_ns_i32) };
+        match status {
+            glow::ALREADY_SIGNALED | glow::CONDITION_SATISFIED => true,
+            _ => false,
+        }
     }
 }
 
