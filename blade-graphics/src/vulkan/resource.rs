@@ -9,6 +9,20 @@ struct Allocation {
     handle: usize,
 }
 
+impl Drop for super::Context {
+    fn drop(&mut self) {
+        let mut manager = self.memory.lock().unwrap();
+        let blocks = manager.slab.drain().collect::<Vec<_>>();
+        for block in blocks {
+            unsafe {
+                manager
+                    .allocator
+                    .dealloc(AshMemoryDevice::wrap(&self.device.core), block)
+            };
+        }
+    }
+}
+
 impl super::Context {
     fn allocate_memory(
         &self,
