@@ -426,14 +426,14 @@ impl Context {
     }
 
     pub unsafe fn init_windowed<
-        I: raw_window_handle::HasRawWindowHandle + raw_window_handle::HasRawDisplayHandle,
+        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
     >(
         window: &I,
         desc: super::ContextDesc,
     ) -> Result<Self, super::NotSupportedError> {
         let mut context = Self::init(desc)?;
 
-        let surface = match window.raw_window_handle().unwrap() {
+        let surface = match window.window_handle().unwrap().as_raw() {
             #[cfg(target_os = "ios")]
             raw_window_handle::RawWindowHandle::UiKit(handle) => {
                 Surface::from_view(handle.ui_view.as_ptr() as *mut _)

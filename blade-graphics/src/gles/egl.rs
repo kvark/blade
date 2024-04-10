@@ -226,7 +226,7 @@ impl Context {
     }
 
     pub unsafe fn init_windowed<
-        I: raw_window_handle::HasRawWindowHandle + raw_window_handle::HasRawDisplayHandle,
+        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
     >(
         window: I,
         desc: crate::ContextDesc,
@@ -238,7 +238,7 @@ impl Context {
             .upcast::<egl::EGL1_5>()
             .ok_or(crate::NotSupportedError)?;
 
-        let (display, wsi_library) = match window.raw_display_handle().unwrap() {
+        let (display, wsi_library) = match window.display_handle().unwrap().as_raw() {
             Rdh::Windows(display_handle) => {
                 let display_attributes = [
                     EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE as egl::Attrib,
@@ -262,7 +262,9 @@ impl Context {
                 let display = egl1_5
                     .get_platform_display(
                         EGL_PLATFORM_X11_KHR,
-                        display_handle.display.map_or(ptr::null_mut(), ptr::NonNull::as_ptr),
+                        display_handle
+                            .display
+                            .map_or(ptr::null_mut(), ptr::NonNull::as_ptr),
                         &display_attributes,
                     )
                     .unwrap();
@@ -275,7 +277,9 @@ impl Context {
                 let display = egl1_5
                     .get_platform_display(
                         EGL_PLATFORM_XCB_EXT,
-                        display_handle.connection.map_or(ptr::null_mut(), ptr::NonNull::as_ptr),
+                        display_handle
+                            .connection
+                            .map_or(ptr::null_mut(), ptr::NonNull::as_ptr),
                         &display_attributes,
                     )
                     .unwrap();
@@ -328,7 +332,7 @@ impl Context {
         Ok(Self {
             wsi: Some(WindowSystemInterface {
                 library: wsi_library.map(Arc::new),
-                window_handle: window.raw_window_handle().unwrap(),
+                window_handle: window.window_handle().unwrap().as_raw(),
                 renderbuf,
                 framebuf,
             }),
