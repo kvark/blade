@@ -90,12 +90,14 @@ impl super::Context {
     ) -> crate::AccelerationStructureSizes {
         let blas_input = self.device.map_acceleration_structure_meshes(meshes);
         let rt = self.device.ray_tracing.as_ref().unwrap();
-        let sizes_raw = unsafe {
+        let mut sizes_raw = vk::AccelerationStructureBuildSizesInfoKHR::default();
+        unsafe {
             rt.acceleration_structure
                 .get_acceleration_structure_build_sizes(
                     vk::AccelerationStructureBuildTypeKHR::DEVICE,
                     &blas_input.build_info,
                     &blas_input.max_primitive_counts,
+                    &mut sizes_raw,
                 )
         };
         crate::AccelerationStructureSizes {
@@ -108,26 +110,26 @@ impl super::Context {
         &self,
         instance_count: u32,
     ) -> crate::AccelerationStructureSizes {
-        let geometry = vk::AccelerationStructureGeometryKHR::builder()
+        let geometry = vk::AccelerationStructureGeometryKHR::default()
             .geometry_type(vk::GeometryTypeKHR::INSTANCES)
             .geometry(vk::AccelerationStructureGeometryDataKHR {
-                instances: vk::AccelerationStructureGeometryInstancesDataKHR::builder().build(),
-            })
-            .build();
+                instances: vk::AccelerationStructureGeometryInstancesDataKHR::default(),
+            });
         let geometries = [geometry];
-        let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
+        let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
             .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(&geometries)
-            .build();
+            .geometries(&geometries);
 
         let rt = self.device.ray_tracing.as_ref().unwrap();
-        let sizes_raw = unsafe {
+        let mut sizes_raw = vk::AccelerationStructureBuildSizesInfoKHR::default();
+        unsafe {
             rt.acceleration_structure
                 .get_acceleration_structure_build_sizes(
                     vk::AccelerationStructureBuildTypeKHR::DEVICE,
                     &build_info,
                     &[instance_count],
+                    &mut sizes_raw,
                 )
         };
         crate::AccelerationStructureSizes {
@@ -149,10 +151,12 @@ impl super::Context {
         });
         let rt = self.device.ray_tracing.as_ref().unwrap();
         for (i, instance) in instances.iter().enumerate() {
-            let device_address_info = vk::AccelerationStructureDeviceAddressInfoKHR::builder()
-                .acceleration_structure(
-                    bottom_level[instance.acceleration_structure_index as usize].raw,
-                );
+            let device_address_info = vk::AccelerationStructureDeviceAddressInfoKHR {
+                acceleration_structure: bottom_level
+                    [instance.acceleration_structure_index as usize]
+                    .raw,
+                ..Default::default()
+            };
             let vk_instance = vk::AccelerationStructureInstanceKHR {
                 transform: unsafe { mem::transmute(instance.transform) },
                 instance_custom_index_and_mask: vk::Packed24_8::new(
@@ -188,17 +192,17 @@ impl crate::traits::ResourceDevice for super::Context {
 
     fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         use vk::BufferUsageFlags as Buf;
-        let mut vk_info = vk::BufferCreateInfo::builder()
-            .size(desc.size)
-            .usage(
-                Buf::TRANSFER_SRC
-                    | Buf::TRANSFER_DST
-                    | Buf::STORAGE_BUFFER
-                    | Buf::INDEX_BUFFER
-                    | Buf::VERTEX_BUFFER
-                    | Buf::INDIRECT_BUFFER,
-            )
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let mut vk_info = vk::BufferCreateInfo {
+            size: desc.size,
+            usage: Buf::TRANSFER_SRC
+                | Buf::TRANSFER_DST
+                | Buf::STORAGE_BUFFER
+                | Buf::INDEX_BUFFER
+                | Buf::VERTEX_BUFFER
+                | Buf::INDIRECT_BUFFER,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            ..Default::default()
+        };
         if self.device.ray_tracing.is_some() {
             vk_info.usage |=
                 Buf::SHADER_DEVICE_ADDRESS | Buf::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
@@ -222,7 +226,7 @@ impl crate::traits::ResourceDevice for super::Context {
                 .unwrap()
         };
         if !desc.name.is_empty() {
-            self.set_object_name(vk::ObjectType::BUFFER, raw, desc.name);
+            self.set_object_name(raw, desc.name);
         }
 
         super::Buffer {
@@ -254,17 +258,19 @@ impl crate::traits::ResourceDevice for super::Context {
             create_flags |= vk::ImageCreateFlags::CUBE_COMPATIBLE;
         }
 
-        let vk_info = vk::ImageCreateInfo::builder()
-            .flags(create_flags)
-            .image_type(map_texture_dimension(desc.dimension))
-            .format(super::map_texture_format(desc.format))
-            .extent(super::map_extent_3d(&desc.size))
-            .mip_levels(desc.mip_level_count)
-            .array_layers(desc.array_layer_count)
-            .samples(vk::SampleCountFlags::from_raw(1)) // desc.sample_count
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(map_texture_usage(desc.usage, desc.format.aspects()))
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let vk_info = vk::ImageCreateInfo {
+            flags: create_flags,
+            image_type: map_texture_dimension(desc.dimension),
+            format: super::map_texture_format(desc.format),
+            extent: super::map_extent_3d(&desc.size),
+            mip_levels: desc.mip_level_count,
+            array_layers: desc.array_layer_count,
+            samples: vk::SampleCountFlags::from_raw(1), // desc.sample_count
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: map_texture_usage(desc.usage, desc.format.aspects()),
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            ..Default::default()
+        };
 
         let raw = unsafe { self.device.core.create_image(&vk_info, None).unwrap() };
         let requirements = unsafe { self.device.core.get_image_memory_requirements(raw) };
@@ -285,7 +291,7 @@ impl crate::traits::ResourceDevice for super::Context {
                 .unwrap()
         };
         if !desc.name.is_empty() {
-            self.set_object_name(vk::ObjectType::IMAGE, raw, desc.name);
+            self.set_object_name(raw, desc.name);
         }
 
         super::Texture {
@@ -309,15 +315,17 @@ impl crate::traits::ResourceDevice for super::Context {
     fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
         let aspects = desc.format.aspects();
         let subresource_range = super::map_subresource_range(desc.subresources, aspects);
-        let vk_info = vk::ImageViewCreateInfo::builder()
-            .image(desc.texture.raw)
-            .view_type(map_view_dimension(desc.dimension))
-            .format(super::map_texture_format(desc.format))
-            .subresource_range(subresource_range);
+        let vk_info = vk::ImageViewCreateInfo {
+            image: desc.texture.raw,
+            view_type: map_view_dimension(desc.dimension),
+            format: super::map_texture_format(desc.format),
+            subresource_range: subresource_range,
+            ..Default::default()
+        };
 
         let raw = unsafe { self.device.core.create_image_view(&vk_info, None).unwrap() };
         if !desc.name.is_empty() {
-            self.set_object_name(vk::ObjectType::IMAGE_VIEW, raw, desc.name);
+            self.set_object_name(raw, desc.name);
         }
 
         super::TextureView {
@@ -335,33 +343,33 @@ impl crate::traits::ResourceDevice for super::Context {
     }
 
     fn create_sampler(&self, desc: crate::SamplerDesc) -> super::Sampler {
-        let mut vk_info = vk::SamplerCreateInfo::builder()
-            .mag_filter(map_filter_mode(desc.mag_filter))
-            .min_filter(map_filter_mode(desc.min_filter))
-            .mipmap_mode(map_mip_filter_mode(desc.mipmap_filter))
-            .address_mode_u(map_address_mode(desc.address_modes[0]))
-            .address_mode_v(map_address_mode(desc.address_modes[1]))
-            .address_mode_w(map_address_mode(desc.address_modes[2]))
-            .min_lod(desc.lod_min_clamp)
-            .max_lod(desc.lod_max_clamp.unwrap_or(vk::LOD_CLAMP_NONE));
+        let mut vk_info = vk::SamplerCreateInfo {
+            mag_filter: map_filter_mode(desc.mag_filter),
+            min_filter: map_filter_mode(desc.min_filter),
+            mipmap_mode: map_mip_filter_mode(desc.mipmap_filter),
+            address_mode_u: map_address_mode(desc.address_modes[0]),
+            address_mode_v: map_address_mode(desc.address_modes[1]),
+            address_mode_w: map_address_mode(desc.address_modes[2]),
+            min_lod: desc.lod_min_clamp,
+            max_lod: desc.lod_max_clamp.unwrap_or(vk::LOD_CLAMP_NONE),
+            ..Default::default()
+        };
 
         if let Some(fun) = desc.compare {
-            vk_info = vk_info
-                .compare_enable(true)
-                .compare_op(super::map_comparison(fun));
+            vk_info.compare_enable = vk::TRUE;
+            vk_info.compare_op = super::map_comparison(fun);
         }
         if desc.anisotropy_clamp > 1 {
-            vk_info = vk_info
-                .anisotropy_enable(true)
-                .max_anisotropy(desc.anisotropy_clamp as f32);
+            vk_info.anisotropy_enable = vk::TRUE;
+            vk_info.max_anisotropy = desc.anisotropy_clamp as f32;
         }
         if let Some(color) = desc.border_color {
-            vk_info = vk_info.border_color(map_border_color(color));
+            vk_info.border_color = map_border_color(color);
         }
 
         let raw = unsafe { self.device.core.create_sampler(&vk_info, None).unwrap() };
         if !desc.name.is_empty() {
-            self.set_object_name(vk::ObjectType::SAMPLER, raw, desc.name);
+            self.set_object_name(raw, desc.name);
         }
 
         super::Sampler { raw }
@@ -375,10 +383,12 @@ impl crate::traits::ResourceDevice for super::Context {
         &self,
         desc: crate::AccelerationStructureDesc,
     ) -> super::AccelerationStructure {
-        let buffer_info = vk::BufferCreateInfo::builder()
-            .size(desc.size)
-            .usage(vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let buffer_info = vk::BufferCreateInfo {
+            size: desc.size,
+            usage: vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            ..Default::default()
+        };
 
         let buffer = unsafe { self.device.core.create_buffer(&buffer_info, None).unwrap() };
         let requirements = unsafe { self.device.core.get_buffer_memory_requirements(buffer) };
@@ -399,10 +409,12 @@ impl crate::traits::ResourceDevice for super::Context {
                 vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL
             }
         };
-        let vk_info = vk::AccelerationStructureCreateInfoKHR::builder()
-            .ty(raw_ty)
-            .buffer(buffer)
-            .size(desc.size);
+        let vk_info = vk::AccelerationStructureCreateInfoKHR {
+            ty: raw_ty,
+            buffer,
+            size: desc.size,
+            ..Default::default()
+        };
 
         let rt = self.device.ray_tracing.as_ref().unwrap();
         let raw = unsafe {
@@ -412,8 +424,8 @@ impl crate::traits::ResourceDevice for super::Context {
         };
 
         if !desc.name.is_empty() {
-            self.set_object_name(vk::ObjectType::BUFFER, buffer, desc.name);
-            self.set_object_name(vk::ObjectType::ACCELERATION_STRUCTURE_KHR, raw, desc.name);
+            self.set_object_name(buffer, desc.name);
+            self.set_object_name(raw, desc.name);
         }
         super::AccelerationStructure {
             raw,

@@ -433,14 +433,14 @@ impl Context {
     ) -> Result<Self, super::NotSupportedError> {
         let mut context = Self::init(desc)?;
 
-        let surface = match window.raw_window_handle() {
+        let surface = match window.raw_window_handle().unwrap() {
             #[cfg(target_os = "ios")]
             raw_window_handle::RawWindowHandle::UiKit(handle) => {
-                Surface::from_view(handle.ui_view as *mut _)
+                Surface::from_view(handle.ui_view.as_ptr() as *mut _)
             }
             #[cfg(target_os = "macos")]
             raw_window_handle::RawWindowHandle::AppKit(handle) => {
-                Surface::from_view(handle.ns_view as *mut _)
+                Surface::from_view(handle.ns_view.as_ptr() as *mut _)
             }
             _ => return Err(crate::NotSupportedError),
         };

@@ -158,8 +158,8 @@ fn make_buffer_image_copy(
     }
 }
 
-fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo {
-    let mut builder = vk::RenderingAttachmentInfo::builder()
+fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo<'static> {
+    let mut vk_info = vk::RenderingAttachmentInfo::default()
         .image_view(rt.view.raw)
         .image_layout(vk::ImageLayout::GENERAL)
         .load_op(vk::AttachmentLoadOp::LOAD);
@@ -190,10 +190,11 @@ fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo {
                 },
             }
         };
-        builder = builder.load_op(vk::AttachmentLoadOp::CLEAR).clear_value(cv);
+        vk_info.load_op = vk::AttachmentLoadOp::CLEAR;
+        vk_info.clear_value = cv;
     }
 
-    builder.build()
+    vk_info
 }
 
 impl super::CommandEncoder {
@@ -201,18 +202,17 @@ impl super::CommandEncoder {
         if let Some(ref mut ch) = self.crash_handler {
             let id = ch.add_marker(marker);
             unsafe {
-                (self
-                    .device
+                self.device
                     .buffer_marker
                     .as_ref()
                     .unwrap()
-                    .cmd_write_buffer_marker_amd)(
-                    self.buffers[0].raw,
-                    vk::PipelineStageFlags::ALL_COMMANDS,
-                    ch.marker_buf.raw,
-                    0,
-                    id,
-                );
+                    .cmd_write_buffer_marker(
+                        self.buffers[0].raw,
+                        vk::PipelineStageFlags::ALL_COMMANDS,
+                        ch.marker_buf.raw,
+                        0,
+                        id,
+                    );
             }
         }
     }
@@ -220,9 +220,10 @@ impl super::CommandEncoder {
     pub fn start(&mut self) {
         self.buffers.rotate_left(1);
 
-        let vk_info = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-            .build();
+        let vk_info = vk::CommandBufferBeginInfo {
+            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            ..Default::default()
+        };
         unsafe {
             self.device
                 .core
@@ -248,14 +249,13 @@ impl super::CommandEncoder {
 
     fn barrier(&mut self) {
         let wa = &self.device.workarounds;
-        let barrier = vk::MemoryBarrier::builder()
-            .src_access_mask(vk::AccessFlags::MEMORY_WRITE | wa.extra_sync_src_access)
-            .dst_access_mask(
-                vk::AccessFlags::MEMORY_READ
-                    | vk::AccessFlags::MEMORY_WRITE
-                    | wa.extra_sync_dst_access,
-            )
-            .build();
+        let barrier = vk::MemoryBarrier {
+            src_access_mask: vk::AccessFlags::MEMORY_WRITE | wa.extra_sync_src_access,
+            dst_access_mask: vk::AccessFlags::MEMORY_READ
+                | vk::AccessFlags::MEMORY_WRITE
+                | wa.extra_sync_dst_access,
+            ..Default::default()
+        };
         unsafe {
             self.device.core.cmd_pipeline_barrier(
                 self.buffers[0].raw,
@@ -270,18 +270,19 @@ impl super::CommandEncoder {
     }
 
     pub fn init_texture(&mut self, texture: super::Texture) {
-        let barrier = vk::ImageMemoryBarrier::builder()
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .image(texture.raw)
-            .subresource_range(vk::ImageSubresourceRange {
+        let barrier = vk::ImageMemoryBarrier {
+            old_layout: vk::ImageLayout::UNDEFINED,
+            new_layout: vk::ImageLayout::GENERAL,
+            image: texture.raw,
+            subresource_range: vk::ImageSubresourceRange {
                 aspect_mask: super::map_aspects(texture.format.aspects()),
                 base_mip_level: 0,
                 level_count: vk::REMAINING_MIP_LEVELS,
                 base_array_layer: 0,
                 layer_count: vk::REMAINING_ARRAY_LAYERS,
-            })
-            .build();
+            },
+            ..Default::default()
+        };
         unsafe {
             self.device.core.cmd_pipeline_barrier(
                 self.buffers[0].raw,
@@ -303,19 +304,20 @@ impl super::CommandEncoder {
             acquire_semaphore: frame.acquire_semaphore,
         });
 
-        let barrier = vk::ImageMemoryBarrier::builder()
-            .old_layout(vk::ImageLayout::GENERAL)
-            .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-            .image(frame.image)
-            .subresource_range(vk::ImageSubresourceRange {
+        let barrier = vk::ImageMemoryBarrier {
+            old_layout: vk::ImageLayout::GENERAL,
+            new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+            image: frame.image,
+            subresource_range: vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
                 level_count: 1,
                 base_array_layer: 0,
                 layer_count: 1,
-            })
-            .src_access_mask(vk::AccessFlags::MEMORY_WRITE | wa.extra_sync_src_access)
-            .build();
+            },
+            src_access_mask: vk::AccessFlags::MEMORY_WRITE | wa.extra_sync_src_access,
+            ..Default::default()
+        };
         unsafe {
             self.device.core.cmd_pipeline_barrier(
                 self.buffers[0].raw,
@@ -369,9 +371,10 @@ impl super::CommandEncoder {
             color_attachments.push(map_render_target(rt));
         }
 
-        let mut rendering_info = vk::RenderingInfoKHR::builder()
+        let mut rendering_info = vk::RenderingInfoKHR::default()
             .layer_count(1)
             .color_attachments(&color_attachments);
+
         if let Some(rt) = targets.depth_stencil {
             target_size = rt.view.target_size;
             depth_stencil_attachment = map_render_target(&rt);
@@ -398,7 +401,7 @@ impl super::CommandEncoder {
             min_depth: 0.0,
             max_depth: 1.0,
         };
-        rendering_info = rendering_info.render_area(render_area);
+        rendering_info.render_area = render_area;
 
         let cmd_buf = self.buffers[0];
         unsafe {
@@ -584,26 +587,29 @@ impl crate::traits::AccelerationStructureEncoder
             first_vertex: 0,
             transform_offset: 0,
         };
-        let geometry = vk::AccelerationStructureGeometryKHR::builder()
-            .geometry_type(vk::GeometryTypeKHR::INSTANCES)
-            .geometry(vk::AccelerationStructureGeometryDataKHR {
-                instances: vk::AccelerationStructureGeometryInstancesDataKHR::builder()
-                    .data(vk::DeviceOrHostAddressConstKHR {
+        let geometry = vk::AccelerationStructureGeometryKHR {
+            geometry_type: vk::GeometryTypeKHR::INSTANCES,
+            geometry: vk::AccelerationStructureGeometryDataKHR {
+                instances: vk::AccelerationStructureGeometryInstancesDataKHR {
+                    data: vk::DeviceOrHostAddressConstKHR {
                         device_address: self.device.get_device_address(&instance_data),
-                    })
-                    .build(),
-            })
-            .build();
+                    },
+                    ..Default::default()
+                },
+            },
+            ..Default::default()
+        };
         let geometries = [geometry];
-        let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
-            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(&geometries)
-            .scratch_data(vk::DeviceOrHostAddressKHR {
+        let build_info = vk::AccelerationStructureBuildGeometryInfoKHR {
+            ty: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+            mode: vk::BuildAccelerationStructureModeKHR::BUILD,
+            scratch_data: vk::DeviceOrHostAddressKHR {
                 device_address: self.device.get_device_address(&scratch_data),
-            })
-            .dst_acceleration_structure(acceleration_structure.raw)
-            .build();
+            },
+            dst_acceleration_structure: acceleration_structure.raw,
+            ..Default::default()
+        }
+        .geometries(&geometries);
 
         let rt = self.device.ray_tracing.as_ref().unwrap();
         unsafe {
@@ -699,9 +705,11 @@ impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_, '_> {
         });
 
         let descriptor_set_layouts = [dsl.raw];
-        let descriptor_set_info = vk::DescriptorSetAllocateInfo::builder()
-            .descriptor_pool(self.cmd_buf.descriptor_pool)
-            .set_layouts(&descriptor_set_layouts);
+        let descriptor_set_info = vk::DescriptorSetAllocateInfo {
+            descriptor_pool: self.cmd_buf.descriptor_pool,
+            ..Default::default()
+        }
+        .set_layouts(&descriptor_set_layouts);
         unsafe {
             let sets = self
                 .device

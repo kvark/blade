@@ -17,7 +17,7 @@ hidden-trait = "0.1"
 log = { workspace = true }
 mint = { workspace = true }
 naga = { workspace = true, features = ["clone"] }
-raw-window-handle = "0.5"
+raw-window-handle = "0.6"
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 block = "0.1"
@@ -27,10 +27,10 @@ objc = "0.2.5"
 naga = { workspace = true, features = ["msl-out"] }
 
 [target.'cfg(any(vulkan, windows, target_os = "linux", target_os = "android"))'.dependencies]
-ash = "0.37"
-ash-window = "0.12"
+ash = "0.38"
+ash-window = "0.13"
 gpu-alloc = "0.6"
-gpu-alloc-ash = "0.6"
+gpu-alloc-ash = "0.7"
 naga = { workspace = true, features = ["spv-out"] }
 slab = { workspace = true }
 

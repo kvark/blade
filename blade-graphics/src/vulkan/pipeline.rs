@@ -1,13 +1,13 @@
 use ash::vk;
 use naga::back::spv;
-use std::{ffi, mem, ptr, str};
+use std::{ffi, mem, str};
 
 const DUMP_PREFIX: Option<&str> = None;
 
-struct CompiledShader {
+struct CompiledShader<'a> {
     vk_module: vk::ShaderModule,
     _entry_point: ffi::CString,
-    create_info: vk::PipelineShaderStageCreateInfo,
+    create_info: vk::PipelineShaderStageCreateInfo<'a>,
     attribute_mappings: Vec<crate::VertexAttributeMapping>,
     wg_size: [u32; 3],
 }
@@ -102,7 +102,7 @@ impl super::Context {
             std::fs::write(file_name, spv_bytes).unwrap();
         }
 
-        let vk_info = vk::ShaderModuleCreateInfo::builder().code(&spv);
+        let vk_info = vk::ShaderModuleCreateInfo::default().code(&spv);
 
         let vk_module = unsafe {
             self.device
@@ -118,11 +118,12 @@ impl super::Context {
         };
 
         let entry_point = ffi::CString::new(sf.entry_point).unwrap();
-        let create_info = vk::PipelineShaderStageCreateInfo::builder()
-            .stage(vk_stage)
-            .module(vk_module)
-            .name(&entry_point)
-            .build();
+        let create_info = vk::PipelineShaderStageCreateInfo {
+            stage: vk_stage,
+            module: vk_module,
+            p_name: entry_point.as_ptr(),
+            ..Default::default()
+        };
 
         CompiledShader {
             vk_module,
@@ -210,7 +211,7 @@ impl super::Context {
                 descriptor_type,
                 descriptor_count,
                 stage_flags,
-                p_immutable_samplers: ptr::null(),
+                ..Default::default()
             });
             template_entries.push(vk::DescriptorUpdateTemplateEntryKHR {
                 dst_binding: binding_index as u32,
@@ -226,8 +227,8 @@ impl super::Context {
         }
 
         let mut binding_flags_info =
-            vk::DescriptorSetLayoutBindingFlagsCreateInfo::builder().binding_flags(&binding_flags);
-        let set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder()
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
+        let set_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
             .bindings(&vk_bindings)
             .push_next(&mut binding_flags_info);
         let raw = unsafe {
@@ -237,7 +238,7 @@ impl super::Context {
                 .unwrap()
         };
 
-        let template_create_info = vk::DescriptorUpdateTemplateCreateInfo::builder()
+        let template_create_info = vk::DescriptorUpdateTemplateCreateInfo::default()
             .descriptor_update_entries(&template_entries)
             .template_type(vk::DescriptorUpdateTemplateTypeKHR::DESCRIPTOR_SET)
             .descriptor_set_layout(raw);
@@ -269,7 +270,7 @@ impl super::Context {
             descriptor_set_layouts.push(dsl);
         }
 
-        let vk_info = vk::PipelineLayoutCreateInfo::builder().set_layouts(&vk_set_layouts);
+        let vk_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&vk_set_layouts);
         let raw = unsafe {
             self.device
                 .core
@@ -304,10 +305,9 @@ impl super::Context {
 
         let layout = self.create_pipeline_layout(desc.data_layouts, &group_infos);
 
-        let create_info = vk::ComputePipelineCreateInfo::builder()
+        let create_info = vk::ComputePipelineCreateInfo::default()
             .layout(layout.raw)
-            .stage(cs.create_info)
-            .build();
+            .stage(cs.create_info);
 
         let mut raw_vec = unsafe {
             self.device
@@ -320,19 +320,8 @@ impl super::Context {
         unsafe { self.device.core.destroy_shader_module(cs.vk_module, None) };
 
         if let Some(ref ext) = self.device.shader_info {
-            let mut data_size = mem::size_of::<vk::ShaderStatisticsInfoAMD>();
-            let mut statistics = vk::ShaderStatisticsInfoAMD::default();
-            if unsafe {
-                #[allow(trivial_casts)]
-                (ext.get_shader_info_amd)(
-                    self.device.core.handle(),
-                    raw,
-                    vk::ShaderStageFlags::COMPUTE,
-                    vk::ShaderInfoTypeAMD::STATISTICS,
-                    &mut data_size,
-                    &mut statistics as *mut _ as *mut _,
-                )
-            } == vk::Result::SUCCESS
+            if let Ok(statistics) =
+                unsafe { ext.get_shader_info_statistics(raw, vk::ShaderStageFlags::COMPUTE) }
             {
                 let ru = &statistics.resource_usage;
                 log::info!(
@@ -345,7 +334,7 @@ impl super::Context {
         }
 
         if !desc.name.is_empty() {
-            self.set_object_name(vk::ObjectType::PIPELINE, raw, desc.name);
+            self.set_object_name(raw, desc.name);
         }
         super::ComputePipeline {
             raw,
@@ -410,17 +399,15 @@ impl super::Context {
             })
             .collect::<Vec<_>>();
 
-        let vk_vertex_input = vk::PipelineVertexInputStateCreateInfo::builder()
+        let vk_vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(&vertex_buffers)
-            .vertex_attribute_descriptions(&vertex_attributes)
-            .build();
+            .vertex_attribute_descriptions(&vertex_attributes);
         let (raw_topology, supports_restart) = map_primitive_topology(desc.primitive.topology);
-        let vk_input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
+        let vk_input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(raw_topology)
-            .primitive_restart_enable(supports_restart)
-            .build();
+            .primitive_restart_enable(supports_restart);
 
-        let mut vk_rasterization = vk::PipelineRasterizationStateCreateInfo::builder()
+        let mut vk_rasterization = vk::PipelineRasterizationStateCreateInfo::default()
             .polygon_mode(if desc.primitive.wireframe {
                 vk::PolygonMode::LINE
             } else {
@@ -429,9 +416,8 @@ impl super::Context {
             .front_face(map_front_face(desc.primitive.front_face))
             .line_width(1.0);
         let mut vk_depth_clip_state =
-            vk::PipelineRasterizationDepthClipStateCreateInfoEXT::builder()
-                .depth_clip_enable(false)
-                .build();
+            vk::PipelineRasterizationDepthClipStateCreateInfoEXT::default()
+                .depth_clip_enable(false);
         if desc.primitive.unclipped_depth {
             vk_rasterization = vk_rasterization.push_next(&mut vk_depth_clip_state);
         }
@@ -442,24 +428,21 @@ impl super::Context {
             vk::DynamicState::BLEND_CONSTANTS,
             vk::DynamicState::STENCIL_REFERENCE,
         ];
-        let vk_dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
-            .dynamic_states(&dynamic_states)
-            .build();
+        let vk_dynamic_state =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
 
-        let vk_viewport = vk::PipelineViewportStateCreateInfo::builder()
+        let vk_viewport = vk::PipelineViewportStateCreateInfo::default()
             .flags(vk::PipelineViewportStateCreateFlags::empty())
             .scissor_count(1)
-            .viewport_count(1)
-            .build();
+            .viewport_count(1);
 
         let vk_sample_mask = [1u32, 0];
-        let vk_multisample = vk::PipelineMultisampleStateCreateInfo::builder()
+        let vk_multisample = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1)
-            .sample_mask(&vk_sample_mask)
-            .build();
+            .sample_mask(&vk_sample_mask);
 
         let mut ds_format = vk::Format::UNDEFINED;
-        let mut vk_depth_stencil = vk::PipelineDepthStencilStateCreateInfo::builder();
+        let mut vk_depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default();
         if let Some(ref ds) = desc.depth_stencil {
             ds_format = super::map_texture_format(ds.format);
 
@@ -491,7 +474,7 @@ impl super::Context {
         let mut color_formats = Vec::with_capacity(desc.color_targets.len());
         let mut vk_attachments = Vec::with_capacity(desc.color_targets.len());
         for ct in desc.color_targets {
-            let mut vk_attachment = vk::PipelineColorBlendAttachmentState::builder()
+            let mut vk_attachment = vk::PipelineColorBlendAttachmentState::default()
                 .color_write_mask(vk::ColorComponentFlags::from_raw(ct.write_mask.bits()));
             if let Some(ref blend) = ct.blend {
                 let (color_op, color_src, color_dst) = map_blend_component(&blend.color);
@@ -507,19 +490,17 @@ impl super::Context {
             }
 
             color_formats.push(super::map_texture_format(ct.format));
-            vk_attachments.push(vk_attachment.build());
+            vk_attachments.push(vk_attachment);
         }
-        let vk_color_blend = vk::PipelineColorBlendStateCreateInfo::builder()
-            .attachments(&vk_attachments)
-            .build();
+        let vk_color_blend =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&vk_attachments);
 
-        let mut rendering_info = vk::PipelineRenderingCreateInfo::builder()
+        let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_formats)
             .depth_attachment_format(ds_format)
-            .stencil_attachment_format(ds_format)
-            .build();
+            .stencil_attachment_format(ds_format);
 
-        let create_info = vk::GraphicsPipelineCreateInfo::builder()
+        let create_info = vk::GraphicsPipelineCreateInfo::default()
             .layout(layout.raw)
             .stages(&stages)
             .vertex_input_state(&vk_vertex_input)
@@ -530,8 +511,7 @@ impl super::Context {
             .depth_stencil_state(&vk_depth_stencil)
             .color_blend_state(&vk_color_blend)
             .dynamic_state(&vk_dynamic_state)
-            .push_next(&mut rendering_info)
-            .build();
+            .push_next(&mut rendering_info);
 
         let mut raw_vec = unsafe {
             self.device
@@ -545,7 +525,7 @@ impl super::Context {
         unsafe { self.device.core.destroy_shader_module(fs.vk_module, None) };
 
         if !desc.name.is_empty() {
-            self.set_object_name(vk::ObjectType::PIPELINE, raw, desc.name);
+            self.set_object_name(raw, desc.name);
         }
         super::RenderPipeline { raw, layout }
     }
