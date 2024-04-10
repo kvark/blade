@@ -238,7 +238,7 @@ impl Context {
             .upcast::<egl::EGL1_5>()
             .ok_or(crate::NotSupportedError)?;
 
-        let (display, wsi_library) = match window.raw_display_handle() {
+        let (display, wsi_library) = match window.raw_display_handle().unwrap() {
             Rdh::Windows(display_handle) => {
                 let display_attributes = [
                     EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE as egl::Attrib,
@@ -262,7 +262,7 @@ impl Context {
                 let display = egl1_5
                     .get_platform_display(
                         EGL_PLATFORM_X11_KHR,
-                        display_handle.display,
+                        display_handle.display.map_or(ptr::null_mut(), ptr::NonNull::as_ptr),
                         &display_attributes,
                     )
                     .unwrap();
@@ -275,7 +275,7 @@ impl Context {
                 let display = egl1_5
                     .get_platform_display(
                         EGL_PLATFORM_XCB_EXT,
-                        display_handle.connection,
+                        display_handle.connection.map_or(ptr::null_mut(), ptr::NonNull::as_ptr),
                         &display_attributes,
                     )
                     .unwrap();
@@ -288,7 +288,7 @@ impl Context {
                 let display = egl1_5
                     .get_platform_display(
                         EGL_PLATFORM_WAYLAND_KHR,
-                        display_handle.display,
+                        display_handle.display.as_ptr(),
                         &display_attributes,
                     )
                     .unwrap();
@@ -328,7 +328,7 @@ impl Context {
         Ok(Self {
             wsi: Some(WindowSystemInterface {
                 library: wsi_library.map(Arc::new),
-                window_handle: window.raw_window_handle(),
+                window_handle: window.raw_window_handle().unwrap(),
                 renderbuf,
                 framebuf,
             }),
@@ -349,16 +349,16 @@ impl Context {
         let (mut temp_xlib_handle, mut temp_xcb_handle);
         #[allow(trivial_casts)]
         let native_window_ptr = match wsi.window_handle {
-            Rwh::Xlib(handle) if cfg!(windows) => handle.window as *mut std::ffi::c_void,
+            Rwh::Xlib(handle) if cfg!(windows) => handle.window as *mut ffi::c_void,
             Rwh::Xlib(handle) => {
                 temp_xlib_handle = handle.window;
-                &mut temp_xlib_handle as *mut _ as *mut std::ffi::c_void
+                &mut temp_xlib_handle as *mut _ as *mut ffi::c_void
             }
             Rwh::Xcb(handle) => {
                 temp_xcb_handle = handle.window;
-                &mut temp_xcb_handle as *mut _ as *mut std::ffi::c_void
+                &mut temp_xcb_handle as *mut _ as *mut ffi::c_void
             }
-            Rwh::AndroidNdk(handle) => handle.a_native_window,
+            Rwh::AndroidNdk(handle) => handle.a_native_window.as_ptr(),
             Rwh::Wayland(handle) => unsafe {
                 let wl_egl_window_create: libloading::Symbol<WlEglWindowCreateFun> = wsi
                     .library
@@ -367,20 +367,20 @@ impl Context {
                     .get(b"wl_egl_window_create")
                     .unwrap();
                 wl_egl_window_create(
-                    handle.surface,
+                    handle.surface.as_ptr(),
                     config.size.width as _,
                     config.size.height as _,
-                ) as *mut _ as *mut std::ffi::c_void
+                ) as *mut _ as *mut ffi::c_void
             },
-            Rwh::Win32(handle) => handle.hwnd,
+            Rwh::Win32(handle) => handle.hwnd.get() as *mut ffi::c_void,
             Rwh::AppKit(handle) => {
                 #[cfg(not(target_os = "macos"))]
-                let window_ptr = handle.ns_view;
+                let window_ptr = handle.ns_view.as_ptr();
                 #[cfg(target_os = "macos")]
                 let window_ptr = unsafe {
                     use objc::{msg_send, runtime::Object, sel, sel_impl};
                     // ns_view always have a layer and don't need to verify that it exists.
-                    let layer: *mut Object = msg_send![handle.ns_view as *mut Object, layer];
+                    let layer: *mut Object = msg_send![handle.ns_view.as_ptr(), layer];
                     layer as *mut ffi::c_void
                 };
                 window_ptr

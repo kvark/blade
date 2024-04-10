@@ -31,7 +31,7 @@ impl Context {
         desc: crate::ContextDesc,
     ) -> Result<Self, crate::NotSupportedError> {
         let webgl2 = match window.raw_window_handle() {
-            raw_window_handle::RawWindowHandle::Web(handle) => {
+            Ok(raw_window_handle::RawWindowHandle::Web(handle)) => {
                 let canvas: web_sys::HtmlCanvasElement = web_sys::window()
                     .and_then(|win| win.document())
                     .expect("Cannot get document")

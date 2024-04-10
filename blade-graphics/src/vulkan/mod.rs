@@ -1,7 +1,4 @@
-use ash::{
-    extensions::{ext, khr},
-    vk,
-};
+use ash::{khr, vk};
 use std::{num::NonZeroU32, ptr, sync::Mutex};
 
 mod command;
@@ -11,14 +8,14 @@ mod resource;
 
 struct Instance {
     core: ash::Instance,
-    debug_utils: ext::DebugUtils,
-    get_physical_device_properties2: khr::GetPhysicalDeviceProperties2,
-    surface: Option<khr::Surface>,
+    _debug_utils: ash::ext::debug_utils::Instance,
+    get_physical_device_properties2: khr::get_physical_device_properties2::Instance,
+    surface: Option<khr::surface::Instance>,
 }
 
 #[derive(Clone)]
 struct RayTracingDevice {
-    acceleration_structure: khr::AccelerationStructure,
+    acceleration_structure: khr::acceleration_structure::Device,
 }
 
 #[derive(Clone)]
@@ -30,11 +27,12 @@ struct Workarounds {
 #[derive(Clone)]
 struct Device {
     core: ash::Device,
-    timeline_semaphore: khr::TimelineSemaphore,
-    dynamic_rendering: khr::DynamicRendering,
+    debug_utils: ash::ext::debug_utils::Device,
+    timeline_semaphore: khr::timeline_semaphore::Device,
+    dynamic_rendering: khr::dynamic_rendering::Device,
     ray_tracing: Option<RayTracingDevice>,
-    buffer_marker: Option<vk::AmdBufferMarkerFn>,
-    shader_info: Option<vk::AmdShaderInfoFn>,
+    buffer_marker: Option<ash::amd::buffer_marker::Device>,
+    shader_info: Option<ash::amd::shader_info::Device>,
     workarounds: Workarounds,
 }
 
@@ -85,7 +83,7 @@ struct Surface {
     frames: Vec<Frame>,
     next_semaphore: vk::Semaphore,
     swapchain: vk::SwapchainKHR,
-    extension: khr::Swapchain,
+    extension: khr::swapchain::Device,
 }
 
 fn map_timeout(millis: u32) -> u64 {
@@ -305,17 +303,21 @@ impl crate::traits::CommandDevice for Context {
             });
         }
 
-        let pool_info = vk::CommandPoolCreateInfo::builder()
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+        let pool_info = vk::CommandPoolCreateInfo {
+            flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+            ..Default::default()
+        };
         let pool = unsafe {
             self.device
                 .core
                 .create_command_pool(&pool_info, None)
                 .unwrap()
         };
-        let cmd_buf_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(pool)
-            .command_buffer_count(desc.buffer_count);
+        let cmd_buf_info = vk::CommandBufferAllocateInfo {
+            command_pool: pool,
+            command_buffer_count: desc.buffer_count,
+            ..Default::default()
+        };
         let cmd_buffers = unsafe {
             self.device
                 .core
@@ -327,12 +329,14 @@ impl crate::traits::CommandDevice for Context {
             .into_iter()
             .map(|raw| {
                 if !desc.name.is_empty() {
-                    self.set_object_name(vk::ObjectType::COMMAND_BUFFER, raw, desc.name);
+                    self.set_object_name(raw, desc.name);
                 };
                 let mut inline_uniform_block_info =
-                    vk::DescriptorPoolInlineUniformBlockCreateInfoEXT::builder()
-                        .max_inline_uniform_block_bindings(ROUGH_SET_COUNT);
-                let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
+                    vk::DescriptorPoolInlineUniformBlockCreateInfoEXT {
+                        max_inline_uniform_block_bindings: ROUGH_SET_COUNT,
+                        ..Default::default()
+                    };
+                let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
                     .max_sets(ROUGH_SET_COUNT)
                     .pool_sizes(&descriptor_sizes)
                     .push_next(&mut inline_uniform_block_info);
@@ -414,10 +418,10 @@ impl crate::traits::CommandDevice for Context {
             }
             None => (0, 1),
         };
-        let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::builder()
+        let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
             .wait_semaphore_values(&wait_values_all[..num_wait_semaphores])
             .signal_semaphore_values(&signal_values_all[..num_signal_sepahores]);
-        let vk_info = vk::SubmitInfo::builder()
+        let vk_info = vk::SubmitInfo::default()
             .command_buffers(&command_buffers)
             .wait_semaphores(&wait_semaphores_all[..num_wait_semaphores])
             .wait_dst_stage_mask(&wait_stages[..num_wait_semaphores])
@@ -426,7 +430,7 @@ impl crate::traits::CommandDevice for Context {
         let ret = unsafe {
             self.device
                 .core
-                .queue_submit(queue.raw, &[vk_info.build()], vk::Fence::null())
+                .queue_submit(queue.raw, &[vk_info], vk::Fence::null())
         };
         encoder.check_gpu_crash(ret);
 
@@ -435,7 +439,7 @@ impl crate::traits::CommandDevice for Context {
             let swapchains = [surface.swapchain];
             let image_indices = [presentation.image_index];
             let wait_semaphores = [queue.present_semaphore];
-            let present_info = vk::PresentInfoKHR::builder()
+            let present_info = vk::PresentInfoKHR::default()
                 .swapchains(&swapchains)
                 .image_indices(&image_indices)
                 .wait_semaphores(&wait_semaphores);
@@ -452,7 +456,7 @@ impl crate::traits::CommandDevice for Context {
         let timeline_semaphore = self.queue.lock().unwrap().timeline_semaphore;
         let semaphores = [timeline_semaphore];
         let semaphore_values = [sp.progress];
-        let wait_info = vk::SemaphoreWaitInfoKHR::builder()
+        let wait_info = vk::SemaphoreWaitInfoKHR::default()
             .semaphores(&semaphores)
             .values(&semaphore_values);
         let timeout_ns = map_timeout(timeout_ms);
@@ -576,16 +580,19 @@ fn map_vertex_format(vertex_format: crate::VertexFormat) -> vk::Format {
     }
 }
 
-struct BottomLevelAccelerationStructureInput {
+struct BottomLevelAccelerationStructureInput<'a> {
     max_primitive_counts: Box<[u32]>,
     build_range_infos: Box<[vk::AccelerationStructureBuildRangeInfoKHR]>,
-    _geometries: Box<[vk::AccelerationStructureGeometryKHR]>,
-    build_info: vk::AccelerationStructureBuildGeometryInfoKHR,
+    _geometries: Box<[vk::AccelerationStructureGeometryKHR<'a>]>,
+    build_info: vk::AccelerationStructureBuildGeometryInfoKHR<'a>,
 }
 
 impl Device {
     fn get_device_address(&self, piece: &crate::BufferPiece) -> u64 {
-        let vk_info = vk::BufferDeviceAddressInfo::builder().buffer(piece.buffer.raw);
+        let vk_info = vk::BufferDeviceAddressInfo {
+            buffer: piece.buffer.raw,
+            ..Default::default()
+        };
         let base = unsafe { self.core.get_buffer_device_address(&vk_info) };
         base + piece.offset
     }
@@ -608,19 +615,20 @@ impl Device {
                 transform_offset: 0,
             });
 
-            let mut triangles = vk::AccelerationStructureGeometryTrianglesDataKHR::builder()
-                .vertex_format(map_vertex_format(mesh.vertex_format))
-                .vertex_data({
+            let mut triangles = vk::AccelerationStructureGeometryTrianglesDataKHR {
+                vertex_format: map_vertex_format(mesh.vertex_format),
+                vertex_data: {
                     let device_address = self.get_device_address(&mesh.vertex_data);
                     assert!(
                         device_address & 0x3 == 0,
                         "Vertex data address {device_address} is not aligned"
                     );
                     vk::DeviceOrHostAddressConstKHR { device_address }
-                })
-                .vertex_stride(mesh.vertex_stride as u64)
-                .max_vertex(mesh.vertex_count.saturating_sub(1))
-                .build();
+                },
+                vertex_stride: mesh.vertex_stride as u64,
+                max_vertex: mesh.vertex_count.saturating_sub(1),
+                ..Default::default()
+            };
             if let Some(index_type) = mesh.index_type {
                 let device_address = self.get_device_address(&mesh.index_data);
                 assert!(
@@ -639,23 +647,26 @@ impl Device {
                 triangles.transform_data = vk::DeviceOrHostAddressConstKHR { device_address };
             }
 
-            let geometry = vk::AccelerationStructureGeometryKHR::builder()
-                .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
-                .geometry(vk::AccelerationStructureGeometryDataKHR { triangles })
-                .flags(if mesh.is_opaque {
+            let geometry = vk::AccelerationStructureGeometryKHR {
+                geometry_type: vk::GeometryTypeKHR::TRIANGLES,
+                geometry: vk::AccelerationStructureGeometryDataKHR { triangles },
+                flags: if mesh.is_opaque {
                     vk::GeometryFlagsKHR::OPAQUE
                 } else {
                     vk::GeometryFlagsKHR::empty()
-                })
-                .build();
+                },
+                ..Default::default()
+            };
             geometries.push(geometry);
         }
-        let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
-            .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(&geometries)
-            .build();
+        let build_info = vk::AccelerationStructureBuildGeometryInfoKHR {
+            ty: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            flags: vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE,
+            mode: vk::BuildAccelerationStructureModeKHR::BUILD,
+            geometry_count: geometries.len() as u32,
+            p_geometries: geometries.as_ptr(),
+            ..Default::default()
+        };
 
         log::debug!(
             "BLAS total {} primitives in {} geometries",

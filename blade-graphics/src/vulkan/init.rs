@@ -1,7 +1,4 @@
-use ash::{
-    extensions::{ext, khr},
-    vk,
-};
+use ash::{amd, ext, khr, vk};
 use naga::back::spv;
 use std::{ffi, fs, mem, sync::Mutex};
 
@@ -19,10 +16,10 @@ mod layer {
 }
 
 const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
-    vk::ExtInlineUniformBlockFn::name(),
-    vk::KhrTimelineSemaphoreFn::name(),
-    vk::KhrDescriptorUpdateTemplateFn::name(),
-    vk::KhrDynamicRenderingFn::name(),
+    vk::EXT_INLINE_UNIFORM_BLOCK_NAME,
+    vk::KHR_TIMELINE_SEMAPHORE_NAME,
+    vk::KHR_DESCRIPTOR_UPDATE_TEMPLATE_NAME,
+    vk::KHR_DYNAMIC_RENDERING_NAME,
 ];
 
 #[derive(Debug)]
@@ -85,7 +82,7 @@ unsafe fn inspect_adapter(
         vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
     let mut portability_subset_properties =
         vk::PhysicalDevicePortabilitySubsetPropertiesKHR::default();
-    let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::builder()
+    let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::default()
         .push_next(&mut inline_uniform_block_properties)
         .push_next(&mut timeline_semaphore_properties)
         .push_next(&mut descriptor_indexing_properties)
@@ -129,7 +126,7 @@ unsafe fn inspect_adapter(
     let mut acceleration_structure_features =
         vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
     let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
-    let mut features2_khr = vk::PhysicalDeviceFeatures2::builder()
+    let mut features2_khr = vk::PhysicalDeviceFeatures2::default()
         .push_next(&mut inline_uniform_block_features)
         .push_next(&mut timeline_semaphore_features)
         .push_next(&mut dynamic_rendering_features)
@@ -175,8 +172,8 @@ unsafe fn inspect_adapter(
         return None;
     }
 
-    let ray_tracing = if !supported_extensions.contains(&vk::KhrAccelerationStructureFn::name())
-        || !supported_extensions.contains(&vk::KhrRayQueryFn::name())
+    let ray_tracing = if !supported_extensions.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME)
+        || !supported_extensions.contains(&vk::KHR_RAY_QUERY_NAME)
     {
         log::info!("No ray tracing extensions are supported");
         false
@@ -216,8 +213,8 @@ unsafe fn inspect_adapter(
         true
     };
 
-    let buffer_marker = supported_extensions.contains(&vk::AmdBufferMarkerFn::name());
-    let shader_info = supported_extensions.contains(&vk::AmdShaderInfoFn::name());
+    let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
+    let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
 
     Some(AdapterCapabilities {
         api_version,
@@ -300,8 +297,8 @@ impl super::Context {
             let mut create_flags = vk::InstanceCreateFlags::empty();
 
             let mut instance_extensions = vec![
-                ext::DebugUtils::name(),
-                vk::KhrGetPhysicalDeviceProperties2Fn::name(),
+                vk::EXT_DEBUG_UTILS_NAME,
+                vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME,
             ];
             if let Some((_, rdh)) = surface_handles {
                 instance_extensions.extend(
@@ -318,12 +315,12 @@ impl super::Context {
                     return Err(crate::NotSupportedError);
                 }
             }
-            if supported_instance_extensions.contains(&vk::KhrPortabilityEnumerationFn::name()) {
-                instance_extensions.push(vk::KhrPortabilityEnumerationFn::name());
+            if supported_instance_extensions.contains(&vk::KHR_PORTABILITY_ENUMERATION_NAME) {
+                instance_extensions.push(vk::KHR_PORTABILITY_ENUMERATION_NAME);
                 create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
             }
 
-            let app_info = vk::ApplicationInfo::builder()
+            let app_info = vk::ApplicationInfo::default()
                 .engine_name(ffi::CStr::from_bytes_with_nul(b"blade\0").unwrap())
                 .engine_version(1)
                 .api_version(vk::HEADER_VERSION_COMPLETE);
@@ -333,7 +330,7 @@ impl super::Context {
                 .map(|&s| s.as_ptr())
                 .collect::<Vec<_>>();
             let (layer_strings, extension_strings) = str_pointers.split_at(layers.len());
-            let create_info = vk::InstanceCreateInfo::builder()
+            let create_info = vk::InstanceCreateInfo::default()
                 .application_info(&app_info)
                 .flags(create_flags)
                 .enabled_layer_names(layer_strings)
@@ -353,19 +350,18 @@ impl super::Context {
             ash_window::create_surface(&entry, &core_instance, rdh, rwh, None).unwrap()
         });
 
-        let instance = super::Instance {
-            debug_utils: ext::DebugUtils::new(&entry, &core_instance),
-            get_physical_device_properties2: khr::GetPhysicalDeviceProperties2::new(
-                &entry,
-                &core_instance,
-            ),
-            surface: if surface_handles.is_some() {
-                Some(khr::Surface::new(&entry, &core_instance))
-            } else {
-                None
-            },
-            core: core_instance,
-        };
+        let instance =
+            super::Instance {
+                _debug_utils: ext::debug_utils::Instance::new(&entry, &core_instance),
+                get_physical_device_properties2:
+                    khr::get_physical_device_properties2::Instance::new(&entry, &core_instance),
+                surface: if surface_handles.is_some() {
+                    Some(khr::surface::Instance::new(&entry, &core_instance))
+                } else {
+                    None
+                },
+                core: core_instance,
+            };
 
         let physical_devices = instance.core.enumerate_physical_devices().unwrap();
         let (physical_device, capabilities) = physical_devices
@@ -379,36 +375,35 @@ impl super::Context {
         log::debug!("Adapter {:#?}", capabilities);
 
         let device_core = {
-            let family_info = vk::DeviceQueueCreateInfo::builder()
+            let family_info = vk::DeviceQueueCreateInfo::default()
                 .queue_family_index(capabilities.queue_family_index)
-                .queue_priorities(&[1.0])
-                .build();
+                .queue_priorities(&[1.0]);
             let family_infos = [family_info];
 
             let mut device_extensions = REQUIRED_DEVICE_EXTENSIONS.to_vec();
             if surface_handles.is_some() {
-                device_extensions.push(vk::KhrSwapchainFn::name());
+                device_extensions.push(vk::KHR_SWAPCHAIN_NAME);
             }
             if capabilities.layered {
                 log::info!("Enabling Vulkan Portability");
-                device_extensions.push(vk::KhrPortabilitySubsetFn::name());
+                device_extensions.push(vk::KHR_PORTABILITY_SUBSET_NAME);
             }
             if capabilities.ray_tracing {
                 if capabilities.api_version < vk::API_VERSION_1_2 {
-                    device_extensions.push(vk::ExtDescriptorIndexingFn::name());
-                    device_extensions.push(vk::KhrBufferDeviceAddressFn::name());
-                    device_extensions.push(vk::KhrShaderFloatControlsFn::name());
-                    device_extensions.push(vk::KhrSpirv14Fn::name());
+                    device_extensions.push(vk::EXT_DESCRIPTOR_INDEXING_NAME);
+                    device_extensions.push(vk::KHR_BUFFER_DEVICE_ADDRESS_NAME);
+                    device_extensions.push(vk::KHR_SHADER_FLOAT_CONTROLS_NAME);
+                    device_extensions.push(vk::KHR_SPIRV_1_4_NAME);
                 }
-                device_extensions.push(vk::KhrDeferredHostOperationsFn::name());
-                device_extensions.push(vk::KhrAccelerationStructureFn::name());
-                device_extensions.push(vk::KhrRayQueryFn::name());
+                device_extensions.push(vk::KHR_DEFERRED_HOST_OPERATIONS_NAME);
+                device_extensions.push(vk::KHR_ACCELERATION_STRUCTURE_NAME);
+                device_extensions.push(vk::KHR_RAY_QUERY_NAME);
             }
             if capabilities.buffer_marker {
-                device_extensions.push(vk::AmdBufferMarkerFn::name());
+                device_extensions.push(vk::AMD_BUFFER_MARKER_NAME);
             }
             if capabilities.shader_info {
-                device_extensions.push(vk::AmdShaderInfoFn::name());
+                device_extensions.push(vk::AMD_SHADER_INFO_NAME);
             }
 
             let str_pointers = device_extensions
@@ -416,14 +411,19 @@ impl super::Context {
                 .map(|&s| s.as_ptr())
                 .collect::<Vec<_>>();
 
-            let mut ext_inline_uniform_block =
-                vk::PhysicalDeviceInlineUniformBlockFeaturesEXT::builder()
-                    .inline_uniform_block(true);
-            let mut khr_timeline_semaphore =
-                vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR::builder().timeline_semaphore(true);
-            let mut khr_dynamic_rendering =
-                vk::PhysicalDeviceDynamicRenderingFeaturesKHR::builder().dynamic_rendering(true);
-            let mut device_create_info = vk::DeviceCreateInfo::builder()
+            let mut ext_inline_uniform_block = vk::PhysicalDeviceInlineUniformBlockFeaturesEXT {
+                inline_uniform_block: vk::TRUE,
+                ..Default::default()
+            };
+            let mut khr_timeline_semaphore = vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR {
+                timeline_semaphore: vk::TRUE,
+                ..Default::default()
+            };
+            let mut khr_dynamic_rendering = vk::PhysicalDeviceDynamicRenderingFeaturesKHR {
+                dynamic_rendering: vk::TRUE,
+                ..Default::default()
+            };
+            let mut device_create_info = vk::DeviceCreateInfo::default()
                 .queue_create_infos(&family_infos)
                 .enabled_extension_names(&str_pointers)
                 .push_next(&mut ext_inline_uniform_block)
@@ -435,18 +435,24 @@ impl super::Context {
             let mut khr_acceleration_structure;
             let mut khr_ray_query;
             if capabilities.ray_tracing {
-                ext_descriptor_indexing =
-                    vk::PhysicalDeviceDescriptorIndexingFeaturesEXT::builder()
-                        .shader_storage_buffer_array_non_uniform_indexing(true)
-                        .shader_sampled_image_array_non_uniform_indexing(true)
-                        .descriptor_binding_partially_bound(true);
-                khr_buffer_device_address =
-                    vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR::builder()
-                        .buffer_device_address(true);
-                khr_acceleration_structure =
-                    vk::PhysicalDeviceAccelerationStructureFeaturesKHR::builder()
-                        .acceleration_structure(true);
-                khr_ray_query = vk::PhysicalDeviceRayQueryFeaturesKHR::builder().ray_query(true);
+                ext_descriptor_indexing = vk::PhysicalDeviceDescriptorIndexingFeaturesEXT {
+                    shader_storage_buffer_array_non_uniform_indexing: vk::TRUE,
+                    shader_sampled_image_array_non_uniform_indexing: vk::TRUE,
+                    descriptor_binding_partially_bound: vk::TRUE,
+                    ..Default::default()
+                };
+                khr_buffer_device_address = vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR {
+                    buffer_device_address: vk::TRUE,
+                    ..Default::default()
+                };
+                khr_acceleration_structure = vk::PhysicalDeviceAccelerationStructureFeaturesKHR {
+                    acceleration_structure: vk::TRUE,
+                    ..Default::default()
+                };
+                khr_ray_query = vk::PhysicalDeviceRayQueryFeaturesKHR {
+                    ray_query: vk::TRUE,
+                    ..Default::default()
+                };
                 device_create_info = device_create_info
                     .push_next(&mut ext_descriptor_indexing)
                     .push_next(&mut khr_buffer_device_address)
@@ -461,11 +467,12 @@ impl super::Context {
         };
 
         let device = super::Device {
-            timeline_semaphore: khr::TimelineSemaphore::new(&instance.core, &device_core),
-            dynamic_rendering: khr::DynamicRendering::new(&instance.core, &device_core),
+            debug_utils: ext::debug_utils::Device::new(&instance.core, &device_core),
+            timeline_semaphore: khr::timeline_semaphore::Device::new(&instance.core, &device_core),
+            dynamic_rendering: khr::dynamic_rendering::Device::new(&instance.core, &device_core),
             ray_tracing: if capabilities.ray_tracing {
                 Some(super::RayTracingDevice {
-                    acceleration_structure: khr::AccelerationStructure::new(
+                    acceleration_structure: khr::acceleration_structure::Device::new(
                         &instance.core,
                         &device_core,
                     ),
@@ -474,25 +481,15 @@ impl super::Context {
                 None
             },
             buffer_marker: if capabilities.buffer_marker && desc.validation {
-                //TODO: https://github.com/ash-rs/ash/issues/768
-                Some(vk::AmdBufferMarkerFn::load(|name| unsafe {
-                    mem::transmute(
-                        instance
-                            .core
-                            .get_device_proc_addr(device_core.handle(), name.as_ptr()),
-                    )
-                }))
+                Some(amd::buffer_marker::Device::new(
+                    &instance.core,
+                    &device_core,
+                ))
             } else {
                 None
             },
             shader_info: if capabilities.shader_info {
-                Some(vk::AmdShaderInfoFn::load(|name| unsafe {
-                    mem::transmute(
-                        instance
-                            .core
-                            .get_device_proc_addr(device_core.handle(), name.as_ptr()),
-                    )
-                }))
+                Some(amd::shader_info::Device::new(&instance.core, &device_core))
             } else {
                 None
             },
@@ -561,18 +558,20 @@ impl super::Context {
             .core
             .get_device_queue(capabilities.queue_family_index, 0);
         let last_progress = 0;
-        let mut timeline_info = vk::SemaphoreTypeCreateInfo::builder()
-            .semaphore_type(vk::SemaphoreType::TIMELINE)
-            .initial_value(last_progress);
+        let mut timeline_info = vk::SemaphoreTypeCreateInfo {
+            semaphore_type: vk::SemaphoreType::TIMELINE,
+            initial_value: last_progress,
+            ..Default::default()
+        };
         let timeline_semaphore_create_info =
-            vk::SemaphoreCreateInfo::builder().push_next(&mut timeline_info);
+            vk::SemaphoreCreateInfo::default().push_next(&mut timeline_info);
         let timeline_semaphore = unsafe {
             device
                 .core
                 .create_semaphore(&timeline_semaphore_create_info, None)
                 .unwrap()
         };
-        let present_semaphore_create_info = vk::SemaphoreCreateInfo::builder();
+        let present_semaphore_create_info = vk::SemaphoreCreateInfo::default();
         let present_semaphore = unsafe {
             device
                 .core
@@ -581,8 +580,8 @@ impl super::Context {
         };
 
         let surface = vk_surface.map(|raw| {
-            let extension = khr::Swapchain::new(&instance.core, &device.core);
-            let semaphore_create_info = vk::SemaphoreCreateInfo::builder();
+            let extension = khr::swapchain::Device::new(&instance.core, &device.core);
+            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
             let next_semaphore = unsafe {
                 device
                     .core
@@ -631,25 +630,22 @@ impl super::Context {
         window: &I,
         desc: crate::ContextDesc,
     ) -> Result<Self, crate::NotSupportedError> {
-        let handles = (window.raw_window_handle(), window.raw_display_handle());
+        let handles = (
+            window.raw_window_handle().unwrap(),
+            window.raw_display_handle().unwrap(),
+        );
         Self::init_impl(desc, Some(handles))
     }
 
-    pub(super) fn set_object_name(
-        &self,
-        object_type: vk::ObjectType,
-        object: impl vk::Handle,
-        name: &str,
-    ) {
+    pub(super) fn set_object_name<T: vk::Handle>(&self, object: T, name: &str) {
         let name_cstr = ffi::CString::new(name).unwrap();
-        let name_info = vk::DebugUtilsObjectNameInfoEXT::builder()
-            .object_type(object_type)
-            .object_handle(object.as_raw())
+        let name_info = vk::DebugUtilsObjectNameInfoEXT::default()
+            .object_handle(object)
             .object_name(&name_cstr);
         let _ = unsafe {
-            self.instance
+            self.device
                 .debug_utils
-                .set_debug_utils_object_name(self.device.core.handle(), &name_info)
+                .set_debug_utils_object_name(&name_info)
         };
     }
 
@@ -718,24 +714,26 @@ impl super::Context {
             crate::ColorSpace::Srgb => crate::TextureFormat::Bgra8Unorm,
         };
         let vk_format = super::map_texture_format(format);
-        let create_info = vk::SwapchainCreateInfoKHR::builder()
-            .surface(surface.raw)
-            .min_image_count(effective_frame_count)
-            .image_format(vk_format)
-            .image_extent(vk::Extent2D {
+        let create_info = vk::SwapchainCreateInfoKHR {
+            surface: surface.raw,
+            min_image_count: effective_frame_count,
+            image_format: vk_format,
+            image_extent: vk::Extent2D {
                 width: config.size.width,
                 height: config.size.height,
-            })
-            .image_array_layers(1)
-            .image_usage(super::resource::map_texture_usage(
+            },
+            image_array_layers: 1,
+            image_usage: super::resource::map_texture_usage(
                 config.usage,
                 crate::TexelAspects::COLOR,
-            ))
-            .queue_family_indices(&queue_families)
-            .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
-            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .present_mode(present_mode)
-            .old_swapchain(surface.swapchain);
+            ),
+            pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
+            composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
+            present_mode,
+            old_swapchain: surface.swapchain,
+            ..Default::default()
+        }
+        .queue_family_indices(&queue_families);
         let new_swapchain = unsafe {
             surface
                 .extension
@@ -771,18 +769,20 @@ impl super::Context {
             layer_count: 1,
         };
         for (index, image) in images.into_iter().enumerate() {
-            let view_create_info = vk::ImageViewCreateInfo::builder()
-                .image(image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(vk_format)
-                .subresource_range(subresource_range);
+            let view_create_info = vk::ImageViewCreateInfo {
+                image,
+                view_type: vk::ImageViewType::TYPE_2D,
+                format: vk_format,
+                subresource_range,
+                ..Default::default()
+            };
             let view = unsafe {
                 self.device
                     .core
                     .create_image_view(&view_create_info, None)
                     .unwrap()
             };
-            let semaphore_create_info = vk::SemaphoreCreateInfo::builder();
+            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
             let acquire_semaphore = unsafe {
                 self.device
                     .core

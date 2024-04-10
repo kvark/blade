@@ -49,7 +49,7 @@ impl crate::traits::ResourceDevice for super::Context {
                     | glow::MAP_COHERENT_BIT
                     | glow::MAP_READ_BIT
                     | glow::MAP_WRITE_BIT;
-                glow::STREAM_READ
+                glow::DYNAMIC_DRAW //TEMP
             }
             crate::Memory::Upload => {
                 map_flags =
