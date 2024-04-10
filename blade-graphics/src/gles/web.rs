@@ -25,13 +25,13 @@ impl Context {
     }
 
     pub unsafe fn init_windowed<
-        I: raw_window_handle::HasRawWindowHandle + raw_window_handle::HasRawDisplayHandle,
+        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
     >(
         window: I,
         desc: crate::ContextDesc,
     ) -> Result<Self, crate::NotSupportedError> {
-        let webgl2 = match window.raw_window_handle() {
-            Ok(raw_window_handle::RawWindowHandle::Web(handle)) => {
+        let webgl2 = match window.window_handle().unwrap().as_raw() {
+            raw_window_handle::RawWindowHandle::Web(handle) => {
                 let canvas: web_sys::HtmlCanvasElement = web_sys::window()
                     .and_then(|win| win.document())
                     .expect("Cannot get document")

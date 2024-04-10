@@ -231,8 +231,8 @@ impl super::Context {
     unsafe fn init_impl(
         desc: crate::ContextDesc,
         surface_handles: Option<(
-            raw_window_handle::RawWindowHandle,
-            raw_window_handle::RawDisplayHandle,
+            raw_window_handle::WindowHandle,
+            raw_window_handle::DisplayHandle,
         )>,
     ) -> Result<Self, crate::NotSupportedError> {
         let entry = match ash::Entry::load() {
@@ -300,9 +300,9 @@ impl super::Context {
                 vk::EXT_DEBUG_UTILS_NAME,
                 vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME,
             ];
-            if let Some((_, rdh)) = surface_handles {
+            if let Some((_, dh)) = surface_handles {
                 instance_extensions.extend(
-                    ash_window::enumerate_required_extensions(rdh)
+                    ash_window::enumerate_required_extensions(dh.as_raw())
                         .unwrap()
                         .iter()
                         .map(|&ptr| ffi::CStr::from_ptr(ptr)),
@@ -346,8 +346,9 @@ impl super::Context {
         };
         log::debug!("Bugs {:#?}", bugs);
 
-        let vk_surface = surface_handles.map(|(rwh, rdh)| {
-            ash_window::create_surface(&entry, &core_instance, rdh, rwh, None).unwrap()
+        let vk_surface = surface_handles.map(|(wh, dh)| {
+            ash_window::create_surface(&entry, &core_instance, dh.as_raw(), wh.as_raw(), None)
+                .unwrap()
         });
 
         let instance =
@@ -625,14 +626,14 @@ impl super::Context {
     }
 
     pub unsafe fn init_windowed<
-        I: raw_window_handle::HasRawWindowHandle + raw_window_handle::HasRawDisplayHandle,
+        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
     >(
         window: &I,
         desc: crate::ContextDesc,
     ) -> Result<Self, crate::NotSupportedError> {
         let handles = (
-            window.raw_window_handle().unwrap(),
-            window.raw_display_handle().unwrap(),
+            window.window_handle().unwrap(),
+            window.display_handle().unwrap(),
         );
         Self::init_impl(desc, Some(handles))
     }
