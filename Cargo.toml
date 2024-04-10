@@ -59,7 +59,7 @@ rapier3d = { version = "0.18", features = ["debug-render"] }
 serde = { version = "1", features = ["serde_derive"] }
 slab = "0.4"
 strum = { workspace = true }
-winit = { version = "0.29", features = ["rwh_05"] }
+winit = "0.29"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 blade-render = { version = "0.3", path = "blade-render" }

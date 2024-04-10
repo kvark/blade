@@ -1,9 +1,10 @@
 Changelog for Blade
 
-## blade-graphics-0.5, blade-macros-0.3 (TBD)
+## blade-graphics-0.5, blade-macros-0.3, blade-egui-0.4 (TBD)
 
 - vertex buffers support
 - configuration for disabling exclusive fullscreen
+- window API switched to raw-window-handle-0.6
 - GLES: support for storage buffer and compute
 - GLES: scissor rects, able to run "particle" example
 
