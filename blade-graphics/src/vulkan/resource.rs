@@ -385,7 +385,8 @@ impl crate::traits::ResourceDevice for super::Context {
     ) -> super::AccelerationStructure {
         let buffer_info = vk::BufferCreateInfo {
             size: desc.size,
-            usage: vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
+            usage: vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
+                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             ..Default::default()
         };
