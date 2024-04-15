@@ -297,6 +297,10 @@ impl super::CommandEncoder {
     }
 
     pub fn present(&mut self, frame: super::Frame) {
+        if frame.acquire_semaphore == vk::Semaphore::null() {
+            return;
+        }
+
         assert_eq!(self.present, None);
         let wa = &self.device.workarounds;
         self.present = Some(super::Presentation {
