@@ -806,16 +806,29 @@ impl super::Context {
     pub fn acquire_frame(&self) -> super::Frame {
         let mut surface = self.surface.as_ref().unwrap().lock().unwrap();
         let acquire_semaphore = surface.next_semaphore;
-        let (index, _suboptimal) = unsafe {
-            surface
-                .extension
-                .acquire_next_image(surface.swapchain, !0, acquire_semaphore, vk::Fence::null())
-                .unwrap()
-        };
-        surface.next_semaphore = mem::replace(
-            &mut surface.frames[index as usize].acquire_semaphore,
-            acquire_semaphore,
-        );
-        surface.frames[index as usize]
+        match unsafe {
+            surface.extension.acquire_next_image(
+                surface.swapchain,
+                !0,
+                acquire_semaphore,
+                vk::Fence::null(),
+            )
+        } {
+            Ok((index, _suboptimal)) => {
+                surface.next_semaphore = mem::replace(
+                    &mut surface.frames[index as usize].acquire_semaphore,
+                    acquire_semaphore,
+                );
+                surface.frames[index as usize]
+            }
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                log::warn!("Acquire failed because the surface is out of date");
+                super::Frame {
+                    acquire_semaphore: vk::Semaphore::null(),
+                    ..surface.frames[0]
+                }
+            }
+            Err(other) => panic!("Aquire image error {}", other),
+        }
     }
 }
