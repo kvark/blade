@@ -27,7 +27,7 @@ impl Example {
             .unwrap()
         };
 
-        let surface_format = context.resize(gpu::SurfaceConfig {
+        let surface_info = context.resize(gpu::SurfaceConfig {
             size: gpu::Extent {
                 width: window_size.width,
                 height: window_size.height,
@@ -35,15 +35,15 @@ impl Example {
             },
             usage: gpu::TextureUsage::TARGET,
             display_sync: gpu::DisplaySync::Block,
-            color_space: gpu::ColorSpace::Linear,
+            ..Default::default()
         });
-        let gui_painter = blade_egui::GuiPainter::new(surface_format, &context);
+        let gui_painter = blade_egui::GuiPainter::new(surface_info, &context);
         let particle_system = particle::System::new(
             &context,
             particle::SystemDesc {
                 name: "particle system",
                 capacity: 100_000,
-                draw_format: surface_format,
+                draw_format: surface_info.format,
             },
         );
 

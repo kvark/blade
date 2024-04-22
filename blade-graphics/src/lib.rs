@@ -1009,7 +1009,7 @@ pub enum ColorSpace {
     Srgb,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SurfaceConfig {
     pub size: Extent,
     pub usage: TextureUsage,
@@ -1021,6 +1021,22 @@ pub struct SurfaceConfig {
     /// For example, if the display expects sRGB space and we render
     /// in `ColorSpace::Linear` space, the returned format will be sRGB.
     pub color_space: ColorSpace,
+    pub transparent: bool,
+    pub allow_exclusive_full_screen: bool,
+}
+
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+pub enum AlphaMode {
+    #[default]
+    Ignored,
+    PreMultiplied,
+    PostMultiplied,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceInfo {
+    pub format: TextureFormat,
+    pub alpha: AlphaMode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

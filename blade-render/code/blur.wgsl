@@ -104,7 +104,7 @@ fn temporal_accum(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cur_luminocity = dot(cur_illumination, LUMA);
     var mixed_ilm = vec4<f32>(cur_illumination, cur_luminocity * cur_luminocity);
     if (sum_weight > MIN_WEIGHT) {
-        let prev_ilm = sum_ilm / w4(sum_weight);
+        let prev_ilm = sum_ilm / vec4(vec3<f32>(sum_weight), max(0.001, sum_weight*sum_weight));
         mixed_ilm = mix(mixed_ilm, prev_ilm, sum_weight * (1.0 - params.temporal_weight));
     }
     textureStore(output, global_id.xy, mixed_ilm);

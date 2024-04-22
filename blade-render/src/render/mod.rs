@@ -33,8 +33,8 @@ fn mat3_transform(t_orig: &blade_graphics::Transform) -> glam::Mat3 {
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderConfig {
-    pub screen_size: blade_graphics::Extent,
-    pub surface_format: blade_graphics::TextureFormat,
+    pub surface_size: blade_graphics::Extent,
+    pub surface_info: blade_graphics::SurfaceInfo,
     pub max_debug_lines: u32,
 }
 
@@ -318,8 +318,8 @@ pub struct Renderer {
     samplers: Samplers,
     reservoir_size: u32,
     debug: DebugRender,
-    screen_size: blade_graphics::Extent,
-    screen_format: blade_graphics::TextureFormat,
+    surface_size: blade_graphics::Extent,
+    surface_info: blade_graphics::SurfaceInfo,
     frame_index: usize,
     frame_scene_built: usize,
     //TODO: refactor `ResourceArray` to not carry the freelist logic
@@ -570,7 +570,7 @@ impl ShaderPipelines {
 
     fn create_post_proc(
         shader: &blade_graphics::Shader,
-        format: blade_graphics::TextureFormat,
+        info: blade_graphics::SurfaceInfo,
         gpu: &blade_graphics::Context,
     ) -> blade_graphics::RenderPipeline {
         let layout = <PostProcData as blade_graphics::ShaderData>::layout();
@@ -584,7 +584,7 @@ impl ShaderPipelines {
             vertex: shader.at("blit_vs"),
             vertex_fetches: &[],
             fragment: shader.at("blit_fs"),
-            color_targets: &[format.into()],
+            color_targets: &[info.format.into()],
             depth_stencil: None,
         })
     }
@@ -604,7 +604,7 @@ impl ShaderPipelines {
             atrous: Self::create_atrous(sh_blur, gpu),
             post_proc: Self::create_post_proc(
                 shader_man[shaders.post_proc].raw.as_ref().unwrap(),
-                config.surface_format,
+                config.surface_info,
                 gpu,
             ),
             env_prepare: EnvironmentMap::init_pipeline(
@@ -651,11 +651,11 @@ impl Renderer {
                 sh_draw,
                 sh_blit,
                 config.max_debug_lines,
-                config.surface_format,
+                config.surface_info,
             )
         };
 
-        let targets = RestirTargets::new(config.screen_size, sp.reservoir_size, encoder, gpu);
+        let targets = RestirTargets::new(config.surface_size, sp.reservoir_size, encoder, gpu);
         let dummy = DummyResources::new(encoder, gpu);
 
         let samplers = Samplers {
@@ -698,8 +698,8 @@ impl Renderer {
             samplers,
             reservoir_size: sp.reservoir_size,
             debug,
-            screen_size: config.screen_size,
-            screen_format: config.surface_format,
+            surface_size: config.surface_size,
+            surface_info: config.surface_info,
             frame_index: 0,
             frame_scene_built: 0,
             texture_resource_lookup: HashMap::default(),
@@ -774,7 +774,7 @@ impl Renderer {
         if self.shaders.post_proc != old.post_proc {
             if let Ok(ref shader) = asset_hub.shaders[self.shaders.post_proc].raw {
                 self.post_proc_pipeline =
-                    ShaderPipelines::create_post_proc(shader, self.screen_format, gpu);
+                    ShaderPipelines::create_post_proc(shader, self.surface_info, gpu);
             }
         }
         if self.shaders.debug_draw != old.debug_draw {
@@ -791,8 +791,8 @@ impl Renderer {
         true
     }
 
-    pub fn get_screen_size(&self) -> blade_graphics::Extent {
-        self.screen_size
+    pub fn get_surface_size(&self) -> blade_graphics::Extent {
+        self.surface_size
     }
 
     pub fn view_dummy_white(&self) -> blade_graphics::TextureView {
@@ -812,7 +812,7 @@ impl Renderer {
         encoder: &mut blade_graphics::CommandEncoder,
         gpu: &blade_graphics::Context,
     ) {
-        self.screen_size = size;
+        self.surface_size = size;
         self.targets.destroy(gpu);
         self.targets = RestirTargets::new(size, self.reservoir_size, encoder, gpu);
     }
@@ -1007,7 +1007,7 @@ impl Renderer {
             texture_flags: config.texture_flags.bits(),
             unused: 0,
             mouse_pos: match config.mouse_pos {
-                Some(p) => [p[0], self.screen_size.height as i32 - p[1]],
+                Some(p) => [p[0], self.surface_size.height as i32 - p[1]],
                 None => [-1; 2],
             },
         }
@@ -1015,15 +1015,15 @@ impl Renderer {
 
     fn make_camera_params(&self, camera: &super::Camera) -> CameraParams {
         let fov_x = 2.0
-            * ((camera.fov_y * 0.5).tan() * self.screen_size.width as f32
-                / self.screen_size.height as f32)
+            * ((camera.fov_y * 0.5).tan() * self.surface_size.width as f32
+                / self.surface_size.height as f32)
                 .atan();
         CameraParams {
             position: camera.pos.into(),
             depth: camera.depth,
             orientation: camera.rot.into(),
             fov: [fov_x, camera.fov_y],
-            target_size: [self.screen_size.width, self.screen_size.height],
+            target_size: [self.surface_size.width, self.surface_size.height],
         }
     }
 
@@ -1057,7 +1057,7 @@ impl Renderer {
             if !enable_debug_draw {
                 self.debug.reset_lines(&mut transfer);
             }
-            let total_reservoirs = self.screen_size.width as u64 * self.screen_size.height as u64;
+            let total_reservoirs = self.surface_size.width as u64 * self.surface_size.height as u64;
             let prev_reservoir_buf = self.targets.reservoir_buf[self.frame_index % 2];
             transfer.fill_buffer(
                 prev_reservoir_buf.into(),
@@ -1087,7 +1087,7 @@ impl Renderer {
 
         if let mut pass = command_encoder.compute() {
             let mut pc = pass.with(&self.fill_pipeline);
-            let groups = self.fill_pipeline.get_dispatch_for(self.screen_size);
+            let groups = self.fill_pipeline.get_dispatch_for(self.surface_size);
             pc.bind(
                 0,
                 &FillData {
@@ -1114,7 +1114,7 @@ impl Renderer {
 
         if let mut pass = command_encoder.compute() {
             let mut pc = pass.with(&self.main_pipeline);
-            let groups = self.main_pipeline.get_dispatch_for(self.screen_size);
+            let groups = self.main_pipeline.get_dispatch_for(self.surface_size);
             pc.bind(
                 0,
                 &MainData {
@@ -1163,7 +1163,7 @@ impl Renderer {
         denoiser_config: DenoiserConfig,
     ) {
         let mut params = BlurParams {
-            extent: [self.screen_size.width, self.screen_size.height],
+            extent: [self.surface_size.width, self.surface_size.height],
             temporal_weight: denoiser_config.temporal_weight,
             iteration: 0,
             use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
@@ -1176,7 +1176,10 @@ impl Renderer {
         if denoiser_config.temporal_weight < 1.0 {
             let mut pass = command_encoder.compute();
             let mut pc = pass.with(&self.blur.temporal_accum_pipeline);
-            let groups = self.blur.atrous_pipeline.get_dispatch_for(self.screen_size);
+            let groups = self
+                .blur
+                .atrous_pipeline
+                .get_dispatch_for(self.surface_size);
             pc.bind(
                 0,
                 &TemporalAccumData {
@@ -1202,7 +1205,10 @@ impl Renderer {
         for _ in 0..denoiser_config.num_passes {
             let mut pass = command_encoder.compute();
             let mut pc = pass.with(&self.blur.atrous_pipeline);
-            let groups = self.blur.atrous_pipeline.get_dispatch_for(self.screen_size);
+            let groups = self
+                .blur
+                .atrous_pipeline
+                .get_dispatch_for(self.surface_size);
             pc.bind(
                 0,
                 &AtrousData {
@@ -1258,7 +1264,7 @@ impl Renderer {
             pass,
         );
         self.debug
-            .render_blits(debug_blits, self.samplers.linear, self.screen_size, pass);
+            .render_blits(debug_blits, self.samplers.linear, self.surface_size, pass);
     }
 
     #[profiling::function]
