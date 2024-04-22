@@ -384,6 +384,8 @@ impl Engine {
             //TODO: make it `Recent`
             display_sync: gpu::DisplaySync::Block,
             color_space: gpu::ColorSpace::Linear,
+            transparent: false,
+            allow_exclusive_full_screen: true,
         }
     }
 
@@ -405,8 +407,8 @@ impl Engine {
         });
 
         let surface_config = Self::make_surface_config(window.inner_size());
-        let screen_size = surface_config.size;
-        let surface_format = gpu_context.resize(surface_config);
+        let surface_size = surface_config.size;
+        let surface_info = gpu_context.resize(surface_config);
 
         let num_workers = num_cpus::get_physical().max((num_cpus::get() * 3 + 2) / 4);
         log::info!("Initializing Choir with {} workers", num_workers);
@@ -425,8 +427,8 @@ impl Engine {
         let (command_encoder, _) = pacer.begin_frame();
 
         let render_config = blade_render::RenderConfig {
-            screen_size,
-            surface_format,
+            surface_size,
+            surface_info,
             max_debug_lines: 1 << 14,
         };
         let renderer = blade_render::Renderer::new(
@@ -439,7 +441,7 @@ impl Engine {
 
         pacer.end_frame(&gpu_context);
 
-        let gui_painter = blade_egui::GuiPainter::new(surface_format, &gpu_context);
+        let gui_painter = blade_egui::GuiPainter::new(surface_info, &gpu_context);
         let mut physics = Physics::default();
         physics.debug_pipeline.mode = rapier3d::pipeline::DebugRenderMode::empty();
         physics.integration_params.dt = config.time_step;
@@ -525,14 +527,14 @@ impl Engine {
         // wants to borrow `self` mutably, and `command_encoder` blocks that.
         let surface_config = Self::make_surface_config(physical_size);
         let new_render_size = surface_config.size;
-        if new_render_size != self.renderer.get_screen_size() {
+        if new_render_size != self.renderer.get_surface_size() {
             log::info!("Resizing to {}", new_render_size);
             self.pacer.wait_for_previous_frame(&self.gpu_context);
             self.gpu_context.resize(surface_config);
         }
 
         let (command_encoder, temp) = self.pacer.begin_frame();
-        if new_render_size != self.renderer.get_screen_size() {
+        if new_render_size != self.renderer.get_surface_size() {
             self.renderer
                 .resize_screen(new_render_size, command_encoder, &self.gpu_context);
             self.need_accumulation_reset = true;
@@ -829,7 +831,7 @@ impl Engine {
     }
 
     pub fn screen_aspect(&self) -> f32 {
-        let size = self.renderer.get_screen_size();
+        let size = self.renderer.get_surface_size();
         size.width as f32 / size.height.max(1) as f32
     }
 

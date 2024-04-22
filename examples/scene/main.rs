@@ -162,7 +162,7 @@ impl Example {
             },
             usage: gpu::TextureUsage::TARGET,
             display_sync: gpu::DisplaySync::Block,
-            color_space: gpu::ColorSpace::Linear,
+            ..Default::default()
         }
     }
 
@@ -183,8 +183,8 @@ impl Example {
         });
 
         let surface_config = Self::make_surface_config(window.inner_size());
-        let screen_size = surface_config.size;
-        let surface_format = context.resize(surface_config);
+        let surface_size = surface_config.size;
+        let surface_info = context.resize(surface_config);
 
         let num_workers = num_cpus::get_physical().max((num_cpus::get() * 3 + 2) / 4);
         log::info!("Initializing Choir with {} workers", num_workers);
@@ -202,8 +202,8 @@ impl Example {
         let mut pacer = blade_render::util::FramePacer::new(&context);
         let (command_encoder, _) = pacer.begin_frame();
         let render_config = blade_render::RenderConfig {
-            screen_size,
-            surface_format,
+            surface_size,
+            surface_info,
             max_debug_lines: 1000,
         };
         let renderer = blade_render::Renderer::new(
@@ -214,7 +214,7 @@ impl Example {
             &render_config,
         );
         pacer.end_frame(&context);
-        let gui_painter = blade_egui::GuiPainter::new(surface_format, &context);
+        let gui_painter = blade_egui::GuiPainter::new(surface_info, &context);
 
         Self {
             scene_path: PathBuf::new(),
@@ -413,14 +413,14 @@ impl Example {
         // wants to borrow `self` mutably, and `command_encoder` blocks that.
         let surface_config = Self::make_surface_config(physical_size);
         let new_render_size = surface_config.size;
-        if new_render_size != self.renderer.get_screen_size() {
+        if new_render_size != self.renderer.get_surface_size() {
             log::info!("Resizing to {}", new_render_size);
             self.pacer.wait_for_previous_frame(&self.context);
             self.context.resize(surface_config);
         }
 
         let (command_encoder, temp) = self.pacer.begin_frame();
-        if new_render_size != self.renderer.get_screen_size() {
+        if new_render_size != self.renderer.get_surface_size() {
             self.renderer
                 .resize_screen(new_render_size, command_encoder, &self.context);
             self.need_accumulation_reset = true;
@@ -525,7 +525,7 @@ impl Example {
         let view_matrix =
             glam::Mat4::from_rotation_translation(self.camera.rot.into(), self.camera.pos.into())
                 .inverse();
-        let extent = self.renderer.get_screen_size();
+        let extent = self.renderer.get_surface_size();
         let aspect = extent.width as f32 / extent.height as f32;
         let projection_matrix =
             glam::Mat4::perspective_rh(self.camera.fov_y, aspect, 1.0, self.camera.depth);

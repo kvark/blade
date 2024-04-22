@@ -142,13 +142,13 @@ impl DebugRender {
         shader_draw: &blade_graphics::Shader,
         shader_blit: &blade_graphics::Shader,
         capacity: u32,
-        surface_format: blade_graphics::TextureFormat,
+        surface_info: blade_graphics::SurfaceInfo,
     ) -> Self {
         let line_size = shader_draw.get_struct_size("DebugLine");
         let buffer_size = shader_draw.get_struct_size("DebugBuffer");
         let this = Self {
             capacity,
-            surface_format,
+            surface_format: surface_info.format,
             buffer: gpu.create_buffer(blade_graphics::BufferDesc {
                 name: "debug",
                 size: (buffer_size + capacity.saturating_sub(1) * line_size) as u64,
@@ -170,8 +170,8 @@ impl DebugRender {
                 memory: blade_graphics::Memory::Shared,
             }),
             cpu_lines_offset: Cell::new(0),
-            draw_pipeline: create_draw_pipeline(shader_draw, surface_format, gpu),
-            blit_pipeline: create_blit_pipeline(shader_blit, surface_format, gpu),
+            draw_pipeline: create_draw_pipeline(shader_draw, surface_info.format, gpu),
+            blit_pipeline: create_blit_pipeline(shader_blit, surface_info.format, gpu),
             line_size,
             buffer_size,
         };

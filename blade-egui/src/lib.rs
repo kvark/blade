@@ -120,10 +120,7 @@ impl GuiPainter {
     /// It supports renderpasses with only a color attachment,
     /// and this attachment format must be The `output_format`.
     #[profiling::function]
-    pub fn new(
-        output_format: blade_graphics::TextureFormat,
-        context: &blade_graphics::Context,
-    ) -> Self {
+    pub fn new(info: blade_graphics::SurfaceInfo, context: &blade_graphics::Context) -> Self {
         let shader = context.create_shader(blade_graphics::ShaderDesc {
             source: SHADER_SOURCE,
         });
@@ -141,7 +138,7 @@ impl GuiPainter {
             depth_stencil: None, //TODO?
             fragment: shader.at("fs_main"),
             color_targets: &[blade_graphics::ColorTargetState {
-                format: output_format,
+                format: info.format,
                 blend: Some(blade_graphics::BlendState::ALPHA_BLENDING),
                 write_mask: blade_graphics::ColorWrites::all(),
             }],

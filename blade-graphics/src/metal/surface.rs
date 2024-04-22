@@ -70,7 +70,7 @@ impl super::Surface {
         &mut self,
         device: &metal::DeviceRef,
         config: crate::SurfaceConfig,
-    ) -> crate::TextureFormat {
+    ) -> crate::SurfaceInfo {
         let format = match config.color_space {
             crate::ColorSpace::Linear => crate::TextureFormat::Bgra8UnormSrgb,
             crate::ColorSpace::Srgb => crate::TextureFormat::Bgra8Unorm,
@@ -80,7 +80,7 @@ impl super::Surface {
             crate::DisplaySync::Recent | crate::DisplaySync::Tear => false,
         };
 
-        self.render_layer.set_opaque(true);
+        self.render_layer.set_opaque(!config.transparent);
         self.render_layer.set_device(device);
         self.render_layer
             .set_pixel_format(super::map_texture_format(format));
@@ -95,12 +95,15 @@ impl super::Surface {
             let () = msg_send![self.render_layer, setDisplaySyncEnabled: vsync];
         }
 
-        format
+        crate::SurfaceInfo {
+            format,
+            alpha: crate::AlphaMode::PostMultiplied,
+        }
     }
 }
 
 impl super::Context {
-    pub fn resize(&self, config: crate::SurfaceConfig) -> crate::TextureFormat {
+    pub fn resize(&self, config: crate::SurfaceConfig) -> crate::SurfaceInfo {
         let mut surface = self.surface.as_ref().unwrap().lock().unwrap();
         surface.reconfigure(&*self.device.lock().unwrap(), config)
     }

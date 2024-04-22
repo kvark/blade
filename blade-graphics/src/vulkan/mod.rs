@@ -33,6 +33,7 @@ struct Device {
     ray_tracing: Option<RayTracingDevice>,
     buffer_marker: Option<ash::amd::buffer_marker::Device>,
     shader_info: Option<ash::amd::shader_info::Device>,
+    full_screen_exclusive: Option<ash::ext::full_screen_exclusive::Device>,
     workarounds: Workarounds,
 }
 

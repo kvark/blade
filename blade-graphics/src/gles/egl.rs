@@ -17,8 +17,6 @@ const EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE: u32 = 0x3489;
 const EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE: u32 = 0x348F;
 const EGL_PLATFORM_ANGLE_DEBUG_LAYERS_ENABLED: u32 = 0x3451;
 const EGL_PLATFORM_SURFACELESS_MESA: u32 = 0x31DD;
-const EGL_GL_COLORSPACE_KHR: u32 = 0x309D;
-const EGL_GL_COLORSPACE_SRGB_KHR: u32 = 0x3089;
 
 const EGL_DEBUG_MSG_CRITICAL_KHR: u32 = 0x33B9;
 const EGL_DEBUG_MSG_ERROR_KHR: u32 = 0x33BA;
@@ -346,7 +344,7 @@ impl Context {
         })
     }
 
-    pub fn resize(&self, config: crate::SurfaceConfig) -> crate::TextureFormat {
+    pub fn resize(&self, config: crate::SurfaceConfig) -> crate::SurfaceInfo {
         use raw_window_handle::RawWindowHandle as Rwh;
 
         let wsi = self.wsi.as_ref().unwrap();
@@ -394,6 +392,10 @@ impl Context {
             }
         };
 
+        if !config.allow_exclusive_full_screen {
+            log::warn!("Unable to forbid exclusive full screen");
+        }
+
         let mut inner = self.inner.lock().unwrap();
 
         let mut attributes = vec![
@@ -411,15 +413,18 @@ impl Context {
         //TODO: detect if linear color space is supported
         match inner.egl.srgb_kind {
             SrgbFrameBufferKind::None => {}
-            SrgbFrameBufferKind::Core => {
+            SrgbFrameBufferKind::Core | SrgbFrameBufferKind::Khr => {
                 attributes.push(egl::GL_COLORSPACE);
                 attributes.push(egl::GL_COLORSPACE_SRGB);
             }
-            SrgbFrameBufferKind::Khr => {
-                attributes.push(EGL_GL_COLORSPACE_KHR as i32);
-                attributes.push(EGL_GL_COLORSPACE_SRGB_KHR as i32);
-            }
         }
+        let alpha = if config.transparent {
+            attributes.push(egl::TRANSPARENT_TYPE);
+            attributes.push(egl::TRANSPARENT_RGB);
+            crate::AlphaMode::PostMultiplied //TODO: verify
+        } else {
+            crate::AlphaMode::Ignored
+        };
         attributes.push(egl::ATTRIB_NONE as i32);
 
         let format = match config.color_space {
@@ -489,7 +494,7 @@ impl Context {
         };
         inner.egl.unmake_current();
 
-        format
+        crate::SurfaceInfo { format, alpha }
     }
 
     pub fn acquire_frame(&self) -> super::Frame {

@@ -31,6 +31,7 @@ struct AdapterCapabilities {
     ray_tracing: bool,
     buffer_marker: bool,
     shader_info: bool,
+    full_screen_exclusive: bool,
 }
 
 #[derive(Debug)]
@@ -215,6 +216,7 @@ unsafe fn inspect_adapter(
 
     let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
+    let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
 
     Some(AdapterCapabilities {
         api_version,
@@ -224,6 +226,7 @@ unsafe fn inspect_adapter(
         ray_tracing,
         buffer_marker,
         shader_info,
+        full_screen_exclusive,
     })
 }
 
@@ -406,6 +409,9 @@ impl super::Context {
             if capabilities.shader_info {
                 device_extensions.push(vk::AMD_SHADER_INFO_NAME);
             }
+            if capabilities.full_screen_exclusive {
+                device_extensions.push(vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
+            }
 
             let str_pointers = device_extensions
                 .iter()
@@ -491,6 +497,14 @@ impl super::Context {
             },
             shader_info: if capabilities.shader_info {
                 Some(amd::shader_info::Device::new(&instance.core, &device_core))
+            } else {
+                None
+            },
+            full_screen_exclusive: if capabilities.full_screen_exclusive {
+                Some(ext::full_screen_exclusive::Device::new(
+                    &instance.core,
+                    &device_core,
+                ))
             } else {
                 None
             },
@@ -661,7 +675,7 @@ impl super::Context {
 }
 
 impl super::Context {
-    pub fn resize(&self, config: crate::SurfaceConfig) -> crate::TextureFormat {
+    pub fn resize(&self, config: crate::SurfaceConfig) -> crate::SurfaceInfo {
         let surface_khr = self.instance.surface.as_ref().unwrap();
         let mut surface = self.surface.as_ref().unwrap().lock().unwrap();
 
@@ -681,6 +695,40 @@ impl super::Context {
                 config.size.height
             );
         }
+
+        let (alpha, composite_alpha) = if config.transparent {
+            if capabilities
+                .supported_composite_alpha
+                .contains(vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED)
+            {
+                (
+                    crate::AlphaMode::PostMultiplied,
+                    vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED,
+                )
+            } else if capabilities
+                .supported_composite_alpha
+                .contains(vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED)
+            {
+                (
+                    crate::AlphaMode::PreMultiplied,
+                    vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED,
+                )
+            } else {
+                log::error!(
+                    "No composite alpha flag for transparency: {:?}",
+                    capabilities.supported_composite_alpha
+                );
+                (
+                    crate::AlphaMode::Ignored,
+                    vk::CompositeAlphaFlagsKHR::OPAQUE,
+                )
+            }
+        } else {
+            (
+                crate::AlphaMode::Ignored,
+                vk::CompositeAlphaFlagsKHR::OPAQUE,
+            )
+        };
 
         let (requested_frame_count, mode_preferences) = match config.display_sync {
             crate::DisplaySync::Block => (3, [vk::PresentModeKHR::FIFO].as_slice()),
@@ -709,32 +757,84 @@ impl super::Context {
         log::info!("Using surface present mode {:?}", present_mode);
 
         let queue_families = [self.queue_family_index];
-        //TODO: consider supported color spaces by Vulkan
-        let format = match config.color_space {
-            crate::ColorSpace::Linear => crate::TextureFormat::Bgra8UnormSrgb,
-            crate::ColorSpace::Srgb => crate::TextureFormat::Bgra8Unorm,
+
+        let supported_formats = unsafe {
+            surface_khr
+                .get_physical_device_surface_formats(self.physical_device, surface.raw)
+                .unwrap()
         };
-        let vk_format = super::map_texture_format(format);
-        let create_info = vk::SwapchainCreateInfoKHR {
+        let (format, surface_format) = match config.color_space {
+            crate::ColorSpace::Linear => {
+                let surface_format = vk::SurfaceFormatKHR {
+                    format: vk::Format::B8G8R8A8_UNORM,
+                    color_space: vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT,
+                };
+                if supported_formats.contains(&surface_format) {
+                    log::info!("Using linear SRGB color space");
+                    (crate::TextureFormat::Bgra8Unorm, surface_format)
+                } else {
+                    (
+                        crate::TextureFormat::Bgra8UnormSrgb,
+                        vk::SurfaceFormatKHR {
+                            format: vk::Format::B8G8R8A8_SRGB,
+                            color_space: vk::ColorSpaceKHR::default(),
+                        },
+                    )
+                }
+            }
+            crate::ColorSpace::Srgb => (
+                crate::TextureFormat::Bgra8Unorm,
+                vk::SurfaceFormatKHR {
+                    format: vk::Format::B8G8R8A8_UNORM,
+                    color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                },
+            ),
+        };
+        if !supported_formats.is_empty() && !supported_formats.contains(&surface_format) {
+            log::error!("Surface formats are incompatible: {:?}", supported_formats);
+        }
+
+        let vk_usage = super::resource::map_texture_usage(config.usage, crate::TexelAspects::COLOR);
+        if !capabilities.supported_usage_flags.contains(vk_usage) {
+            log::error!(
+                "Surface usages are incompatible: {:?}",
+                capabilities.supported_usage_flags
+            );
+        }
+
+        let mut full_screen_exclusive_info = vk::SurfaceFullScreenExclusiveInfoEXT {
+            full_screen_exclusive: if config.allow_exclusive_full_screen {
+                vk::FullScreenExclusiveEXT::ALLOWED
+            } else {
+                vk::FullScreenExclusiveEXT::DISALLOWED
+            },
+            ..Default::default()
+        };
+
+        let mut create_info = vk::SwapchainCreateInfoKHR {
             surface: surface.raw,
             min_image_count: effective_frame_count,
-            image_format: vk_format,
+            image_format: surface_format.format,
+            image_color_space: surface_format.color_space,
             image_extent: vk::Extent2D {
                 width: config.size.width,
                 height: config.size.height,
             },
             image_array_layers: 1,
-            image_usage: super::resource::map_texture_usage(
-                config.usage,
-                crate::TexelAspects::COLOR,
-            ),
+            image_usage: vk_usage,
             pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
-            composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
+            composite_alpha,
             present_mode,
             old_swapchain: surface.swapchain,
             ..Default::default()
         }
         .queue_family_indices(&queue_families);
+
+        if self.device.full_screen_exclusive.is_some() {
+            create_info = create_info.push_next(&mut full_screen_exclusive_info);
+        } else if !config.allow_exclusive_full_screen {
+            log::warn!("Unable to forbid exclusive full screen");
+        }
         let new_swapchain = unsafe {
             surface
                 .extension
@@ -773,7 +873,7 @@ impl super::Context {
             let view_create_info = vk::ImageViewCreateInfo {
                 image,
                 view_type: vk::ImageViewType::TYPE_2D,
-                format: vk_format,
+                format: surface_format.format,
                 subresource_range,
                 ..Default::default()
             };
@@ -800,7 +900,8 @@ impl super::Context {
             });
         }
         surface.swapchain = new_swapchain;
-        format
+
+        crate::SurfaceInfo { format, alpha }
     }
 
     pub fn acquire_frame(&self) -> super::Frame {

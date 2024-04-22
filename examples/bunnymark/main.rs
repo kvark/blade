@@ -74,7 +74,7 @@ impl Example {
             .unwrap()
         };
 
-        let surface_format = context.resize(gpu::SurfaceConfig {
+        let surface_info = context.resize(gpu::SurfaceConfig {
             size: gpu::Extent {
                 width: window_size.width,
                 height: window_size.height,
@@ -82,7 +82,7 @@ impl Example {
             },
             usage: gpu::TextureUsage::TARGET,
             display_sync: gpu::DisplaySync::Recent,
-            color_space: gpu::ColorSpace::Linear,
+            ..Default::default()
         });
 
         let global_layout = <Params as gpu::ShaderData>::layout();
@@ -110,7 +110,7 @@ impl Example {
             depth_stencil: None,
             fragment: shader.at("fs_main"),
             color_targets: &[gpu::ColorTargetState {
-                format: surface_format,
+                format: surface_info.format,
                 blend: Some(gpu::BlendState::ALPHA_BLENDING),
                 write_mask: gpu::ColorWrites::default(),
             }],

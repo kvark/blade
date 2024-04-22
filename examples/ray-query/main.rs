@@ -85,11 +85,11 @@ impl Example {
             subresources: &gpu::TextureSubresources::default(),
         });
 
-        let surface_format = context.resize(gpu::SurfaceConfig {
+        let surface_info = context.resize(gpu::SurfaceConfig {
             size: screen_size,
             usage: gpu::TextureUsage::TARGET,
-            display_sync: gpu::DisplaySync::Block,
-            color_space: gpu::ColorSpace::Linear,
+            transparent: true,
+            ..Default::default()
         });
 
         let source = std::fs::read_to_string("examples/ray-query/shader.wgsl").unwrap();
@@ -111,7 +111,7 @@ impl Example {
             vertex: shader.at("draw_vs"),
             vertex_fetches: &[],
             fragment: shader.at("draw_fs"),
-            color_targets: &[surface_format.into()],
+            color_targets: &[surface_info.format.into()],
             depth_stencil: None,
         });
 
@@ -327,6 +327,7 @@ fn main() {
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
     let window = winit::window::WindowBuilder::new()
         .with_title("blade-ray-query")
+        .with_transparent(true)
         .build(&event_loop)
         .unwrap();
 

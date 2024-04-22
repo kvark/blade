@@ -48,6 +48,7 @@ impl Context {
                     &wasm_bindgen::JsValue::FALSE,
                 )
                 .expect("Cannot create context options");
+                //Note: could also set: "alpha", "premultipliedAlpha"
 
                 canvas
                     .get_context_with_context_options("webgl2", &context_options)
@@ -81,7 +82,8 @@ impl Context {
         })
     }
 
-    pub fn resize(&self, config: crate::SurfaceConfig) -> crate::TextureFormat {
+    pub fn resize(&self, config: crate::SurfaceConfig) -> crate::SurfaceInfo {
+        //TODO: create WebGL context here
         let sc = &self.swapchain;
         let format_desc = super::describe_texture_format(sc.format);
         let gl = &self.glow;
@@ -104,7 +106,11 @@ impl Context {
             gl.bind_renderbuffer(glow::RENDERBUFFER, None);
         }
         sc.extent.set(config.size);
-        sc.format
+
+        crate::SurfaceInfo {
+            format: sc.format,
+            alpha: crate::AlphaMode::PreMultiplied,
+        }
     }
 
     pub fn acquire_frame(&self) -> super::Frame {
