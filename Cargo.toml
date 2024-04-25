@@ -72,7 +72,6 @@ egui = { workspace = true }
 egui-gizmo = "0.16"
 egui_plot = "0.26"
 env_logger = "0.10"
-del-msh = "=0.1.25" # not following semver :(
 glam = { workspace = true }
 log = { workspace = true }
 mint = { workspace = true, features = ["serde"] }
@@ -82,6 +81,9 @@ profiling = { workspace = true }
 ron = "0.8"
 serde = { version = "1", features = ["serde_derive"] }
 strum = { workspace = true }
+# not following semver :(
+del-msh = "=0.1.25"
+del-geo = "=0.1.19"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # see https://github.com/emilk/egui/issues/4270
