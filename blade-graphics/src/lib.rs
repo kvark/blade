@@ -1009,7 +1009,7 @@ pub enum ColorSpace {
     Srgb,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SurfaceConfig {
     pub size: Extent,
     pub usage: TextureUsage,
