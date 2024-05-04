@@ -368,14 +368,33 @@ impl super::Context {
             };
 
         let physical_devices = instance.core.enumerate_physical_devices().unwrap();
-        let (physical_device, capabilities) = physical_devices
+        let mut available_devices: Vec<_> = physical_devices
             .into_iter()
-            .find_map(|phd| {
+            .filter_map(|phd| {
                 inspect_adapter(phd, &instance, driver_api_version, &bugs, vk_surface)
                     .map(|caps| (phd, caps))
             })
+            .collect();
+        // Rank available devices by device type
+        available_devices.sort_by(|dev1, dev2| {
+            // Provided by VK_VERSION_1_0
+            // typedef enum VkPhysicalDeviceType {
+            //     VK_PHYSICAL_DEVICE_TYPE_OTHER = 0,
+            //     VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU = 1,
+            //     VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU = 2,
+            //     VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU = 3,
+            //     VK_PHYSICAL_DEVICE_TYPE_CPU = 4,
+            // } VkPhysicalDeviceType;
+            // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceType.html
+            dev1.1
+                .properties
+                .device_type
+                .cmp(&dev2.1.properties.device_type)
+        });
+        let (physical_device, ref capabilities) = available_devices
+            .into_iter()
+            .nth(0)
             .ok_or(crate::NotSupportedError)?;
-
         log::debug!("Adapter {:#?}", capabilities);
 
         let device_core = {
