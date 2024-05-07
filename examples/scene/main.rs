@@ -1153,13 +1153,14 @@ fn main() {
                         winit::event::WindowEvent::CursorMoved { position, .. } => {
                             if let Some(_) = drag_start {
                                 let prev = glam::Quat::from(example.camera.rot);
-                                let rotation = glam::Quat::from_euler(
-                                    glam::EulerRot::ZYX,
-                                    0.0,
-                                    (last_mouse_pos[0] as f32 - position.x as f32) * rotate_speed,
+                                let rotation_local = glam::Quat::from_rotation_x(
                                     (last_mouse_pos[1] as f32 - position.y as f32) * rotate_speed,
                                 );
-                                example.camera.rot = (prev * rotation).into();
+                                let rotation_global = glam::Quat::from_rotation_y(
+                                    (last_mouse_pos[0] as f32 - position.x as f32) * rotate_speed,
+                                );
+                                example.camera.rot =
+                                    (rotation_global * prev * rotation_local).into();
                                 example.debug.mouse_pos = None;
                             }
                             last_mouse_pos = [position.x as i32, position.y as i32];
