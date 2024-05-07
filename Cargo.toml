@@ -55,7 +55,7 @@ log = { workspace = true }
 mint = { workspace = true, features = ["serde"] }
 num_cpus = "1"
 profiling = { workspace = true }
-rapier3d = { version = "0.18", features = ["debug-render"] }
+rapier3d = { version = "0.19", features = ["debug-render"] }
 serde = { version = "1", features = ["serde_derive"] }
 slab = "0.4"
 strum = { workspace = true }
