@@ -254,7 +254,7 @@ struct Physics {
     multibody_joints: rapier3d::dynamics::MultibodyJointSet,
     solver: rapier3d::dynamics::CCDSolver,
     colliders: rapier3d::geometry::ColliderSet,
-    broad_phase: rapier3d::geometry::BroadPhase,
+    broad_phase: rapier3d::geometry::DefaultBroadPhase,
     narrow_phase: rapier3d::geometry::NarrowPhase,
     gravity: rapier3d::math::Vector<f32>,
     pipeline: rapier3d::pipeline::PhysicsPipeline,
