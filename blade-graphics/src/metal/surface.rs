@@ -97,7 +97,13 @@ impl super::Surface {
 
         crate::SurfaceInfo {
             format,
-            alpha: crate::AlphaMode::PostMultiplied,
+            alpha: if config.transparent {
+                crate::AlphaMode::PostMultiplied
+            } else {
+                //Warning: it's not really ignored! Instead, it's assumed to be 1:
+                // https://developer.apple.com/documentation/quartzcore/calayer/1410763-isopaque
+                crate::AlphaMode::Ignored
+            },
         }
     }
 }
