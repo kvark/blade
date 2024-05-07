@@ -319,8 +319,13 @@ impl super::Context {
                 }
             }
             if supported_instance_extensions.contains(&vk::KHR_PORTABILITY_ENUMERATION_NAME) {
+                log::info!("Enabling Vulkan Portability");
                 instance_extensions.push(vk::KHR_PORTABILITY_ENUMERATION_NAME);
                 create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
+            }
+            if supported_instance_extensions.contains(&vk::EXT_SWAPCHAIN_COLORSPACE_NAME) {
+                log::info!("Enabling color space support");
+                instance_extensions.push(vk::EXT_SWAPCHAIN_COLORSPACE_NAME);
             }
 
             let app_info = vk::ApplicationInfo::default()
