@@ -10,6 +10,7 @@ Changelog for Blade
 - window API switched to raw-window-handle-0.6
 - GLES: support for storage buffer and compute
 - GLES: scissor rects, able to run "particle" example
+- fixed initial RAM consumption
 
 ## blade-graphics-0.4, blade-render-0.3, blade-0.2 (22 Mar 2024)
 

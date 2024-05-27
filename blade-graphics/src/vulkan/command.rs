@@ -219,19 +219,14 @@ impl super::CommandEncoder {
 
     pub fn start(&mut self) {
         self.buffers.rotate_left(1);
+        self.device
+            .reset_descriptor_pool(&mut self.buffers[0].descriptor_pool);
 
         let vk_info = vk::CommandBufferBeginInfo {
             flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
             ..Default::default()
         };
         unsafe {
-            self.device
-                .core
-                .reset_descriptor_pool(
-                    self.buffers[0].descriptor_pool,
-                    vk::DescriptorPoolResetFlags::empty(),
-                )
-                .unwrap();
             self.device
                 .core
                 .begin_command_buffer(self.buffers[0].raw, &vk_info)
@@ -357,7 +352,7 @@ impl super::CommandEncoder {
         self.barrier();
         self.mark("pass/compute");
         super::ComputeCommandEncoder {
-            cmd_buf: self.buffers[0],
+            cmd_buf: self.buffers.first_mut().unwrap(),
             device: &self.device,
             update_data: &mut self.update_data,
         }
@@ -407,7 +402,7 @@ impl super::CommandEncoder {
         };
         rendering_info.render_area = render_area;
 
-        let cmd_buf = self.buffers[0];
+        let cmd_buf = self.buffers.first_mut().unwrap();
         unsafe {
             self.device
                 .core
@@ -708,20 +703,12 @@ impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_, '_> {
             template_offsets: &dsl.template_offsets,
         });
 
-        let descriptor_set_layouts = [dsl.raw];
-        let descriptor_set_info = vk::DescriptorSetAllocateInfo {
-            descriptor_pool: self.cmd_buf.descriptor_pool,
-            ..Default::default()
-        }
-        .set_layouts(&descriptor_set_layouts);
+        let vk_set = self
+            .device
+            .allocate_descriptor_set(&mut self.cmd_buf.descriptor_pool, dsl);
         unsafe {
-            let sets = self
-                .device
-                .core
-                .allocate_descriptor_sets(&descriptor_set_info)
-                .unwrap();
             self.device.core.update_descriptor_set_with_template(
-                sets[0],
+                vk_set,
                 dsl.update_template,
                 self.update_data.as_ptr() as *const _,
             );
@@ -730,7 +717,7 @@ impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_, '_> {
                 self.bind_point,
                 self.layout.raw,
                 group,
-                &sets,
+                &[vk_set],
                 &[],
             );
         }

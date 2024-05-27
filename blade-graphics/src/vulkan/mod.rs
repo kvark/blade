@@ -2,6 +2,7 @@ use ash::{khr, vk};
 use std::{num::NonZeroU32, ptr, sync::Mutex};
 
 mod command;
+mod descriptor;
 mod init;
 mod pipeline;
 mod resource;
@@ -208,10 +209,10 @@ pub struct RenderPipeline {
     layout: PipelineLayout,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 struct CommandBuffer {
     raw: vk::CommandBuffer,
-    descriptor_pool: vk::DescriptorPool,
+    descriptor_pool: descriptor::DescriptorPool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -244,17 +245,17 @@ pub struct AccelerationStructureCommandEncoder<'a> {
     device: &'a Device,
 }
 pub struct ComputeCommandEncoder<'a> {
-    cmd_buf: CommandBuffer,
+    cmd_buf: &'a mut CommandBuffer,
     device: &'a Device,
     update_data: &'a mut Vec<u8>,
 }
 pub struct RenderCommandEncoder<'a> {
-    cmd_buf: CommandBuffer,
+    cmd_buf: &'a mut CommandBuffer,
     device: &'a Device,
     update_data: &'a mut Vec<u8>,
 }
 pub struct PipelineEncoder<'a, 'p> {
-    cmd_buf: CommandBuffer,
+    cmd_buf: &'a mut CommandBuffer,
     layout: &'p PipelineLayout,
     bind_point: vk::PipelineBindPoint,
     device: &'a Device,
@@ -332,21 +333,7 @@ impl crate::traits::CommandDevice for Context {
                 if !desc.name.is_empty() {
                     self.set_object_name(raw, desc.name);
                 };
-                let mut inline_uniform_block_info =
-                    vk::DescriptorPoolInlineUniformBlockCreateInfoEXT {
-                        max_inline_uniform_block_bindings: ROUGH_SET_COUNT,
-                        ..Default::default()
-                    };
-                let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
-                    .max_sets(ROUGH_SET_COUNT)
-                    .pool_sizes(&descriptor_sizes)
-                    .push_next(&mut inline_uniform_block_info);
-                let descriptor_pool = unsafe {
-                    self.device
-                        .core
-                        .create_descriptor_pool(&descriptor_pool_info, None)
-                        .unwrap()
-                };
+                let descriptor_pool = self.device.create_descriptor_pool();
                 CommandBuffer {
                     raw,
                     descriptor_pool,
@@ -380,16 +367,15 @@ impl crate::traits::CommandDevice for Context {
     }
 
     fn destroy_command_encoder(&self, command_encoder: &mut CommandEncoder) {
-        for cmd_buf in command_encoder.buffers.iter() {
+        for cmd_buf in command_encoder.buffers.iter_mut() {
             let raw_cmd_buffers = [cmd_buf.raw];
             unsafe {
                 self.device
                     .core
                     .free_command_buffers(command_encoder.pool, &raw_cmd_buffers);
-                self.device
-                    .core
-                    .destroy_descriptor_pool(cmd_buf.descriptor_pool, None);
             }
+            self.device
+                .destroy_descriptor_pool(&mut cmd_buf.descriptor_pool);
         }
         unsafe {
             self.device
