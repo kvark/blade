@@ -1,16 +1,18 @@
 Changelog for Blade
 
-## blade-graphics-0.5, blade-macros-0.3, blade-egui-0.4 (TBD)
+## blade-graphics-0.5, blade-macros-0.3, blade-egui-0.4, blade-util-0.1 (TBD)
 
-- vertex buffers support
-- surface configuration:
-  - transparency support
-  - option to disable exclusive fullscreen
-  - VK: using linear sRGB color space if available
+- crate: `blade-util` for helper utilities
+- graphics:
+  - vertex buffers support
+  - surface configuration:
+    - transparency support
+    - option to disable exclusive fullscreen
+    - VK: using linear sRGB color space if available
+  - GLES: support for storage buffer and compute
+  - GLES: scissor rects, able to run "particle" example
+  - fixed initial RAM consumption
 - window API switched to raw-window-handle-0.6
-- GLES: support for storage buffer and compute
-- GLES: scissor rects, able to run "particle" example
-- fixed initial RAM consumption
 
 ## blade-graphics-0.4, blade-render-0.3, blade-0.2 (22 Mar 2024)
 

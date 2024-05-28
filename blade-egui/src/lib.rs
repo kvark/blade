@@ -13,11 +13,9 @@
     clippy::pattern_type_mismatch,
 )]
 
-mod belt;
-
 const SHADER_SOURCE: &'static str = include_str!("../shader.wgsl");
 
-use belt::{BeltDescriptor, BufferBelt};
+use blade_util::{BufferBelt, BufferBeltDescriptor};
 use std::{
     collections::hash_map::{Entry, HashMap},
     mem, ptr,
@@ -144,9 +142,10 @@ impl GuiPainter {
             }],
         });
 
-        let belt = BufferBelt::new(BeltDescriptor {
+        let belt = BufferBelt::new(BufferBeltDescriptor {
             memory: blade_graphics::Memory::Shared,
             min_chunk_size: 0x1000,
+            alignment: 4,
         });
 
         let sampler = context.create_sampler(blade_graphics::SamplerDesc {
@@ -197,7 +196,7 @@ impl GuiPainter {
         let mut copies = Vec::new();
         for &(texture_id, ref image_delta) in textures_delta.set.iter() {
             let src = match image_delta.image {
-                egui::ImageData::Color(ref c) => self.belt.alloc_data(c.pixels.as_slice(), context),
+                egui::ImageData::Color(ref c) => self.belt.alloc_pod(c.pixels.as_slice(), context),
                 egui::ImageData::Font(ref a) => {
                     let color_iter = a.srgba_pixels(None);
                     let stage = self.belt.alloc(
@@ -323,8 +322,8 @@ impl GuiPainter {
 
             if let egui::epaint::Primitive::Mesh(ref mesh) = clipped_prim.primitive {
                 let texture = self.textures.get(&mesh.texture_id).unwrap();
-                let index_buf = self.belt.alloc_data(&mesh.indices, context);
-                let vertex_buf = self.belt.alloc_data(&mesh.vertices, context);
+                let index_buf = self.belt.alloc_pod(&mesh.indices, context);
+                let vertex_buf = self.belt.alloc_pod(&mesh.vertices, context);
 
                 pc.bind(
                     1,
