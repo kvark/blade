@@ -82,7 +82,7 @@ impl BufferBelt {
     }
 
     /// Allocate a region to hold the byte `data` slice contents.
-    pub unsafe fn alloc_bytes<T>(&mut self, data: &[u8], gpu: &gpu::Context) -> gpu::BufferPiece {
+    pub unsafe fn alloc_bytes(&mut self, data: &[u8], gpu: &gpu::Context) -> gpu::BufferPiece {
         assert!(!data.is_empty());
         let bp = self.alloc(data.len() as u64, gpu);
         unsafe {
