@@ -81,7 +81,7 @@ impl super::Device {
         let result = unsafe { self.core.allocate_descriptor_sets(&descriptor_set_info) };
         match result {
             Ok(vk_sets) => return vk_sets[0],
-            Err(vk::Result::ERROR_OUT_OF_POOL_MEMORY) => {}
+            Err(vk::Result::ERROR_OUT_OF_POOL_MEMORY) | Err(vk::Result::ERROR_FRAGMENTED_POOL) => {}
             Err(other) => panic!("Unexpected descriptor allocation error: {:?}", other),
         };
 
