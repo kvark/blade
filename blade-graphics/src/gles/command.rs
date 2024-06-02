@@ -613,6 +613,7 @@ impl super::Command {
                 let block_info = dst.format.block_info();
                 let row_texels =
                     bytes_per_row / block_info.size as u32 * block_info.dimensions.0 as u32;
+                gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
                 gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(src.raw));
                 gl.bind_texture(dst.target, Some(dst.raw));
                 let unpack_data = glow::PixelUnpackData::BufferOffset(src.offset as u32);
