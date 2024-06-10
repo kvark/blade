@@ -2,6 +2,8 @@ use ash::{amd, ext, khr, vk};
 use naga::back::spv;
 use std::{ffi, fs, mem, sync::Mutex};
 
+use crate::NotSupportedError;
+
 mod db {
     pub mod intel {
         pub const VENDOR: u32 = 0x8086;
@@ -237,21 +239,21 @@ impl super::Context {
             raw_window_handle::WindowHandle,
             raw_window_handle::DisplayHandle,
         )>,
-    ) -> Result<Self, crate::NotSupportedError> {
+    ) -> Result<Self, NotSupportedError> {
         let entry = match ash::Entry::load() {
             Ok(entry) => entry,
             Err(err) => {
                 log::error!("Missing Vulkan entry points: {:?}", err);
-                return Err(crate::NotSupportedError);
+                return Err(NotSupportedError::VulkanLoadingError(err));
             }
         };
         let driver_api_version = match entry.try_enumerate_instance_version() {
             // Vulkan 1.1+
             Ok(Some(version)) => version,
-            Ok(None) => return Err(crate::NotSupportedError),
+            Ok(None) => return Err(NotSupportedError::ApiMismatch),
             Err(err) => {
                 log::error!("try_enumerate_instance_version: {:?}", err);
-                return Err(crate::NotSupportedError);
+                return Err(NotSupportedError::VulkanError(err));
             }
         };
 
@@ -259,7 +261,7 @@ impl super::Context {
             Ok(layers) => layers,
             Err(err) => {
                 log::error!("enumerate_instance_layer_properties: {:?}", err);
-                return Err(crate::NotSupportedError);
+                return Err(NotSupportedError::VulkanError(err));
             }
         };
         let supported_layer_names = supported_layers
@@ -288,7 +290,7 @@ impl super::Context {
                 Ok(extensions) => extensions,
                 Err(err) => {
                     log::error!("enumerate_instance_extension_properties: {:?}", err);
-                    return Err(crate::NotSupportedError);
+                    return Err(NotSupportedError::VulkanError(err));
                 }
             };
         let supported_instance_extensions = supported_instance_extension_properties
@@ -305,8 +307,7 @@ impl super::Context {
             ];
             if let Some((_, dh)) = surface_handles {
                 instance_extensions.extend(
-                    ash_window::enumerate_required_extensions(dh.as_raw())
-                        .unwrap()
+                    ash_window::enumerate_required_extensions(dh.as_raw())?
                         .iter()
                         .map(|&ptr| ffi::CStr::from_ptr(ptr)),
                 );
@@ -315,7 +316,7 @@ impl super::Context {
             for inst_ext in instance_extensions.iter() {
                 if !supported_instance_extensions.contains(inst_ext) {
                     log::error!("Instance extension {:?} is not supported", inst_ext);
-                    return Err(crate::NotSupportedError);
+                    return Err(NotSupportedError::ExtensionNotSupported);
                 }
             }
             if supported_instance_extensions.contains(&vk::KHR_PORTABILITY_ENUMERATION_NAME) {
@@ -343,7 +344,7 @@ impl super::Context {
                 .flags(create_flags)
                 .enabled_layer_names(layer_strings)
                 .enabled_extension_names(extension_strings);
-            entry.create_instance(&create_info, None).unwrap()
+            entry.create_instance(&create_info, None)?
         };
 
         let bugs = SystemBugs {
@@ -379,7 +380,7 @@ impl super::Context {
                 inspect_adapter(phd, &instance, driver_api_version, &bugs, vk_surface)
                     .map(|caps| (phd, caps))
             })
-            .ok_or(crate::NotSupportedError)?;
+            .ok_or_else(|| NotSupportedError::NoSupportedDeviceFound)?;
 
         log::debug!("Adapter {:#?}", capabilities);
 
@@ -640,7 +641,7 @@ impl super::Context {
         })
     }
 
-    pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
+    pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, NotSupportedError> {
         Self::init_impl(desc, None)
     }
 
@@ -649,7 +650,7 @@ impl super::Context {
     >(
         window: &I,
         desc: crate::ContextDesc,
-    ) -> Result<Self, crate::NotSupportedError> {
+    ) -> Result<Self, NotSupportedError> {
         let handles = (
             window.window_handle().unwrap(),
             window.display_handle().unwrap(),

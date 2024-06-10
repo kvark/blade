@@ -23,6 +23,7 @@
     clippy::pattern_type_mismatch,
 )]
 
+use ash::vk;
 pub use naga::{StorageAccess, VectorSize};
 pub type Transform = mint::RowMatrix3x4<f32>;
 
@@ -87,7 +88,26 @@ pub struct ContextDesc {
 }
 
 #[derive(Debug)]
-pub struct NotSupportedError;
+pub enum NotSupportedError {
+    VulkanLoadingError(ash::LoadingError),
+    VulkanError(vk::Result),
+    /// Vulkan API below 1.1
+    ApiMismatch,
+    NoSupportedDeviceFound,
+    ExtensionNotSupported,
+}
+
+impl From<vk::Result> for NotSupportedError {
+    fn from(result: vk::Result) -> Self {
+        Self::VulkanError(result)
+    }
+}
+
+impl From<ash::LoadingError> for NotSupportedError {
+    fn from(result: ash::LoadingError) -> Self {
+        Self::VulkanLoadingError(result)
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Capabilities {
