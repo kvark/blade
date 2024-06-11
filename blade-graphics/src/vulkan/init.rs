@@ -23,6 +23,15 @@ const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
 ];
 
 #[derive(Debug)]
+#[allow(unused)]
+struct SystemBugs {
+    /// https://gitlab.freedesktop.org/mesa/mesa/-/issues/4688
+    intel_unable_to_present: bool,
+    /// https://github.com/kvark/blade/issues/117
+    intel_fix_descriptor_pool_leak: bool,
+}
+
+#[derive(Debug)]
 struct AdapterCapabilities {
     api_version: u32,
     properties: vk::PhysicalDeviceProperties,
@@ -32,12 +41,7 @@ struct AdapterCapabilities {
     buffer_marker: bool,
     shader_info: bool,
     full_screen_exclusive: bool,
-}
-
-#[derive(Debug)]
-struct SystemBugs {
-    /// https://gitlab.freedesktop.org/mesa/mesa/-/issues/4688
-    intel_unable_to_present: bool,
+    bugs: SystemBugs,
 }
 
 // See https://github.com/canonical/nvidia-prime/blob/587c5012be9dddcc17ab4d958f10a24fa3342b4d/prime-select#L56
@@ -52,7 +56,6 @@ unsafe fn inspect_adapter(
     phd: vk::PhysicalDevice,
     instance: &super::Instance,
     driver_api_version: u32,
-    bugs: &SystemBugs,
     surface: Option<vk::SurfaceKHR>,
 ) -> Option<AdapterCapabilities> {
     let supported_extension_properties = instance
@@ -102,6 +105,11 @@ unsafe fn inspect_adapter(
         return None;
     }
 
+    //Note: this is somewhat broad across X11/Wayland and different drivers.
+    // It could be narrower, but at the end of the day if the user forced Prime
+    // for GLX it should be safe to assume they want it for Vulkan as well.
+    let intel_unable_to_present = is_nvidia_prime_forced();
+
     let queue_family_index = 0; //TODO
     if let Some(surface) = surface {
         let khr = instance.surface.as_ref()?;
@@ -109,8 +117,7 @@ unsafe fn inspect_adapter(
             log::warn!("Rejected for not presenting to the window surface");
             return None;
         }
-        if bugs.intel_unable_to_present && properties2_khr.properties.vendor_id == db::intel::VENDOR
-        {
+        if intel_unable_to_present && properties2_khr.properties.vendor_id == db::intel::VENDOR {
             log::warn!("Rejecting Intel for not presenting when Nvidia is present (on Linux)");
             return None;
         }
@@ -142,6 +149,9 @@ unsafe fn inspect_adapter(
     let properties = properties2_khr.properties;
     let name = ffi::CStr::from_ptr(properties.device_name.as_ptr());
     log::info!("Adapter {:?}", name);
+
+    let vendor_id = properties2_khr.properties.vendor_id;
+    let intel_fix_descriptor_pool_leak = vendor_id == db::intel::VENDOR;
 
     if inline_uniform_block_properties.max_inline_uniform_block_size
         < crate::limits::PLAIN_DATA_SIZE
@@ -218,6 +228,11 @@ unsafe fn inspect_adapter(
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
     let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
 
+    let bugs = SystemBugs {
+        intel_unable_to_present,
+        intel_fix_descriptor_pool_leak,
+    };
+
     Some(AdapterCapabilities {
         api_version,
         properties,
@@ -227,6 +242,7 @@ unsafe fn inspect_adapter(
         buffer_marker,
         shader_info,
         full_screen_exclusive,
+        bugs,
     })
 }
 
@@ -346,14 +362,6 @@ impl super::Context {
             entry.create_instance(&create_info, None).unwrap()
         };
 
-        let bugs = SystemBugs {
-            //Note: this is somewhat broad across X11/Wayland and different drivers.
-            // It could be narrower, but at the end of the day if the user forced Prime
-            // for GLX it should be safe to assume they want it for Vulkan as well.
-            intel_unable_to_present: is_nvidia_prime_forced(),
-        };
-        log::debug!("Bugs {:#?}", bugs);
-
         let vk_surface = surface_handles.map(|(wh, dh)| {
             ash_window::create_surface(&entry, &core_instance, dh.as_raw(), wh.as_raw(), None)
                 .unwrap()
@@ -376,7 +384,7 @@ impl super::Context {
         let (physical_device, capabilities) = physical_devices
             .into_iter()
             .find_map(|phd| {
-                inspect_adapter(phd, &instance, driver_api_version, &bugs, vk_surface)
+                inspect_adapter(phd, &instance, driver_api_version, vk_surface)
                     .map(|caps| (phd, caps))
             })
             .ok_or(crate::NotSupportedError)?;
@@ -520,6 +528,7 @@ impl super::Context {
                 extra_sync_dst_access: vk::AccessFlags::TRANSFER_WRITE
                     | vk::AccessFlags::TRANSFER_READ
                     | vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR,
+                intel_fix_descriptor_pool_leak: capabilities.bugs.intel_fix_descriptor_pool_leak,
             },
         };
 
