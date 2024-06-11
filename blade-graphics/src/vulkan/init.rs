@@ -108,7 +108,7 @@ unsafe fn inspect_adapter(
     //Note: this is somewhat broad across X11/Wayland and different drivers.
     // It could be narrower, but at the end of the day if the user forced Prime
     // for GLX it should be safe to assume they want it for Vulkan as well.
-    let intel_unable_to_present = is_nvidia_prime_forced();
+    let intel_unable_to_present = is_nvidia_prime_forced() && properties2_khr.properties.vendor_id == db::intel::VENDOR;
 
     let queue_family_index = 0; //TODO
     if let Some(surface) = surface {
@@ -117,7 +117,7 @@ unsafe fn inspect_adapter(
             log::warn!("Rejected for not presenting to the window surface");
             return None;
         }
-        if intel_unable_to_present && properties2_khr.properties.vendor_id == db::intel::VENDOR {
+        if intel_unable_to_present {
             log::warn!("Rejecting Intel for not presenting when Nvidia is present (on Linux)");
             return None;
         }
