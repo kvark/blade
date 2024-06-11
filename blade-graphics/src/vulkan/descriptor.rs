@@ -7,7 +7,7 @@ const COUNT_BASE: u32 = 16;
 #[derive(Debug)]
 pub struct DescriptorPool {
     sub_pools: Vec<vk::DescriptorPool>,
-    current_pool: usize,
+    stage: usize,
 }
 
 impl super::Device {
@@ -61,7 +61,7 @@ impl super::Device {
         let vk_pool = self.create_descriptor_sub_pool(COUNT_BASE);
         DescriptorPool {
             sub_pools: vec![vk_pool],
-            current_pool: 0,
+            stage: 0,
         }
     }
 
@@ -78,30 +78,22 @@ impl super::Device {
     ) -> vk::DescriptorSet {
         let descriptor_set_layouts = [layout.raw];
 
-        while pool.current_pool < pool.sub_pools.len() {
-            let descriptor_set_info = vk::DescriptorSetAllocateInfo::default()
-                .descriptor_pool(pool.sub_pools[pool.current_pool])
-                .set_layouts(&descriptor_set_layouts);
-            let result = unsafe { self.core.allocate_descriptor_sets(&descriptor_set_info) };
-            match result {
-                Ok(vk_sets) => return vk_sets[0],
-                Err(vk::Result::ERROR_OUT_OF_POOL_MEMORY)
-                | Err(vk::Result::ERROR_FRAGMENTED_POOL) => {
-                    pool.current_pool += 1;
-                }
-                Err(other) => panic!("Unexpected descriptor allocation error: {:?}", other),
-            };
-        }
-
-        let next_max_sets = COUNT_BASE.pow(pool.sub_pools.len() as u32 + 1);
-        let vk_pool = self.create_descriptor_sub_pool(next_max_sets);
-        pool.sub_pools.push(vk_pool);
-        pool.current_pool = pool.sub_pools.len() - 1;
-
-        let descriptor_set_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(pool.sub_pools[pool.current_pool])
+        let mut descriptor_set_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(pool.sub_pools[0])
             .set_layouts(&descriptor_set_layouts);
+        let result = unsafe { self.core.allocate_descriptor_sets(&descriptor_set_info) };
+        match result {
+            Ok(vk_sets) => return vk_sets[0],
+            Err(vk::Result::ERROR_OUT_OF_POOL_MEMORY) | Err(vk::Result::ERROR_FRAGMENTED_POOL) => {}
+            Err(other) => panic!("Unexpected descriptor allocation error: {:?}", other),
+        };
 
+        let next_max_sets = COUNT_BASE.pow(pool.stage as u32 + 1);
+        pool.stage += 1;
+        let vk_pool = self.create_descriptor_sub_pool(next_max_sets);
+        pool.sub_pools.insert(0, vk_pool);
+
+        descriptor_set_info.descriptor_pool = vk_pool;
         let vk_sets = unsafe {
             self.core
                 .allocate_descriptor_sets(&descriptor_set_info)
@@ -111,13 +103,17 @@ impl super::Device {
     }
 
     pub(super) fn reset_descriptor_pool(&self, pool: &mut DescriptorPool) {
-        for &vk_pool in pool.sub_pools.iter() {
+        for &vk_pool in pool.sub_pools[1..].iter() {
             unsafe {
-                self.core
-                    .reset_descriptor_pool(vk_pool, vk::DescriptorPoolResetFlags::empty())
-                    .unwrap();
+                self.core.destroy_descriptor_pool(vk_pool, None);
             }
         }
-        pool.current_pool = 0
+
+        pool.sub_pools.truncate(1);
+        unsafe {
+            self.core
+                .reset_descriptor_pool(pool.sub_pools[0], vk::DescriptorPoolResetFlags::empty())
+                .unwrap();
+        }
     }
 }
