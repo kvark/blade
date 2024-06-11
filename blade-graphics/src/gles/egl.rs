@@ -150,7 +150,7 @@ fn init_egl(desc: &crate::ContextDesc) -> Result<(EglInstance, String), crate::N
         } else {
             egl::DynamicInstance::<egl::EGL1_4>::load_required()
         };
-        egl_result.map_err(|_| crate::NotSupportedError)?
+        egl_result.map_err(|e| crate::NotSupportedError::GLESLoadingError(e))?
     };
 
     let client_ext_str = match egl.query_string(None, egl::EXTENSIONS) {
@@ -234,7 +234,7 @@ impl Context {
         let (egl, _client_extensions) = init_egl(&desc)?;
         let egl1_5 = egl
             .upcast::<egl::EGL1_5>()
-            .ok_or(crate::NotSupportedError)?;
+            .ok_or(crate::NotSupportedError::NoSupportedDeviceFound)?;
 
         let (display, wsi_library) = match window.display_handle().unwrap().as_raw() {
             Rdh::Windows(display_handle) => {
@@ -316,7 +316,7 @@ impl Context {
             }
             other => {
                 log::error!("Unsupported RDH {:?}", other);
-                return Err(crate::NotSupportedError);
+                return Err(crate::NotSupportedError::NoSupportedPlatformFound);
             }
         };
 
@@ -671,7 +671,7 @@ impl EglContext {
     ) -> Result<Self, crate::NotSupportedError> {
         let version = egl
             .initialize(display)
-            .map_err(|_| crate::NotSupportedError)?;
+            .map_err(|e| crate::NotSupportedError::GLESError(e))?;
         let vendor = egl.query_string(Some(display), egl::VENDOR).unwrap();
         let display_extensions = egl
             .query_string(Some(display), egl::EXTENSIONS)
@@ -742,7 +742,7 @@ impl EglContext {
             Ok(context) => context,
             Err(e) => {
                 log::warn!("unable to create GLES 3.x context: {:?}", e);
-                return Err(crate::NotSupportedError);
+                return Err(crate::NotSupportedError::GLESError(e));
             }
         };
 
@@ -758,7 +758,7 @@ impl EglContext {
                     .map(Some)
                     .map_err(|e| {
                         log::warn!("Error in create_pbuffer_surface: {:?}", e);
-                        crate::NotSupportedError
+                        crate::NotSupportedError::GLESError(e)
                     })?
             };
 
@@ -887,5 +887,5 @@ fn choose_config(
         }
     }
 
-    Err(crate::NotSupportedError)
+    Err(crate::NotSupportedError::NoSupportedDeviceFound)
 }

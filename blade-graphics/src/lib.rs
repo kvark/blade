@@ -23,7 +23,6 @@
     clippy::pattern_type_mismatch,
 )]
 
-use ash::vk;
 pub use naga::{StorageAccess, VectorSize};
 pub type Transform = mint::RowMatrix3x4<f32>;
 
@@ -89,24 +88,24 @@ pub struct ContextDesc {
 
 #[derive(Debug)]
 pub enum NotSupportedError {
+    #[cfg(all(
+        not(gles),
+        any(vulkan, windows, target_os = "linux", target_os = "android")
+    ))]
     VulkanLoadingError(ash::LoadingError),
-    VulkanError(vk::Result),
-    /// Vulkan API below 1.1
-    ApiMismatch,
+    #[cfg(all(
+        not(gles),
+        any(vulkan, windows, target_os = "linux", target_os = "android")
+    ))]
+    VulkanError(ash::vk::Result),
+
+    #[cfg(any(gles, target_arch = "wasm32"))]
+    GLESLoadingError(egl::LoadError<libloading::Error>),
+    #[cfg(any(gles, target_arch = "wasm32"))]
+    GLESError(egl::Error),
+
     NoSupportedDeviceFound,
-    ExtensionNotSupported,
-}
-
-impl From<vk::Result> for NotSupportedError {
-    fn from(result: vk::Result) -> Self {
-        Self::VulkanError(result)
-    }
-}
-
-impl From<ash::LoadingError> for NotSupportedError {
-    fn from(result: ash::LoadingError) -> Self {
-        Self::VulkanLoadingError(result)
-    }
+    NoSupportedPlatformFound,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

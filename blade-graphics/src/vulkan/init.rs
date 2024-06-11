@@ -250,7 +250,7 @@ impl super::Context {
         let driver_api_version = match entry.try_enumerate_instance_version() {
             // Vulkan 1.1+
             Ok(Some(version)) => version,
-            Ok(None) => return Err(NotSupportedError::ApiMismatch),
+            Ok(None) => return Err(NotSupportedError::NoSupportedDeviceFound),
             Err(err) => {
                 log::error!("try_enumerate_instance_version: {:?}", err);
                 return Err(NotSupportedError::VulkanError(err));
@@ -306,17 +306,17 @@ impl super::Context {
                 vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME,
             ];
             if let Some((_, dh)) = surface_handles {
-                instance_extensions.extend(
-                    ash_window::enumerate_required_extensions(dh.as_raw())?
-                        .iter()
-                        .map(|&ptr| ffi::CStr::from_ptr(ptr)),
-                );
+                match ash_window::enumerate_required_extensions(dh.as_raw()) {
+                    Ok(extensions) => instance_extensions
+                        .extend(extensions.iter().map(|&ptr| ffi::CStr::from_ptr(ptr))),
+                    Err(e) => return Err(NotSupportedError::VulkanError(e)),
+                }
             }
 
             for inst_ext in instance_extensions.iter() {
                 if !supported_instance_extensions.contains(inst_ext) {
                     log::error!("Instance extension {:?} is not supported", inst_ext);
-                    return Err(NotSupportedError::ExtensionNotSupported);
+                    return Err(NotSupportedError::NoSupportedDeviceFound);
                 }
             }
             if supported_instance_extensions.contains(&vk::KHR_PORTABILITY_ENUMERATION_NAME) {
@@ -344,7 +344,10 @@ impl super::Context {
                 .flags(create_flags)
                 .enabled_layer_names(layer_strings)
                 .enabled_extension_names(extension_strings);
-            entry.create_instance(&create_info, None)?
+            match entry.create_instance(&create_info, None) {
+                Ok(instance) => instance,
+                Err(e) => return Err(NotSupportedError::VulkanError(e)),
+            }
         };
 
         let bugs = SystemBugs {
