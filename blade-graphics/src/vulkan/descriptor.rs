@@ -45,18 +45,12 @@ impl super::Device {
             max_inline_uniform_block_bindings: max_sets,
             ..Default::default()
         };
-        let descriptor_pool_info = if self.workarounds.intel_fix_descriptor_pool_leak {
-            vk::DescriptorPoolCreateInfo::default()
-                .max_sets(max_sets)
-                .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
-                .pool_sizes(&descriptor_sizes)
-                .push_next(&mut inline_uniform_block_info)
-        } else {
-            vk::DescriptorPoolCreateInfo::default()
-                .max_sets(max_sets)
-                .pool_sizes(&descriptor_sizes)
-                .push_next(&mut inline_uniform_block_info)
-        };
+
+        let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
+            .max_sets(max_sets)
+            .flags(self.workarounds.extra_descriptor_pool_create_flags)
+            .pool_sizes(&descriptor_sizes)
+            .push_next(&mut inline_uniform_block_info);
 
         unsafe {
             self.core

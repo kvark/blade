@@ -23,7 +23,7 @@ struct RayTracingDevice {
 struct Workarounds {
     extra_sync_src_access: vk::AccessFlags,
     extra_sync_dst_access: vk::AccessFlags,
-    intel_fix_descriptor_pool_leak: bool,
+    extra_descriptor_pool_create_flags: vk::DescriptorPoolCreateFlags,
 }
 
 #[derive(Clone)]
