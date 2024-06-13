@@ -46,10 +46,13 @@ impl super::Device {
             max_inline_uniform_block_bindings: max_sets,
             ..Default::default()
         };
+
         let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
             .max_sets(max_sets)
+            .flags(self.workarounds.extra_descriptor_pool_create_flags)
             .pool_sizes(&descriptor_sizes)
             .push_next(&mut inline_uniform_block_info);
+
         unsafe {
             self.core
                 .create_descriptor_pool(&descriptor_pool_info, None)
