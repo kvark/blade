@@ -316,7 +316,7 @@ impl Context {
             }
             other => {
                 log::error!("Unsupported RDH {:?}", other);
-                return Err(crate::NotSupportedError::NoSupportedPlatformFound);
+                return Err(crate::NotSupportedError::PlatformNotSupported);
             }
         };
 
