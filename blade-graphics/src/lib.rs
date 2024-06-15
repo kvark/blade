@@ -87,7 +87,26 @@ pub struct ContextDesc {
 }
 
 #[derive(Debug)]
-pub struct NotSupportedError;
+pub enum NotSupportedError {
+    #[cfg(all(
+        not(gles),
+        any(vulkan, windows, target_os = "linux", target_os = "android")
+    ))]
+    VulkanLoadingError(ash::LoadingError),
+    #[cfg(all(
+        not(gles),
+        any(vulkan, windows, target_os = "linux", target_os = "android")
+    ))]
+    VulkanError(ash::vk::Result),
+
+    #[cfg(gles)]
+    GLESLoadingError(egl::LoadError<libloading::Error>),
+    #[cfg(gles)]
+    GLESError(egl::Error),
+
+    NoSupportedDeviceFound,
+    PlatformNotSupported,
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Capabilities {

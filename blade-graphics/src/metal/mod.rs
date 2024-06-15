@@ -397,7 +397,8 @@ impl Context {
             std::env::set_var("MTL_HUD_ENABLED", "1");
         }
 
-        let device = metal::Device::system_default().ok_or(super::NotSupportedError)?;
+        let device = metal::Device::system_default()
+            .ok_or(super::NotSupportedError::NoSupportedDeviceFound)?;
         let queue = device.new_command_queue();
 
         let capture = if desc.capture {
@@ -442,7 +443,7 @@ impl Context {
             raw_window_handle::RawWindowHandle::AppKit(handle) => {
                 Surface::from_view(handle.ns_view.as_ptr() as *mut _)
             }
-            _ => return Err(crate::NotSupportedError),
+            _ => return Err(crate::NotSupportedError::PlatformNotSupported),
         };
 
         context.surface = Some(Mutex::new(surface));

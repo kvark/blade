@@ -21,7 +21,7 @@ pub struct Context {
 
 impl Context {
     pub unsafe fn init(_desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
-        Err(crate::NotSupportedError)
+        Err(crate::NotSupportedError::PlatformNotSupported)
     }
 
     pub unsafe fn init_windowed<
@@ -56,7 +56,7 @@ impl Context {
                     .and_then(|context| context.dyn_into::<web_sys::WebGl2RenderingContext>().ok())
                     .expect("Cannot convert into WebGL2 context")
             }
-            _ => return Err(crate::NotSupportedError),
+            _ => return Err(crate::NotSupportedError::PlatformNotSupported),
         };
 
         let glow = glow::Context::from_webgl2_context(webgl2.clone());
