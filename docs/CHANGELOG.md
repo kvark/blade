@@ -9,9 +9,15 @@ Changelog for Blade
     - transparency support
     - option to disable exclusive fullscreen
     - VK: using linear sRGB color space if available
-  - GLES: support for storage buffer and compute
-  - GLES: scissor rects, able to run "particle" example
-  - fixed initial RAM consumption
+  - exposed initialization errors
+  - Vk:
+    - fixed initial RAM consumption
+    - worked around Intel descriptor memory allocation bug
+  - GLES:
+    - support for storage buffer and compute
+    - scissor rects, able to run "particle" example
+    - blending and draw masks
+    - fixed texture uploads
 - window API switched to raw-window-handle-0.6
 
 ## blade-graphics-0.4, blade-render-0.3, blade-0.2 (22 Mar 2024)
