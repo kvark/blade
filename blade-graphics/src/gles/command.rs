@@ -227,6 +227,17 @@ impl super::PassEncoder<'_, super::RenderPipeline> {
     ) -> super::PipelineEncoder<'b> {
         self.commands
             .push(super::Command::SetProgram(pipeline.inner.program));
+
+        match &pipeline.inner.color_targets[..] {
+            &[(blend_state, write_masks)] => self
+                .commands
+                .push(super::Command::SetAllColorTargets(blend_state, write_masks)),
+            separate => self.commands.extend(separate.iter().zip(0..).map(
+                |(&(blend_state, write_masks), i)| {
+                    super::Command::SetSingleColorTarget(i, blend_state, write_masks)
+                },
+            )),
+        }
         super::PipelineEncoder {
             commands: self.commands,
             plain_data: self.plain_data,
@@ -454,6 +465,38 @@ impl crate::VertexFormat {
             Self::I32Vec2 => (2, glow::INT),
             Self::I32Vec3 => (3, glow::INT),
             Self::I32Vec4 => (4, glow::INT),
+        }
+    }
+}
+
+impl crate::BlendFactor {
+    fn to_gles(self) -> u32 {
+        match self {
+            Self::Zero => glow::ZERO,
+            Self::One => glow::ONE,
+            Self::Src => glow::SRC_COLOR,
+            Self::OneMinusSrc => glow::ONE_MINUS_SRC_COLOR,
+            Self::SrcAlpha => glow::SRC_ALPHA,
+            Self::OneMinusSrcAlpha => glow::ONE_MINUS_SRC_ALPHA,
+            Self::Dst => glow::DST_COLOR,
+            Self::OneMinusDst => glow::ONE_MINUS_DST_COLOR,
+            Self::DstAlpha => glow::DST_ALPHA,
+            Self::OneMinusDstAlpha => glow::ONE_MINUS_DST_ALPHA,
+            Self::SrcAlphaSaturated => glow::SRC_ALPHA_SATURATE,
+            Self::Constant => glow::CONSTANT_ALPHA,
+            Self::OneMinusConstant => glow::ONE_MINUS_CONSTANT_ALPHA,
+        }
+    }
+}
+
+impl crate::BlendOperation {
+    fn to_gles(self) -> u32 {
+        match self {
+            Self::Add => glow::FUNC_ADD,
+            Self::Subtract => glow::FUNC_SUBTRACT,
+            Self::ReverseSubtract => glow::FUNC_REVERSE_SUBTRACT,
+            Self::Min => glow::MIN,
+            Self::Max => glow::MAX,
         }
     }
 }
@@ -737,6 +780,48 @@ impl super::Command {
             Self::SetDrawColorBuffers(count) => {
                 gl.draw_buffers(&COLOR_ATTACHMENTS[..count as usize]);
             }
+            Self::SetAllColorTargets(blend, write_mask) => {
+                if let Some(blend_state) = blend {
+                    gl.enable(glow::BLEND);
+                    gl.blend_func_separate(
+                        blend_state.color.src_factor.to_gles(),
+                        blend_state.color.dst_factor.to_gles(),
+                        blend_state.alpha.src_factor.to_gles(),
+                        blend_state.alpha.dst_factor.to_gles(),
+                    );
+                    gl.blend_equation(blend_state.color.operation.to_gles());
+                } else {
+                    gl.disable(glow::BLEND);
+                }
+                gl.color_mask(
+                    write_mask.contains(crate::ColorWrites::RED),
+                    write_mask.contains(crate::ColorWrites::GREEN),
+                    write_mask.contains(crate::ColorWrites::BLUE),
+                    write_mask.contains(crate::ColorWrites::ALPHA),
+                );
+            }
+            Self::SetSingleColorTarget(i, blend, write_mask) => {
+                if let Some(blend_state) = blend {
+                    gl.enable_draw_buffer(glow::BLEND, i);
+                    gl.blend_func_separate_draw_buffer(
+                        i,
+                        blend_state.color.src_factor.to_gles(),
+                        blend_state.color.dst_factor.to_gles(),
+                        blend_state.alpha.src_factor.to_gles(),
+                        blend_state.alpha.dst_factor.to_gles(),
+                    );
+                    gl.blend_equation_draw_buffer(i, blend_state.color.operation.to_gles());
+                } else {
+                    gl.disable_draw_buffer(glow::BLEND, i);
+                }
+                gl.color_mask_draw_buffer(
+                    i,
+                    write_mask.contains(crate::ColorWrites::RED),
+                    write_mask.contains(crate::ColorWrites::GREEN),
+                    write_mask.contains(crate::ColorWrites::BLUE),
+                    write_mask.contains(crate::ColorWrites::ALPHA),
+                );
+            }
             Self::ClearColor {
                 draw_buffer,
                 color,
@@ -813,7 +898,7 @@ impl super::Command {
                 gl.use_program(None);
             }
             //SetPrimitive(PrimitiveState),
-            Self::SetBlendConstant(constant) => unimplemented!(),
+            Self::SetBlendConstant([r, g, b, a]) => gl.blend_color(r, g, b, a),
             Self::SetColorTarget {
                 draw_buffer_index,
                 //desc: ColorTargetDesc,

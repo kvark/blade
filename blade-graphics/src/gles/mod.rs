@@ -15,6 +15,7 @@ const DEBUG_ID: u32 = 0;
 bitflags::bitflags! {
     struct Capabilities: u32 {
         const BUFFER_STORAGE = 1 << 0;
+        const DRAW_BUFFERS_INDEXED = 1 << 1;
     }
 }
 
@@ -100,6 +101,7 @@ struct PipelineInner {
     program: glow::Program,
     group_mappings: Box<[ShaderDataMapping]>,
     vertex_attribute_infos: Box<[VertexAttributeInfo]>,
+    color_targets: Box<[(Option<crate::BlendState>, crate::ColorWrites)]>,
 }
 
 pub struct ComputePipeline {
@@ -253,6 +255,8 @@ enum Command {
     },
     InvalidateAttachment(u32),
     SetDrawColorBuffers(u8),
+    SetAllColorTargets(Option<crate::BlendState>, crate::ColorWrites),
+    SetSingleColorTarget(u32, Option<crate::BlendState>, crate::ColorWrites),
     ClearColor {
         draw_buffer: u32,
         color: crate::TextureColor,

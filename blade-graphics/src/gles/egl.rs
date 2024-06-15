@@ -810,6 +810,16 @@ impl EglContext {
             super::Capabilities::BUFFER_STORAGE,
             extensions.contains("GL_EXT_buffer_storage"),
         );
+        capabilities.set(
+            super::Capabilities::DRAW_BUFFERS_INDEXED,
+            if gl.version().is_embedded {
+                (gl.version().major, gl.version().minor) >= (3, 2)
+            } else {
+                (gl.version().major, gl.version().minor) >= (3, 0)
+            },
+            // glow uses unsuffixed functions like glEnablei instead of glEnableiEXT.
+            // Therefore, GL_EXT_draw_buffers_indexed is not sufficient.
+        );
 
         let limits = super::Limits {
             uniform_buffer_alignment: gl.get_parameter_i32(glow::UNIFORM_BUFFER_OFFSET_ALIGNMENT)
