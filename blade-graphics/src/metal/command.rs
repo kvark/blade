@@ -92,7 +92,7 @@ impl super::CommandEncoder {
     pub fn start(&mut self) {
         let queue = self.queue.lock().unwrap();
         self.raw = Some(objc::rc::autoreleasepool(|| {
-            let cmd_buf = queue.new_command_buffer();
+            let cmd_buf = queue.new_command_buffer_with_unretained_references();
             if !self.name.is_empty() {
                 cmd_buf.set_label(&self.name);
             }
