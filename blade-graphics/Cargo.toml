@@ -22,7 +22,7 @@ raw-window-handle = "0.6"
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 block = "0.1"
 core-graphics-types = "0.1"
-metal = "0.25"
+metal = "0.29"
 objc = "0.2.5"
 naga = { workspace = true, features = ["msl-out"] }
 
