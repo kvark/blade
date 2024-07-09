@@ -1027,6 +1027,12 @@ impl Renderer {
         }
     }
 
+    fn work_indices(&self) -> (usize, usize) {
+        let cur = self.frame_index & 1;
+        let prev = cur ^ 1;
+        (cur, prev.min(self.frame_index))
+    }
+
     /// Prepare to render a frame.
     #[profiling::function]
     pub fn prepare(
@@ -1082,8 +1088,7 @@ impl Renderer {
         ray_config: RayConfig,
     ) {
         let debug = self.make_debug_params(&debug_config);
-        let cur = self.frame_index % 2;
-        let prev = cur ^ 1;
+        let (cur, prev) = self.work_indices();
 
         if let mut pass = command_encoder.compute() {
             let mut pc = pass.with(&self.fill_pipeline);
@@ -1169,8 +1174,7 @@ impl Renderer {
             use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
             pad: 0,
         };
-        let cur = self.frame_index % 2;
-        let prev = cur ^ 1;
+        let (cur, prev) = self.work_indices();
         let temp = 2;
 
         if denoiser_config.temporal_weight < 1.0 {
