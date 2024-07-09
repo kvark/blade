@@ -138,7 +138,7 @@ fn atrous3x3(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     for (var yy=-1; yy<=1; yy+=1) {
         for (var xx=-1; xx<=1; xx+=1) {
-            let p = center + vec2<i32>(xx, yy) * (1 << params.iteration);
+            let p = center + vec2<i32>(xx, yy) * (1i << params.iteration);
             if (all(p == center) || any(p < vec2<i32>(0)) || any(p >= params.extent)) {
                 continue;
             }
