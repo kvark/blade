@@ -270,6 +270,8 @@ impl super::Context {
 
         let pipeline_options = msl::PipelineOptions {
             allow_and_force_point_size: flags.contains(ShaderFlags::ALLOW_POINT_SIZE),
+            vertex_pulling_transform: false,
+            vertex_buffer_mappings: Vec::new(),
         };
         let (source, info) =
             msl::write_string(&module, &sf.shader.info, &naga_options, &pipeline_options).unwrap();
