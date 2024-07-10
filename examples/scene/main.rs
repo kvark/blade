@@ -2,6 +2,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use blade_graphics as gpu;
+use blade_helpers::ControlledCamera;
 use std::{
     collections::VecDeque,
     fmt, fs,
@@ -133,8 +134,7 @@ struct Example {
     gizmo_mode: egui_gizmo::GizmoMode,
     have_objects_changed: bool,
     scene_revision: usize,
-    camera: blade_render::Camera,
-    fly_speed: f32,
+    camera: ControlledCamera,
     debug: blade_render::DebugConfig,
     track_hot_reloads: bool,
     need_accumulation_reset: bool,
@@ -233,24 +233,7 @@ impl Example {
             gizmo_mode: egui_gizmo::GizmoMode::Translate,
             have_objects_changed: false,
             scene_revision: 0,
-            camera: blade_render::Camera {
-                pos: mint::Vector3 {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                rot: mint::Quaternion {
-                    v: mint::Vector3 {
-                        x: 0.0,
-                        y: 0.0,
-                        z: 0.0,
-                    },
-                    s: 1.0,
-                },
-                fov_y: 0.0,
-                depth: 0.0,
-            },
-            fly_speed: 0.0,
+            camera: ControlledCamera::default(),
             debug: blade_render::DebugConfig::default(),
             track_hot_reloads: false,
             need_accumulation_reset: true,
@@ -307,7 +290,7 @@ impl Example {
             ron::de::from_bytes(&fs::read(scene_path).expect("Unable to open the scene file"))
                 .expect("Unable to parse the scene file");
 
-        self.camera = blade_render::Camera {
+        self.camera.inner = blade_render::Camera {
             pos: config_scene.camera.position,
             rot: glam::Quat::from(config_scene.camera.orientation)
                 .normalize()
@@ -315,7 +298,7 @@ impl Example {
             fov_y: config_scene.camera.fov_y,
             depth: MAX_DEPTH,
         };
-        self.fly_speed = config_scene.camera.speed;
+        self.camera.fly_speed = config_scene.camera.speed;
         self.ray_config.environment_importance_sampling = !config_scene.environment_map.is_empty();
         self.post_proc_config.average_luminocity = config_scene.average_luminocity;
 
@@ -363,10 +346,10 @@ impl Example {
     pub fn save_scene(&self, scene_path: &Path) {
         let config_scene = ConfigScene {
             camera: ConfigCamera {
-                position: self.camera.pos,
-                orientation: self.camera.rot,
-                fov_y: self.camera.fov_y,
-                speed: self.fly_speed,
+                position: self.camera.inner.pos,
+                orientation: self.camera.inner.rot,
+                fov_y: self.camera.inner.fov_y,
+                speed: self.camera.fly_speed,
             },
             environment_map: self.scene_environment_map.clone(),
             average_luminocity: self.post_proc_config.average_luminocity,
@@ -460,7 +443,7 @@ impl Example {
         if do_render {
             self.renderer.prepare(
                 command_encoder,
-                &self.camera,
+                &self.camera.inner,
                 self.is_point_selected || self.is_file_hovered,
                 self.debug.mouse_pos.is_some(),
                 self.need_accumulation_reset,
@@ -522,13 +505,11 @@ impl Example {
     }
 
     fn add_manipulation_gizmo(&mut self, obj_index: usize, ui: &mut egui::Ui) {
-        let view_matrix =
-            glam::Mat4::from_rotation_translation(self.camera.rot.into(), self.camera.pos.into())
-                .inverse();
+        let view_matrix = self.camera.get_view_matrix();
         let extent = self.renderer.get_surface_size();
-        let aspect = extent.width as f32 / extent.height as f32;
-        let projection_matrix =
-            glam::Mat4::perspective_rh(self.camera.fov_y, aspect, 1.0, self.camera.depth);
+        let projection_matrix = self
+            .camera
+            .get_projection_matrix(extent.width as f32 / extent.height as f32);
         let object = &mut self.objects[obj_index];
         let model_matrix = mint::ColumnMatrix4::from(mint::RowMatrix4 {
             x: object.transform.x,
@@ -590,25 +571,7 @@ impl Example {
         }
 
         egui::CollapsingHeader::new("Camera").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Position:");
-                ui.add(egui::DragValue::new(&mut self.camera.pos.x));
-                ui.add(egui::DragValue::new(&mut self.camera.pos.y));
-                ui.add(egui::DragValue::new(&mut self.camera.pos.z));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Rotation:");
-                ui.add(egui::DragValue::new(&mut self.camera.rot.v.x));
-                ui.add(egui::DragValue::new(&mut self.camera.rot.v.y));
-                ui.add(egui::DragValue::new(&mut self.camera.rot.v.z));
-                ui.add(egui::DragValue::new(&mut self.camera.rot.s));
-            });
-            ui.add(egui::Slider::new(&mut self.camera.fov_y, 0.5f32..=2.0f32).text("FOV"));
-            ui.add(
-                egui::Slider::new(&mut self.fly_speed, 1f32..=100000f32)
-                    .text("Fly speed")
-                    .logarithmic(true),
-            );
+            self.camera.populate_hud(ui);
         });
 
         egui::CollapsingHeader::new("Debug")
@@ -1006,19 +969,6 @@ impl Example {
         });
         true
     }
-
-    fn move_camera_by(&mut self, offset: glam::Vec3) {
-        let dir = glam::Quat::from(self.camera.rot) * offset;
-        self.camera.pos = (glam::Vec3::from(self.camera.pos) + dir).into();
-        self.debug.mouse_pos = None;
-    }
-    fn rotate_camera_z_by(&mut self, angle: f32) -> glam::Quat {
-        let quat = glam::Quat::from(self.camera.rot);
-        let rotation = glam::Quat::from_rotation_z(angle);
-        self.camera.rot = (quat * rotation).into();
-        self.debug.mouse_pos = None;
-        rotation
-    }
 }
 
 fn main() {
@@ -1044,7 +994,7 @@ fn main() {
 
     struct Drag {
         _screen_pos: glam::IVec2,
-        rotation: glam::Quat,
+        _rotation: glam::Quat,
     }
     let mut drag_start = None::<Drag>;
     let mut last_event = time::Instant::now();
@@ -1056,10 +1006,8 @@ fn main() {
             target.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
             let delta = last_event.elapsed().as_secs_f32();
+            let drag_speed = 0.01f32;
             last_event = time::Instant::now();
-            let move_speed = example.fly_speed * delta;
-            let rotate_speed = 0.01f32;
-            let rotate_speed_z = 1000.0 * delta;
 
             match event {
                 winit::event::Event::AboutToWait => {
@@ -1083,42 +1031,14 @@ fn main() {
                                     ..
                                 },
                             ..
-                        } => match key_code {
-                            winit::keyboard::KeyCode::Escape => {
+                        } => {
+                            if key_code == winit::keyboard::KeyCode::Escape {
                                 target.exit();
+                            } else if drag_start.is_none() && example.camera.on_key(key_code, delta)
+                            {
+                                example.debug.mouse_pos = None;
                             }
-                            winit::keyboard::KeyCode::KeyW => {
-                                example.move_camera_by(glam::Vec3::new(0.0, 0.0, -move_speed));
-                            }
-                            winit::keyboard::KeyCode::KeyS => {
-                                example.move_camera_by(glam::Vec3::new(0.0, 0.0, move_speed));
-                            }
-                            winit::keyboard::KeyCode::KeyA => {
-                                example.move_camera_by(glam::Vec3::new(-move_speed, 0.0, 0.0));
-                            }
-                            winit::keyboard::KeyCode::KeyD => {
-                                example.move_camera_by(glam::Vec3::new(move_speed, 0.0, 0.0));
-                            }
-                            winit::keyboard::KeyCode::KeyZ => {
-                                example.move_camera_by(glam::Vec3::new(0.0, -move_speed, 0.0));
-                            }
-                            winit::keyboard::KeyCode::KeyX => {
-                                example.move_camera_by(glam::Vec3::new(0.0, move_speed, 0.0));
-                            }
-                            winit::keyboard::KeyCode::KeyQ => {
-                                let rot = example.rotate_camera_z_by(rotate_speed_z);
-                                if let Some(ref mut drag) = drag_start {
-                                    drag.rotation *= rot;
-                                }
-                            }
-                            winit::keyboard::KeyCode::KeyE => {
-                                let rot = example.rotate_camera_z_by(-rotate_speed_z);
-                                if let Some(ref mut drag) = drag_start {
-                                    drag.rotation *= rot;
-                                }
-                            }
-                            _ => {}
-                        },
+                        }
                         winit::event::WindowEvent::CloseRequested => {
                             target.exit();
                         }
@@ -1130,7 +1050,7 @@ fn main() {
                             drag_start = match state {
                                 winit::event::ElementState::Pressed => Some(Drag {
                                     _screen_pos: last_mouse_pos.into(),
-                                    rotation: example.camera.rot.into(),
+                                    _rotation: example.camera.inner.rot.into(),
                                 }),
                                 winit::event::ElementState::Released => None,
                             };
@@ -1152,14 +1072,14 @@ fn main() {
                         }
                         winit::event::WindowEvent::CursorMoved { position, .. } => {
                             if let Some(_) = drag_start {
-                                let prev = glam::Quat::from(example.camera.rot);
+                                let prev = glam::Quat::from(example.camera.inner.rot);
                                 let rotation_local = glam::Quat::from_rotation_x(
-                                    (last_mouse_pos[1] as f32 - position.y as f32) * rotate_speed,
+                                    (last_mouse_pos[1] as f32 - position.y as f32) * drag_speed,
                                 );
                                 let rotation_global = glam::Quat::from_rotation_y(
-                                    (last_mouse_pos[0] as f32 - position.x as f32) * rotate_speed,
+                                    (last_mouse_pos[0] as f32 - position.x as f32) * drag_speed,
                                 );
-                                example.camera.rot =
+                                example.camera.inner.rot =
                                     (rotation_global * prev * rotation_local).into();
                                 example.debug.mouse_pos = None;
                             }

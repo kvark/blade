@@ -4,6 +4,7 @@ members = [
     "blade-asset",
     "blade-egui",
     "blade-graphics",
+    "blade-helpers",
     "blade-macros",
     "blade-render",
     "run-wasm",
@@ -20,11 +21,13 @@ glam = { version = "0.27", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
+#TODO: switch to crates
 naga = { git = "https://github.com/gfx-rs/wgpu", features = ["wgsl-in"], rev = "425526828f738c95ec50b016c6a761bc00d2fb25" }
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.25", features = ["derive"] }
 web-sys = "0.3.60"
+winit = "0.29"
 
 [lib]
 
@@ -60,12 +63,13 @@ rapier3d = { version = "0.19", features = ["debug-render"] }
 serde = { version = "1", features = ["serde_derive"] }
 slab = "0.4"
 strum = { workspace = true }
-winit = "0.29"
+winit = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 blade-render = { version = "0.3", path = "blade-render" }
 
 [dev-dependencies]
+blade-helpers = { version = "0.1", path = "blade-helpers" }
 blade-macros = { version = "0.2", path = "blade-macros" }
 bytemuck = { workspace = true }
 choir = { workspace = true }
