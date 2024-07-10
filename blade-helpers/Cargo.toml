@@ -1,0 +1,23 @@
+[package]
+name = "blade-helpers"
+version = "0.1.0"
+edition = "2021"
+description = "Helper classes for Blade apps"
+keywords = ["graphics", "engine"]
+license = "MIT"
+repository = "https://github.com/kvark/blade"
+publish = false
+
+[lib]
+
+[features]
+
+[dependencies]
+blade-render = { version = "0.3", path = "../blade-render" }
+egui = { workspace = true }
+glam = { workspace = true }
+mint = { workspace = true }
+winit = { workspace = true }
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["blade_render::*", "epaint::*", "mint::*", "winit::*"]
