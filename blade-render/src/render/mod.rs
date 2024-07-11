@@ -1029,8 +1029,8 @@ impl Renderer {
 
     fn work_indices(&self) -> (usize, usize) {
         let cur = self.frame_index & 1;
-        let prev = cur ^ 1;
-        (cur, prev.min(self.frame_index))
+        let prev = if cur < self.frame_index { cur ^ 1 } else { cur };
+        (cur, prev)
     }
 
     /// Prepare to render a frame.
