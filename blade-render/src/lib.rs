@@ -33,6 +33,7 @@ pub struct Vertex {
     pub tangent: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct Camera {
     pub pos: mint::Vector3<f32>,
     pub rot: mint::Quaternion<f32>,

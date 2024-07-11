@@ -18,6 +18,7 @@ Changelog for Blade
     - scissor rects, able to run "particle" example
     - blending and draw masks
     - fixed texture uploads
+- examples: "move"
 - window API switched to raw-window-handle-0.6
 
 ## blade-graphics-0.4, blade-render-0.3, blade-0.2 (22 Mar 2024)

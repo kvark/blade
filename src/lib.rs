@@ -342,6 +342,18 @@ pub struct FrameCamera {
     pub fov_y: f32,
 }
 
+impl From<blade_render::Camera> for FrameCamera {
+    fn from(cam: blade_render::Camera) -> Self {
+        Self {
+            transform: Transform {
+                position: cam.pos,
+                orientation: cam.rot,
+            },
+            fov_y: cam.fov_y,
+        }
+    }
+}
+
 /// Blade Engine encapsulates all the context for applications,
 /// such as the GPU context, Ray-tracing context, EGUI integration,
 /// asset hub, physics context, task processing, and more.
