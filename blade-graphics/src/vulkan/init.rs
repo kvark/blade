@@ -363,10 +363,14 @@ impl super::Context {
             }
         };
 
-        let vk_surface = surface_handles.map(|(wh, dh)| {
-            ash_window::create_surface(&entry, &core_instance, dh.as_raw(), wh.as_raw(), None)
-                .unwrap()
-        });
+        let vk_surface = if let Some((wh, dh)) = surface_handles {
+            Some(
+                ash_window::create_surface(&entry, &core_instance, dh.as_raw(), wh.as_raw(), None)
+                    .map_err(|e| NotSupportedError::VulkanError(e))?,
+            )
+        } else {
+            None
+        };
 
         let instance =
             super::Instance {
@@ -381,7 +385,10 @@ impl super::Context {
                 core: core_instance,
             };
 
-        let physical_devices = instance.core.enumerate_physical_devices().unwrap();
+        let physical_devices = instance
+            .core
+            .enumerate_physical_devices()
+            .map_err(|e| NotSupportedError::VulkanError(e))?;
         let (physical_device, capabilities) = physical_devices
             .into_iter()
             .find_map(|phd| {
