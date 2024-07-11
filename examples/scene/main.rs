@@ -577,7 +577,6 @@ impl Example {
         egui::CollapsingHeader::new("Debug")
             .default_open(true)
             .show(ui, |ui| {
-                ui.checkbox(&mut self.track_hot_reloads, "Hot reloading");
                 // debug mode
                 egui::ComboBox::from_label("View mode")
                     .selected_text(format!("{:?}", self.debug.view_mode))
