@@ -2,4 +2,5 @@
 
 mod camera;
 
+pub use blade_render::Camera;
 pub use camera::ControlledCamera;
