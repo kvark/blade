@@ -48,6 +48,7 @@ readme = "docs/README.md"
 blade-asset = { version = "0.2", path = "blade-asset" }
 blade-egui = { version = "0.3", path = "blade-egui" }
 blade-graphics = { version = "0.4", path = "blade-graphics" }
+blade-helpers = { version = "0.1", path = "blade-helpers" }
 blade-util = { version = "0.1", path = "blade-util" }
 base64 = { workspace = true }
 choir = { workspace = true }
@@ -62,14 +63,12 @@ profiling = { workspace = true }
 rapier3d = { version = "0.19", features = ["debug-render"] }
 serde = { version = "1", features = ["serde_derive"] }
 slab = "0.4"
-strum = { workspace = true }
 winit = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 blade-render = { version = "0.3", path = "blade-render" }
 
 [dev-dependencies]
-blade-helpers = { version = "0.1", path = "blade-helpers" }
 blade-macros = { version = "0.2", path = "blade-macros" }
 bytemuck = { workspace = true }
 choir = { workspace = true }

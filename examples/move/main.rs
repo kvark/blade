@@ -16,6 +16,8 @@ struct Game {
     object_handle: blade::ObjectHandle,
     angle: f32,
     last_event: time::Instant,
+    last_mouse_pos: [i32; 2],
+    is_point_selected: bool,
 }
 
 #[derive(Debug)]
@@ -100,6 +102,8 @@ impl Game {
             object_handle,
             angle: 0.0,
             last_event: time::Instant::now(),
+            last_mouse_pos: [0; 2],
+            is_point_selected: false,
         }
     }
 
@@ -168,6 +172,19 @@ impl Game {
                     },
                 );
             }
+            winit::event::WindowEvent::MouseInput {
+                state,
+                button: winit::event::MouseButton::Right,
+                ..
+            } => {
+                self.is_point_selected = match state {
+                    winit::event::ElementState::Pressed => true,
+                    winit::event::ElementState::Released => false,
+                };
+            }
+            winit::event::WindowEvent::CursorMoved { position, .. } => {
+                self.last_mouse_pos = [position.x as i32, position.y as i32];
+            }
             _ => {}
         }
 
@@ -190,6 +207,12 @@ impl Game {
 
     fn on_draw(&mut self) -> time::Duration {
         self.update_time();
+
+        self.engine.debug_mouse_pos(if self.is_point_selected {
+            Some(self.last_mouse_pos)
+        } else {
+            None
+        });
 
         let raw_input = self.egui_state.take_egui_input(&self.window);
         let egui_context = self.egui_state.egui_ctx().clone();

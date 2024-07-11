@@ -711,25 +711,28 @@ impl Engine {
 
     #[profiling::function]
     pub fn populate_hud(&mut self, ui: &mut egui::Ui) {
-        use strum::IntoEnumIterator as _;
+        let mut selection = blade_render::SelectionInfo::default();
+        if self.debug.mouse_pos.is_some() {
+            selection = self.renderer.read_debug_selection_info();
+            self.selected_object_handle = self.find_object(selection.custom_index);
+        }
+
         ui.checkbox(&mut self.track_hot_reloads, "Hot reloading");
+
         egui::CollapsingHeader::new("Rendering")
             .default_open(true)
             .show(ui, |ui| {
                 self.need_accumulation_reset |= ui.button("Reset Accumulation").clicked();
                 ui.checkbox(&mut self.denoiser_enabled, "Enable Denoiser");
-                egui::ComboBox::from_label("Debug mode")
-                    .selected_text(format!("{:?}", self.debug.view_mode))
-                    .show_ui(ui, |ui| {
-                        for value in blade_render::DebugMode::iter() {
-                            ui.selectable_value(
-                                &mut self.debug.view_mode,
-                                value,
-                                format!("{value:?}"),
-                            );
-                        }
-                    });
+                blade_helpers::populate_debug_hud(&mut self.debug, ui);
+                blade_helpers::populate_debug_selection(
+                    &mut self.debug.mouse_pos,
+                    &selection,
+                    &self.asset_hub,
+                    ui,
+                );
             });
+
         egui::CollapsingHeader::new("Visualize")
             .default_open(false)
             .show(ui, |ui| {
@@ -744,6 +747,7 @@ impl Engine {
                     self.physics.debug_pipeline.mode.set(flag, enabled);
                 }
             });
+
         egui::CollapsingHeader::new("Objects")
             .default_open(true)
             .show(ui, |ui| {
@@ -847,6 +851,20 @@ impl Engine {
     pub fn screen_aspect(&self) -> f32 {
         let size = self.renderer.get_surface_size();
         size.width as f32 / size.height.max(1) as f32
+    }
+
+    fn find_object(&self, geometry_index: u32) -> Option<ObjectHandle> {
+        let mut index = geometry_index as usize;
+        for (obj_handle, object) in self.objects.iter() {
+            for visual in object.visuals.iter() {
+                let model = &self.asset_hub.models[visual.model];
+                match index.checked_sub(model.geometries.len()) {
+                    Some(i) => index = i,
+                    None => return Some(ObjectHandle(obj_handle)),
+                }
+            }
+        }
+        None
     }
 
     pub fn add_object(
@@ -1142,5 +1160,9 @@ impl Engine {
 
     pub fn set_average_luminosity(&mut self, avg_lum: f32) {
         self.post_proc_config.average_luminocity = avg_lum;
+    }
+
+    pub fn debug_mouse_pos(&mut self, mouse_pos: Option<[i32; 2]>) {
+        self.debug.mouse_pos = mouse_pos;
     }
 }
