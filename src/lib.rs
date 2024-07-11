@@ -712,9 +712,11 @@ impl Engine {
     #[profiling::function]
     pub fn populate_hud(&mut self, ui: &mut egui::Ui) {
         use strum::IntoEnumIterator as _;
+        ui.checkbox(&mut self.track_hot_reloads, "Hot reloading");
         egui::CollapsingHeader::new("Rendering")
             .default_open(true)
             .show(ui, |ui| {
+                self.need_accumulation_reset |= ui.button("Reset Accumulation").clicked();
                 ui.checkbox(&mut self.denoiser_enabled, "Enable Denoiser");
                 egui::ComboBox::from_label("Debug mode")
                     .selected_text(format!("{:?}", self.debug.view_mode))
@@ -729,7 +731,7 @@ impl Engine {
                     });
             });
         egui::CollapsingHeader::new("Visualize")
-            .default_open(true)
+            .default_open(false)
             .show(ui, |ui| {
                 let all_bits = rapier3d::pipeline::DebugRenderMode::all().bits();
                 for bit_pos in 0..=all_bits.ilog2() {
