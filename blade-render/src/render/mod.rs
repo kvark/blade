@@ -1064,12 +1064,13 @@ impl Renderer {
                 self.debug.reset_lines(&mut transfer);
             }
             let total_reservoirs = self.surface_size.width as u64 * self.surface_size.height as u64;
-            let prev_reservoir_buf = self.targets.reservoir_buf[self.frame_index % 2];
-            transfer.fill_buffer(
-                prev_reservoir_buf.into(),
-                total_reservoirs * self.reservoir_size as u64,
-                0,
-            );
+            for reservoir_buf in self.targets.reservoir_buf.iter() {
+                transfer.fill_buffer(
+                    reservoir_buf.at(0),
+                    total_reservoirs * self.reservoir_size as u64,
+                    0,
+                );
+            }
         }
 
         self.frame_index += 1;
