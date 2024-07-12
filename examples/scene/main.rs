@@ -445,9 +445,12 @@ impl Example {
             self.renderer.prepare(
                 command_encoder,
                 &self.camera.inner,
-                self.is_point_selected || self.is_file_hovered,
-                self.debug.mouse_pos.is_some(),
-                self.need_accumulation_reset,
+                blade_render::FrameConfig {
+                    frozen: false,
+                    debug_draw: self.is_point_selected || self.is_file_hovered,
+                    reset_variance: self.debug.mouse_pos.is_none(),
+                    reset_reservoirs: self.need_accumulation_reset,
+                },
             );
             self.need_accumulation_reset = false;
 
