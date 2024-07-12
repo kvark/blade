@@ -372,11 +372,11 @@ pub struct Engine {
     render_objects: Vec<blade_render::Object>,
     debug: blade_render::DebugConfig,
     need_accumulation_reset: bool,
-    is_debug_drawing: bool,
-    ray_config: blade_render::RayConfig,
-    denoiser_enabled: bool,
-    denoiser_config: blade_render::DenoiserConfig,
-    post_proc_config: blade_render::PostProcConfig,
+    pub is_debug_drawing: bool,
+    pub ray_config: blade_render::RayConfig,
+    pub denoiser_enabled: bool,
+    pub denoiser_config: blade_render::DenoiserConfig,
+    pub post_proc_config: blade_render::PostProcConfig,
     track_hot_reloads: bool,
     workers: Vec<choir::WorkerHandle>,
     choir: Arc<choir::Choir>,
@@ -473,7 +473,7 @@ impl Engine {
             render_objects: Vec::new(),
             debug: blade_render::DebugConfig::default(),
             need_accumulation_reset: true,
-            is_debug_drawing: false,
+            is_debug_drawing: true,
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
                 environment_importance_sampling: false,
@@ -481,6 +481,7 @@ impl Engine {
                 spatial_taps: 1,
                 spatial_tap_history: 5,
                 spatial_radius: 10,
+                t_start: 0.01,
             },
             denoiser_enabled: true,
             denoiser_config: blade_render::DenoiserConfig {
@@ -488,7 +489,7 @@ impl Engine {
                 temporal_weight: 0.1,
             },
             post_proc_config: blade_render::PostProcConfig {
-                average_luminocity: 1.0,
+                average_luminocity: 0.5,
                 exposure_key_value: 1.0 / 9.6,
                 white_level: 1.0,
             },
@@ -1162,7 +1163,8 @@ impl Engine {
         self.post_proc_config.average_luminocity = avg_lum;
     }
 
-    pub fn debug_mouse_pos(&mut self, mouse_pos: Option<[i32; 2]>) {
+    pub fn set_debug(&mut self, update: bool, mouse_pos: Option<[i32; 2]>) {
+        self.is_debug_drawing = update;
         self.debug.mouse_pos = mouse_pos;
     }
 }

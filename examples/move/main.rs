@@ -18,6 +18,7 @@ struct Game {
     last_event: time::Instant,
     last_mouse_pos: [i32; 2],
     is_point_selected: bool,
+    is_debug_active: bool,
 }
 
 #[derive(Debug)]
@@ -45,7 +46,7 @@ impl Game {
                 fov_y: 1.0,
                 depth: 0.0,
             },
-            ..Default::default()
+            fly_speed: 10.0,
         };
 
         let data_path = PathBuf::from("examples/move/data");
@@ -104,6 +105,7 @@ impl Game {
             last_event: time::Instant::now(),
             last_mouse_pos: [0; 2],
             is_point_selected: false,
+            is_debug_active: false,
         }
     }
 
@@ -155,7 +157,9 @@ impl Game {
                 if key_code == winit::keyboard::KeyCode::Escape {
                     return Err(QuitEvent);
                 }
-                self.camera.on_key(key_code, delta);
+                if self.camera.on_key(key_code, delta) {
+                    self.is_debug_active = false;
+                }
             }
             winit::event::WindowEvent::CloseRequested => {
                 return Err(QuitEvent);
@@ -181,6 +185,7 @@ impl Game {
                     winit::event::ElementState::Pressed => true,
                     winit::event::ElementState::Released => false,
                 };
+                self.is_debug_active |= self.is_point_selected;
             }
             winit::event::WindowEvent::CursorMoved { position, .. } => {
                 self.last_mouse_pos = [position.x as i32, position.y as i32];
@@ -208,11 +213,14 @@ impl Game {
     fn on_draw(&mut self) -> time::Duration {
         self.update_time();
 
-        self.engine.debug_mouse_pos(if self.is_point_selected {
-            Some(self.last_mouse_pos)
-        } else {
-            None
-        });
+        self.engine.set_debug(
+            self.is_point_selected,
+            if self.is_debug_active {
+                Some(self.last_mouse_pos)
+            } else {
+                None
+            },
+        );
 
         let raw_input = self.egui_state.take_egui_input(&self.window);
         let egui_context = self.egui_state.egui_ctx().clone();
