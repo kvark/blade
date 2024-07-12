@@ -712,6 +712,8 @@ impl Engine {
 
     #[profiling::function]
     pub fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        use blade_helpers::ExposeHud as _;
+
         let mut selection = blade_render::SelectionInfo::default();
         if self.debug.mouse_pos.is_some() {
             selection = self.renderer.read_debug_selection_info();
@@ -721,11 +723,20 @@ impl Engine {
         ui.checkbox(&mut self.track_hot_reloads, "Hot reloading");
 
         egui::CollapsingHeader::new("Rendering")
-            .default_open(true)
+            .default_open(false)
             .show(ui, |ui| {
+                let old_config = self.ray_config;
+                self.ray_config.populate_hud(ui);
+                self.need_accumulation_reset |= self.ray_config != old_config;
                 self.need_accumulation_reset |= ui.button("Reset Accumulation").clicked();
                 ui.checkbox(&mut self.denoiser_enabled, "Enable Denoiser");
-                blade_helpers::populate_debug_hud(&mut self.debug, ui);
+                self.denoiser_config.populate_hud(ui);
+                self.post_proc_config.populate_hud(ui);
+            });
+        egui::CollapsingHeader::new("Debug")
+            .default_open(true)
+            .show(ui, |ui| {
+                self.debug.populate_hud(ui);
                 blade_helpers::populate_debug_selection(
                     &mut self.debug.mouse_pos,
                     &selection,

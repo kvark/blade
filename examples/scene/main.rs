@@ -2,7 +2,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use blade_graphics as gpu;
-use blade_helpers::{populate_debug_hud, populate_debug_selection, ControlledCamera};
+use blade_helpers::ControlledCamera;
 use std::{
     collections::VecDeque,
     fmt, fs,
@@ -541,6 +541,7 @@ impl Example {
 
     #[profiling::function]
     fn populate_view(&mut self, ui: &mut egui::Ui) {
+        use blade_helpers::{populate_debug_selection, ExposeHud as _};
         use strum::IntoEnumIterator as _;
 
         let delta = self.last_render_time.elapsed();
@@ -578,7 +579,7 @@ impl Example {
         egui::CollapsingHeader::new("Debug")
             .default_open(true)
             .show(ui, |ui| {
-                populate_debug_hud(&mut self.debug, ui);
+                self.debug.populate_hud(ui);
                 populate_debug_selection(
                     &mut self.debug.mouse_pos,
                     &selection,
@@ -640,69 +641,21 @@ impl Example {
 
         let old_ray_config = self.ray_config;
         egui::CollapsingHeader::new("Ray Trace")
-            .default_open(true)
+            .default_open(false)
             .show(ui, |ui| {
-                let rc = &mut self.ray_config;
-                ui.add(
-                    egui::Slider::new(&mut rc.num_environment_samples, 1..=100u32)
-                        .text("Num env samples")
-                        .logarithmic(true),
-                );
-                ui.checkbox(
-                    &mut rc.environment_importance_sampling,
-                    "Env importance sampling",
-                );
-                ui.add(
-                    egui::widgets::Slider::new(&mut rc.temporal_history, 0..=50)
-                        .text("Temporal history"),
-                );
-                ui.add(
-                    egui::widgets::Slider::new(&mut rc.spatial_taps, 0..=10).text("Spatial taps"),
-                );
-                ui.add(
-                    egui::widgets::Slider::new(&mut rc.spatial_tap_history, 0..=50)
-                        .text("Spatial tap history"),
-                );
-                ui.add(
-                    egui::widgets::Slider::new(&mut rc.spatial_radius, 1..=50)
-                        .text("Spatial radius (px)"),
-                );
+                self.ray_config.populate_hud(ui);
             });
         self.need_accumulation_reset |= self.ray_config != old_ray_config;
 
         egui::CollapsingHeader::new("Denoise")
-            .default_open(true)
+            .default_open(false)
             .show(ui, |ui| {
                 ui.checkbox(&mut self.denoiser_enabled, "Enable");
-                let dc = &mut self.denoiser_config;
-                ui.add(
-                    egui::Slider::new(&mut dc.temporal_weight, 0.0..=1.0f32)
-                        .text("Temporal weight"),
-                );
-                ui.add(egui::Slider::new(&mut dc.num_passes, 0..=5u32).text("A-trous passes"));
+                self.denoiser_config.populate_hud(ui);
             });
 
         egui::CollapsingHeader::new("Tone Map").show(ui, |ui| {
-            ui.add(
-                egui::Slider::new(
-                    &mut self.post_proc_config.average_luminocity,
-                    0.1f32..=1_000f32,
-                )
-                .text("Average luminocity")
-                .logarithmic(true),
-            );
-            ui.add(
-                egui::Slider::new(
-                    &mut self.post_proc_config.exposure_key_value,
-                    0.01f32..=10f32,
-                )
-                .text("Key value")
-                .logarithmic(true),
-            );
-            ui.add(
-                egui::Slider::new(&mut self.post_proc_config.white_level, 0.1f32..=2f32)
-                    .text("White level"),
-            );
+            self.post_proc_config.populate_hud(ui);
         });
 
         egui::CollapsingHeader::new("Performance").show(ui, |ui| {

@@ -1,25 +1,80 @@
-pub fn populate_debug_hud(debug: &mut blade_render::DebugConfig, ui: &mut egui::Ui) {
-    use strum::IntoEnumIterator as _;
+pub trait ExposeHud {
+    fn populate_hud(&mut self, ui: &mut egui::Ui);
+}
 
-    egui::ComboBox::from_label("View mode")
-        .selected_text(format!("{:?}", debug.view_mode))
-        .show_ui(ui, |ui| {
-            for value in blade_render::DebugMode::iter() {
-                ui.selectable_value(&mut debug.view_mode, value, format!("{value:?}"));
-            }
-        });
-
-    ui.label("Draw debug:");
-    for (name, bit) in blade_render::DebugDrawFlags::all().iter_names() {
-        let mut enabled = debug.draw_flags.contains(bit);
-        ui.checkbox(&mut enabled, name);
-        debug.draw_flags.set(bit, enabled);
+impl ExposeHud for blade_render::RayConfig {
+    fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        ui.add(
+            egui::Slider::new(&mut self.num_environment_samples, 1..=100u32)
+                .text("Num env samples")
+                .logarithmic(true),
+        );
+        ui.checkbox(
+            &mut self.environment_importance_sampling,
+            "Env importance sampling",
+        );
+        ui.add(
+            egui::widgets::Slider::new(&mut self.temporal_history, 0..=50).text("Temporal history"),
+        );
+        ui.add(egui::widgets::Slider::new(&mut self.spatial_taps, 0..=10).text("Spatial taps"));
+        ui.add(
+            egui::widgets::Slider::new(&mut self.spatial_tap_history, 0..=50)
+                .text("Spatial tap history"),
+        );
+        ui.add(
+            egui::widgets::Slider::new(&mut self.spatial_radius, 1..=50)
+                .text("Spatial radius (px)"),
+        );
     }
-    ui.label("Ignore textures:");
-    for (name, bit) in blade_render::DebugTextureFlags::all().iter_names() {
-        let mut enabled = debug.texture_flags.contains(bit);
-        ui.checkbox(&mut enabled, name);
-        debug.texture_flags.set(bit, enabled);
+}
+
+impl ExposeHud for blade_render::DenoiserConfig {
+    fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        ui.add(egui::Slider::new(&mut self.temporal_weight, 0.0..=1.0f32).text("Temporal weight"));
+        ui.add(egui::Slider::new(&mut self.num_passes, 0..=5u32).text("A-trous passes"));
+    }
+}
+
+impl ExposeHud for blade_render::PostProcConfig {
+    fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        ui.add(
+            egui::Slider::new(&mut self.average_luminocity, 0.1f32..=1_000f32)
+                .text("Average luminocity")
+                .logarithmic(true),
+        );
+        ui.add(
+            egui::Slider::new(&mut self.exposure_key_value, 0.01f32..=10f32)
+                .text("Key value")
+                .logarithmic(true),
+        );
+        ui.add(egui::Slider::new(&mut self.white_level, 0.1f32..=2f32).text("White level"));
+    }
+}
+
+impl ExposeHud for blade_render::DebugConfig {
+    fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        use strum::IntoEnumIterator as _;
+
+        egui::ComboBox::from_label("View mode")
+            .selected_text(format!("{:?}", self.view_mode))
+            .show_ui(ui, |ui| {
+                for value in blade_render::DebugMode::iter() {
+                    ui.selectable_value(&mut self.view_mode, value, format!("{value:?}"));
+                }
+            });
+
+        ui.label("Draw debug:");
+        for (name, bit) in blade_render::DebugDrawFlags::all().iter_names() {
+            let mut enabled = self.draw_flags.contains(bit);
+            ui.checkbox(&mut enabled, name);
+            self.draw_flags.set(bit, enabled);
+        }
+        ui.label("Ignore textures:");
+        for (name, bit) in blade_render::DebugTextureFlags::all().iter_names() {
+            let mut enabled = self.texture_flags.contains(bit);
+            ui.checkbox(&mut enabled, name);
+            self.texture_flags.set(bit, enabled);
+        }
     }
 }
 
