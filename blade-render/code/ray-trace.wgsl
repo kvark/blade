@@ -31,6 +31,7 @@ struct MainParams {
     spatial_taps: u32,
     spatial_tap_history: u32,
     spatial_radius: i32,
+    t_start: f32,
     use_motion_vectors: u32,
 };
 
@@ -222,11 +223,10 @@ fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> f32 {
 }
 
 fn check_ray_occluded(position: vec3<f32>, direction: vec3<f32>, debug_len: f32) -> bool {
-    let start_t = 0.5; // some offset required to avoid self-shadowing
     var rq: ray_query;
     let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
     rayQueryInitialize(&rq, acc_struct,
-        RayDesc(flags, 0xFFu, start_t, camera.depth, position, direction)
+        RayDesc(flags, 0xFFu, parameters.t_start, camera.depth, position, direction)
     );
     rayQueryProceed(&rq);
     let intersection = rayQueryGetCommittedIntersection(&rq);

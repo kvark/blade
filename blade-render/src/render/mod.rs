@@ -93,6 +93,7 @@ pub struct RayConfig {
     pub spatial_taps: u32,
     pub spatial_tap_history: u32,
     pub spatial_radius: u32,
+    pub t_start: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
@@ -358,6 +359,7 @@ struct MainParams {
     spatial_taps: u32,
     spatial_tap_history: u32,
     spatial_radius: u32,
+    t_start: f32,
     use_motion_vectors: u32,
 }
 
@@ -1136,6 +1138,7 @@ impl Renderer {
                         spatial_taps: ray_config.spatial_taps,
                         spatial_tap_history: ray_config.spatial_tap_history,
                         spatial_radius: ray_config.spatial_radius,
+                        t_start: ray_config.t_start,
                         use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
                     },
                     acc_struct: self.acceleration_structure,
