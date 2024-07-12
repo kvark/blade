@@ -197,6 +197,8 @@ impl Game {
     }
 
     fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        use blade_helpers::ExposeHud as _;
+
         egui::CollapsingHeader::new("Game")
             .default_open(true)
             .show(ui, |ui| {

@@ -1,3 +1,5 @@
+use super::ExposeHud;
+
 pub struct ControlledCamera {
     pub inner: blade_render::Camera,
     pub fly_speed: f32,
@@ -36,28 +38,6 @@ impl ControlledCamera {
 
     pub fn get_projection_matrix(&self, aspect: f32) -> glam::Mat4 {
         glam::Mat4::perspective_rh(self.inner.fov_y, aspect, 1.0, self.inner.depth)
-    }
-
-    pub fn populate_hud(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("Position:");
-            ui.add(egui::DragValue::new(&mut self.inner.pos.x));
-            ui.add(egui::DragValue::new(&mut self.inner.pos.y));
-            ui.add(egui::DragValue::new(&mut self.inner.pos.z));
-        });
-        ui.horizontal(|ui| {
-            ui.label("Rotation:");
-            ui.add(egui::DragValue::new(&mut self.inner.rot.v.x));
-            ui.add(egui::DragValue::new(&mut self.inner.rot.v.y));
-            ui.add(egui::DragValue::new(&mut self.inner.rot.v.z));
-            ui.add(egui::DragValue::new(&mut self.inner.rot.s));
-        });
-        ui.add(egui::Slider::new(&mut self.inner.fov_y, 0.5f32..=2.0f32).text("FOV"));
-        ui.add(
-            egui::Slider::new(&mut self.fly_speed, 1f32..=100000f32)
-                .text("Fly speed")
-                .logarithmic(true),
-        );
     }
 
     pub fn move_by(&mut self, offset: glam::Vec3) {
@@ -105,5 +85,29 @@ impl ControlledCamera {
         }
 
         true
+    }
+}
+
+impl ExposeHud for ControlledCamera {
+    fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Position:");
+            ui.add(egui::DragValue::new(&mut self.inner.pos.x));
+            ui.add(egui::DragValue::new(&mut self.inner.pos.y));
+            ui.add(egui::DragValue::new(&mut self.inner.pos.z));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Rotation:");
+            ui.add(egui::DragValue::new(&mut self.inner.rot.v.x));
+            ui.add(egui::DragValue::new(&mut self.inner.rot.v.y));
+            ui.add(egui::DragValue::new(&mut self.inner.rot.v.z));
+            ui.add(egui::DragValue::new(&mut self.inner.rot.s));
+        });
+        ui.add(egui::Slider::new(&mut self.inner.fov_y, 0.5f32..=2.0f32).text("FOV"));
+        ui.add(
+            egui::Slider::new(&mut self.fly_speed, 1f32..=100000f32)
+                .text("Fly speed")
+                .logarithmic(true),
+        );
     }
 }
