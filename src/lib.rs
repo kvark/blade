@@ -371,8 +371,7 @@ pub struct Engine {
     selected_collider: Option<rapier3d::geometry::ColliderHandle>,
     render_objects: Vec<blade_render::Object>,
     debug: blade_render::DebugConfig,
-    need_accumulation_reset: bool,
-    pub is_debug_drawing: bool,
+    pub frame_config: blade_render::FrameConfig,
     pub ray_config: blade_render::RayConfig,
     pub denoiser_enabled: bool,
     pub denoiser_config: blade_render::DenoiserConfig,
@@ -472,8 +471,12 @@ impl Engine {
             selected_collider: None,
             render_objects: Vec::new(),
             debug: blade_render::DebugConfig::default(),
-            need_accumulation_reset: true,
-            is_debug_drawing: true,
+            frame_config: blade_render::FrameConfig {
+                frozen: false,
+                debug_draw: true,
+                reset_variance: false,
+                reset_reservoirs: true,
+            },
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
                 environment_importance_sampling: false,
@@ -529,7 +532,7 @@ impl Engine {
         scale_factor: f32,
     ) {
         if self.track_hot_reloads {
-            self.need_accumulation_reset |= self.renderer.hot_reload(
+            self.frame_config.reset_reservoirs |= self.renderer.hot_reload(
                 &self.asset_hub,
                 &self.gpu_context,
                 self.pacer.last_sync_point().unwrap(),
@@ -550,8 +553,9 @@ impl Engine {
         if new_render_size != self.renderer.get_surface_size() {
             self.renderer
                 .resize_screen(new_render_size, command_encoder, &self.gpu_context);
-            self.need_accumulation_reset = true;
+            self.frame_config.reset_reservoirs = true;
         }
+        self.frame_config.reset_variance = self.debug.mouse_pos.is_none();
 
         self.gui_painter
             .update_textures(command_encoder, gui_textures, &self.gpu_context);
@@ -612,11 +616,9 @@ impl Engine {
                     fov_y: camera.fov_y,
                     depth: MAX_DEPTH,
                 },
-                self.is_debug_drawing,
-                self.debug.mouse_pos.is_some(),
-                self.need_accumulation_reset,
+                self.frame_config,
             );
-            self.need_accumulation_reset = false;
+            self.frame_config.reset_reservoirs = false;
 
             if !self.render_objects.is_empty() {
                 self.renderer
@@ -727,8 +729,8 @@ impl Engine {
             .show(ui, |ui| {
                 let old_config = self.ray_config;
                 self.ray_config.populate_hud(ui);
-                self.need_accumulation_reset |= self.ray_config != old_config;
-                self.need_accumulation_reset |= ui.button("Reset Accumulation").clicked();
+                self.frame_config.reset_reservoirs |= self.ray_config != old_config;
+                self.frame_config.reset_reservoirs |= ui.button("Reset Accumulation").clicked();
                 ui.checkbox(&mut self.denoiser_enabled, "Enable Denoiser");
                 self.denoiser_config.populate_hud(ui);
                 self.post_proc_config.populate_hud(ui);
@@ -1174,8 +1176,7 @@ impl Engine {
         self.post_proc_config.average_luminocity = avg_lum;
     }
 
-    pub fn set_debug(&mut self, update: bool, mouse_pos: Option<[i32; 2]>) {
-        self.is_debug_drawing = update;
+    pub fn set_debug_pixel(&mut self, mouse_pos: Option<[i32; 2]>) {
         self.debug.mouse_pos = mouse_pos;
     }
 }

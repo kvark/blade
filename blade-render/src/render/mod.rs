@@ -618,6 +618,14 @@ impl ShaderPipelines {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct FrameConfig {
+    pub frozen: bool,
+    pub debug_draw: bool,
+    pub reset_variance: bool,
+    pub reset_reservoirs: bool,
+}
+
 /// Temporary resources associated with a GPU frame.
 #[derive(Default)]
 pub struct FrameResources {
@@ -1041,28 +1049,26 @@ impl Renderer {
         &mut self,
         command_encoder: &mut blade_graphics::CommandEncoder,
         camera: &crate::Camera,
-        enable_debug_draw: bool,
-        accumulate_variance: bool,
-        reset_reservoirs: bool,
+        config: FrameConfig,
     ) {
         let mut transfer = command_encoder.transfer();
 
-        if enable_debug_draw {
+        if config.debug_draw {
             self.debug.reset_lines(&mut transfer);
             self.debug.enable_draw(&mut transfer, true);
         } else {
             self.debug.enable_draw(&mut transfer, false);
         }
 
-        if reset_reservoirs || !accumulate_variance {
+        if config.reset_reservoirs || config.reset_variance {
             self.debug.reset_variance(&mut transfer);
         } else {
             self.debug.update_variance(&mut transfer);
         }
         self.debug.update_entry(&mut transfer);
 
-        if reset_reservoirs {
-            if !enable_debug_draw {
+        if config.reset_reservoirs {
+            if !config.debug_draw {
                 self.debug.reset_lines(&mut transfer);
             }
             let total_reservoirs = self.surface_size.width as u64 * self.surface_size.height as u64;
@@ -1075,7 +1081,9 @@ impl Renderer {
             }
         }
 
-        self.frame_index += 1;
+        if !config.frozen {
+            self.frame_index += 1;
+        }
         self.targets.camera_params[self.frame_index % 2] = self.make_camera_params(camera);
         self.post_proc_input_index = self.frame_index % 2;
     }
