@@ -89,6 +89,7 @@ pub struct DebugConfig {
 pub struct RayConfig {
     pub num_environment_samples: u32,
     pub environment_importance_sampling: bool,
+    pub temporal_tap: bool,
     pub temporal_history: u32,
     pub spatial_taps: u32,
     pub spatial_tap_history: u32,
@@ -355,6 +356,7 @@ struct MainParams {
     frame_index: u32,
     num_environment_samples: u32,
     environment_importance_sampling: u32,
+    temporal_tap: u32,
     temporal_history: u32,
     spatial_taps: u32,
     spatial_tap_history: u32,
@@ -1142,6 +1144,7 @@ impl Renderer {
                         num_environment_samples: ray_config.num_environment_samples,
                         environment_importance_sampling: ray_config.environment_importance_sampling
                             as u32,
+                        temporal_tap: ray_config.temporal_tap as u32,
                         temporal_history: ray_config.temporal_history,
                         spatial_taps: ray_config.spatial_taps,
                         spatial_tap_history: ray_config.spatial_tap_history,

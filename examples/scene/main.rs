@@ -244,6 +244,7 @@ impl Example {
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
                 environment_importance_sampling: false,
+                temporal_tap: true,
                 temporal_history: 10,
                 spatial_taps: 1,
                 spatial_tap_history: 5,
