@@ -27,6 +27,7 @@ struct MainParams {
     frame_index: u32,
     num_environment_samples: u32,
     environment_importance_sampling: u32,
+    temporal_tap: u32,
     temporal_history: u32,
     spatial_taps: u32,
     spatial_tap_history: u32,
@@ -385,7 +386,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
             let r0 = max(prev_pixel - vec2<i32>(parameters.spatial_radius), vec2<i32>(0));
             let r1 = min(prev_pixel + vec2<i32>(parameters.spatial_radius + 1), vec2<i32>(prev_camera.target_size));
             other_pixel = vec2<i32>(mix(vec2<f32>(r0), vec2<f32>(r1), vec2<f32>(random_gen(rng), random_gen(rng))));
-        } else if (parameters.temporal_history == 0u)
+        } else if (parameters.temporal_tap == 0u)
         {
             continue;
         }

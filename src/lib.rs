@@ -480,6 +480,7 @@ impl Engine {
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
                 environment_importance_sampling: false,
+                temporal_tap: true,
                 temporal_history: 10,
                 spatial_taps: 1,
                 spatial_tap_history: 5,
@@ -532,7 +533,7 @@ impl Engine {
         scale_factor: f32,
     ) {
         if self.track_hot_reloads {
-            self.frame_config.reset_reservoirs |= self.renderer.hot_reload(
+            self.renderer.hot_reload(
                 &self.asset_hub,
                 &self.gpu_context,
                 self.pacer.last_sync_point().unwrap(),
@@ -727,9 +728,7 @@ impl Engine {
         egui::CollapsingHeader::new("Rendering")
             .default_open(false)
             .show(ui, |ui| {
-                let old_config = self.ray_config;
                 self.ray_config.populate_hud(ui);
-                self.frame_config.reset_reservoirs |= self.ray_config != old_config;
                 self.frame_config.reset_reservoirs |= ui.button("Reset Accumulation").clicked();
                 ui.checkbox(&mut self.denoiser_enabled, "Enable Denoiser");
                 self.denoiser_config.populate_hud(ui);
