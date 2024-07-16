@@ -311,6 +311,7 @@ pub struct Renderer {
     post_proc_pipeline: blade_graphics::RenderPipeline,
     blur: Blur,
     acceleration_structure: blade_graphics::AccelerationStructure,
+    prev_acceleration_structure: blade_graphics::AccelerationStructure,
     env_map: EnvironmentMap,
     dummy: DummyResources,
     hit_buffer: blade_graphics::Buffer,
@@ -392,6 +393,7 @@ struct MainData {
     debug: DebugParams,
     parameters: MainParams,
     acc_struct: blade_graphics::AccelerationStructure,
+    prev_acc_struct: blade_graphics::AccelerationStructure,
     sampler_linear: blade_graphics::Sampler,
     sampler_nearest: blade_graphics::Sampler,
     env_map: blade_graphics::TextureView,
@@ -701,6 +703,7 @@ impl Renderer {
                 atrous_pipeline: sp.atrous,
             },
             acceleration_structure: blade_graphics::AccelerationStructure::default(),
+            prev_acceleration_structure: blade_graphics::AccelerationStructure::default(),
             env_map: EnvironmentMap::with_pipeline(&dummy, sp.env_prepare),
             dummy,
             hit_buffer: blade_graphics::Buffer::default(),
@@ -726,6 +729,9 @@ impl Renderer {
             gpu.destroy_buffer(self.hit_buffer);
         }
         gpu.destroy_acceleration_structure(self.acceleration_structure);
+        if self.prev_acceleration_structure != blade_graphics::AccelerationStructure::default() {
+            gpu.destroy_acceleration_structure(self.prev_acceleration_structure);
+        }
         // env map, dummy, and debug
         self.env_map.destroy(gpu);
         self.dummy.destroy(gpu);
@@ -849,10 +855,11 @@ impl Renderer {
         self.env_map
             .assign(env_view, env_extent, command_encoder, gpu);
 
-        if self.acceleration_structure != blade_graphics::AccelerationStructure::default() {
+        if self.prev_acceleration_structure != blade_graphics::AccelerationStructure::default() {
             temp.acceleration_structures
-                .push(self.acceleration_structure);
+                .push(self.prev_acceleration_structure);
         }
+        self.prev_acceleration_structure = self.acceleration_structure;
 
         let geometry_count = objects
             .iter()
@@ -1153,6 +1160,14 @@ impl Renderer {
                         use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
                     },
                     acc_struct: self.acceleration_structure,
+                    prev_acc_struct: if self.frame_scene_built < self.frame_index
+                        || self.prev_acceleration_structure
+                            == blade_graphics::AccelerationStructure::default()
+                    {
+                        self.acceleration_structure
+                    } else {
+                        self.prev_acceleration_structure
+                    },
                     sampler_linear: self.samplers.linear,
                     sampler_nearest: self.samplers.nearest,
                     env_map: self.env_map.main_view,
