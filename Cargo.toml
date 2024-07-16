@@ -22,7 +22,7 @@ gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
 #TODO: switch to crates
-naga = { git = "https://github.com/gfx-rs/wgpu", features = ["wgsl-in"], rev = "425526828f738c95ec50b016c6a761bc00d2fb25" }
+naga = { git = "https://github.com/gfx-rs/wgpu", features = ["wgsl-in"], rev = "f44f52a85ddb3e7b93fe195fb98a8990b05575d8" }
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.25", features = ["derive"] }

@@ -41,6 +41,7 @@ var<uniform> prev_camera: CameraParams;
 var<uniform> parameters: MainParams;
 var<uniform> debug: DebugParams;
 var acc_struct: acceleration_structure;
+var prev_acc_struct: acceleration_structure;
 var env_map: texture_2d<f32>;
 var sampler_linear: sampler;
 var sampler_nearest: sampler;
@@ -223,10 +224,10 @@ fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> f32 {
     return lambert_brdf * max(0.0, lambert_term);
 }
 
-fn check_ray_occluded(position: vec3<f32>, direction: vec3<f32>, debug_len: f32) -> bool {
+fn check_ray_occluded(acs: acceleration_structure, position: vec3<f32>, direction: vec3<f32>, debug_len: f32) -> bool {
     var rq: ray_query;
     let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
-    rayQueryInitialize(&rq, acc_struct,
+    rayQueryInitialize(&rq, acs,
         RayDesc(flags, 0xFFu, parameters.t_start, camera.depth, position, direction)
     );
     rayQueryProceed(&rq);
@@ -273,7 +274,7 @@ fn make_target_score(color: vec3<f32>) -> TargetScore {
 }
 
 fn estimate_target_score_with_occlusion(
-    surface: Surface, position: vec3<f32>, light_index: u32, light_uv: vec2<f32>, debug_len: f32
+    surface: Surface, position: vec3<f32>, light_index: u32, light_uv: vec2<f32>, acs: acceleration_structure, debug_len: f32
 ) -> TargetScore {
     if (light_index != 0u) {
         return TargetScore();
@@ -287,7 +288,7 @@ fn estimate_target_score_with_occlusion(
         return TargetScore();
     }
 
-    if (check_ray_occluded(position, direction, debug_len)) {
+    if (check_ray_occluded(acs, position, direction, debug_len)) {
         return TargetScore();
     } else {
         //Note: same as `evaluate_reflected_light`
@@ -312,7 +313,7 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debu
         return 0.0;
     }
 
-    if (check_ray_occluded(start_pos, dir, debug_len)) {
+    if (check_ray_occluded(acc_struct, start_pos, dir, debug_len)) {
         return 0.0;
     }
 
@@ -435,7 +436,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
                 let neighbor_position = prev_camera.position + neighbor_surface.depth * neighbor_dir;
 
                 let t_canonical_at_neighbor = estimate_target_score_with_occlusion(
-                    neighbor_surface, neighbor_position, canonical.selected_light_index, canonical.selected_uv, debug_len);
+                    neighbor_surface, neighbor_position, canonical.selected_light_index, canonical.selected_uv, prev_acc_struct, debug_len);
                 let mis_sub_canonical = balance_heuristic(
                     t_canonical_at_neighbor.score, canonical.selected_target_score,
                     neighbor_history * f32(accepted_count), canonical.history);
@@ -448,7 +449,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
             // 2. we can use the cached target score, and there is no use of the target color
             //let t_neighbor_at_neighbor = estimate_target_pdf(neighbor_surface, neighbor_position, neighbor.selected_dir);
             let t_neighbor_at_canonical = estimate_target_score_with_occlusion(
-                surface, position, neighbor.light_index, neighbor.light_uv, debug_len);
+                surface, position, neighbor.light_index, neighbor.light_uv, acc_struct, debug_len);
             let mis_neighbor = balance_heuristic(
                 neighbor.target_score, t_neighbor_at_canonical.score,
                 neighbor_history * f32(accepted_count), canonical.history);
