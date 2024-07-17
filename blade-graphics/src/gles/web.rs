@@ -17,6 +17,7 @@ pub struct Context {
     swapchain: Swapchain,
     pub(super) capabilities: super::Capabilities,
     pub(super) limits: super::Limits,
+    pub(super) device_information: crate::DeviceInformation,
 }
 
 impl Context {
@@ -73,12 +74,20 @@ impl Context {
             extent: Cell::default(),
         };
 
+        let device_information = crate::DeviceInformation {
+            device_kind: crate::DeviceKind::VirtualGPU,
+            device_name: glow.get_parameter_string(glow::VENDOR),
+            driver_name: glow.get_parameter_string(glow::RENDERER),
+            driver_info: glow.get_parameter_string(glow::VERSION),
+        };
+
         Ok(Self {
             webgl2,
             glow,
             swapchain,
             capabilities,
             limits,
+            device_information,
         })
     }
 

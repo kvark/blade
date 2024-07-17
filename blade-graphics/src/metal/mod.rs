@@ -465,6 +465,10 @@ impl Context {
         }
     }
 
+    pub fn device_information(&self) -> &crate::DeviceInformation {
+        todo!();
+    }
+
     /// Get the CALayerMetal for this surface, if any.
     /// This is platform specific API.
     pub fn metal_layer(&self) -> Option<metal::MetalLayer> {

@@ -73,6 +73,7 @@ impl Example {
             )
             .unwrap()
         };
+        println!("{:?}", context.device_information());
 
         let surface_info = context.resize(gpu::SurfaceConfig {
             size: gpu::Extent {

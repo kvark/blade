@@ -114,6 +114,32 @@ pub struct Capabilities {
     pub ray_query: ShaderVisibility,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum DeviceKind {
+    #[default]
+    Unknown,
+    /// Integrated hardware GPU
+    IntegratedGPU,
+    /// Discrete hardware GPU
+    DiscreteGPU,
+    /// Virtualized GPU
+    VirtualGPU,
+    /// Emulated software GPU
+    SoftwareEmulator,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DeviceInformation {
+    /// The kind of GPU
+    pub device_kind: DeviceKind,
+    /// The name of the GPU device
+    pub device_name: String,
+    /// The driver used to talk to the GPU
+    pub driver_name: String,
+    /// Further information about the driver
+    pub driver_info: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Memory {
     /// Device-local memory. Fast for GPU operations.

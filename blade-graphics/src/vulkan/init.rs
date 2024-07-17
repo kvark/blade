@@ -37,6 +37,7 @@ struct SystemBugs {
 struct AdapterCapabilities {
     api_version: u32,
     properties: vk::PhysicalDeviceProperties,
+    device_information: crate::DeviceInformation,
     queue_family_index: u32,
     layered: bool,
     ray_tracing: bool,
@@ -88,12 +89,15 @@ unsafe fn inspect_adapter(
         vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
     let mut portability_subset_properties =
         vk::PhysicalDevicePortabilitySubsetPropertiesKHR::default();
+
+    let mut driver_properties = vk::PhysicalDeviceDriverPropertiesKHR::default();
     let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::default()
         .push_next(&mut inline_uniform_block_properties)
         .push_next(&mut timeline_semaphore_properties)
         .push_next(&mut descriptor_indexing_properties)
         .push_next(&mut acceleration_structure_properties)
-        .push_next(&mut portability_subset_properties);
+        .push_next(&mut portability_subset_properties)
+        .push_next(&mut driver_properties);
     instance
         .get_physical_device_properties2
         .get_physical_device_properties2(phd, &mut properties2_khr);
@@ -152,6 +156,10 @@ unsafe fn inspect_adapter(
     instance
         .get_physical_device_properties2
         .get_physical_device_features2(phd, &mut features2_khr);
+
+    instance
+        .get_physical_device_properties2
+        .get_physical_device_properties2(phd, &mut properties2_khr);
 
     let properties = properties2_khr.properties;
     let name = ffi::CStr::from_ptr(properties.device_name.as_ptr());
@@ -232,9 +240,30 @@ unsafe fn inspect_adapter(
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
     let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
 
+    let device_kind = match properties.device_type {
+        ash::vk::PhysicalDeviceType::CPU => crate::DeviceKind::SoftwareEmulator,
+        ash::vk::PhysicalDeviceType::INTEGRATED_GPU => crate::DeviceKind::IntegratedGPU,
+        ash::vk::PhysicalDeviceType::DISCRETE_GPU => crate::DeviceKind::DiscreteGPU,
+        ash::vk::PhysicalDeviceType::VIRTUAL_GPU => crate::DeviceKind::VirtualGPU,
+        _ => crate::DeviceKind::Unknown,
+    };
+    let device_information = crate::DeviceInformation {
+        device_kind,
+        device_name: ffi::CStr::from_ptr(properties.device_name.as_ptr())
+            .to_string_lossy()
+            .to_string(),
+        driver_name: ffi::CStr::from_ptr(driver_properties.driver_name.as_ptr())
+            .to_string_lossy()
+            .to_string(),
+        driver_info: ffi::CStr::from_ptr(driver_properties.driver_info.as_ptr())
+            .to_string_lossy()
+            .to_string(),
+    };
+
     Some(AdapterCapabilities {
         api_version,
         properties,
+        device_information,
         queue_family_index,
         layered: portability_subset_properties.min_vertex_input_binding_stride_alignment != 0,
         ray_tracing,
@@ -530,6 +559,7 @@ impl super::Context {
                 None
             },
             core: device_core,
+            device_information: capabilities.device_information,
             //TODO: detect GPU family
             workarounds: super::Workarounds {
                 extra_sync_src_access: vk::AccessFlags::TRANSFER_WRITE,
@@ -700,6 +730,10 @@ impl super::Context {
                 None => crate::ShaderVisibility::empty(),
             },
         }
+    }
+
+    pub fn device_information(&self) -> &crate::DeviceInformation {
+        &self.device.device_information
     }
 }
 

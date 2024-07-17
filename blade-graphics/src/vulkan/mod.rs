@@ -29,6 +29,7 @@ struct Workarounds {
 #[derive(Clone)]
 struct Device {
     core: ash::Device,
+    device_information: crate::DeviceInformation,
     debug_utils: ash::ext::debug_utils::Device,
     timeline_semaphore: khr::timeline_semaphore::Device,
     dynamic_rendering: khr::dynamic_rendering::Device,
