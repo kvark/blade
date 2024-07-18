@@ -197,7 +197,7 @@ impl Context {
             egl1_5
                 .get_platform_display(
                     EGL_PLATFORM_SURFACELESS_MESA,
-                    std::ptr::null_mut(),
+                    ptr::null_mut(),
                     &[egl::ATTRIB_NONE],
                 )
                 .unwrap()
@@ -419,9 +419,7 @@ impl Context {
             }
         }
         let alpha = if config.transparent {
-            attributes.push(egl::TRANSPARENT_TYPE);
-            attributes.push(egl::TRANSPARENT_RGB);
-            crate::AlphaMode::PostMultiplied //TODO: verify
+            crate::AlphaMode::PreMultiplied //TODO: verify
         } else {
             crate::AlphaMode::Ignored
         };
