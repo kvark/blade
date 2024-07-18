@@ -1,6 +1,6 @@
 use ash::{amd, ext, khr, vk};
 use naga::back::spv;
-use std::{ffi, fs, mem, sync::Mutex};
+use std::{ffi, mem, sync::Mutex};
 
 use crate::NotSupportedError;
 
@@ -24,11 +24,75 @@ const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
     vk::KHR_DYNAMIC_RENDERING_NAME,
 ];
 
+unsafe fn test_presentation(
+    instance: &super::Instance,
+    physical_device: vk::PhysicalDevice,
+    surface: vk::SurfaceKHR,
+) -> bool {
+    let device_extensions = vec![vk::KHR_SWAPCHAIN_NAME.as_ptr()];
+    let family_infos = [vk::DeviceQueueCreateInfo::default().queue_priorities(&[1.0])];
+    let device_create_info = vk::DeviceCreateInfo::default()
+        .queue_create_infos(&family_infos)
+        .enabled_extension_names(&device_extensions);
+    let device = instance
+        .core
+        .create_device(physical_device, &device_create_info, None)
+        .unwrap();
+
+    let fence = device
+        .create_fence(&vk::FenceCreateInfo::default(), None)
+        .unwrap();
+
+    let extension = khr::swapchain::Device::new(&instance.core, &device);
+    let capabilities = instance
+        .surface
+        .as_ref()
+        .unwrap()
+        .get_physical_device_surface_capabilities(physical_device, surface)
+        .unwrap();
+    let present_mode = instance
+        .surface
+        .as_ref()
+        .unwrap()
+        .get_physical_device_surface_present_modes(physical_device, surface)
+        .unwrap()[0];
+
+    let mut is_good = true;
+    let swapchain_create_info = vk::SwapchainCreateInfoKHR {
+        surface,
+        min_image_count: capabilities.min_image_count,
+        image_format: vk::Format::B8G8R8A8_UNORM,
+        image_extent: capabilities.min_image_extent,
+        image_array_layers: 1,
+        image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
+        composite_alpha: vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED,
+        present_mode,
+        ..Default::default()
+    };
+    match extension.create_swapchain(&swapchain_create_info, None) {
+        Ok(swapchain) => {
+            let result = extension.acquire_next_image(swapchain, !0, vk::Semaphore::null(), fence);
+            if result.is_err() {
+                log::warn!("Acquire frame failed, skipping the adapter");
+                is_good = false;
+            }
+            extension.destroy_swapchain(swapchain, None);
+        }
+        Err(_) => {
+            log::warn!("Swapchain creation failed, skipping the adapter");
+            is_good = false;
+        }
+    }
+
+    device.destroy_fence(fence, None);
+    device.destroy_device(None);
+    is_good
+}
+
 #[derive(Debug)]
 #[allow(unused)]
 struct SystemBugs {
-    /// https://gitlab.freedesktop.org/mesa/mesa/-/issues/4688
-    intel_unable_to_present: bool,
     /// https://github.com/kvark/blade/issues/117
     intel_fix_descriptor_pool_leak: bool,
 }
@@ -47,18 +111,15 @@ struct AdapterCapabilities {
     bugs: SystemBugs,
 }
 
-// See https://github.com/canonical/nvidia-prime/blob/587c5012be9dddcc17ab4d958f10a24fa3342b4d/prime-select#L56
-fn is_nvidia_prime_forced() -> bool {
-    match fs::read_to_string("/etc/prime-discrete") {
-        Ok(contents) => contents == "on\n",
-        Err(_) => false,
-    }
+struct SystemInfo {
+    driver_api_version: u32,
+    adapter_count: usize,
 }
 
 unsafe fn inspect_adapter(
     phd: vk::PhysicalDevice,
     instance: &super::Instance,
-    driver_api_version: u32,
+    info: &SystemInfo,
     surface: Option<vk::SurfaceKHR>,
 ) -> Option<AdapterCapabilities> {
     let mut inline_uniform_block_properties =
@@ -88,7 +149,7 @@ unsafe fn inspect_adapter(
     let name = ffi::CStr::from_ptr(properties.device_name.as_ptr());
     log::info!("Adapter: {:?}", name);
 
-    let api_version = properties.api_version.min(driver_api_version);
+    let api_version = properties.api_version.min(info.driver_api_version);
     if api_version < vk::API_VERSION_1_1 {
         log::warn!("\tRejected for API version {}", api_version);
         return None;
@@ -112,13 +173,38 @@ unsafe fn inspect_adapter(
         }
     }
 
+    let mut inline_uniform_block_properties =
+        vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
+    let mut timeline_semaphore_properties =
+        vk::PhysicalDeviceTimelineSemaphorePropertiesKHR::default();
+    let mut descriptor_indexing_properties =
+        vk::PhysicalDeviceDescriptorIndexingPropertiesEXT::default();
+    let mut acceleration_structure_properties =
+        vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
+    let mut portability_subset_properties =
+        vk::PhysicalDevicePortabilitySubsetPropertiesKHR::default();
+    let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::default()
+        .push_next(&mut inline_uniform_block_properties)
+        .push_next(&mut timeline_semaphore_properties)
+        .push_next(&mut descriptor_indexing_properties)
+        .push_next(&mut acceleration_structure_properties)
+        .push_next(&mut portability_subset_properties);
+    instance
+        .get_physical_device_properties2
+        .get_physical_device_properties2(phd, &mut properties2_khr);
+
+    let api_version = properties2_khr
+        .properties
+        .api_version
+        .min(info.driver_api_version);
+    if api_version < vk::API_VERSION_1_1 {
+        log::warn!("\tRejected for API version {}", api_version);
+        return None;
+    }
+
+    let vendor_id = properties2_khr.properties.vendor_id;
     let bugs = SystemBugs {
-        //Note: this is somewhat broad across X11/Wayland and different drivers.
-        // It could be narrower, but at the end of the day if the user forced Prime
-        // for GLX it should be safe to assume they want it for Vulkan as well.
-        intel_unable_to_present: is_nvidia_prime_forced()
-            && properties.vendor_id == db::intel::VENDOR,
-        intel_fix_descriptor_pool_leak: cfg!(windows) && properties.vendor_id == db::intel::VENDOR,
+        intel_fix_descriptor_pool_leak: cfg!(windows) && vendor_id == db::intel::VENDOR,
     };
 
     let mut full_screen_exclusive = false;
@@ -143,9 +229,13 @@ unsafe fn inspect_adapter(
         log::debug!("{:?}", capabilities2_khr.surface_capabilities);
         full_screen_exclusive = fullscreen_exclusive_ext.full_screen_exclusive_supported != 0;
 
-        if bugs.intel_unable_to_present {
-            log::warn!("Rejecting Intel for not presenting when Nvidia is present (on Linux)");
-            return None;
+        // Check if we are inspecting an Intel GPU on a multi-GPU Linux system.
+        // https://gitlab.freedesktop.org/mesa/mesa/-/issues/4688
+        if cfg!(target_os = "linux") && vendor_id == db::intel::VENDOR && info.adapter_count > 2 {
+            log::info!("Testing presentation capability on Linux/Intel");
+            if !test_presentation(instance, phd, surface) {
+                return None;
+            }
         }
     }
 
@@ -422,11 +512,14 @@ impl super::Context {
             .core
             .enumerate_physical_devices()
             .map_err(|e| NotSupportedError::VulkanError(e))?;
+        let system_info = SystemInfo {
+            driver_api_version,
+            adapter_count: physical_devices.len(),
+        };
         let (physical_device, capabilities) = physical_devices
             .into_iter()
             .find_map(|phd| {
-                inspect_adapter(phd, &instance, driver_api_version, vk_surface)
-                    .map(|caps| (phd, caps))
+                inspect_adapter(phd, &instance, &system_info, vk_surface).map(|caps| (phd, caps))
             })
             .ok_or_else(|| NotSupportedError::NoSupportedDeviceFound)?;
 
