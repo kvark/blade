@@ -114,24 +114,10 @@ pub struct Capabilities {
     pub ray_query: ShaderVisibility,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum DeviceKind {
-    #[default]
-    Unknown,
-    /// Integrated hardware GPU
-    IntegratedGPU,
-    /// Discrete hardware GPU
-    DiscreteGPU,
-    /// Virtualized GPU
-    VirtualGPU,
-    /// Emulated software GPU
-    SoftwareEmulator,
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct DeviceInformation {
-    /// The kind of GPU
-    pub device_kind: DeviceKind,
+    /// If this is something like llvmpipe, not a real GPU
+    pub is_software_emulated: bool,
     /// The name of the GPU device
     pub device_name: String,
     /// The driver used to talk to the GPU

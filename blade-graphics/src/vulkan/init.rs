@@ -240,15 +240,8 @@ unsafe fn inspect_adapter(
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
     let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
 
-    let device_kind = match properties.device_type {
-        ash::vk::PhysicalDeviceType::CPU => crate::DeviceKind::SoftwareEmulator,
-        ash::vk::PhysicalDeviceType::INTEGRATED_GPU => crate::DeviceKind::IntegratedGPU,
-        ash::vk::PhysicalDeviceType::DISCRETE_GPU => crate::DeviceKind::DiscreteGPU,
-        ash::vk::PhysicalDeviceType::VIRTUAL_GPU => crate::DeviceKind::VirtualGPU,
-        _ => crate::DeviceKind::Unknown,
-    };
     let device_information = crate::DeviceInformation {
-        device_kind,
+        is_software_emulated: properties.device_type == ash::vk::PhysicalDeviceType::CPU,
         device_name: ffi::CStr::from_ptr(properties.device_name.as_ptr())
             .to_string_lossy()
             .to_string(),

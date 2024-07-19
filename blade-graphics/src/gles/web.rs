@@ -75,7 +75,7 @@ impl Context {
         };
 
         let device_information = crate::DeviceInformation {
-            device_kind: crate::DeviceKind::VirtualGPU,
+            is_software_emulated: false,
             device_name: glow.get_parameter_string(glow::VENDOR),
             driver_name: glow.get_parameter_string(glow::RENDERER),
             driver_info: glow.get_parameter_string(glow::VERSION),

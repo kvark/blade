@@ -813,7 +813,7 @@ impl EglContext {
         log::info!("Renderer: {}", renderer);
         log::info!("Version: {}", version);
         let device_information = crate::DeviceInformation {
-            device_kind: crate::DeviceKind::Unknown, // todo
+            is_software_emulated: false,
             device_name: vendor,
             driver_name: renderer,
             driver_info: version,
