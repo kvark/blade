@@ -57,6 +57,15 @@ impl From<gpu::Transform> for TransformComponents {
         }
     }
 }
+impl From<transform_gizmo_egui::math::Transform> for TransformComponents {
+    fn from(t: transform_gizmo_egui::math::Transform) -> Self {
+        Self {
+            scale: glam::DVec3::from(t.scale).as_vec3(),
+            rotation: glam::DQuat::from(t.rotation).as_quat(),
+            translation: glam::DVec3::from(t.translation).as_vec3(),
+        }
+    }
+}
 impl TransformComponents {
     fn to_blade(&self) -> gpu::Transform {
         let m = glam::Mat4::from_scale_rotation_translation(
@@ -69,6 +78,13 @@ impl TransformComponents {
             x: m.x_axis.into(),
             y: m.y_axis.into(),
             z: m.z_axis.into(),
+        }
+    }
+    fn to_egui(&self) -> transform_gizmo_egui::math::Transform {
+        transform_gizmo_egui::math::Transform {
+            scale: self.scale.as_dvec3().into(),
+            rotation: self.rotation.as_dquat().into(),
+            translation: self.translation.as_dvec3().into(),
         }
     }
     fn is_inversible(&self) -> bool {
@@ -131,8 +147,8 @@ struct Example {
     object_extras: Vec<ObjectExtra>,
     selected_object_index: Option<usize>,
     need_picked_selection_frames: usize,
-    gizmo_mode: egui_gizmo::GizmoMode,
     have_objects_changed: bool,
+    gizmo: transform_gizmo_egui::Gizmo,
     scene_revision: usize,
     camera: ControlledCamera,
     debug: blade_render::DebugConfig,
@@ -230,8 +246,8 @@ impl Example {
             object_extras: Vec::new(),
             selected_object_index: None,
             need_picked_selection_frames: 0,
-            gizmo_mode: egui_gizmo::GizmoMode::Translate,
             have_objects_changed: false,
+            gizmo: Default::default(),
             scene_revision: 0,
             camera: ControlledCamera::default(),
             debug: blade_render::DebugConfig::default(),
@@ -510,36 +526,35 @@ impl Example {
     }
 
     fn add_manipulation_gizmo(&mut self, obj_index: usize, ui: &mut egui::Ui) {
+        use transform_gizmo_egui::GizmoExt as _;
+
         let view_matrix = self.camera.get_view_matrix();
         let extent = self.renderer.get_surface_size();
         let projection_matrix = self
             .camera
             .get_projection_matrix(extent.width as f32 / extent.height as f32);
-        let object = &mut self.objects[obj_index];
-        let model_matrix = mint::ColumnMatrix4::from(mint::RowMatrix4 {
-            x: object.transform.x,
-            y: object.transform.y,
-            z: object.transform.z,
-            w: [0.0, 0.0, 0.0, 1.0].into(),
+
+        self.gizmo.update_config(transform_gizmo_egui::GizmoConfig {
+            view_matrix: view_matrix.as_dmat4().into(),
+            projection_matrix: projection_matrix.as_dmat4().into(),
+            viewport: transform_gizmo_egui::Rect {
+                min: transform_gizmo_egui::math::Pos2::ZERO,
+                max: transform_gizmo_egui::math::Pos2 {
+                    x: extent.width as f32,
+                    y: extent.height as f32,
+                },
+            },
+            orientation: transform_gizmo_egui::GizmoOrientation::Global,
+            snapping: true,
+            ..Default::default()
         });
-        let gizmo = egui_gizmo::Gizmo::new("Object")
-            .view_matrix(mint::ColumnMatrix4::from(view_matrix))
-            .projection_matrix(mint::ColumnMatrix4::from(projection_matrix))
-            .model_matrix(model_matrix)
-            .mode(self.gizmo_mode)
-            .orientation(egui_gizmo::GizmoOrientation::Global)
-            .snapping(true);
-        if let Some(response) = gizmo.interact(ui) {
-            let t1 = TransformComponents {
-                scale: response.scale.into(),
-                rotation: response.rotation.into(),
-                translation: response.translation.into(),
-            }
-            .to_blade();
-            if object.transform != t1 {
-                object.transform = t1;
-                self.have_objects_changed = true;
-            }
+
+        let object = &mut self.objects[obj_index];
+        let tc = TransformComponents::from(object.transform);
+
+        if let Some((_result, transforms)) = self.gizmo.interact(ui, &[tc.to_egui()]) {
+            object.transform = TransformComponents::from(transforms[0]).to_blade();
+            self.have_objects_changed = true;
         }
     }
 
@@ -732,40 +747,27 @@ impl Example {
             egui::CollapsingHeader::new("Transform")
                 .default_open(true)
                 .show(ui, |ui| {
+                    use std::f32::consts::PI;
                     let object = self.objects.get_mut(index).unwrap();
                     let mut tc = TransformComponents::from(object.transform);
+                    let (mut a1, mut a2, mut a3) = tc.rotation.to_euler(glam::EulerRot::default());
                     ui.horizontal(|ui| {
-                        ui.selectable_value(
-                            &mut self.gizmo_mode,
-                            egui_gizmo::GizmoMode::Translate,
-                            "Translate",
-                        );
+                        ui.label("Translate");
                         ui.add(egui::DragValue::new(&mut tc.translation.x));
                         ui.add(egui::DragValue::new(&mut tc.translation.y));
                         ui.add(egui::DragValue::new(&mut tc.translation.z));
                     });
+                    ui.add(egui::Slider::new(&mut a1, -PI..=PI).text("Euler Y"));
+                    ui.add(egui::Slider::new(&mut a2, -PI * 0.5..=PI * 0.5).text("Euler X"));
+                    ui.add(egui::Slider::new(&mut a3, -PI..=PI).text("Euler Z"));
                     ui.horizontal(|ui| {
-                        ui.selectable_value(
-                            &mut self.gizmo_mode,
-                            egui_gizmo::GizmoMode::Rotate,
-                            "Rotate",
-                        );
-                        ui.add(egui::DragValue::new(&mut tc.rotation.x));
-                        ui.add(egui::DragValue::new(&mut tc.rotation.y));
-                        ui.add(egui::DragValue::new(&mut tc.rotation.z));
-                        ui.add(egui::DragValue::new(&mut tc.rotation.w));
-                    });
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(
-                            &mut self.gizmo_mode,
-                            egui_gizmo::GizmoMode::Scale,
-                            "Scale",
-                        );
+                        ui.label("Scale");
                         ui.add(egui::DragValue::new(&mut tc.scale.x));
                         ui.add(egui::DragValue::new(&mut tc.scale.y));
                         ui.add(egui::DragValue::new(&mut tc.scale.z));
                     });
 
+                    tc.rotation = glam::Quat::from_euler(glam::EulerRot::default(), a1, a2, a3);
                     let transform = tc.to_blade();
                     if object.transform != transform {
                         if tc.is_inversible() {
