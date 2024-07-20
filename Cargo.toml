@@ -16,7 +16,7 @@ base64 = "0.21"
 bitflags = "2"
 bytemuck = { version = "1", features = ["derive"] }
 choir = "0.7"
-egui = "0.26"
+egui = "0.28"
 glam = { version = "0.27", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
@@ -72,9 +72,10 @@ blade-macros = { version = "0.2", path = "blade-macros" }
 bytemuck = { workspace = true }
 choir = { workspace = true }
 egui = { workspace = true }
-egui-gizmo = "0.16"
-egui_plot = "0.26"
-env_logger = "0.10"
+#TODO: https://github.com/urholaukkarinen/transform-gizmo/pull/70
+transform-gizmo-egui = { git = "https://github.com/kvark/transform-gizmo", branch = "rust-version"}
+egui_plot = "0.28"
+env_logger = "0.11"
 glam = { workspace = true }
 log = { workspace = true }
 mint = { workspace = true, features = ["serde"] }
@@ -90,7 +91,7 @@ del-geo = "=0.1.19"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # see https://github.com/emilk/egui/issues/4270
-egui-winit = "0.26"
+egui-winit = "0.28"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 console_error_panic_hook = "0.1.7"
