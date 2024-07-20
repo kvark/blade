@@ -89,6 +89,9 @@ strum = { workspace = true }
 del-msh = "=0.1.25"
 del-geo = "=0.1.19"
 
+egui_extras = { version = "0.28", features = ["all_loaders"] }
+image = { version = "0.25", features = ["jpeg", "png"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # see https://github.com/emilk/egui/issues/4270
 egui-winit = "0.28"

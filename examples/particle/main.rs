@@ -122,6 +122,7 @@ fn main() {
         .unwrap();
 
     let egui_ctx = egui::Context::default();
+    egui_extras::install_image_loaders(&egui_ctx);
     let viewport_id = egui_ctx.viewport_id();
     let mut egui_winit = egui_winit::State::new(egui_ctx, viewport_id, &window, None, None);
 
@@ -166,6 +167,7 @@ fn main() {
                             let egui_output = egui_winit.egui_ctx().run(raw_input, |egui_ctx| {
                                 egui::SidePanel::left("my_side_panel").show(egui_ctx, |ui| {
                                     ui.heading("Particle System");
+                                    ui.add(egui::Image::new(egui::include_image!("../../docs/logo.png")));
                                     example.particle_system.add_gui(ui);
                                     if ui.button("Quit").clicked() {
                                         target.exit();
