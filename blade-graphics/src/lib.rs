@@ -67,7 +67,7 @@ pub mod gles;
     ),
     path = "vulkan/mod.rs"
 )]
-mod hal;
+pub mod hal;
 mod shader;
 pub mod traits;
 pub mod util;

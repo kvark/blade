@@ -4,6 +4,7 @@ mod shader_data;
 mod vertex;
 
 use proc_macro::TokenStream;
+use quote::quote;
 
 /// Derive the `ShaderData` trait for a struct
 ///
@@ -15,9 +16,28 @@ use proc_macro::TokenStream;
 ///   sm: blade_graphics::Sampler,
 /// }
 /// ```
-#[proc_macro_derive(ShaderData)]
-pub fn shader_data_derive(input: TokenStream) -> TokenStream {
-    let stream = match shader_data::generate(input) {
+#[proc_macro_derive(ShaderDataHal)]
+pub fn shader_data_hal_derive(input: TokenStream) -> TokenStream {
+    let stream = match shader_data::generate(input, quote! { blade_graphics::hal }) {
+        Ok(tokens) => tokens,
+        Err(err) => err.into_compile_error(),
+    };
+    stream.into()
+}
+
+/// Derive the `ShaderData` trait for a struct
+///
+/// ## Example
+///
+/// ```rust
+/// #[derive(blade_macros::ShaderData)]
+/// struct Test {
+///   sm: blade_graphics::Sampler,
+/// }
+/// ```
+#[proc_macro_derive(ShaderDataGles)]
+pub fn shader_data_gles_derive(input: TokenStream) -> TokenStream {
+    let stream = match shader_data::generate(input, quote! { blade_graphics::gles }) {
         Ok(tokens) => tokens,
         Err(err) => err.into_compile_error(),
     };

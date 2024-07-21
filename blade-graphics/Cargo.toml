@@ -12,6 +12,7 @@ repository = "https://github.com/kvark/blade"
 [features]
 default = ["gles"]
 gles = ["dep:glow", "dep:egl", "dep:libloading", "naga/glsl-out"]
+derive = ["dep:blade-macros"]
 
 [dependencies]
 bitflags = { workspace = true }
@@ -23,6 +24,7 @@ mint = { workspace = true }
 naga = { workspace = true }
 raw-window-handle = "0.6"
 glow = { version = "0.13", optional = true }
+blade-macros = { "path" = "../blade-macros", optional = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 block = "0.1"

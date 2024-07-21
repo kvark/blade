@@ -686,3 +686,6 @@ mod derive;
 
 #[path = "../common/util.rs"]
 mod util;
+
+#[cfg(feature = "derive")]
+pub use blade_macros::ShaderDataHal as ShaderData;

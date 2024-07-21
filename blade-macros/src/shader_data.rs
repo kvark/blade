@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 
-pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStream> {
+pub fn generate(input_stream: TokenStream, namespace: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
     let item_struct = syn::parse::<syn::ItemStruct>(input_stream)?;
     let fields = match item_struct.fields {
         syn::Fields::Named(ref fields) => fields,
@@ -44,14 +44,14 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
 
     let struct_name = item_struct.ident;
     Ok(quote! {
-        impl<#(#generics),*> blade_graphics::ShaderData for #struct_name<#(#generics),*> {
+        impl<#(#generics,)*> #namespace::ShaderData for #struct_name<#(#generics),*> {
             fn layout() -> blade_graphics::ShaderDataLayout {
                 blade_graphics::ShaderDataLayout {
                     bindings: vec![#(#bindings),*],
                 }
             }
-            fn fill(&self, mut ctx: blade_graphics::PipelineContext) {
-                use blade_graphics::ShaderBindable as _;
+            fn fill(&self, mut ctx: #namespace::PipelineContext) {
+                use #namespace::ShaderBindable as _;
                 #(#assignments)*
             }
         }
