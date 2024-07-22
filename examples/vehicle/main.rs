@@ -533,12 +533,12 @@ impl Game {
                     ui.label("Angle");
                     ui.add(
                         egui::DragValue::new(&mut self.cam_config.azimuth)
-                            .clamp_range(-consts::PI..=consts::PI)
+                            .range(-consts::PI..=consts::PI)
                             .speed(0.1),
                     );
                     ui.add(
                         egui::DragValue::new(&mut self.cam_config.altitude)
-                            .clamp_range(eps..=consts::FRAC_PI_2 - eps)
+                            .range(eps..=consts::FRAC_PI_2 - eps)
                             .speed(0.1),
                     );
                 });

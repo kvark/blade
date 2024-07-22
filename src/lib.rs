@@ -827,7 +827,7 @@ impl Engine {
                         .add(
                             egui::DragValue::new(&mut density)
                                 .prefix("Density: ")
-                                .clamp_range(0.1..=1e6),
+                                .range(0.1..=1e6),
                         )
                         .changed()
                     {
@@ -838,7 +838,7 @@ impl Engine {
                         .add(
                             egui::DragValue::new(&mut friction)
                                 .prefix("Friction: ")
-                                .clamp_range(0.0..=5.0)
+                                .range(0.0..=5.0)
                                 .speed(0.01),
                         )
                         .changed()
@@ -850,7 +850,7 @@ impl Engine {
                         .add(
                             egui::DragValue::new(&mut restitution)
                                 .prefix("Restituion: ")
-                                .clamp_range(0.0..=1.0)
+                                .range(0.0..=1.0)
                                 .speed(0.01),
                         )
                         .changed()
