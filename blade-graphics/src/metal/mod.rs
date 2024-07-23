@@ -49,6 +49,7 @@ pub struct Context {
     surface: Option<Mutex<Surface>>,
     capture: Option<metal::CaptureManager>,
     info: DeviceInfo,
+    device_information: crate::DeviceInformation,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
@@ -413,6 +414,12 @@ impl Context {
         } else {
             None
         };
+        let device_information = crate::DeviceInformation {
+            is_software_emulated: false,
+            device_name: device.name().to_string(),
+            driver_name: "Metal".to_string(),
+            driver_info: "".to_string(),
+        };
 
         Ok(Context {
             device: Mutex::new(device),
@@ -423,6 +430,7 @@ impl Context {
                 //TODO: determine based on OS version
                 language_version: metal::MTLLanguageVersion::V2_4,
             },
+            device_information,
         })
     }
 
@@ -463,6 +471,10 @@ impl Context {
                 crate::ShaderVisibility::empty()
             },
         }
+    }
+
+    pub fn device_information(&self) -> &crate::DeviceInformation {
+        &self.device_information
     }
 
     /// Get the CALayerMetal for this surface, if any.

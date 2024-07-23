@@ -404,6 +404,10 @@ impl Context {
             ray_query: crate::ShaderVisibility::empty(),
         }
     }
+
+    pub fn device_information(&self) -> &crate::DeviceInformation {
+        &self.device_information
+    }
 }
 
 #[hidden_trait::expose]

@@ -124,6 +124,7 @@ pub struct Context {
     inner: Mutex<ContextInner>,
     pub(super) capabilities: super::Capabilities,
     pub(super) limits: super::Limits,
+    pub(super) device_information: crate::DeviceInformation,
 }
 
 pub struct ContextLock<'a> {
@@ -208,7 +209,7 @@ impl Context {
 
         let egl_context = EglContext::init(&desc, egl, display)?;
         egl_context.make_current();
-        let (glow, capabilities, limits) = egl_context.load_functions(&desc);
+        let (glow, capabilities, device_information, limits) = egl_context.load_functions(&desc);
         egl_context.unmake_current();
 
         Ok(Self {
@@ -220,6 +221,7 @@ impl Context {
             }),
             capabilities,
             limits,
+            device_information,
         })
     }
 
@@ -322,7 +324,7 @@ impl Context {
 
         let egl_context = EglContext::init(&desc, egl, display)?;
         egl_context.make_current();
-        let (glow, capabilities, limits) = egl_context.load_functions(&desc);
+        let (glow, capabilities, device_information, limits) = egl_context.load_functions(&desc);
         let renderbuf = glow.create_renderbuffer().unwrap();
         let framebuf = glow.create_framebuffer().unwrap();
         egl_context.unmake_current();
@@ -341,6 +343,7 @@ impl Context {
             }),
             capabilities,
             limits,
+            device_information,
         })
     }
 
@@ -773,7 +776,12 @@ impl EglContext {
     unsafe fn load_functions(
         &self,
         desc: &crate::ContextDesc,
-    ) -> (glow::Context, super::Capabilities, super::Limits) {
+    ) -> (
+        glow::Context,
+        super::Capabilities,
+        crate::DeviceInformation,
+        super::Limits,
+    ) {
         let mut gl = glow::Context::from_loader_function(|name| {
             self.instance
                 .get_proc_address(name)
@@ -802,6 +810,12 @@ impl EglContext {
         log::info!("Vendor: {}", vendor);
         log::info!("Renderer: {}", renderer);
         log::info!("Version: {}", version);
+        let device_information = crate::DeviceInformation {
+            is_software_emulated: false,
+            device_name: vendor,
+            driver_name: renderer,
+            driver_info: version,
+        };
 
         let mut capabilities = super::Capabilities::empty();
         capabilities.set(
@@ -823,7 +837,7 @@ impl EglContext {
             uniform_buffer_alignment: gl.get_parameter_i32(glow::UNIFORM_BUFFER_OFFSET_ALIGNMENT)
                 as u32,
         };
-        (gl, capabilities, limits)
+        (gl, capabilities, device_information, limits)
     }
 }
 
