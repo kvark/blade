@@ -11,7 +11,8 @@ pub trait ResourceDevice {
     fn destroy_buffer(&self, buffer: Self::Buffer);
     fn create_texture(&self, desc: super::TextureDesc) -> Self::Texture;
     fn destroy_texture(&self, texture: Self::Texture);
-    fn create_texture_view(&self, desc: super::TextureViewDesc) -> Self::TextureView;
+    fn create_texture_view(&self, desc: super::TextureViewDesc<Self::Texture>)
+        -> Self::TextureView;
     fn destroy_texture_view(&self, view: Self::TextureView);
     fn create_sampler(&self, desc: super::SamplerDesc) -> Self::Sampler;
     fn destroy_sampler(&self, sampler: Self::Sampler);

@@ -218,7 +218,10 @@ impl crate::traits::ResourceDevice for super::Context {
         }
     }
 
-    fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
+    fn create_texture_view(
+        &self,
+        desc: crate::TextureViewDesc<super::Texture>,
+    ) -> super::TextureView {
         let texture = desc.texture.as_ref();
         let mtl_format = super::map_texture_format(desc.format);
         let mtl_type = map_view_dimension(desc.dimension);

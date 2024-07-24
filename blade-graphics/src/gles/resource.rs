@@ -231,7 +231,10 @@ impl crate::traits::ResourceDevice for super::Context {
         }
     }
 
-    fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
+    fn create_texture_view(
+        &self,
+        desc: crate::TextureViewDesc<super::Texture>,
+    ) -> super::TextureView {
         //TODO: actual reinterpretation
         super::TextureView {
             inner: desc.texture.inner,
