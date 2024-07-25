@@ -388,9 +388,8 @@ pub struct TextureSubresources {
 }
 
 #[derive(Debug)]
-pub struct TextureViewDesc<'a, T> {
+pub struct TextureViewDesc<'a> {
     pub name: &'a str,
-    pub texture: T,
     pub format: TextureFormat,
     pub dimension: ViewDimension,
     pub subresources: &'a TextureSubresources,

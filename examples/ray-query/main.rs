@@ -77,13 +77,15 @@ impl Example {
             mip_level_count: 1,
             usage: gpu::TextureUsage::RESOURCE | gpu::TextureUsage::STORAGE,
         });
-        let target_view = context.create_texture_view(gpu::TextureViewDesc {
-            name: "main",
-            texture: target,
-            format: TARGET_FORMAT,
-            dimension: gpu::ViewDimension::D2,
-            subresources: &gpu::TextureSubresources::default(),
-        });
+        let target_view = context.create_texture_view(
+            target,
+            gpu::TextureViewDesc {
+                name: "main",
+                format: TARGET_FORMAT,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &gpu::TextureSubresources::default(),
+            },
+        );
 
         let surface_info = context.resize(gpu::SurfaceConfig {
             size: screen_size,

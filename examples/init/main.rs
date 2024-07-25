@@ -30,13 +30,15 @@ impl EnvMapSampler {
             dimension: gpu::TextureDimension::D2,
             usage: gpu::TextureUsage::TARGET,
         });
-        let accum_view = context.create_texture_view(gpu::TextureViewDesc {
-            texture: accum_texture,
-            name: "env-test",
-            format,
-            dimension: gpu::ViewDimension::D2,
-            subresources: &gpu::TextureSubresources::default(),
-        });
+        let accum_view = context.create_texture_view(
+            accum_texture,
+            gpu::TextureViewDesc {
+                name: "env-test",
+                format,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &gpu::TextureSubresources::default(),
+            },
+        );
 
         let layout = <EnvSampleData as gpu::ShaderData>::layout();
         let init_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {

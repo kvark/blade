@@ -233,12 +233,13 @@ impl crate::traits::ResourceDevice for super::Context {
 
     fn create_texture_view(
         &self,
-        desc: crate::TextureViewDesc<super::Texture>,
+        texture: super::Texture,
+        desc: crate::TextureViewDesc,
     ) -> super::TextureView {
         //TODO: actual reinterpretation
         super::TextureView {
-            inner: desc.texture.inner,
-            target_size: desc.texture.target_size,
+            inner: texture.inner,
+            target_size: texture.target_size,
             aspects: desc.format.aspects(),
         }
     }
