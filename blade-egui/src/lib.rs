@@ -71,13 +71,15 @@ impl GuiTexture {
             dimension: blade_graphics::TextureDimension::D2,
             usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
         });
-        let view = context.create_texture_view(blade_graphics::TextureViewDesc {
-            name,
-            texture: allocation,
-            format,
-            dimension: blade_graphics::ViewDimension::D2,
-            subresources: &blade_graphics::TextureSubresources::default(),
-        });
+        let view = context.create_texture_view(
+            allocation,
+            blade_graphics::TextureViewDesc {
+                name,
+                format,
+                dimension: blade_graphics::ViewDimension::D2,
+                subresources: &blade_graphics::TextureSubresources::default(),
+            },
+        );
         Self { allocation, view }
     }
 

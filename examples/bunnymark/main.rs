@@ -131,13 +131,15 @@ impl Example {
             mip_level_count: 1,
             usage: gpu::TextureUsage::RESOURCE | gpu::TextureUsage::COPY,
         });
-        let view = context.create_texture_view(gpu::TextureViewDesc {
-            name: "view",
+        let view = context.create_texture_view(
             texture,
-            format: gpu::TextureFormat::Rgba8Unorm,
-            dimension: gpu::ViewDimension::D2,
-            subresources: &Default::default(),
-        });
+            gpu::TextureViewDesc {
+                name: "view",
+                format: gpu::TextureFormat::Rgba8Unorm,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &Default::default(),
+            },
+        );
 
         let upload_buffer = context.create_buffer(gpu::BufferDesc {
             name: "staging",

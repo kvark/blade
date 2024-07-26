@@ -112,25 +112,29 @@ impl EnvironmentMap {
             mip_level_count,
             usage: blade_graphics::TextureUsage::RESOURCE | blade_graphics::TextureUsage::STORAGE,
         });
-        self.weight_view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
-            name: "env-weight",
-            texture: self.weight_texture,
-            format,
-            dimension: blade_graphics::ViewDimension::D2,
-            subresources: &Default::default(),
-        });
-        for base_mip_level in 0..mip_level_count {
-            let view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
-                name: &format!("env-weight-mip{}", base_mip_level),
-                texture: self.weight_texture,
+        self.weight_view = gpu.create_texture_view(
+            self.weight_texture,
+            blade_graphics::TextureViewDesc {
+                name: "env-weight",
                 format,
                 dimension: blade_graphics::ViewDimension::D2,
-                subresources: &blade_graphics::TextureSubresources {
-                    base_mip_level,
-                    mip_level_count: NonZeroU32::new(1),
-                    ..Default::default()
+                subresources: &Default::default(),
+            },
+        );
+        for base_mip_level in 0..mip_level_count {
+            let view = gpu.create_texture_view(
+                self.weight_texture,
+                blade_graphics::TextureViewDesc {
+                    name: &format!("env-weight-mip{}", base_mip_level),
+                    format,
+                    dimension: blade_graphics::ViewDimension::D2,
+                    subresources: &blade_graphics::TextureSubresources {
+                        base_mip_level,
+                        mip_level_count: NonZeroU32::new(1),
+                        ..Default::default()
+                    },
                 },
-            });
+            );
             self.weight_mips.push(view);
         }
 

@@ -312,11 +312,15 @@ impl crate::traits::ResourceDevice for super::Context {
         self.free_memory(texture.memory_handle);
     }
 
-    fn create_texture_view(&self, desc: crate::TextureViewDesc) -> super::TextureView {
+    fn create_texture_view(
+        &self,
+        texture: super::Texture,
+        desc: crate::TextureViewDesc,
+    ) -> super::TextureView {
         let aspects = desc.format.aspects();
         let subresource_range = super::map_subresource_range(desc.subresources, aspects);
         let vk_info = vk::ImageViewCreateInfo {
-            image: desc.texture.raw,
+            image: texture.raw,
             view_type: map_view_dimension(desc.dimension),
             format: super::map_texture_format(desc.format),
             subresource_range: subresource_range,
@@ -331,8 +335,8 @@ impl crate::traits::ResourceDevice for super::Context {
         super::TextureView {
             raw,
             target_size: [
-                (desc.texture.target_size[0] >> desc.subresources.base_mip_level).max(1),
-                (desc.texture.target_size[1] >> desc.subresources.base_mip_level).max(1),
+                (texture.target_size[0] >> desc.subresources.base_mip_level).max(1),
+                (texture.target_size[1] >> desc.subresources.base_mip_level).max(1),
             ],
             aspects,
         }

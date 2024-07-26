@@ -397,15 +397,15 @@ impl blade_asset::Baker for Baker {
                 dimension: blade_graphics::TextureDimension::D2,
                 usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
             });
-        let view = self
-            .gpu_context
-            .create_texture_view(blade_graphics::TextureViewDesc {
+        let view = self.gpu_context.create_texture_view(
+            texture,
+            blade_graphics::TextureViewDesc {
                 name,
-                texture,
                 format: image.format.0,
                 dimension: blade_graphics::ViewDimension::D2,
                 subresources: &Default::default(),
-            });
+            },
+        );
         self.pending_operations
             .lock()
             .unwrap()

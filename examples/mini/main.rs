@@ -62,18 +62,20 @@ fn main() {
     });
     let views = (0..mip_level_count)
         .map(|i| {
-            context.create_texture_view(gpu::TextureViewDesc {
-                name: &format!("mip-{}", i),
+            context.create_texture_view(
                 texture,
-                format: gpu::TextureFormat::Rgba8Unorm,
-                dimension: gpu::ViewDimension::D2,
-                subresources: &gpu::TextureSubresources {
-                    base_mip_level: i,
-                    mip_level_count: NonZeroU32::new(1),
-                    base_array_layer: 0,
-                    array_layer_count: None,
+                gpu::TextureViewDesc {
+                    name: &format!("mip-{}", i),
+                    format: gpu::TextureFormat::Rgba8Unorm,
+                    dimension: gpu::ViewDimension::D2,
+                    subresources: &gpu::TextureSubresources {
+                        base_mip_level: i,
+                        mip_level_count: NonZeroU32::new(1),
+                        base_array_layer: 0,
+                        array_layer_count: None,
+                    },
                 },
-            })
+            )
         })
         .collect::<Vec<_>>();
 

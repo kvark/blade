@@ -172,17 +172,19 @@ impl<const N: usize> RenderTarget<N> {
 
         let mut views = [blade_graphics::TextureView::default(); N];
         for (i, view) in views.iter_mut().enumerate() {
-            *view = gpu.create_texture_view(blade_graphics::TextureViewDesc {
-                name: &format!("{name}{i}"),
+            *view = gpu.create_texture_view(
                 texture,
-                format,
-                dimension: blade_graphics::ViewDimension::D2,
-                subresources: &blade_graphics::TextureSubresources {
-                    base_array_layer: i as u32,
-                    array_layer_count: NonZeroU32::new(1),
-                    ..Default::default()
+                blade_graphics::TextureViewDesc {
+                    name: &format!("{name}{i}"),
+                    format,
+                    dimension: blade_graphics::ViewDimension::D2,
+                    subresources: &blade_graphics::TextureSubresources {
+                        base_array_layer: i as u32,
+                        array_layer_count: NonZeroU32::new(1),
+                        ..Default::default()
+                    },
                 },
-            });
+            );
         }
 
         Self { texture, views }
