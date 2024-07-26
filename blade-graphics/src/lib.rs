@@ -567,7 +567,7 @@ pub enum ShaderBinding {
     Plain { size: u32 },
 }
 
-pub trait ShaderBindable: Clone + Copy {
+pub trait ShaderBindable: Clone + Copy + derive::HasShaderBinding {
     fn bind_to(&self, context: &mut PipelineContext, index: u32);
 }
 
