@@ -55,7 +55,13 @@ pub mod derive;
 #[cfg_attr(
     all(
         not(gles),
-        any(vulkan, windows, target_os = "linux", target_os = "android")
+        any(
+            vulkan,
+            windows,
+            target_os = "linux",
+            target_os = "android",
+            target_os = "freebsd"
+        )
     ),
     path = "vulkan/mod.rs"
 )]
@@ -90,12 +96,24 @@ pub struct ContextDesc {
 pub enum NotSupportedError {
     #[cfg(all(
         not(gles),
-        any(vulkan, windows, target_os = "linux", target_os = "android")
+        any(
+            vulkan,
+            windows,
+            target_os = "linux",
+            target_os = "android",
+            target_os = "freebsd"
+        )
     ))]
     VulkanLoadingError(ash::LoadingError),
     #[cfg(all(
         not(gles),
-        any(vulkan, windows, target_os = "linux", target_os = "android")
+        any(
+            vulkan,
+            windows,
+            target_os = "linux",
+            target_os = "android",
+            target_os = "freebsd"
+        )
     ))]
     VulkanError(ash::vk::Result),
 
