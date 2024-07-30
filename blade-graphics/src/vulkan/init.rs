@@ -241,7 +241,7 @@ unsafe fn inspect_adapter(
     let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
 
     let device_information = crate::DeviceInformation {
-        is_software_emulated: properties.device_type == ash::vk::PhysicalDeviceType::CPU,
+        is_software_emulated: properties.device_type == vk::PhysicalDeviceType::CPU,
         device_name: ffi::CStr::from_ptr(properties.device_name.as_ptr())
             .to_string_lossy()
             .to_string(),
