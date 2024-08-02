@@ -130,17 +130,22 @@ pub enum JointHandle {
     Hard(#[doc(hidden)] rapier3d::dynamics::MultibodyJointHandle),
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct MotorDesc {
-    pub stiffness: f32,
-    pub damping: f32,
-    pub max_force: f32,
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FreedomAxis {
     pub limits: Option<ops::Range<f32>>,
-    pub motor: Option<MotorDesc>,
+    pub motor: Option<config::Motor>,
+}
+
+impl FreedomAxis {
+    pub const FREE: Self = Self {
+        limits: None,
+        motor: None,
+    };
+    pub const ALL_FREE: mint::Vector3<Option<Self>> = mint::Vector3 {
+        x: Some(Self::FREE),
+        y: Some(Self::FREE),
+        z: Some(Self::FREE),
+    };
 }
 
 #[derive(Clone, Debug, PartialEq)]

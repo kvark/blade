@@ -102,6 +102,13 @@ pub struct Object {
     pub additional_mass: Option<AdditionalMass>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Deserialize)]
+pub struct Motor {
+    pub stiffness: f32,
+    pub damping: f32,
+    pub max_force: f32,
+}
+
 fn default_time_step() -> f32 {
     0.01
 }
