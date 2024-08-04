@@ -59,7 +59,7 @@ On Vulkan we'll require certain features to make the translation simple:
 Blade is based on different set of assumptions from wgpu-hal:
 - *safety*: wgpu places safety first and foremost. Self-sufficient, guarantees no UB. Blade is on the opposite - considers safety to be secondary. Expects users to rely on native API's validation and tooling.
 - *API reach*: wgpu attempts to be everywhere, having backends for all the APIs it can reach. Blade targets only the essential backends: Vulkan and Metal.
-- *abstraction*: wgpu is completely opaque, with only a few unsafe APIs for interacting with external objects. Blade needs to be transparent, since it assumes modifcation by the user, and doens't provide safety.
+- *abstraction*: wgpu is completely opaque, with only a few unsafe APIs for interacting with external objects. Blade needs to be transparent, since it assumes modifcation by the user, and doesn't provide safety.
 - *errors*: wgpu considers all external errors recoverable. Blade doesn't expect any recovery after the initialization is done.
 - *object copy*: wgpu-hal hides API objects so that they can only be `Clone`, and some of the backends use `Arc` and other heap-allocated backing for them. Blade keeps the API for resources to be are light as possible and allows them to be copied freely.
 - *bind group creation cost*: wgpu considers it expensive, needs to be prepared ahead of time. Blade considers it cheap enough to always create on the fly.
