@@ -10,9 +10,11 @@ Changelog for Blade
     - option to disable exclusive fullscreen
     - VK: using linear sRGB color space if available
   - exposed initialization errors
+  - exposed device information
   - Vk:
     - fixed initial RAM consumption
     - worked around Intel descriptor memory allocation bug
+    - fixed coherent memory requirements
   - GLES:
     - support for storage buffer and compute
     - scissor rects, able to run "particle" example

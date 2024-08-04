@@ -608,10 +608,25 @@ impl super::Context {
                 | vk::MemoryPropertyFlags::HOST_CACHED
                 | vk::MemoryPropertyFlags::LAZILY_ALLOCATED;
             let valid_ash_memory_types = memory_types.iter().enumerate().fold(0, |u, (i, mem)| {
-                if known_memory_flags.contains(mem.property_flags) {
-                    u | (1 << i)
-                } else {
+                if !known_memory_flags.contains(mem.property_flags) {
+                    log::debug!(
+                        "Skipping memory type={} for having unknown flags: {:?}",
+                        i,
+                        mem.property_flags & !known_memory_flags
+                    );
                     u
+                } else if mem
+                    .property_flags
+                    .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+                    && !mem
+                        .property_flags
+                        .contains(vk::MemoryPropertyFlags::HOST_COHERENT)
+                {
+                    //TODO: see if and how we can support this
+                    log::debug!("Skipping memory type={} for lack of host coherency", i);
+                    u
+                } else {
+                    u | (1 << i)
                 }
             });
             super::MemoryManager {
