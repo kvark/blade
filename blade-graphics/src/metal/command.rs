@@ -221,6 +221,9 @@ impl super::CommandEncoder {
 
 #[hidden_trait::expose]
 impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
+    type BufferPiece = crate::BufferPiece;
+    type TexturePiece = crate::TexturePiece;
+
     fn fill_buffer(&mut self, dst: crate::BufferPiece, size: u64, value: u8) {
         let range = metal::NSRange {
             location: dst.offset,
@@ -315,6 +318,10 @@ impl Drop for super::TransferCommandEncoder<'_> {
 impl crate::traits::AccelerationStructureEncoder
     for super::AccelerationStructureCommandEncoder<'_>
 {
+    type AccelerationStructure = crate::AccelerationStructure;
+    type AccelerationStructureMesh = crate::AccelerationStructureMesh;
+    type BufferPiece = crate::BufferPiece;
+
     fn build_bottom_level(
         &mut self,
         acceleration_structure: super::AccelerationStructure,
@@ -515,6 +522,8 @@ impl crate::traits::PipelineEncoder for super::RenderPipelineContext<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
+    type BufferPiece = crate::BufferPiece;
+
     fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
         let scissor = metal::MTLScissorRect {
             x: rect.x as _,

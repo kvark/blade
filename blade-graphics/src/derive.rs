@@ -2,7 +2,7 @@ use std::mem;
 
 use super::{ResourceIndex, ShaderBinding, VertexFormat};
 
-pub trait HasShaderBinding: super::ShaderBindable {
+pub trait HasShaderBinding {
     const TYPE: ShaderBinding;
 }
 impl<T: bytemuck::Pod> HasShaderBinding for T {

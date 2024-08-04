@@ -450,6 +450,9 @@ impl super::CommandEncoder {
 
 #[hidden_trait::expose]
 impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
+    type BufferPiece = crate::BufferPiece;
+    type TexturePiece = crate::TexturePiece;
+
     fn fill_buffer(&mut self, dst: crate::BufferPiece, size: u64, value: u8) {
         let value_u32 = (value as u32) * 0x1010101;
         unsafe {
@@ -545,6 +548,10 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
 impl crate::traits::AccelerationStructureEncoder
     for super::AccelerationStructureCommandEncoder<'_>
 {
+    type AccelerationStructure = crate::AccelerationStructure;
+    type AccelerationStructureMesh = crate::AccelerationStructureMesh;
+    type BufferPiece = crate::BufferPiece;
+
     fn build_bottom_level(
         &mut self,
         acceleration_structure: super::AccelerationStructure,
@@ -737,6 +744,8 @@ impl crate::traits::ComputePipelineEncoder for super::PipelineEncoder<'_, '_> {
 
 #[hidden_trait::expose]
 impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
+    type BufferPiece = crate::BufferPiece;
+
     fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
         let vk_scissor = vk::Rect2D {
             offset: vk::Offset2D {

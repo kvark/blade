@@ -271,6 +271,9 @@ impl<T> Drop for super::PassEncoder<'_, T> {
 
 #[hidden_trait::expose]
 impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
+    type BufferPiece = crate::BufferPiece;
+    type TexturePiece = crate::TexturePiece;
+
     fn fill_buffer(&mut self, dst: crate::BufferPiece, size: u64, value: u8) {
         self.commands.push(super::Command::FillBuffer {
             dst: dst.into(),
@@ -337,6 +340,10 @@ impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
 
 #[hidden_trait::expose]
 impl crate::traits::AccelerationStructureEncoder for super::PassEncoder<'_, ()> {
+    type AccelerationStructure = crate::AccelerationStructure;
+    type AccelerationStructureMesh = crate::AccelerationStructureMesh;
+    type BufferPiece = crate::BufferPiece;
+
     fn build_bottom_level(
         &mut self,
         _acceleration_structure: super::AccelerationStructure,
@@ -379,6 +386,8 @@ impl crate::traits::ComputePipelineEncoder for super::PipelineEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
+    type BufferPiece = crate::BufferPiece;
+
     fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
         self.commands.push(super::Command::SetScissor(rect.clone()));
     }
