@@ -48,6 +48,8 @@ pub const IDENTITY_TRANSFORM: Transform = mint::RowMatrix3x4 {
 };
 
 pub mod derive;
+#[cfg(feature = "gles")]
+pub mod gles;
 #[cfg_attr(
     all(not(vulkan), not(gles), any(target_os = "ios", target_os = "macos")),
     path = "metal/mod.rs"
@@ -65,10 +67,9 @@ pub mod derive;
     ),
     path = "vulkan/mod.rs"
 )]
-#[cfg_attr(any(gles, target_arch = "wasm32"), path = "gles/mod.rs")]
 mod hal;
 mod shader;
-mod traits;
+pub mod traits;
 pub mod util;
 pub mod limits {
     pub const PLAIN_DATA_SIZE: u32 = 256;
@@ -76,7 +77,9 @@ pub mod limits {
     pub const STORAGE_BUFFER_ALIGNMENT: u64 = 256;
     pub const ACCELERATION_STRUCTURE_SCRATCH_ALIGNMENT: u64 = 256;
 }
-
+#[cfg(any(gles, target_arch = "wasm32"))]
+pub use gles::*;
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub use hal::*;
 
 use std::{fmt, num::NonZeroU32};
@@ -117,9 +120,9 @@ pub enum NotSupportedError {
     ))]
     VulkanError(ash::vk::Result),
 
-    #[cfg(gles)]
+    #[cfg(feature = "gles")]
     GLESLoadingError(egl::LoadError<libloading::Error>),
-    #[cfg(gles)]
+    #[cfg(feature = "gles")]
     GLESError(egl::Error),
 
     NoSupportedDeviceFound,
@@ -171,18 +174,12 @@ pub struct BufferDesc<'a> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct BufferPiece {
-    pub buffer: Buffer,
+pub struct GenericBufferPiece<T: traits::Buffer> {
+    pub buffer: T,
     pub offset: u64,
 }
 
-impl From<Buffer> for BufferPiece {
-    fn from(buffer: Buffer) -> Self {
-        Self { buffer, offset: 0 }
-    }
-}
-
-impl BufferPiece {
+impl<T: traits::Buffer> GenericBufferPiece<T> {
     pub fn data(&self) -> *mut u8 {
         let base = self.buffer.data();
         assert!(!base.is_null());
@@ -190,12 +187,9 @@ impl BufferPiece {
     }
 }
 
-impl Buffer {
-    pub fn at(self, offset: u64) -> BufferPiece {
-        BufferPiece {
-            buffer: self,
-            offset,
-        }
+impl<T: traits::Buffer> From<T> for GenericBufferPiece<T> {
+    fn from(buffer: T) -> Self {
+        Self { buffer, offset: 0 }
     }
 }
 
@@ -241,27 +235,6 @@ impl<T, const N: ResourceIndex> std::ops::Index<ResourceIndex> for ResourceArray
 impl<T, const N: ResourceIndex> std::ops::IndexMut<ResourceIndex> for ResourceArray<T, N> {
     fn index_mut(&mut self, index: ResourceIndex) -> &mut T {
         &mut self.data[index as usize]
-    }
-}
-pub type BufferArray<const N: ResourceIndex> = ResourceArray<BufferPiece, N>;
-pub type TextureArray<const N: ResourceIndex> = ResourceArray<TextureView, N>;
-
-#[derive(Clone, Copy, Debug)]
-pub struct TexturePiece {
-    pub texture: Texture,
-    pub mip_level: u32,
-    pub array_layer: u32,
-    pub origin: [u32; 3],
-}
-
-impl From<Texture> for TexturePiece {
-    fn from(texture: Texture) -> Self {
-        Self {
-            texture,
-            mip_level: 0,
-            array_layer: 0,
-            origin: [0; 3],
-        }
     }
 }
 
@@ -524,19 +497,6 @@ pub enum VertexFormat {
 }
 
 #[derive(Clone, Debug)]
-pub struct AccelerationStructureMesh {
-    pub vertex_data: BufferPiece,
-    pub vertex_format: VertexFormat,
-    pub vertex_stride: u32,
-    pub vertex_count: u32,
-    pub index_data: BufferPiece,
-    pub index_type: Option<IndexType>,
-    pub triangle_count: u32,
-    pub transform_data: BufferPiece,
-    pub is_opaque: bool,
-}
-
-#[derive(Clone, Debug)]
 pub struct AccelerationStructureInstance {
     pub acceleration_structure_index: u32,
     pub transform: Transform,
@@ -585,10 +545,6 @@ pub enum ShaderBinding {
     Plain { size: u32 },
 }
 
-pub trait ShaderBindable: Clone + Copy + derive::HasShaderBinding {
-    fn bind_to(&self, context: &mut PipelineContext, index: u32);
-}
-
 #[derive(Debug)]
 struct ShaderDataInfo {
     visibility: ShaderVisibility,
@@ -610,11 +566,6 @@ impl ShaderDataLayout {
             binding_access: vec![StorageAccess::empty(); self.bindings.len()].into_boxed_slice(),
         }
     }
-}
-
-pub trait ShaderData {
-    fn layout() -> ShaderDataLayout;
-    fn fill(&self, context: PipelineContext);
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -1014,27 +965,6 @@ pub struct RenderPipelineDesc<'a> {
 pub enum InitOp {
     Load,
     Clear(TextureColor),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum FinishOp {
-    Store,
-    Discard,
-    ResolveTo(TextureView),
-    Ignore,
-}
-
-#[derive(Debug)]
-pub struct RenderTarget {
-    pub view: TextureView,
-    pub init_op: InitOp,
-    pub finish_op: FinishOp,
-}
-
-#[derive(Debug)]
-pub struct RenderTargetSet<'a> {
-    pub colors: &'a [RenderTarget],
-    pub depth_stencil: Option<RenderTarget>,
 }
 
 /// Mechanism used to acquire frames and display them on screen.

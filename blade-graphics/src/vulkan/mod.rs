@@ -127,9 +127,17 @@ impl Default for Buffer {
     }
 }
 
-impl Buffer {
-    pub fn data(&self) -> *mut u8 {
+#[hidden_trait::expose]
+impl crate::traits::Buffer for Buffer {
+    fn data(&self) -> *mut u8 {
         self.mapped_data
+    }
+
+    fn at(self, offset: u64) -> crate::GenericBufferPiece<Self> {
+        crate::GenericBufferPiece {
+            buffer: self,
+            offset,
+        }
     }
 }
 
@@ -577,7 +585,7 @@ struct BottomLevelAccelerationStructureInput<'a> {
 }
 
 impl Device {
-    fn get_device_address(&self, piece: &crate::BufferPiece) -> u64 {
+    fn get_device_address(&self, piece: &BufferPiece) -> u64 {
         let vk_info = vk::BufferDeviceAddressInfo {
             buffer: piece.buffer.raw,
             ..Default::default()
@@ -588,7 +596,7 @@ impl Device {
 
     fn map_acceleration_structure_meshes(
         &self,
-        meshes: &[crate::AccelerationStructureMesh],
+        meshes: &[AccelerationStructureMesh],
     ) -> BottomLevelAccelerationStructureInput {
         let mut total_primitive_count = 0;
         let mut max_primitive_counts = Vec::with_capacity(meshes.len());
@@ -670,3 +678,11 @@ impl Device {
         }
     }
 }
+
+include!("../common/lib.rs");
+
+#[path = "../common/derive.rs"]
+mod derive;
+
+#[path = "../common/util.rs"]
+mod util;

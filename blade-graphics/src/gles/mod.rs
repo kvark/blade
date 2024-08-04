@@ -34,9 +34,17 @@ pub struct Buffer {
 unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
 
-impl Buffer {
-    pub fn data(&self) -> *mut u8 {
+#[hidden_trait::expose]
+impl crate::traits::Buffer for Buffer {
+    fn data(&self) -> *mut u8 {
         self.data
+    }
+
+    fn at(self, offset: u64) -> crate::GenericBufferPiece<Self> {
+        crate::GenericBufferPiece {
+            buffer: self,
+            offset,
+        }
     }
 }
 
@@ -143,8 +151,8 @@ struct BufferPart {
     raw: glow::Buffer,
     offset: u64,
 }
-impl From<crate::BufferPiece> for BufferPart {
-    fn from(piece: crate::BufferPiece) -> Self {
+impl From<BufferPiece> for BufferPart {
+    fn from(piece: BufferPiece) -> Self {
         Self {
             raw: piece.buffer.raw,
             offset: piece.offset,
@@ -161,8 +169,8 @@ struct TexturePart {
     array_layer: u32,
     origin: [u32; 3],
 }
-impl From<crate::TexturePiece> for TexturePart {
-    fn from(piece: crate::TexturePiece) -> Self {
+impl From<TexturePiece> for TexturePart {
+    fn from(piece: TexturePiece) -> Self {
         let (raw, target) = piece.texture.inner.as_native();
         Self {
             raw,
@@ -560,3 +568,11 @@ fn map_compare_func(fun: crate::CompareFunction) -> u32 {
         Cf::Always => glow::ALWAYS,
     }
 }
+
+include!("../common/lib.rs");
+
+#[path = "../common/derive.rs"]
+mod derive;
+
+#[path = "../common/util.rs"]
+mod util;

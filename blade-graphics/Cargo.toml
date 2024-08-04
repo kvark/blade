@@ -9,6 +9,10 @@ repository = "https://github.com/kvark/blade"
 
 [lib]
 
+[features]
+default = ["gles"]
+gles = ["dep:glow", "dep:egl", "dep:libloading", "naga/glsl-out"]
+
 [dependencies]
 bitflags = { workspace = true }
 bytemuck = { workspace = true }
@@ -18,6 +22,7 @@ log = { workspace = true }
 mint = { workspace = true }
 naga = { workspace = true }
 raw-window-handle = "0.6"
+glow = { version = "0.13", optional = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 block = "0.1"
@@ -34,13 +39,11 @@ gpu-alloc-ash = "0.7"
 naga = { workspace = true, features = ["spv-out"] }
 slab = { workspace = true }
 
-[target.'cfg(any(gles, target_arch = "wasm32"))'.dependencies]
-glow = "0.13"
-naga = { workspace = true, features = ["glsl-out"] }
-
-[target.'cfg(all(gles, not(target_arch = "wasm32")))'.dependencies]
-egl = { package = "khronos-egl", version = "5.0", features = ["dynamic"] }
-libloading = { version = "0.8" }
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+egl = { package = "khronos-egl", version = "5.0", features = [
+    "dynamic",
+], optional = true }
+libloading = { version = "0.8", optional = true }
 
 [target.'cfg(all(target_arch = "wasm32"))'.dependencies]
 wasm-bindgen = "0.2.83"

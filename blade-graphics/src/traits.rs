@@ -1,6 +1,6 @@
 use std::{fmt::Debug, hash::Hash};
 pub trait ResourceDevice {
-    type Buffer: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
+    type Buffer: Buffer;
     type Texture: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
     type TextureView: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
     type Sampler: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
@@ -88,15 +88,11 @@ pub trait AccelerationStructureEncoder {
     );
 }
 
-pub trait PipelineEncoder {
-    fn bind<D: super::ShaderData>(&mut self, group: u32, data: &D);
-}
-
-pub trait ComputePipelineEncoder: PipelineEncoder {
+pub trait ComputePipelineEncoder {
     fn dispatch(&mut self, groups: [u32; 3]);
 }
 
-pub trait RenderPipelineEncoder: PipelineEncoder {
+pub trait RenderPipelineEncoder {
     type BufferPiece: Send + Sync + Clone + Copy + Debug;
 
     //TODO: reconsider exposing this here
@@ -125,4 +121,9 @@ pub trait RenderPipelineEncoder: PipelineEncoder {
         index_type: crate::IndexType,
         indirect_buf: Self::BufferPiece,
     );
+}
+
+pub trait Buffer: Send + Sync + Clone + Copy + Debug + Hash + PartialEq {
+    fn data(&self) -> *mut u8;
+    fn at(self, offset: u64) -> crate::GenericBufferPiece<Self>;
 }

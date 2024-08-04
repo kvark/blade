@@ -10,24 +10,6 @@ impl<T: bytemuck::Pod> HasShaderBinding for T {
         size: mem::size_of::<T>() as u32,
     };
 }
-impl HasShaderBinding for super::TextureView {
-    const TYPE: ShaderBinding = ShaderBinding::Texture;
-}
-impl HasShaderBinding for super::Sampler {
-    const TYPE: ShaderBinding = ShaderBinding::Sampler;
-}
-impl HasShaderBinding for super::BufferPiece {
-    const TYPE: ShaderBinding = ShaderBinding::Buffer;
-}
-impl<'a, const N: ResourceIndex> HasShaderBinding for &'a super::BufferArray<N> {
-    const TYPE: ShaderBinding = ShaderBinding::BufferArray { count: N };
-}
-impl<'a, const N: ResourceIndex> HasShaderBinding for &'a super::TextureArray<N> {
-    const TYPE: ShaderBinding = ShaderBinding::TextureArray { count: N };
-}
-impl HasShaderBinding for super::AccelerationStructure {
-    const TYPE: ShaderBinding = ShaderBinding::AccelerationStructure;
-}
 
 pub trait HasVertexAttribute {
     const FORMAT: VertexFormat;
