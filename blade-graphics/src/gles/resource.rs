@@ -4,7 +4,7 @@ use std::{ptr, slice};
 impl super::Context {
     pub fn get_bottom_level_acceleration_structure_sizes(
         &self,
-        _meshes: &[crate::AccelerationStructureMesh],
+        _meshes: &[super::AccelerationStructureMesh],
     ) -> crate::AccelerationStructureSizes {
         unimplemented!()
     }

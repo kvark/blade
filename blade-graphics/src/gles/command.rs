@@ -5,7 +5,7 @@ const COLOR_ATTACHMENTS: &[u32] = &[
     glow::COLOR_ATTACHMENT3,
 ];
 
-impl<T: bytemuck::Pod> crate::ShaderBindable for T {
+impl<T: bytemuck::Pod> super::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let self_slice = bytemuck::bytes_of(self);
         let alignment = ctx.limits.uniform_buffer_alignment as usize;
@@ -26,7 +26,7 @@ impl<T: bytemuck::Pod> crate::ShaderBindable for T {
         }
     }
 }
-impl crate::ShaderBindable for super::TextureView {
+impl super::ShaderBindable for super::TextureView {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let (texture, target) = self.inner.as_native();
         for &slot in ctx.targets[index as usize].iter() {
@@ -38,12 +38,12 @@ impl crate::ShaderBindable for super::TextureView {
         }
     }
 }
-impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::TextureArray<N> {
+impl<'a, const N: crate::ResourceIndex> super::ShaderBindable for &'a super::TextureArray<N> {
     fn bind_to(&self, _ctx: &mut super::PipelineContext, _index: u32) {
         unimplemented!()
     }
 }
-impl crate::ShaderBindable for super::Sampler {
+impl super::ShaderBindable for super::Sampler {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         for &slot in ctx.targets[index as usize].iter() {
             ctx.commands.push(super::Command::BindSampler {
@@ -53,7 +53,7 @@ impl crate::ShaderBindable for super::Sampler {
         }
     }
 }
-impl crate::ShaderBindable for crate::BufferPiece {
+impl super::ShaderBindable for super::BufferPiece {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         for &slot in ctx.targets[index as usize].iter() {
             ctx.commands.push(super::Command::BindBuffer {
@@ -65,12 +65,12 @@ impl crate::ShaderBindable for crate::BufferPiece {
         }
     }
 }
-impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
+impl<'a, const N: crate::ResourceIndex> super::ShaderBindable for &'a super::BufferArray<N> {
     fn bind_to(&self, _ctx: &mut super::PipelineContext, _index: u32) {
         unimplemented!()
     }
 }
-impl crate::ShaderBindable for super::AccelerationStructure {
+impl super::ShaderBindable for super::AccelerationStructure {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         for _ in ctx.targets[index as usize].iter() {
             unimplemented!()
@@ -119,7 +119,7 @@ impl super::CommandEncoder {
 
     pub fn render(
         &mut self,
-        targets: crate::RenderTargetSet,
+        targets: super::RenderTargetSet,
     ) -> super::PassEncoder<super::RenderPipeline> {
         let mut target_size = [0u16; 2];
         let mut invalidate_attachments = Vec::new();
@@ -130,7 +130,7 @@ impl super::CommandEncoder {
                 attachment,
                 view: rt.view,
             });
-            if let crate::FinishOp::Discard = rt.finish_op {
+            if let super::FinishOp::Discard = rt.finish_op {
                 invalidate_attachments.push(attachment);
             }
         }
@@ -145,7 +145,7 @@ impl super::CommandEncoder {
                 attachment,
                 view: rt.view,
             });
-            if let crate::FinishOp::Discard = rt.finish_op {
+            if let super::FinishOp::Discard = rt.finish_op {
                 invalidate_attachments.push(attachment);
             }
         }
@@ -271,10 +271,10 @@ impl<T> Drop for super::PassEncoder<'_, T> {
 
 #[hidden_trait::expose]
 impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
-    type BufferPiece = crate::BufferPiece;
-    type TexturePiece = crate::TexturePiece;
+    type BufferPiece = super::BufferPiece;
+    type TexturePiece = super::TexturePiece;
 
-    fn fill_buffer(&mut self, dst: crate::BufferPiece, size: u64, value: u8) {
+    fn fill_buffer(&mut self, dst: super::BufferPiece, size: u64, value: u8) {
         self.commands.push(super::Command::FillBuffer {
             dst: dst.into(),
             size,
@@ -284,8 +284,8 @@ impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
 
     fn copy_buffer_to_buffer(
         &mut self,
-        src: crate::BufferPiece,
-        dst: crate::BufferPiece,
+        src: super::BufferPiece,
+        dst: super::BufferPiece,
         size: u64,
     ) {
         self.commands.push(super::Command::CopyBufferToBuffer {
@@ -296,8 +296,8 @@ impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
     }
     fn copy_texture_to_texture(
         &mut self,
-        src: crate::TexturePiece,
-        dst: crate::TexturePiece,
+        src: super::TexturePiece,
+        dst: super::TexturePiece,
         size: crate::Extent,
     ) {
         self.commands.push(super::Command::CopyTextureToTexture {
@@ -309,9 +309,9 @@ impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
 
     fn copy_buffer_to_texture(
         &mut self,
-        src: crate::BufferPiece,
+        src: super::BufferPiece,
         bytes_per_row: u32,
-        dst: crate::TexturePiece,
+        dst: super::TexturePiece,
         size: crate::Extent,
     ) {
         self.commands.push(super::Command::CopyBufferToTexture {
@@ -324,8 +324,8 @@ impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
 
     fn copy_texture_to_buffer(
         &mut self,
-        src: crate::TexturePiece,
-        dst: crate::BufferPiece,
+        src: super::TexturePiece,
+        dst: super::BufferPiece,
         bytes_per_row: u32,
         size: crate::Extent,
     ) {
@@ -340,15 +340,15 @@ impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
 
 #[hidden_trait::expose]
 impl crate::traits::AccelerationStructureEncoder for super::PassEncoder<'_, ()> {
-    type AccelerationStructure = crate::AccelerationStructure;
-    type AccelerationStructureMesh = crate::AccelerationStructureMesh;
-    type BufferPiece = crate::BufferPiece;
+    type AccelerationStructure = super::AccelerationStructure;
+    type AccelerationStructureMesh = super::AccelerationStructureMesh;
+    type BufferPiece = super::BufferPiece;
 
     fn build_bottom_level(
         &mut self,
         _acceleration_structure: super::AccelerationStructure,
-        _meshes: &[crate::AccelerationStructureMesh],
-        _scratch_data: crate::BufferPiece,
+        _meshes: &[super::AccelerationStructureMesh],
+        _scratch_data: super::BufferPiece,
     ) {
         unimplemented!()
     }
@@ -358,16 +358,16 @@ impl crate::traits::AccelerationStructureEncoder for super::PassEncoder<'_, ()> 
         _acceleration_structure: super::AccelerationStructure,
         _bottom_level: &[super::AccelerationStructure],
         _instance_count: u32,
-        _instance_data: crate::BufferPiece,
-        _scratch_data: crate::BufferPiece,
+        _instance_data: super::BufferPiece,
+        _scratch_data: super::BufferPiece,
     ) {
         unimplemented!()
     }
 }
 
 #[hidden_trait::expose]
-impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_> {
-    fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
+impl super::traits::PipelineEncoder for super::PipelineEncoder<'_> {
+    fn bind<D: super::ShaderData>(&mut self, group: u32, data: &D) {
         data.fill(super::PipelineContext {
             commands: self.commands,
             plain_data: self.plain_data,
@@ -386,13 +386,13 @@ impl crate::traits::ComputePipelineEncoder for super::PipelineEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
-    type BufferPiece = crate::BufferPiece;
+    type BufferPiece = super::BufferPiece;
 
     fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
         self.commands.push(super::Command::SetScissor(rect.clone()));
     }
 
-    fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
+    fn bind_vertex(&mut self, index: u32, vertex_buf: super::BufferPiece) {
         self.commands.push(super::Command::BindVertex {
             buffer: vertex_buf.buffer.raw,
         });
@@ -427,7 +427,7 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
 
     fn draw_indexed(
         &mut self,
-        index_buf: crate::BufferPiece,
+        index_buf: super::BufferPiece,
         index_type: crate::IndexType,
         index_count: u32,
         base_vertex: i32,
@@ -445,15 +445,15 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
         });
     }
 
-    fn draw_indirect(&mut self, _indirect_buf: crate::BufferPiece) {
+    fn draw_indirect(&mut self, _indirect_buf: super::BufferPiece) {
         unimplemented!()
     }
 
     fn draw_indexed_indirect(
         &mut self,
-        _index_buf: crate::BufferPiece,
+        _index_buf: super::BufferPiece,
         _index_type: crate::IndexType,
-        _indirect_buf: crate::BufferPiece,
+        _indirect_buf: super::BufferPiece,
     ) {
         unimplemented!()
     }

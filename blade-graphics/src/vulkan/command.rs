@@ -50,12 +50,12 @@ impl super::PipelineContext<'_> {
     }
 }
 
-impl<T: bytemuck::Pod> crate::ShaderBindable for T {
+impl<T: bytemuck::Pod> super::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         ctx.write(index, *self);
     }
 }
-impl crate::ShaderBindable for super::TextureView {
+impl super::ShaderBindable for super::TextureView {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         ctx.write(
             index,
@@ -67,7 +67,7 @@ impl crate::ShaderBindable for super::TextureView {
         );
     }
 }
-impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::TextureArray<N> {
+impl<'a, const N: crate::ResourceIndex> super::ShaderBindable for &'a super::TextureArray<N> {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         ctx.write_array(
             index,
@@ -79,7 +79,7 @@ impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::Tex
         );
     }
 }
-impl crate::ShaderBindable for super::Sampler {
+impl super::ShaderBindable for super::Sampler {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         ctx.write(
             index,
@@ -91,7 +91,7 @@ impl crate::ShaderBindable for super::Sampler {
         );
     }
 }
-impl crate::ShaderBindable for crate::BufferPiece {
+impl super::ShaderBindable for super::BufferPiece {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         ctx.write(
             index,
@@ -103,7 +103,7 @@ impl crate::ShaderBindable for crate::BufferPiece {
         );
     }
 }
-impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
+impl<'a, const N: crate::ResourceIndex> super::ShaderBindable for &'a super::BufferArray<N> {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         ctx.write_array(
             index,
@@ -115,13 +115,13 @@ impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::Buf
         );
     }
 }
-impl crate::ShaderBindable for super::AccelerationStructure {
+impl super::ShaderBindable for super::AccelerationStructure {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         ctx.write(index, self.raw);
     }
 }
 
-impl crate::TexturePiece {
+impl super::TexturePiece {
     fn subresource_layers(&self, aspects: crate::TexelAspects) -> vk::ImageSubresourceLayers {
         vk::ImageSubresourceLayers {
             aspect_mask: super::map_aspects(aspects),
@@ -141,9 +141,9 @@ fn map_origin(origin: &[u32; 3]) -> vk::Offset3D {
 }
 
 fn make_buffer_image_copy(
-    buffer: &crate::BufferPiece,
+    buffer: &super::BufferPiece,
     bytes_per_row: u32,
-    texture: &crate::TexturePiece,
+    texture: &super::TexturePiece,
     size: &crate::Extent,
 ) -> vk::BufferImageCopy {
     let block_info = texture.texture.format.block_info();
@@ -158,7 +158,7 @@ fn make_buffer_image_copy(
     }
 }
 
-fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo<'static> {
+fn map_render_target(rt: &super::RenderTarget) -> vk::RenderingAttachmentInfo<'static> {
     let mut vk_info = vk::RenderingAttachmentInfo::default()
         .image_view(rt.view.raw)
         .image_layout(vk::ImageLayout::GENERAL)
@@ -358,7 +358,7 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn render(&mut self, targets: crate::RenderTargetSet) -> super::RenderCommandEncoder {
+    pub fn render(&mut self, targets: super::RenderTargetSet) -> super::RenderCommandEncoder {
         self.barrier();
         self.mark("pass/render");
 
@@ -450,8 +450,8 @@ impl super::CommandEncoder {
 
 #[hidden_trait::expose]
 impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
-    type BufferPiece = crate::BufferPiece;
-    type TexturePiece = crate::TexturePiece;
+    type BufferPiece = super::BufferPiece;
+    type TexturePiece = super::TexturePiece;
 
     fn fill_buffer(&mut self, dst: crate::BufferPiece, size: u64, value: u8) {
         let value_u32 = (value as u32) * 0x1010101;
@@ -464,8 +464,8 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
 
     fn copy_buffer_to_buffer(
         &mut self,
-        src: crate::BufferPiece,
-        dst: crate::BufferPiece,
+        src: super::BufferPiece,
+        dst: super::BufferPiece,
         size: u64,
     ) {
         let copy = vk::BufferCopy {
@@ -482,8 +482,8 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
 
     fn copy_texture_to_texture(
         &mut self,
-        src: crate::TexturePiece,
-        dst: crate::TexturePiece,
+        src: super::TexturePiece,
+        dst: super::TexturePiece,
         size: crate::Extent,
     ) {
         let copy = vk::ImageCopy {
@@ -507,9 +507,9 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
 
     fn copy_buffer_to_texture(
         &mut self,
-        src: crate::BufferPiece,
+        src: super::BufferPiece,
         bytes_per_row: u32,
-        dst: crate::TexturePiece,
+        dst: super::TexturePiece,
         size: crate::Extent,
     ) {
         let copy = make_buffer_image_copy(&src, bytes_per_row, &dst, &size);
@@ -526,8 +526,8 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
 
     fn copy_texture_to_buffer(
         &mut self,
-        src: crate::TexturePiece,
-        dst: crate::BufferPiece,
+        src: super::TexturePiece,
+        dst: super::BufferPiece,
         bytes_per_row: u32,
         size: crate::Extent,
     ) {
@@ -548,9 +548,9 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
 impl crate::traits::AccelerationStructureEncoder
     for super::AccelerationStructureCommandEncoder<'_>
 {
-    type AccelerationStructure = crate::AccelerationStructure;
-    type AccelerationStructureMesh = crate::AccelerationStructureMesh;
-    type BufferPiece = crate::BufferPiece;
+    type AccelerationStructure = super::AccelerationStructure;
+    type AccelerationStructureMesh = super::AccelerationStructureMesh;
+    type BufferPiece = super::BufferPiece;
 
     fn build_bottom_level(
         &mut self,
@@ -584,8 +584,8 @@ impl crate::traits::AccelerationStructureEncoder
         acceleration_structure: super::AccelerationStructure,
         _bottom_level: &[super::AccelerationStructure],
         instance_count: u32,
-        instance_data: crate::BufferPiece,
-        scratch_data: crate::BufferPiece,
+        instance_data: super::BufferPiece,
+        scratch_data: super::BufferPiece,
     ) {
         let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR {
             primitive_count: instance_count,
@@ -700,8 +700,8 @@ impl super::PipelineEncoder<'_, '_> {
 }
 
 #[hidden_trait::expose]
-impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_, '_> {
-    fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
+impl super::traits::PipelineEncoder for super::PipelineEncoder<'_, '_> {
+    fn bind<D: super::ShaderData>(&mut self, group: u32, data: &D) {
         let dsl = &self.layout.descriptor_set_layouts[group as usize];
         self.update_data.clear();
         self.update_data.resize(dsl.template_size as usize, 0);
@@ -744,7 +744,7 @@ impl crate::traits::ComputePipelineEncoder for super::PipelineEncoder<'_, '_> {
 
 #[hidden_trait::expose]
 impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
-    type BufferPiece = crate::BufferPiece;
+    type BufferPiece = super::BufferPiece;
 
     fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
         let vk_scissor = vk::Rect2D {
@@ -764,7 +764,7 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
         };
     }
 
-    fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
+    fn bind_vertex(&mut self, index: u32, vertex_buf: super::BufferPiece) {
         unsafe {
             self.device.core.cmd_bind_vertex_buffers(
                 self.cmd_buf.raw,
@@ -795,7 +795,7 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
 
     fn draw_indexed(
         &mut self,
-        index_buf: crate::BufferPiece,
+        index_buf: super::BufferPiece,
         index_type: crate::IndexType,
         index_count: u32,
         base_vertex: i32,
@@ -821,7 +821,7 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
         }
     }
 
-    fn draw_indirect(&mut self, indirect_buf: crate::BufferPiece) {
+    fn draw_indirect(&mut self, indirect_buf: super::BufferPiece) {
         unsafe {
             self.device.core.cmd_draw_indirect(
                 self.cmd_buf.raw,
@@ -835,9 +835,9 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
 
     fn draw_indexed_indirect(
         &mut self,
-        index_buf: crate::BufferPiece,
+        index_buf: super::BufferPiece,
         index_type: crate::IndexType,
-        indirect_buf: crate::BufferPiece,
+        indirect_buf: super::BufferPiece,
     ) {
         let raw_index_type = super::map_index_type(index_type);
         unsafe {

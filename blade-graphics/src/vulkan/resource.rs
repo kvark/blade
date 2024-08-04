@@ -86,7 +86,7 @@ impl super::Context {
     //TODO: move these into `ResourceDevice` trait when ready
     pub fn get_bottom_level_acceleration_structure_sizes(
         &self,
-        meshes: &[crate::AccelerationStructureMesh],
+        meshes: &[super::AccelerationStructureMesh],
     ) -> crate::AccelerationStructureSizes {
         let blas_input = self.device.map_acceleration_structure_meshes(meshes);
         let rt = self.device.ray_tracing.as_ref().unwrap();
