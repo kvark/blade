@@ -440,13 +440,15 @@ impl Context {
                     .into_iter()
                     .map(|v| v as usize)
                     .collect::<Vec<_>>();
-                egl.create_platform_window_surface(
-                    inner.egl.display,
-                    inner.egl.config,
-                    native_window_ptr,
-                    &attributes_usize,
-                )
-                .unwrap()
+                unsafe {
+                    egl.create_platform_window_surface(
+                        inner.egl.display,
+                        inner.egl.config,
+                        native_window_ptr,
+                        &attributes_usize,
+                    )
+                    .unwrap()
+                }
             }
             _ => unsafe {
                 inner
