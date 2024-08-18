@@ -4,7 +4,8 @@
     trivial_casts,
     trivial_numeric_casts,
     unused_extern_crates,
-    unused_qualifications,
+    //TODO: re-enable. Currently doesn't like "mem::size_of" on newer Rust
+    //unused_qualifications,
     // We don't match on a reference, unless required.
     clippy::pattern_type_mismatch,
 )]
