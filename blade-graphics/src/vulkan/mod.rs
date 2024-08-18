@@ -11,6 +11,7 @@ struct Instance {
     core: ash::Instance,
     _debug_utils: ash::ext::debug_utils::Instance,
     get_physical_device_properties2: khr::get_physical_device_properties2::Instance,
+    get_surface_capabilities2: khr::get_surface_capabilities2::Instance,
     surface: Option<khr::surface::Instance>,
 }
 

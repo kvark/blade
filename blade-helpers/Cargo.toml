@@ -22,3 +22,6 @@ winit = { workspace = true }
 
 [package.metadata.cargo_check_external_types]
 allowed_external_types = ["blade_render::*", "epaint::*", "mint::*", "winit::*"]
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }

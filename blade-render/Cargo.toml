@@ -11,7 +11,19 @@ repository = "https://github.com/kvark/blade"
 
 [features]
 default = ["asset"]
-asset = ["gltf" , "base64", "exr", "mikktspace", "slab", "texpresso", "zune-core", "zune-jpeg", "zune-png", "zune-hdr", "zune-imageprocs"]
+asset = [
+    "gltf",
+    "base64",
+    "exr",
+    "mikktspace",
+    "slab",
+    "texpresso",
+    "zune-core",
+    "zune-jpeg",
+    "zune-png",
+    "zune-hdr",
+    "zune-imageprocs",
+]
 
 [dependencies]
 base64 = { workspace = true, optional = true }
@@ -38,4 +50,16 @@ zune-hdr = { version = "0.4", optional = true }
 zune-imageprocs = { version = "0.4", optional = true }
 
 [package.metadata.cargo_check_external_types]
-allowed_external_types = ["bitflags::*", "blade_asset::*", "blade_graphics::*", "bytemuck::*", "choir::*", "epaint::*", "mint::*", "strum::*"]
+allowed_external_types = [
+    "bitflags::*",
+    "blade_asset::*",
+    "blade_graphics::*",
+    "bytemuck::*",
+    "choir::*",
+    "epaint::*",
+    "mint::*",
+    "strum::*",
+]
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }

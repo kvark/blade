@@ -44,8 +44,19 @@ libloading = { version = "0.8" }
 
 [target.'cfg(all(target_arch = "wasm32"))'.dependencies]
 wasm-bindgen = "0.2.83"
-web-sys = { workspace = true, features = ["HtmlCanvasElement", "WebGl2RenderingContext"] }
+web-sys = { workspace = true, features = [
+    "HtmlCanvasElement",
+    "WebGl2RenderingContext",
+] }
 js-sys = "0.3.60"
 
 [package.metadata.cargo_check_external_types]
-allowed_external_types = ["bitflags::*", "mint::*", "naga::*", "raw_window_handle::*"]
+allowed_external_types = [
+    "bitflags::*",
+    "mint::*",
+    "naga::*",
+    "raw_window_handle::*",
+]
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }

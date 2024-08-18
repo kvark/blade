@@ -18,7 +18,8 @@ const SHADER_SOURCE: &'static str = include_str!("../shader.wgsl");
 use blade_util::{BufferBelt, BufferBeltDescriptor};
 use std::{
     collections::hash_map::{Entry, HashMap},
-    mem, ptr,
+    mem::size_of,
+    ptr,
 };
 
 #[repr(C)]
@@ -202,7 +203,7 @@ impl GuiPainter {
                 egui::ImageData::Font(ref a) => {
                     let color_iter = a.srgba_pixels(None);
                     let stage = self.belt.alloc(
-                        (color_iter.len() * mem::size_of::<egui::Color32>()) as u64,
+                        (color_iter.len() * size_of::<egui::Color32>()) as u64,
                         context,
                     );
                     let mut ptr = stage.data() as *mut egui::Color32;
