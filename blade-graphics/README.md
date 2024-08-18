@@ -22,6 +22,22 @@ The backend is selected automatically based on the host platform:
 | compute | :white_check_mark: | :white_check_mark: | |
 | ray tracing | :white_check_mark: | | |
 
+### Vulkan
+
+Required instance extensions:
+- VK_EXT_debug_utils
+- VK_KHR_get_physical_device_properties2
+- VK_KHR_get_surface_capabilities2
+
+Required device extensions:
+- VK_EXT_inline_uniform_block
+- VK_KHR_descriptor_update_template
+- VK_KHR_timeline_semaphore
+- VK_KHR_dynamic_rendering
+
+Conceptually, Blade requires the baseline Vulkan hardware with a relatively fresh driver.
+All of these required extensions are supported in software by the driver on any underlying architecture.
+
 ### OpenGL ES
 
 GLES is also supported at a basic level. It's enabled for `wasm32-unknown-unknown` target, and can also be force-enabled on native:
