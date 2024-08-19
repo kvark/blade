@@ -7,11 +7,11 @@
 #include "surface.inc.wgsl"
 #include "gbuf.inc.wgsl"
 
-//TODO: use proper WGSL
+//TODO: https://github.com/gfx-rs/wgpu/pull/5429
 const RAY_FLAG_CULL_NO_OPAQUE: u32 = 0x80u;
 
 const PI: f32 = 3.1415926;
-const MAX_RESERVOIRS: u32 = 2u;
+const MAX_RESAMPLE: u32 = 4u;
 // See "9.1 pairwise mis for robust reservoir reuse"
 // "Correlations and Reuse for Fast and Accurate Physically Based Light Transport"
 const PAIRWISE_MIS: bool = true;
@@ -22,6 +22,9 @@ const BASE_CANONICAL_MIS: f32 = 0.05;
 // See "DECOUPLING SHADING AND REUSE" in
 // "Rearchitecting Spatiotemporal Resampling for Production"
 const DECOUPLED_SHADING: bool = false;
+
+const GROUP_SIZE: vec2<u32> = vec2<u32>(8, 8);
+const GROUP_SIZE_TOTAL: u32 = GROUP_SIZE.x * GROUP_SIZE.y;
 
 struct MainParams {
     frame_index: u32,
@@ -34,7 +37,7 @@ struct MainParams {
     spatial_radius: i32,
     t_start: f32,
     use_motion_vectors: u32,
-};
+}
 
 var<uniform> camera: CameraParams;
 var<uniform> prev_camera: CameraParams;
@@ -55,6 +58,14 @@ struct StoredReservoir {
 }
 var<storage, read_write> reservoirs: array<StoredReservoir>;
 var<storage, read> prev_reservoirs: array<StoredReservoir>;
+
+struct PixelCache {
+    surface: Surface,
+    reservoir: StoredReservoir,
+    //Note: we could store direction XY in local camera space instead
+    world_pos: vec3<f32>,
+}
+var<workgroup> pixel_cache: array<PixelCache, GROUP_SIZE_TOTAL>;
 
 struct LightSample {
     radiance: vec3<f32>,
@@ -333,14 +344,77 @@ fn balance_heuristic(w0: f32, w1: f32, h0: f32, h1: f32) -> HeuristicFactors {
     return hf;
 }
 
+struct ResampleBase {
+    surface: Surface,
+    canonical: LiveReservoir,
+    world_pos: vec3<f32>,
+    accepted_count: f32,
+}
+struct ResampleState {
+    reservoir: LiveReservoir,
+    mis_canonical: f32,
+    color_and_weight: vec4<f32>,
+}
+
+/*fn resample(base: ResampleBase, state: ptr<function, ResampleState>, other: PixelCache, max_history: u32, rng: ptr<function, RandomState>, enable_debug: bool) {
+    var live: LiveReservoir;
+    let neighbor = other.reservoir;
+    if (PAIRWISE_MIS) {
+        let debug_len = select(0.0, other.surface.depth * 0.2, enable_debug);
+        let canonical = base.canonical;
+        let neighbor_history = min(neighbor.confidence, f32(max_history));
+        {   // scoping this to hint the register allocation
+            let t_canonical_at_neighbor = estimate_target_score_with_occlusion(
+                other.surface, other.world_pos, canonical.selected_light_index, canonical.selected_uv, prev_acc_struct, debug_len);
+            let mis_sub_canonical = balance_heuristic(
+                t_canonical_at_neighbor.score, canonical.selected_target_score,
+                neighbor_history * base.accepted_count, canonical.history);
+            (*state).mis_canonical += 1.0 - mis_sub_canonical.weight;
+        }
+
+        // Notes about t_neighbor_at_neighbor:
+        // 1. we assume lights aren't moving. Technically we should check if the
+        //   target light has moved, and re-evaluate the occlusion.
+        // 2. we can use the cached target score, and there is no use of the target color
+        //let t_neighbor_at_neighbor = estimate_target_pdf(neighbor_surface, neighbor_position, neighbor.selected_dir);
+        let t_neighbor_at_canonical = estimate_target_score_with_occlusion(
+            base.surface, base.world_pos, neighbor.light_index, neighbor.light_uv, acc_struct, debug_len);
+        let mis_neighbor = balance_heuristic(
+            neighbor.target_score, t_neighbor_at_canonical.score,
+            neighbor_history * base.accepted_count, canonical.history);
+
+        live.history = neighbor_history;
+        live.selected_light_index = neighbor.light_index;
+        live.selected_uv = neighbor.light_uv;
+        live.selected_target_score = t_neighbor_at_canonical.score;
+        live.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor.weight;
+        //Note: should be needed according to the paper
+        // live.history *= min(mis_neighbor.history, mis_sub_canonical.history);
+        live.radiance = t_neighbor_at_canonical.color;
+    } else {
+        live = unpack_reservoir(neighbor, max_history);
+        live.radiance = evaluate_reflected_light(base.surface, live.selected_light_index, live.selected_uv);
+    }
+
+    if (DECOUPLED_SHADING) {
+        (*state).color_and_weight += live.weight_sum * vec4<f32>(neighbor.contribution_weight * live.radiance, 1.0);
+    }
+    if (live.weight_sum <= 0.0) {
+        bump_reservoir(&(*state).reservoir, live.history);
+    } else {
+        merge_reservoir(&(*state).reservoir, live, random_gen(rng));
+    }
+}*/
+
 struct RestirOutput {
     radiance: vec3<f32>,
 }
 
-fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, enable_debug: bool) -> RestirOutput {
+fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, local_index: u32, enable_debug: bool) -> RestirOutput {
     if (debug.view_mode == DebugMode_Depth) {
         textureStore(out_debug, pixel, vec4<f32>(surface.depth / camera.depth));
     }
+    pixel_cache[local_index] = PixelCache();
     let ray_dir = get_ray_direction(camera, pixel);
     let pixel_index = get_reservoir_index(pixel, camera);
     if (surface.depth == 0.0) {
@@ -356,6 +430,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         textureStore(out_debug, pixel, vec4<f32>(normal, 0.0));
     }
 
+    // 1: build the canonical sample
     var canonical = LiveReservoir();
     for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
         var ls: LightSample;
@@ -376,132 +451,87 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
 
     //TODO: find best match in a 2x2 grid
     let prev_pixel = vec2<i32>(get_prev_pixel(pixel, position));
-
-    // First, gather the list of reservoirs to merge with
-    var accepted_reservoir_indices = array<i32, MAX_RESERVOIRS>();
     var accepted_count = 0u;
-    var temporal_index = ~0u;
-    for (var tap = 0u; tap <= parameters.spatial_taps; tap += 1u) {
-        var other_pixel = prev_pixel;
-        if (tap != 0u) {
-            let r0 = max(prev_pixel - vec2<i32>(parameters.spatial_radius), vec2<i32>(0));
-            let r1 = min(prev_pixel + vec2<i32>(parameters.spatial_radius + 1), vec2<i32>(prev_camera.target_size));
-            other_pixel = vec2<i32>(mix(vec2<f32>(r0), vec2<f32>(r1), vec2<f32>(random_gen(rng), random_gen(rng))));
-        } else if (parameters.temporal_tap == 0u)
-        {
-            continue;
-        }
+    var accepted_local_indices = array<u32, MAX_RESAMPLE>();
 
-        let other_index = get_reservoir_index(other_pixel, prev_camera);
-        if (other_index < 0) {
-            continue;
-        }
-        if (prev_reservoirs[other_index].confidence == 0.0) {
-            continue;
-        }
+    // 2: read the temporal sample.
+    let prev_reservoir_index = get_reservoir_index(prev_pixel, prev_camera);
+    if (prev_reservoir_index >= 0) {
+        let prev_reservoir = prev_reservoirs[prev_reservoir_index];
+        let prev_surface = read_prev_surface(prev_pixel);
+        let prev_dir = get_ray_direction(prev_camera, prev_pixel);
+        let prev_world_pos = prev_camera.position + prev_surface.depth * prev_dir;
+        pixel_cache[local_index] = PixelCache(prev_surface, prev_reservoir, prev_world_pos);
 
-        let other_surface = read_prev_surface(other_pixel);
-        let compatibility = compare_surfaces(surface, other_surface);
-        if (compatibility < 0.1) {
+        if (parameters.temporal_tap != 0u && prev_reservoir.confidence > 0.0) {
             // if the surfaces are too different, there is no trust in this sample
-            continue;
-        }
-
-        if (tap == 0u) {
-            temporal_index = accepted_count;
-        }
-        accepted_reservoir_indices[accepted_count] = other_index;
-        if (accepted_count < MAX_RESERVOIRS) {
-            accepted_count += 1u;
-        }
-    }
-
-    // Next, evaluate the MIS of each of the samples versus the canonical one.
-    var reservoir = LiveReservoir();
-    var shaded_color = vec3<f32>(0.0);
-    var mis_canonical = BASE_CANONICAL_MIS;
-    var color_and_weight = vec4<f32>(0.0);
-    for (var rid = 0u; rid < accepted_count; rid += 1u) {
-        let neighbor_index = accepted_reservoir_indices[rid];
-        let neighbor = prev_reservoirs[neighbor_index];
-
-        let max_history = select(parameters.spatial_tap_history, parameters.temporal_history, rid == temporal_index);
-        var other: LiveReservoir;
-        if (PAIRWISE_MIS) {
-            let neighbor_pixel = get_pixel_from_reservoir_index(neighbor_index, prev_camera);
-            let neighbor_history = min(neighbor.confidence, f32(max_history));
-            {   // scoping this to hint the register allocation
-                let neighbor_surface = read_prev_surface(neighbor_pixel);
-                let neighbor_dir = get_ray_direction(prev_camera, neighbor_pixel);
-                let neighbor_position = prev_camera.position + neighbor_surface.depth * neighbor_dir;
-
-                let t_canonical_at_neighbor = estimate_target_score_with_occlusion(
-                    neighbor_surface, neighbor_position, canonical.selected_light_index, canonical.selected_uv, prev_acc_struct, debug_len);
-                let mis_sub_canonical = balance_heuristic(
-                    t_canonical_at_neighbor.score, canonical.selected_target_score,
-                    neighbor_history * f32(accepted_count), canonical.history);
-                mis_canonical += 1.0 - mis_sub_canonical.weight;
+            if (compare_surfaces(surface, prev_surface) > 0.1) {
+                accepted_local_indices[0] = local_index;
+                accepted_count = 1u;
             }
-
-            // Notes about t_neighbor_at_neighbor:
-            // 1. we assume lights aren't moving. Technically we should check if the
-            //   target light has moved, and re-evaluate the occlusion.
-            // 2. we can use the cached target score, and there is no use of the target color
-            //let t_neighbor_at_neighbor = estimate_target_pdf(neighbor_surface, neighbor_position, neighbor.selected_dir);
-            let t_neighbor_at_canonical = estimate_target_score_with_occlusion(
-                surface, position, neighbor.light_index, neighbor.light_uv, acc_struct, debug_len);
-            let mis_neighbor = balance_heuristic(
-                neighbor.target_score, t_neighbor_at_canonical.score,
-                neighbor_history * f32(accepted_count), canonical.history);
-
-            other.history = neighbor_history;
-            other.selected_light_index = neighbor.light_index;
-            other.selected_uv = neighbor.light_uv;
-            other.selected_target_score = t_neighbor_at_canonical.score;
-            other.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor.weight;
-            //Note: should be needed according to the paper
-            // other.history *= min(mis_neighbor.history, mis_sub_canonical.history);
-            other.radiance = t_neighbor_at_canonical.color;
-        } else {
-            other = unpack_reservoir(neighbor, max_history);
-            other.radiance = evaluate_reflected_light(surface, other.selected_light_index, other.selected_uv);
-        }
-
-        if (DECOUPLED_SHADING) {
-            color_and_weight += other.weight_sum * vec4<f32>(neighbor.contribution_weight * other.radiance, 1.0);
-        }
-        if (other.weight_sum <= 0.0) {
-            bump_reservoir(&reservoir, other.history);
-        } else {
-            merge_reservoir(&reservoir, other, random_gen(rng));
         }
     }
 
-    // Finally, merge in the canonical sample
+    // 3: sync with the workgroup to ensure all reservoirs are available.
+    workgroupBarrier();
+
+    // 4: gather the list of neighbors (withing the workgroup) to resample.
+    let max_accepted = min(MAX_RESAMPLE, accepted_count + parameters.spatial_taps);
+    let num_candidates = parameters.spatial_taps * 2u;
+    for (var candidates = num_candidates; candidates > 0u && accepted_count < max_accepted; candidates -= 1u) {
+        let other_cache_index = random_u32(rng) % (GROUP_SIZE.x * GROUP_SIZE.y);
+        let other = pixel_cache[other_cache_index];
+        if (other_cache_index != local_index && other.reservoir.confidence > 0.0) {
+            // if the surfaces are too different, there is no trust in this sample
+            //if (compare_surfaces(surface, other.surface) > 0.1) {
+                //accepted_local_indices[accepted_count] = other_cache_index;
+                accepted_count += 1u;
+            //}
+        }
+    }
+
+    // 5: evaluate the MIS of each of the samples versus the canonical one.
+    let base = ResampleBase(surface, canonical, position, f32(accepted_count));
+    var state = ResampleState();
+    state.mis_canonical = BASE_CANONICAL_MIS;
+    for (var lid = 0u; lid < accepted_count; lid += 1u) {
+        let other_local_index = accepted_local_indices[lid];
+        //let other = pixel_cache[other_local_index];
+        //let max_history = select(parameters.spatial_tap_history, parameters.temporal_history, other_local_index == local_index);
+        //resample(base, &state, other, max_history, rng, enable_debug);
+    }
+
+    // 6: merge in the canonical sample.
     if (PAIRWISE_MIS) {
-        canonical.weight_sum *= mis_canonical / canonical.history;
+        canonical.weight_sum *= state.mis_canonical / canonical.history;
     }
     if (DECOUPLED_SHADING) {
         //FIXME: issue with near zero denominator. Do we need do use BASE_CANONICAL_MIS?
-        let cw = canonical.weight_sum / max(canonical.selected_target_score * mis_canonical, 0.1);
-        color_and_weight += canonical.weight_sum * vec4<f32>(cw * canonical.radiance, 1.0);
+        let cw = canonical.weight_sum / max(canonical.selected_target_score * state.mis_canonical, 0.1);
+        state.color_and_weight += canonical.weight_sum * vec4<f32>(cw * canonical.radiance, 1.0);
     }
+    //TODO: https://github.com/gfx-rs/wgpu/issues/6131
+    var reservoir = state.reservoir;
     merge_reservoir(&reservoir, canonical, random_gen(rng));
 
+    // 7: finish
     let effective_history = select(reservoir.history, BASE_CANONICAL_MIS + f32(accepted_count), PAIRWISE_MIS);
     let stored = pack_reservoir_detail(reservoir, effective_history);
     reservoirs[pixel_index] = stored;
     var ro = RestirOutput();
     if (DECOUPLED_SHADING) {
-        ro.radiance = color_and_weight.xyz / max(color_and_weight.w, 0.001);
+        ro.radiance = state.color_and_weight.xyz / max(state.color_and_weight.w, 0.001);
     } else {
-        ro.radiance = stored.contribution_weight * reservoir.radiance;
+        ro.radiance = stored.contribution_weight * state.reservoir.radiance;
     }
     return ro;
 }
 
-@compute @workgroup_size(8, 4)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+@compute @workgroup_size(GROUP_SIZE.x, GROUP_SIZE.y)
+fn main(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(local_invocation_index) local_index: u32,
+) {
     if (any(global_id.xy >= camera.target_size)) {
         return;
     }
@@ -512,7 +542,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let surface = read_surface(vec2<i32>(global_id.xy));
     let enable_debug = all(global_id.xy == debug.mouse_pos);
     let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
-    let ro = compute_restir(surface, vec2<i32>(global_id.xy), &rng, enable_restir_debug);
+    let ro = compute_restir(surface, vec2<i32>(global_id.xy), &rng, local_index, enable_restir_debug);
     let color = ro.radiance;
     if (enable_debug) {
         debug_buf.variance.color_sum += color;

@@ -56,6 +56,10 @@ fn murmur3(rng: ptr<function, RandomState>) -> u32 {
     return hash;
 }
 
+fn random_u32(rng: ptr<function, RandomState>) -> u32 {
+    return murmur3(rng);
+}
+
 fn random_gen(rng: ptr<function, RandomState>) -> f32 {
     let v = murmur3(rng);
     let one = bitcast<u32>(1.0);
