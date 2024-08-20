@@ -545,11 +545,17 @@ impl ShaderPipelines {
         shader.check_struct_size::<DebugVariance>();
         shader.check_struct_size::<DebugEntry>();
         let layout = <MainData as blade_graphics::ShaderData>::layout();
-        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+        let pipeline = gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "ray-trace",
             data_layouts: &[&layout],
             compute: shader.at("main"),
-        })
+        });
+
+        let pl_struct_size = shader.get_struct_size("PixelCache");
+        let group_size = pipeline.get_workgroup_size();
+        let wg_required = pl_struct_size * group_size[0] * group_size[1];
+        log::info!("Using {} workgroup memory for RT", wg_required);
+        pipeline
     }
 
     fn create_temporal_accum(

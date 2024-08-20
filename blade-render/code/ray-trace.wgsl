@@ -23,7 +23,8 @@ const BASE_CANONICAL_MIS: f32 = 0.05;
 // "Rearchitecting Spatiotemporal Resampling for Production"
 const DECOUPLED_SHADING: bool = false;
 
-const GROUP_SIZE: vec2<u32> = vec2<u32>(8, 8);
+//TODO: crashes on AMD 6850U if `GROUP_SIZE_TOTAL` > 32
+const GROUP_SIZE: vec2<u32> = vec2<u32>(8, 4);
 const GROUP_SIZE_TOTAL: u32 = GROUP_SIZE.x * GROUP_SIZE.y;
 
 struct MainParams {
@@ -356,7 +357,7 @@ struct ResampleState {
     color_and_weight: vec4<f32>,
 }
 
-/*fn resample(base: ResampleBase, state: ptr<function, ResampleState>, other: PixelCache, max_history: u32, rng: ptr<function, RandomState>, enable_debug: bool) {
+fn resample(base: ResampleBase, state: ptr<function, ResampleState>, other: PixelCache, max_history: u32, rng: ptr<function, RandomState>, enable_debug: bool) {
     var live: LiveReservoir;
     let neighbor = other.reservoir;
     if (PAIRWISE_MIS) {
@@ -399,12 +400,13 @@ struct ResampleState {
     if (DECOUPLED_SHADING) {
         (*state).color_and_weight += live.weight_sum * vec4<f32>(neighbor.contribution_weight * live.radiance, 1.0);
     }
+    /*
     if (live.weight_sum <= 0.0) {
         bump_reservoir(&(*state).reservoir, live.history);
     } else {
         merge_reservoir(&(*state).reservoir, live, random_gen(rng));
-    }
-}*/
+    }*/
+}
 
 struct RestirOutput {
     radiance: vec3<f32>,
@@ -483,10 +485,10 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         let other = pixel_cache[other_cache_index];
         if (other_cache_index != local_index && other.reservoir.confidence > 0.0) {
             // if the surfaces are too different, there is no trust in this sample
-            //if (compare_surfaces(surface, other.surface) > 0.1) {
-                //accepted_local_indices[accepted_count] = other_cache_index;
+            if (compare_surfaces(surface, other.surface) > 0.1) {
+                accepted_local_indices[accepted_count] = other_cache_index;
                 accepted_count += 1u;
-            //}
+            }
         }
     }
 
@@ -496,9 +498,9 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     state.mis_canonical = BASE_CANONICAL_MIS;
     for (var lid = 0u; lid < accepted_count; lid += 1u) {
         let other_local_index = accepted_local_indices[lid];
-        //let other = pixel_cache[other_local_index];
-        //let max_history = select(parameters.spatial_tap_history, parameters.temporal_history, other_local_index == local_index);
-        //resample(base, &state, other, max_history, rng, enable_debug);
+        let other = pixel_cache[other_local_index];
+        let max_history = select(parameters.spatial_tap_history, parameters.temporal_history, other_local_index == local_index);
+        resample(base, &state, other, max_history, rng, enable_debug);
     }
 
     // 6: merge in the canonical sample.
