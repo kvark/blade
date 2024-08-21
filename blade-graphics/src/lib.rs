@@ -127,6 +127,11 @@ pub enum NotSupportedError {
     PlatformNotSupported,
 }
 
+#[derive(Debug)]
+pub enum GpuError {
+    VulkanError(ash::vk::Result),
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Capabilities {
     /// Which shader stages support ray queries

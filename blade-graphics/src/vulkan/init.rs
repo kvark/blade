@@ -986,7 +986,7 @@ impl super::Context {
         crate::SurfaceInfo { format, alpha }
     }
 
-    pub fn acquire_frame(&self) -> super::Frame {
+    pub fn acquire_frame(&self) -> Result<super::Frame, crate::GpuError> {
         let mut surface = self.surface.as_ref().unwrap().lock().unwrap();
         let acquire_semaphore = surface.next_semaphore;
         match unsafe {
@@ -1002,16 +1002,16 @@ impl super::Context {
                     &mut surface.frames[index as usize].acquire_semaphore,
                     acquire_semaphore,
                 );
-                surface.frames[index as usize]
+                Ok(surface.frames[index as usize])
             }
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 log::warn!("Acquire failed because the surface is out of date");
-                super::Frame {
+                Ok(super::Frame {
                     acquire_semaphore: vk::Semaphore::null(),
                     ..surface.frames[0]
-                }
+                })
             }
-            Err(other) => panic!("Aquire image error {}", other),
+            Err(other) => Err(crate::GpuError::VulkanError(other)),
         }
     }
 }

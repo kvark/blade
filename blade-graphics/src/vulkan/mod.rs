@@ -390,7 +390,7 @@ impl crate::traits::CommandDevice for Context {
         };
     }
 
-    fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+    fn submit(&self, encoder: &mut CommandEncoder) -> Result<SyncPoint, crate::GpuError> {
         let raw_cmd_buf = encoder.finish();
         let mut queue = self.queue.lock().unwrap();
         queue.last_progress += 1;
@@ -422,7 +422,9 @@ impl crate::traits::CommandDevice for Context {
                 .core
                 .queue_submit(queue.raw, &[vk_info], vk::Fence::null())
         };
-        encoder.check_gpu_crash(ret);
+        encoder
+            .check_gpu_crash(ret)
+            .map_err(|e| crate::GpuError::VulkanError(e))?;
 
         if let Some(presentation) = encoder.present.take() {
             let surface = self.surface.as_ref().unwrap().lock().unwrap();
@@ -434,10 +436,12 @@ impl crate::traits::CommandDevice for Context {
                 .image_indices(&image_indices)
                 .wait_semaphores(&wait_semaphores);
             let ret = unsafe { surface.extension.queue_present(queue.raw, &present_info) };
-            let _ = encoder.check_gpu_crash(ret);
+            encoder
+                .check_gpu_crash(ret)
+                .map_err(|e| crate::GpuError::VulkanError(e))?;
         }
 
-        SyncPoint { progress }
+        Ok(SyncPoint { progress })
     }
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {

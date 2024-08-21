@@ -55,7 +55,7 @@ impl FramePacer {
     }
 
     pub fn end_frame(&mut self, context: &blade_graphics::Context) -> &blade_graphics::SyncPoint {
-        let sync_point = context.submit(&mut self.command_encoder);
+        let sync_point = context.submit(&mut self.command_encoder).unwrap();
         self.frame_index += 1;
         // Wait for the previous frame immediately - this ensures that we are
         // only processing one frame at a time, and yet not stalling.

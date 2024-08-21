@@ -427,7 +427,7 @@ impl crate::traits::CommandDevice for Context {
 
     fn destroy_command_encoder(&self, _command_encoder: &mut CommandEncoder) {}
 
-    fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+    fn submit(&self, encoder: &mut CommandEncoder) -> Result<SyncPoint, crate::GpuError> {
         use glow::HasContext as _;
 
         let fence = {
@@ -464,13 +464,13 @@ impl crate::traits::CommandDevice for Context {
                 if push_group {
                     gl.pop_debug_group();
                 }
-                gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0).unwrap()
+                gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0)?
             }
         };
         if encoder.has_present {
             self.present();
         }
-        SyncPoint { fence }
+        Ok(SyncPoint { fence })
     }
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {

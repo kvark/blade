@@ -507,10 +507,10 @@ impl crate::traits::CommandDevice for Context {
 
     fn destroy_command_encoder(&self, _command_encoder: &mut CommandEncoder) {}
 
-    fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+    fn submit(&self, encoder: &mut CommandEncoder) -> Result<SyncPoint, crate::GpuError> {
         let cmd_buf = encoder.raw.take().unwrap();
         cmd_buf.commit();
-        SyncPoint { cmd_buf }
+        Ok(SyncPoint { cmd_buf })
     }
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {

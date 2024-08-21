@@ -683,7 +683,7 @@ impl Engine {
             }
         }
 
-        let frame = self.gpu_context.acquire_frame();
+        let frame = self.gpu_context.acquire_frame().unwrap();
         command_encoder.init_texture(frame.texture());
 
         if let mut pass = command_encoder.render(gpu::RenderTargetSet {
