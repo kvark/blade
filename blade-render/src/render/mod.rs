@@ -93,7 +93,11 @@ pub struct RayConfig {
     pub temporal_history: u32,
     pub spatial_taps: u32,
     pub spatial_tap_history: u32,
-    pub spatial_radius: u32,
+    /// Minimal distance to a spatially reused pixel (in the current frame).
+    pub spatial_min_distance: u32,
+    /// Enable jittering of the compute grid, to allow spatial samples to mix
+    /// outside of the original workgroup pixel bounds.
+    pub spatial_jitter: bool,
     pub t_start: f32,
 }
 
@@ -322,6 +326,7 @@ pub struct Renderer {
     textures: blade_graphics::TextureArray<MAX_RESOURCES>,
     samplers: Samplers,
     reservoir_size: u32,
+    grid_jitter: [u32; 2],
     debug: DebugRender,
     surface_size: blade_graphics::Extent,
     surface_info: blade_graphics::SurfaceInfo,
@@ -331,6 +336,7 @@ pub struct Renderer {
     // This way we can embed user info into the allocator.
     texture_resource_lookup:
         HashMap<blade_graphics::ResourceIndex, blade_asset::Handle<crate::Texture>>,
+    random: nanorand::WyRand,
 }
 
 #[repr(C)]
@@ -363,9 +369,10 @@ struct MainParams {
     temporal_history: u32,
     spatial_taps: u32,
     spatial_tap_history: u32,
-    spatial_radius: u32,
+    spatial_min_distance: u32,
     t_start: f32,
     use_motion_vectors: u32,
+    grid_offset: [u32; 2],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -720,12 +727,14 @@ impl Renderer {
             textures: blade_graphics::TextureArray::new(),
             samplers,
             reservoir_size: sp.reservoir_size,
+            grid_jitter: [0; 2],
             debug,
             surface_size: config.surface_size,
             surface_info: config.surface_info,
             frame_index: 0,
             frame_scene_built: 0,
             texture_resource_lookup: HashMap::default(),
+            random: nanorand::WyRand::new(),
         }
     }
 
@@ -1109,6 +1118,12 @@ impl Renderer {
         }
         self.targets.camera_params[self.frame_index % 2] = self.make_camera_params(camera);
         self.post_proc_input_index = self.frame_index % 2;
+
+        self.grid_jitter = {
+            let wg_size = self.main_pipeline.get_workgroup_size();
+            let random = nanorand::Rng::generate::<u64>(&mut self.random) as u32;
+            [random % wg_size[0], (random / wg_size[0]) % wg_size[1]]
+        };
     }
 
     /// Ray trace the scene.
@@ -1152,8 +1167,19 @@ impl Renderer {
         }
 
         if let mut pass = command_encoder.compute() {
+            let grid_offset = if ray_config.spatial_jitter {
+                self.grid_jitter
+            } else {
+                [0; 2]
+            };
+            let groups = {
+                let mut grid_size = self.surface_size;
+                grid_size.width += grid_offset[0];
+                grid_size.height += grid_offset[1];
+                self.main_pipeline.get_dispatch_for(grid_size)
+            };
+
             let mut pc = pass.with(&self.main_pipeline);
-            let groups = self.main_pipeline.get_dispatch_for(self.surface_size);
             pc.bind(
                 0,
                 &MainData {
@@ -1169,9 +1195,10 @@ impl Renderer {
                         temporal_history: ray_config.temporal_history,
                         spatial_taps: ray_config.spatial_taps,
                         spatial_tap_history: ray_config.spatial_tap_history,
-                        spatial_radius: ray_config.spatial_radius,
+                        spatial_min_distance: ray_config.spatial_min_distance,
                         t_start: ray_config.t_start,
                         use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
+                        grid_offset,
                     },
                     acc_struct: self.acceleration_structure,
                     prev_acc_struct: if self.frame_scene_built < self.frame_index

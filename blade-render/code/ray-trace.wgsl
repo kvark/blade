@@ -12,7 +12,6 @@ const RAY_FLAG_CULL_NO_OPAQUE: u32 = 0x80u;
 
 const PI: f32 = 3.1415926;
 const MAX_RESAMPLE: u32 = 4u;
-const MIN_RESAMPLE_DISTANCE: i32 = 3;
 // See "9.1 pairwise mis for robust reservoir reuse"
 // "Correlations and Reuse for Fast and Accurate Physically Based Light Transport"
 const PAIRWISE_MIS: bool = true;
@@ -36,9 +35,10 @@ struct MainParams {
     temporal_history: u32,
     spatial_taps: u32,
     spatial_tap_history: u32,
-    spatial_radius: i32,
+    spatial_min_distance: i32,
     t_start: f32,
     use_motion_vectors: u32,
+    grid_offset: vec2<u32>,
 }
 
 var<uniform> camera: CameraParams;
@@ -231,7 +231,7 @@ fn read_prev_surface(pixel: vec2<i32>) -> Surface {
 }
 
 fn index_to_coord(index: u32) -> vec2<i32> {
-    return vec2<i32>(vec2<u32>(index % GROUP_SIZE.x, index / GROUP_SIZE.x));
+    return vec2<i32>((vec2<u32>(index, index / GROUP_SIZE.x) + GROUP_SIZE - parameters.grid_offset) % GROUP_SIZE);
 }
 
 fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> f32 {
@@ -478,8 +478,6 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
                 accepted_count = 1u;
             }
         }
-    } else {
-        pixel_cache[local_index].reservoir.confidence = 0.0;
     }
     //TODO: store the reservoir from this iteration, not the previous one
 
@@ -493,11 +491,11 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     for (var candidates = num_candidates; candidates > 0u && accepted_count < max_accepted; candidates -= 1u) {
         let other_cache_index = random_u32(rng) % GROUP_SIZE_TOTAL;
         let diff = index_to_coord(other_cache_index) - local_xy;
-        if (dot(diff, diff) < MIN_RESAMPLE_DISTANCE * MIN_RESAMPLE_DISTANCE) {
+        if (dot(diff, diff) < parameters.spatial_min_distance * parameters.spatial_min_distance) {
             continue;
         }
         let other = pixel_cache[other_cache_index];
-        if (other_cache_index != local_index && other.reservoir.confidence > 0.0) {
+        if (other.reservoir.confidence > 0.0) {
             // if the surfaces are too different, there is no trust in this sample
             if (compare_surfaces(surface, other.surface) > 0.1) {
                 accepted_local_indices[accepted_count] = other_cache_index;
@@ -551,22 +549,24 @@ fn main(
     @builtin(global_invocation_id) global_id: vec3<u32>,
     @builtin(local_invocation_index) local_index: u32,
 ) {
-    if (any(global_id.xy >= camera.target_size)) {
+    pixel_cache[local_index].reservoir.confidence = 0.0;
+    let pixel_coord = global_id.xy - parameters.grid_offset;
+    if (any(pixel_coord >= camera.target_size)) {
         return;
     }
 
-    let global_index = global_id.y * camera.target_size.x + global_id.x;
+    let global_index = pixel_coord.y * camera.target_size.x + pixel_coord.x;
     var rng = random_init(global_index, parameters.frame_index);
 
-    let surface = read_surface(vec2<i32>(global_id.xy));
-    let enable_debug = all(global_id.xy == debug.mouse_pos);
+    let surface = read_surface(vec2<i32>(pixel_coord));
+    let enable_debug = all(pixel_coord == debug.mouse_pos);
     let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
-    let ro = compute_restir(surface, vec2<i32>(global_id.xy), &rng, local_index, enable_restir_debug);
+    let ro = compute_restir(surface, vec2<i32>(pixel_coord), &rng, local_index, enable_restir_debug);
     let color = ro.radiance;
     if (enable_debug) {
         debug_buf.variance.color_sum += color;
         debug_buf.variance.color2_sum += color * color;
         debug_buf.variance.count += 1u;
     }
-    textureStore(out_diffuse, global_id.xy, vec4<f32>(color, 1.0));
+    textureStore(out_diffuse, pixel_coord, vec4<f32>(color, 1.0));
 }

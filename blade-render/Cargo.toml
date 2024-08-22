@@ -39,6 +39,7 @@ glam = { workspace = true }
 log = { workspace = true }
 mikktspace = { package = "bevy_mikktspace", version = "0.12", optional = true }
 mint = { workspace = true }
+nanorand = { workspace = true, features = ["wyrand"] }
 profiling = { workspace = true }
 slab = { workspace = true, optional = true }
 strum = { workspace = true }
