@@ -12,6 +12,7 @@ const RAY_FLAG_CULL_NO_OPAQUE: u32 = 0x80u;
 
 const PI: f32 = 3.1415926;
 const MAX_RESAMPLE: u32 = 4u;
+const MIN_RESAMPLE_DISTANCE: i32 = 3;
 // See "9.1 pairwise mis for robust reservoir reuse"
 // "Correlations and Reuse for Fast and Accurate Physically Based Light Transport"
 const PAIRWISE_MIS: bool = true;
@@ -229,6 +230,10 @@ fn read_prev_surface(pixel: vec2<i32>) -> Surface {
     return surface;
 }
 
+fn index_to_coord(index: u32) -> vec2<i32> {
+    return vec2<i32>(vec2<u32>(index % GROUP_SIZE.x, index / GROUP_SIZE.x));
+}
+
 fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> f32 {
     let lambert_brdf = 1.0 / PI;
     let lambert_term = qrot(qinv(surface.basis), dir).z;
@@ -418,7 +423,6 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     if (debug.view_mode == DebugMode_Depth) {
         textureStore(out_debug, pixel, vec4<f32>(surface.depth / camera.depth));
     }
-    pixel_cache[local_index] = PixelCache();
     let ray_dir = get_ray_direction(camera, pixel);
     let pixel_index = get_reservoir_index(pixel, camera);
     if (surface.depth == 0.0) {
@@ -474,16 +478,24 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
                 accepted_count = 1u;
             }
         }
+    } else {
+        pixel_cache[local_index].reservoir.confidence = 0.0;
     }
+    //TODO: store the reservoir from this iteration, not the previous one
 
     // 3: sync with the workgroup to ensure all reservoirs are available.
     workgroupBarrier();
 
     // 4: gather the list of neighbors (within the workgroup) to resample.
     let max_accepted = min(MAX_RESAMPLE, accepted_count + parameters.spatial_taps);
-    let num_candidates = parameters.spatial_taps * 2u;
+    let num_candidates = parameters.spatial_taps * 3u;
+    let local_xy = index_to_coord(local_index);
     for (var candidates = num_candidates; candidates > 0u && accepted_count < max_accepted; candidates -= 1u) {
         let other_cache_index = random_u32(rng) % GROUP_SIZE_TOTAL;
+        let diff = index_to_coord(other_cache_index) - local_xy;
+        if (dot(diff, diff) < MIN_RESAMPLE_DISTANCE * MIN_RESAMPLE_DISTANCE) {
+            continue;
+        }
         let other = pixel_cache[other_cache_index];
         if (other_cache_index != local_index && other.reservoir.confidence > 0.0) {
             // if the surfaces are too different, there is no trust in this sample
