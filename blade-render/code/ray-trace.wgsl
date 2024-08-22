@@ -351,15 +351,16 @@ struct ResampleBase {
     world_pos: vec3<f32>,
     accepted_count: f32,
 }
-struct ResampleState {
-    reservoir: LiveReservoir,
+struct ResampleResult {
+    selected: bool,
     mis_canonical: f32,
     color_and_weight: vec4<f32>,
 }
 
-fn resample(base: ResampleBase, state: ptr<function, ResampleState>, other: PixelCache, max_history: u32, rng: ptr<function, RandomState>, enable_debug: bool) {
-    var live: LiveReservoir;
+fn resample(dst: ptr<function, LiveReservoir>, base: ResampleBase, other: PixelCache, max_history: u32, rng: ptr<function, RandomState>, enable_debug: bool) -> ResampleResult {
+    var src: LiveReservoir;
     let neighbor = other.reservoir;
+    var rr = ResampleResult();
     if (PAIRWISE_MIS) {
         let debug_len = select(0.0, other.surface.depth * 0.2, enable_debug);
         let canonical = base.canonical;
@@ -370,7 +371,7 @@ fn resample(base: ResampleBase, state: ptr<function, ResampleState>, other: Pixe
             let mis_sub_canonical = balance_heuristic(
                 t_canonical_at_neighbor.score, canonical.selected_target_score,
                 neighbor_history * base.accepted_count, canonical.history);
-            (*state).mis_canonical += 1.0 - mis_sub_canonical.weight;
+            rr.mis_canonical = 1.0 - mis_sub_canonical.weight;
         }
 
         // Notes about t_neighbor_at_neighbor:
@@ -384,28 +385,29 @@ fn resample(base: ResampleBase, state: ptr<function, ResampleState>, other: Pixe
             neighbor.target_score, t_neighbor_at_canonical.score,
             neighbor_history * base.accepted_count, canonical.history);
 
-        live.history = neighbor_history;
-        live.selected_light_index = neighbor.light_index;
-        live.selected_uv = neighbor.light_uv;
-        live.selected_target_score = t_neighbor_at_canonical.score;
-        live.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor.weight;
+        src.history = neighbor_history;
+        src.selected_light_index = neighbor.light_index;
+        src.selected_uv = neighbor.light_uv;
+        src.selected_target_score = t_neighbor_at_canonical.score;
+        src.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor.weight;
         //Note: should be needed according to the paper
-        // live.history *= min(mis_neighbor.history, mis_sub_canonical.history);
-        live.radiance = t_neighbor_at_canonical.color;
+        // src.history *= min(mis_neighbor.history, mis_sub_canonical.history);
+        src.radiance = t_neighbor_at_canonical.color;
     } else {
-        live = unpack_reservoir(neighbor, max_history);
-        live.radiance = evaluate_reflected_light(base.surface, live.selected_light_index, live.selected_uv);
+        src = unpack_reservoir(neighbor, max_history);
+        src.radiance = evaluate_reflected_light(base.surface, src.selected_light_index, src.selected_uv);
     }
 
     if (DECOUPLED_SHADING) {
-        (*state).color_and_weight += live.weight_sum * vec4<f32>(neighbor.contribution_weight * live.radiance, 1.0);
+        rr.color_and_weight += src.weight_sum * vec4<f32>(neighbor.contribution_weight * src.radiance, 1.0);
     }
-    /*
-    if (live.weight_sum <= 0.0) {
-        bump_reservoir(&(*state).reservoir, live.history);
+    if (src.weight_sum <= 0.0) {
+        bump_reservoir(dst, src.history);
     } else {
-        merge_reservoir(&(*state).reservoir, live, random_gen(rng));
-    }*/
+        merge_reservoir(dst, src, random_gen(rng));
+        rr.selected = true;
+    }
+    return rr;
 }
 
 struct RestirOutput {
@@ -477,11 +479,11 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     // 3: sync with the workgroup to ensure all reservoirs are available.
     workgroupBarrier();
 
-    // 4: gather the list of neighbors (withing the workgroup) to resample.
+    // 4: gather the list of neighbors (within the workgroup) to resample.
     let max_accepted = min(MAX_RESAMPLE, accepted_count + parameters.spatial_taps);
     let num_candidates = parameters.spatial_taps * 2u;
     for (var candidates = num_candidates; candidates > 0u && accepted_count < max_accepted; candidates -= 1u) {
-        let other_cache_index = random_u32(rng) % (GROUP_SIZE.x * GROUP_SIZE.y);
+        let other_cache_index = random_u32(rng) % GROUP_SIZE_TOTAL;
         let other = pixel_cache[other_cache_index];
         if (other_cache_index != local_index && other.reservoir.confidence > 0.0) {
             // if the surfaces are too different, there is no trust in this sample
@@ -494,26 +496,29 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
 
     // 5: evaluate the MIS of each of the samples versus the canonical one.
     let base = ResampleBase(surface, canonical, position, f32(accepted_count));
-    var state = ResampleState();
-    state.mis_canonical = BASE_CANONICAL_MIS;
+    var reservoir = LiveReservoir();
+    var mis_canonical = BASE_CANONICAL_MIS;
+    var color_and_weight = vec4<f32>(0.0);
     for (var lid = 0u; lid < accepted_count; lid += 1u) {
         let other_local_index = accepted_local_indices[lid];
         let other = pixel_cache[other_local_index];
         let max_history = select(parameters.spatial_tap_history, parameters.temporal_history, other_local_index == local_index);
-        resample(base, &state, other, max_history, rng, enable_debug);
+        let rr = resample(&reservoir, base, other, max_history, rng, enable_debug);
+        mis_canonical += rr.mis_canonical;
+        if (DECOUPLED_SHADING) {
+            color_and_weight += rr.color_and_weight;
+        }
     }
 
     // 6: merge in the canonical sample.
     if (PAIRWISE_MIS) {
-        canonical.weight_sum *= state.mis_canonical / canonical.history;
+        canonical.weight_sum *= mis_canonical / canonical.history;
     }
     if (DECOUPLED_SHADING) {
         //FIXME: issue with near zero denominator. Do we need do use BASE_CANONICAL_MIS?
-        let cw = canonical.weight_sum / max(canonical.selected_target_score * state.mis_canonical, 0.1);
-        state.color_and_weight += canonical.weight_sum * vec4<f32>(cw * canonical.radiance, 1.0);
+        let cw = canonical.weight_sum / max(canonical.selected_target_score * mis_canonical, 0.1);
+        color_and_weight += canonical.weight_sum * vec4<f32>(cw * canonical.radiance, 1.0);
     }
-    //TODO: https://github.com/gfx-rs/wgpu/issues/6131
-    var reservoir = state.reservoir;
     merge_reservoir(&reservoir, canonical, random_gen(rng));
 
     // 7: finish
@@ -522,9 +527,9 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     reservoirs[pixel_index] = stored;
     var ro = RestirOutput();
     if (DECOUPLED_SHADING) {
-        ro.radiance = state.color_and_weight.xyz / max(state.color_and_weight.w, 0.001);
+        ro.radiance = color_and_weight.xyz / max(color_and_weight.w, 0.001);
     } else {
-        ro.radiance = stored.contribution_weight * state.reservoir.radiance;
+        ro.radiance = stored.contribution_weight * reservoir.radiance;
     }
     return ro;
 }

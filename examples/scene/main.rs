@@ -582,6 +582,8 @@ impl Example {
             return;
         }
 
+        ui.checkbox(&mut self.track_hot_reloads, "Hot reloading");
+
         let mut selection = blade_render::SelectionInfo::default();
         if self.debug.mouse_pos.is_some() {
             selection = self.renderer.read_debug_selection_info();
