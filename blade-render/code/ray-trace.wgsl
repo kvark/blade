@@ -39,6 +39,7 @@ struct MainParams {
     t_start: f32,
     use_motion_vectors: u32,
     grid_offset: vec2<u32>,
+    grid_scale: vec2<u32>,
 }
 
 var<uniform> camera: CameraParams;
@@ -96,12 +97,6 @@ fn get_reservoir_index(pixel: vec2<i32>, camera: CameraParams) -> i32 {
     }
 }
 
-fn get_pixel_from_reservoir_index(index: i32, camera: CameraParams) -> vec2<i32> {
-    let y = index / i32(camera.target_size.x);
-    let x = index - y * i32(camera.target_size.x);
-    return vec2<i32>(x, y);
-}
-
 fn bump_reservoir(r: ptr<function, LiveReservoir>, history: f32) {
     (*r).history += history;
 }
@@ -156,7 +151,8 @@ fn pack_reservoir(r: LiveReservoir) -> StoredReservoir {
 var t_depth: texture_2d<f32>;
 var t_prev_depth: texture_2d<f32>;
 var t_basis: texture_2d<f32>;
-var t_prev_basis: texture_2d<f32>;
+var t_prev_basis: texture_2d<f32>
+;
 var t_flat_normal: texture_2d<f32>;
 var t_prev_flat_normal: texture_2d<f32>;
 var t_motion: texture_2d<f32>;
@@ -230,8 +226,13 @@ fn read_prev_surface(pixel: vec2<i32>) -> Surface {
     return surface;
 }
 
-fn index_to_coord(index: u32) -> vec2<i32> {
-    return vec2<i32>((vec2<u32>(index, index / GROUP_SIZE.x) + GROUP_SIZE - parameters.grid_offset) % GROUP_SIZE);
+fn thread_index_to_coord(thread_index: u32, group_id: vec3<u32>) -> vec2<i32> {
+    let cluster_id = group_id.xy / parameters.grid_scale;
+    let cluster_offset = group_id.xy - cluster_id * parameters.grid_scale;
+    let local_id = vec2<u32>(thread_index % GROUP_SIZE.x, thread_index / GROUP_SIZE.x);
+    let global_id = (cluster_id * GROUP_SIZE + local_id) * parameters.grid_scale + cluster_offset;
+    //TODO: also use the offset
+    return vec2<i32>(global_id);
 }
 
 fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> f32 {
@@ -419,7 +420,10 @@ struct RestirOutput {
     radiance: vec3<f32>,
 }
 
-fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, local_index: u32, enable_debug: bool) -> RestirOutput {
+fn compute_restir(
+    surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>,
+    local_index: u32, group_id: vec3<u32>, enable_debug: bool,
+) -> RestirOutput {
     if (debug.view_mode == DebugMode_Depth) {
         textureStore(out_debug, pixel, vec4<f32>(surface.depth / camera.depth));
     }
@@ -487,10 +491,9 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     // 4: gather the list of neighbors (within the workgroup) to resample.
     let max_accepted = min(MAX_RESAMPLE, accepted_count + parameters.spatial_taps);
     let num_candidates = parameters.spatial_taps * 3u;
-    let local_xy = index_to_coord(local_index);
     for (var candidates = num_candidates; candidates > 0u && accepted_count < max_accepted; candidates -= 1u) {
         let other_cache_index = random_u32(rng) % GROUP_SIZE_TOTAL;
-        let diff = index_to_coord(other_cache_index) - local_xy;
+        let diff = thread_index_to_coord(other_cache_index, group_id) - pixel;
         if (dot(diff, diff) < parameters.spatial_min_distance * parameters.spatial_min_distance) {
             continue;
         }
@@ -546,22 +549,22 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
 
 @compute @workgroup_size(GROUP_SIZE.x, GROUP_SIZE.y)
 fn main(
-    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(workgroup_id) group_id: vec3<u32>,
     @builtin(local_invocation_index) local_index: u32,
 ) {
     pixel_cache[local_index].reservoir.confidence = 0.0;
-    let pixel_coord = global_id.xy - parameters.grid_offset;
-    if (any(pixel_coord >= camera.target_size)) {
+    let pixel_coord = thread_index_to_coord(local_index, group_id);
+    if (any(vec2<u32>(pixel_coord) >= camera.target_size)) {
         return;
     }
 
-    let global_index = pixel_coord.y * camera.target_size.x + pixel_coord.x;
+    let global_index = u32(pixel_coord.y) * camera.target_size.x + u32(pixel_coord.x);
     var rng = random_init(global_index, parameters.frame_index);
 
-    let surface = read_surface(vec2<i32>(pixel_coord));
-    let enable_debug = all(pixel_coord == debug.mouse_pos);
+    let surface = read_surface(pixel_coord);
+    let enable_debug = all(pixel_coord == vec2<i32>(debug.mouse_pos));
     let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
-    let ro = compute_restir(surface, vec2<i32>(pixel_coord), &rng, local_index, enable_restir_debug);
+    let ro = compute_restir(surface, pixel_coord, &rng, local_index, group_id, enable_restir_debug);
     let color = ro.radiance;
     if (enable_debug) {
         debug_buf.variance.color_sum += color;

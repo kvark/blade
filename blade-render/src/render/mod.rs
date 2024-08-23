@@ -11,6 +11,7 @@ pub use env_map::EnvironmentMap;
 use std::{collections::HashMap, mem, num::NonZeroU32, path::Path, ptr};
 
 const MAX_RESOURCES: u32 = 8192;
+const GRID_SCALES: u32 = 4;
 const RADIANCE_FORMAT: blade_graphics::TextureFormat = blade_graphics::TextureFormat::Rgba16Float;
 
 fn mat4_transform(t: &blade_graphics::Transform) -> glam::Mat4 {
@@ -299,6 +300,20 @@ struct Blur {
     atrous_pipeline: blade_graphics::ComputePipeline,
 }
 
+#[derive(Clone, Copy)]
+struct GridMapping {
+    offset: mint::Vector2<u32>,
+    scale: mint::Vector2<u32>,
+}
+impl Default for GridMapping {
+    fn default() -> Self {
+        Self {
+            offset: [0; 2].into(),
+            scale: [1; 2].into(),
+        }
+    }
+}
+
 /// Blade Renderer is a comprehensive rendering solution for
 /// end user applications.
 ///
@@ -326,7 +341,7 @@ pub struct Renderer {
     textures: blade_graphics::TextureArray<MAX_RESOURCES>,
     samplers: Samplers,
     reservoir_size: u32,
-    grid_jitter: [u32; 2],
+    grid_mapping: GridMapping,
     debug: DebugRender,
     surface_size: blade_graphics::Extent,
     surface_info: blade_graphics::SurfaceInfo,
@@ -373,6 +388,7 @@ struct MainParams {
     t_start: f32,
     use_motion_vectors: u32,
     grid_offset: [u32; 2],
+    grid_scale: [u32; 2],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -727,7 +743,7 @@ impl Renderer {
             textures: blade_graphics::TextureArray::new(),
             samplers,
             reservoir_size: sp.reservoir_size,
-            grid_jitter: [0; 2],
+            grid_mapping: GridMapping::default(),
             debug,
             surface_size: config.surface_size,
             surface_info: config.surface_info,
@@ -1119,10 +1135,19 @@ impl Renderer {
         self.targets.camera_params[self.frame_index % 2] = self.make_camera_params(camera);
         self.post_proc_input_index = self.frame_index % 2;
 
-        self.grid_jitter = {
+        self.grid_mapping = {
             let wg_size = self.main_pipeline.get_workgroup_size();
-            let random = nanorand::Rng::generate::<u64>(&mut self.random) as u32;
-            [random % wg_size[0], (random / wg_size[0]) % wg_size[1]]
+            let random = nanorand::Rng::generate::<u64>(&mut self.random);
+            let r_offset = random as u32;
+            let r_scale = (random >> 32) as u32;
+            GridMapping {
+                offset: [r_offset % wg_size[0], (r_offset / wg_size[0]) % wg_size[1]].into(),
+                scale: [
+                    1 << (r_scale % GRID_SCALES),
+                    1 << ((r_scale / GRID_SCALES) % GRID_SCALES),
+                ]
+                .into(),
+            }
         };
     }
 
@@ -1167,18 +1192,12 @@ impl Renderer {
         }
 
         if let mut pass = command_encoder.compute() {
-            let grid_offset = if ray_config.spatial_jitter {
-                self.grid_jitter
+            let grid_mapping = if ray_config.spatial_jitter {
+                self.grid_mapping
             } else {
-                [0; 2]
+                GridMapping::default()
             };
-            let groups = {
-                let mut grid_size = self.surface_size;
-                grid_size.width += grid_offset[0];
-                grid_size.height += grid_offset[1];
-                self.main_pipeline.get_dispatch_for(grid_size)
-            };
-
+            let groups = self.main_pipeline.get_dispatch_for(self.surface_size);
             let mut pc = pass.with(&self.main_pipeline);
             pc.bind(
                 0,
@@ -1198,7 +1217,8 @@ impl Renderer {
                         spatial_min_distance: ray_config.spatial_min_distance,
                         t_start: ray_config.t_start,
                         use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
-                        grid_offset,
+                        grid_offset: grid_mapping.offset.into(),
+                        grid_scale: grid_mapping.scale.into(),
                     },
                     acc_struct: self.acceleration_structure,
                     prev_acc_struct: if self.frame_scene_built < self.frame_index
