@@ -22,7 +22,7 @@ impl ExposeHud for blade_render::RayConfig {
             egui::widgets::Slider::new(&mut self.spatial_tap_history, 0..=50)
                 .text("Spatial tap history"),
         );
-        ui.checkbox(&mut self.spatial_jitter, "Spatial jittering");
+        ui.add(egui::widgets::Slider::new(&mut self.group_mixer, 1..=10).text("Group mixer"));
         ui.add(
             egui::widgets::Slider::new(&mut self.spatial_min_distance, 1..=10)
                 .text("Spatial minimum distance (px)"),

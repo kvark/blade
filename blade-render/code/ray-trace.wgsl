@@ -1,3 +1,4 @@
+#include "color.inc.wgsl"
 #include "quaternion.inc.wgsl"
 #include "random.inc.wgsl"
 #include "env-importance.inc.wgsl"
@@ -26,6 +27,7 @@ const DECOUPLED_SHADING: bool = false;
 //TODO: crashes on AMD 6850U if `GROUP_SIZE_TOTAL` > 32
 const GROUP_SIZE: vec2<u32> = vec2<u32>(8, 4);
 const GROUP_SIZE_TOTAL: u32 = GROUP_SIZE.x * GROUP_SIZE.y;
+const GROUP_VISUALIZE: bool = false;
 
 struct MainParams {
     frame_index: u32,
@@ -38,7 +40,6 @@ struct MainParams {
     spatial_min_distance: i32,
     t_start: f32,
     use_motion_vectors: u32,
-    grid_offset: vec2<u32>,
     grid_scale: vec2<u32>,
 }
 
@@ -231,7 +232,6 @@ fn thread_index_to_coord(thread_index: u32, group_id: vec3<u32>) -> vec2<i32> {
     let cluster_offset = group_id.xy - cluster_id * parameters.grid_scale;
     let local_id = vec2<u32>(thread_index % GROUP_SIZE.x, thread_index / GROUP_SIZE.x);
     let global_id = (cluster_id * GROUP_SIZE + local_id) * parameters.grid_scale + cluster_offset;
-    //TODO: also use the offset
     return vec2<i32>(global_id);
 }
 
@@ -555,6 +555,14 @@ fn main(
     pixel_cache[local_index].reservoir.confidence = 0.0;
     let pixel_coord = thread_index_to_coord(local_index, group_id);
     if (any(vec2<u32>(pixel_coord) >= camera.target_size)) {
+        return;
+    }
+    if (GROUP_VISUALIZE)
+    {
+        var rng = random_init(group_id.y * 1000u + group_id.x, 0u);
+        let h = random_gen(&rng) * 360.0;
+        let color = hsv_to_rgb(h, 0.5, 1.0);
+        textureStore(out_diffuse, pixel_coord, vec4<f32>(color, 1.0));
         return;
     }
 

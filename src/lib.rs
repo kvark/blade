@@ -490,7 +490,7 @@ impl Engine {
                 spatial_taps: 1,
                 spatial_tap_history: 5,
                 spatial_min_distance: 4,
-                spatial_jitter: true,
+                group_mixer: 10,
                 t_start: 0.01,
             },
             denoiser_enabled: true,
