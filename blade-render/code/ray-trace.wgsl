@@ -16,10 +16,7 @@ const MAX_RESAMPLE: u32 = 4u;
 // See "9.1 pairwise mis for robust reservoir reuse"
 // "Correlations and Reuse for Fast and Accurate Physically Based Light Transport"
 const PAIRWISE_MIS: bool = true;
-// Base MIS for canonical samples. The constant isolates a critical difference between
-// Bitterli's pseudocode (where it's 1) and NVidia's RTXDI implementation (where it's 0).
-// With Bitterli's 1 we have MIS not respecting the prior history enough.
-const BASE_CANONICAL_MIS: f32 = 0.05;
+const DEFENSIVE_MIS: bool = false;
 // See "DECOUPLING SHADING AND REUSE" in
 // "Rearchitecting Spatiotemporal Resampling for Production"
 const DECOUPLED_SHADING: bool = false;
@@ -338,19 +335,6 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debu
     return brdf;
 }
 
-struct HeuristicFactors {
-    weight: f32,
-    //history: f32,
-}
-
-fn balance_heuristic(w0: f32, w1: f32, h0: f32, h1: f32) -> HeuristicFactors {
-    var hf: HeuristicFactors;
-    let balance_denom = h0 * w0 + h1 * w1;
-    hf.weight = select(h0 * w0 / balance_denom, 0.0, balance_denom <= 0.0);
-    //hf.history = select(pow(clamp(w1 / w0, 0.0, 1.0), 8.0), 1.0, w0 <= 0.0);
-    return hf;
-}
-
 struct ResampleBase {
     surface: Surface,
     canonical: LiveReservoir,
@@ -361,6 +345,8 @@ struct ResampleResult {
     selected: bool,
     mis_canonical: f32,
 }
+
+const canonical_count: f32 = 1.0;
 
 fn resample(
     dst: ptr<function, LiveReservoir>, color_and_weight: ptr<function, vec4<f32>>,
@@ -377,10 +363,10 @@ fn resample(
         {   // scoping this to hint the register allocation
             let t_canonical_at_neighbor = estimate_target_score_with_occlusion(
                 other.surface, other.world_pos, canonical.selected_light_index, canonical.selected_uv, other_acs, debug_len);
-            let mis_sub_canonical = balance_heuristic(
-                t_canonical_at_neighbor.score, canonical.selected_target_score,
-                neighbor_history * base.accepted_count, canonical.history);
-            rr.mis_canonical = 1.0 - mis_sub_canonical.weight;
+            let nom = canonical.selected_target_score * canonical.history;
+            let denom = canonical_count * nom + t_canonical_at_neighbor.score * neighbor_history * base.accepted_count;
+            let kf = 1.0 / select(base.accepted_count, canonical_count + base.accepted_count, DEFENSIVE_MIS);
+            rr.mis_canonical = kf * nom / max(0.01, denom);
         }
 
         // Notes about t_neighbor_at_neighbor:
@@ -390,17 +376,16 @@ fn resample(
         //let t_neighbor_at_neighbor = estimate_target_pdf(neighbor_surface, neighbor_position, neighbor.selected_dir);
         let t_neighbor_at_canonical = estimate_target_score_with_occlusion(
             base.surface, base.world_pos, neighbor.light_index, neighbor.light_uv, acc_struct, debug_len);
-        let mis_neighbor = balance_heuristic(
-            neighbor.target_score, t_neighbor_at_canonical.score,
-            neighbor_history * base.accepted_count, canonical.history);
+        let nom = t_neighbor_at_canonical.score * canonical.history;
+        let denom = canonical_count * neighbor.target_score * neighbor_history + base.accepted_count * nom;
+        let kf = select(1.0, base.accepted_count / (canonical_count + base.accepted_count), DEFENSIVE_MIS);
+        let mis_neighbor = kf * nom / max(0.01, denom);
 
         src.history = neighbor_history;
         src.selected_light_index = neighbor.light_index;
         src.selected_uv = neighbor.light_uv;
         src.selected_target_score = t_neighbor_at_canonical.score;
-        src.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor.weight;
-        //Note: should be needed according to the paper
-        // src.history *= min(mis_neighbor.history, mis_sub_canonical.history);
+        src.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor;
         src.radiance = t_neighbor_at_canonical.color;
     } else {
         src = unpack_reservoir(neighbor, max_history);
@@ -437,7 +422,7 @@ fn finalize_resampling(
     merge_reservoir(reservoir, canonical, random_gen(rng));
 
     if (base.accepted_count > 0.0) {
-        let effective_history = select((*reservoir).history, BASE_CANONICAL_MIS + base.accepted_count, PAIRWISE_MIS);
+        let effective_history = select((*reservoir).history, base.accepted_count, PAIRWISE_MIS);
         ro.reservoir = pack_reservoir_detail(*reservoir, effective_history);
     } else {
         ro.reservoir = pack_reservoir(canonical);
@@ -505,7 +490,8 @@ fn resample_temporal(
     let prev_world_pos = prev_camera.position + prev_surface.depth * prev_dir;
     let other = PixelCache(prev_surface, prev_reservoir, prev_world_pos);
     let rr = resample(&reservoir, &color_and_weight, base, other, prev_acc_struct, parameters.temporal_history, rng, enable_debug);
-    let mis_canonical = BASE_CANONICAL_MIS + rr.mis_canonical;
+    let total_samples = 2.0;
+    let mis_canonical = select(0.0, 1.0 / total_samples, DEFENSIVE_MIS) + rr.mis_canonical;
 
     return finalize_resampling(&reservoir, &color_and_weight, base, mis_canonical, rng);
 }
@@ -544,7 +530,8 @@ fn resample_spatial(
 
     let canonical = unpack_reservoir(canonical_stored, ~0u);
     var reservoir = LiveReservoir();
-    var mis_canonical = BASE_CANONICAL_MIS;
+    let total_samples = 1.0 + f32(accepted_count);
+    var mis_canonical = select(0.0, 1.0 / total_samples, DEFENSIVE_MIS);
     var color_and_weight = vec4<f32>(0.0);
     let base = ResampleBase(surface, canonical, position, f32(accepted_count));
 
