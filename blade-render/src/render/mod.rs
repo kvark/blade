@@ -51,7 +51,13 @@ pub enum DebugMode {
     Normal = 2,
     Motion = 3,
     HitConsistency = 4,
-    Variance = 5,
+    TemporalMatch = 5,
+    TemporalMisCanonical = 6,
+    TemporalMisError = 7,
+    SpatialMatch = 8,
+    SpatialMisCanonical = 9,
+    SpatialMisError = 10,
+    Variance = 100,
 }
 
 impl Default for DebugMode {
@@ -1162,8 +1168,20 @@ impl Renderer {
                 let r = self.frame_index as u32 ^ 0x5A;
                 [r % limit + 1, (r / limit) % limit + 1]
             };
-
-            let groups = self.main_pipeline.get_dispatch_for(self.surface_size);
+            let groups = {
+                let wg_size = self.main_pipeline.get_workgroup_size();
+                let cluster_size = [
+                    wg_size[0] * grid_scale[0],
+                    wg_size[1] * grid_scale[1],
+                    wg_size[2],
+                ];
+                let clusters = self.surface_size.group_by(cluster_size);
+                [
+                    clusters[0] * grid_scale[0],
+                    clusters[1] * grid_scale[1],
+                    clusters[2],
+                ]
+            };
             let mut pc = pass.with(&self.main_pipeline);
             pc.bind(
                 0,
