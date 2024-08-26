@@ -556,6 +556,7 @@ pub struct AccelerationStructureSizes {
 pub struct Shader {
     module: naga::Module,
     info: naga::valid::ModuleInfo,
+    source: String,
 }
 
 #[derive(Clone, Copy)]
