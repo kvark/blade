@@ -695,7 +695,7 @@ impl super::Context {
         });
 
         let mut naga_flags = spv::WriterFlags::FORCE_POINT_SIZE;
-        if desc.validation {
+        if desc.validation || desc.capture {
             naga_flags |= spv::WriterFlags::DEBUG;
         }
 

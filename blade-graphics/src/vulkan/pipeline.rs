@@ -1,6 +1,6 @@
 use ash::vk;
 use naga::back::spv;
-use std::{ffi, mem, str};
+use std::{ffi, mem, path::Path, str};
 
 const DUMP_PREFIX: Option<&str> = None;
 
@@ -55,7 +55,7 @@ impl super::Context {
     fn load_shader(
         &self,
         sf: crate::ShaderFunction,
-        naga_options: &spv::Options,
+        naga_options_base: &spv::Options,
         group_layouts: &[&crate::ShaderDataLayout],
         group_infos: &mut [crate::ShaderDataInfo],
         vertex_fetch_states: &[crate::VertexFetchState],
@@ -78,6 +78,17 @@ impl super::Context {
         let pipeline_options = spv::PipelineOptions {
             shader_stage: ep.stage,
             entry_point: sf.entry_point.to_string(),
+        };
+        let mut naga_options_debug;
+        let naga_options = if self.naga_flags.contains(spv::WriterFlags::DEBUG) {
+            naga_options_debug = naga_options_base.clone();
+            naga_options_debug.debug_info = Some(naga::back::spv::DebugInfo {
+                source_code: &sf.shader.source,
+                file_name: Path::new(""),
+            });
+            &naga_options_debug
+        } else {
+            naga_options_base
         };
 
         let spv = spv::write_vec(
