@@ -1015,3 +1015,17 @@ impl super::Context {
         }
     }
 }
+
+impl Drop for super::Context {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(surface) = &self.surface {
+                if let Some(surface_instance) = &self.instance.surface {
+                    surface_instance.destroy_surface(surface.lock().unwrap().raw, None);
+                }
+            }
+            self.device.core.destroy_device(None);
+            self.instance.core.destroy_instance(None);
+        }
+    }
+}
