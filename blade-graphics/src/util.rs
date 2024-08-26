@@ -94,14 +94,19 @@ impl super::TextureFormat {
     }
 }
 
+impl super::Extent {
+    pub fn group_by(&self, size: [u32; 3]) -> [u32; 3] {
+        [
+            (self.width + size[0] - 1) / size[0],
+            (self.height + size[1] - 1) / size[1],
+            (self.depth + size[2] - 1) / size[2],
+        ]
+    }
+}
+
 impl super::ComputePipeline {
     /// Return the dispatch group counts sufficient to cover the given extent.
     pub fn get_dispatch_for(&self, extent: super::Extent) -> [u32; 3] {
-        let wg_size = self.get_workgroup_size();
-        [
-            (extent.width + wg_size[0] - 1) / wg_size[0],
-            (extent.height + wg_size[1] - 1) / wg_size[1],
-            (extent.depth + wg_size[2] - 1) / wg_size[2],
-        ]
+        extent.group_by(self.get_workgroup_size())
     }
 }
