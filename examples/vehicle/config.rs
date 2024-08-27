@@ -11,12 +11,6 @@ pub struct Wheel {
 }
 
 #[derive(serde::Deserialize)]
-pub struct Motor {
-    pub visual: blade::config::Visual,
-    pub collider: blade::config::Collider,
-}
-
-#[derive(serde::Deserialize)]
 pub struct Axle {
     /// Side offset for each wheel.
     pub x_wheels: Vec<f32>,
