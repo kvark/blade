@@ -695,9 +695,15 @@ impl super::Context {
         });
 
         let mut naga_flags = spv::WriterFlags::FORCE_POINT_SIZE;
-        if desc.validation || desc.capture {
+        let shader_debug_path = if desc.validation || desc.capture {
+            use std::{env, fs};
             naga_flags |= spv::WriterFlags::DEBUG;
-        }
+            let dir = env::temp_dir().join("blade");
+            let _ = fs::create_dir(&dir);
+            Some(dir)
+        } else {
+            None
+        };
 
         Ok(super::Context {
             memory: Mutex::new(memory_manager),
@@ -712,6 +718,7 @@ impl super::Context {
             surface,
             physical_device,
             naga_flags,
+            shader_debug_path,
             instance,
             _entry: entry,
         })

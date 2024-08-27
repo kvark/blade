@@ -1,6 +1,6 @@
 use ash::vk;
 use naga::back::spv;
-use std::{ffi, mem, path::Path, str};
+use std::{ffi, mem, str};
 
 const DUMP_PREFIX: Option<&str> = None;
 
@@ -79,12 +79,23 @@ impl super::Context {
             shader_stage: ep.stage,
             entry_point: sf.entry_point.to_string(),
         };
+        let file_path;
         let mut naga_options_debug;
-        let naga_options = if self.naga_flags.contains(spv::WriterFlags::DEBUG) {
+        let naga_options = if let Some(ref temp_dir) = self.shader_debug_path {
+            use std::{
+                fs,
+                hash::{DefaultHasher, Hash as _, Hasher as _},
+            };
+            let mut hasher = DefaultHasher::new();
+            sf.shader.source.hash(&mut hasher);
+            file_path = temp_dir.join(format!("{}-{:x}.wgsl", sf.entry_point, hasher.finish()));
+            log::debug!("Dumping processed shader code to: {}", file_path.display());
+            let _ = fs::write(&file_path, &sf.shader.source);
+
             naga_options_debug = naga_options_base.clone();
             naga_options_debug.debug_info = Some(naga::back::spv::DebugInfo {
                 source_code: &sf.shader.source,
-                file_name: Path::new(""),
+                file_name: &file_path,
             });
             &naga_options_debug
         } else {
