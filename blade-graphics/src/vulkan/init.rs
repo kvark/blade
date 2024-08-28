@@ -524,7 +524,7 @@ impl super::Context {
             instance
                 .core
                 .create_device(physical_device, &device_create_info, None)
-                .unwrap()
+                .map_err(|e| NotSupportedError::VulkanError(e))?
         };
 
         let device = super::Device {
