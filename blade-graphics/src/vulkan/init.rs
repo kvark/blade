@@ -569,7 +569,11 @@ impl super::Context {
                 extra_sync_src_access: vk::AccessFlags::TRANSFER_WRITE,
                 extra_sync_dst_access: vk::AccessFlags::TRANSFER_WRITE
                     | vk::AccessFlags::TRANSFER_READ
-                    | vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR,
+                    | if capabilities.ray_tracing {
+                        vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR
+                    } else {
+                        vk::AccessFlags::NONE
+                    },
                 extra_descriptor_pool_create_flags: if capabilities
                     .bugs
                     .intel_fix_descriptor_pool_leak
