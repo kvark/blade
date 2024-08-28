@@ -1,6 +1,6 @@
 Changelog for Blade
 
-## blade-graphics-0.5, blade-macros-0.3, blade-egui-0.4, blade-util-0.1 (TBD)
+## blade-graphics-0.5, blade-macros-0.3, blade-egui-0.4, blade-util-0.1 (27 Aug 2024)
 
 - crate: `blade-util` for helper utilities
 - graphics:
@@ -15,6 +15,7 @@ Changelog for Blade
     - fixed initial RAM consumption
     - worked around Intel descriptor memory allocation bug
     - fixed coherent memory requirements
+    - rudimentary cleanup on destruction
   - GLES:
     - support for storage buffer and compute
     - scissor rects, able to run "particle" example

@@ -114,9 +114,9 @@ impl JointAxis {
     fn into_rapier(self) -> rapier3d::dynamics::JointAxis {
         use rapier3d::dynamics::JointAxis as Ja;
         match self {
-            Self::LinearX => Ja::X,
-            Self::LinearY => Ja::Y,
-            Self::LinearZ => Ja::Z,
+            Self::LinearX => Ja::LinX,
+            Self::LinearY => Ja::LinY,
+            Self::LinearZ => Ja::LinZ,
             Self::AngularX => Ja::AngX,
             Self::AngularY => Ja::AngY,
             Self::AngularZ => Ja::AngZ,
