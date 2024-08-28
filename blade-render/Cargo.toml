@@ -28,9 +28,9 @@ asset = [
 [dependencies]
 base64 = { workspace = true, optional = true }
 bitflags = { workspace = true }
-blade-graphics = { version = "0.4", path = "../blade-graphics" }
+blade-graphics = { version = "0.5", path = "../blade-graphics" }
 blade-asset = { version = "0.2", path = "../blade-asset" }
-blade-macros = { version = "0.2.1", path = "../blade-macros" }
+blade-macros = { version = "0.3", path = "../blade-macros" }
 bytemuck = { workspace = true }
 choir = { workspace = true }
 exr = { version = "1.6", optional = true }

@@ -10,7 +10,7 @@ repository = "https://github.com/kvark/blade"
 [lib]
 
 [dependencies]
-blade-graphics = { version = "0.4", path = "../blade-graphics" }
+blade-graphics = { version = "0.5", path = "../blade-graphics" }
 bytemuck = { workspace = true }
 log = { workspace = true }
 profiling = { workspace = true }

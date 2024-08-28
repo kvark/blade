@@ -45,8 +45,8 @@ readme = "docs/README.md"
 
 [dependencies]
 blade-asset = { version = "0.2", path = "blade-asset" }
-blade-egui = { version = "0.3", path = "blade-egui" }
-blade-graphics = { version = "0.4", path = "blade-graphics" }
+blade-egui = { version = "0.4", path = "blade-egui" }
+blade-graphics = { version = "0.5", path = "blade-graphics" }
 blade-helpers = { version = "0.1", path = "blade-helpers" }
 blade-util = { version = "0.1", path = "blade-util" }
 base64 = { workspace = true }
@@ -54,12 +54,12 @@ choir = { workspace = true }
 colorsys = "0.6"
 egui = { workspace = true }
 gltf = { workspace = true }
-nalgebra = { version = "0.32", features = ["mint"] }
+nalgebra = { version = "0.33", features = ["mint"] }
 log = { workspace = true }
 mint = { workspace = true, features = ["serde"] }
 num_cpus = "1"
 profiling = { workspace = true }
-rapier3d = { version = "0.19", features = ["debug-render"] }
+rapier3d = { version = "0.22", features = ["debug-render"] }
 serde = { version = "1", features = ["serde_derive"] }
 slab = "0.4"
 winit = { workspace = true }
@@ -68,12 +68,12 @@ winit = { workspace = true }
 blade-render = { version = "0.3", path = "blade-render" }
 
 [dev-dependencies]
-blade-macros = { version = "0.2", path = "blade-macros" }
+egui_plot = "0.28"
+blade-macros = { version = "0.3", path = "blade-macros" }
 bytemuck = { workspace = true }
 choir = { workspace = true }
 egui = { workspace = true }
 transform-gizmo-egui = { git = "https://github.com/urholaukkarinen/transform-gizmo", rev = "5be085444468ff7059abcd4e4872ab4510f65a06" }
-egui_plot = "0.28"
 env_logger = "0.11"
 glam = { workspace = true }
 log = { workspace = true }
@@ -84,9 +84,8 @@ profiling = { workspace = true }
 ron = "0.8"
 serde = { version = "1", features = ["serde_derive"] }
 strum = { workspace = true }
-# not following semver :(
-del-msh = "=0.1.25"
-del-geo = "=0.1.19"
+del-msh-core = "=0.1.33"
+del-geo = "=0.1.29"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # see https://github.com/emilk/egui/issues/4270
@@ -99,7 +98,7 @@ web-sys = { workspace = true, features = ["Window"] }
 getrandom = { version = "0.2", features = ["js"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dev-dependencies]
-renderdoc = "0.11"
+renderdoc = "0.12"
 
 # This is too slow in Debug
 [profile.dev.package.texpresso]
@@ -118,3 +117,4 @@ allowed_external_types = [
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }
+# not following semver :(

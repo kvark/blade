@@ -1,6 +1,6 @@
 [package]
 name = "blade-graphics"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Graphics abstraction for Blade"
 keywords = ["graphics"]
@@ -35,7 +35,7 @@ naga = { workspace = true, features = ["spv-out"] }
 slab = { workspace = true }
 
 [target.'cfg(any(gles, target_arch = "wasm32"))'.dependencies]
-glow = "0.13"
+glow = "0.14"
 naga = { workspace = true, features = ["glsl-out"] }
 
 [target.'cfg(all(gles, not(target_arch = "wasm32")))'.dependencies]

@@ -924,17 +924,8 @@ impl super::Context {
                 .unwrap()
         };
 
-        // destroy the old swapchain
         unsafe {
-            surface.extension.destroy_swapchain(surface.swapchain, None);
-        }
-        for frame in surface.frames.drain(..) {
-            unsafe {
-                self.device.core.destroy_image_view(frame.view, None);
-                self.device
-                    .core
-                    .destroy_semaphore(frame.acquire_semaphore, None);
-            }
+            surface.deinit_swapchain(&self.device.core);
         }
 
         let images = unsafe {
@@ -1016,16 +1007,39 @@ impl super::Context {
     }
 }
 
+impl super::Surface {
+    unsafe fn deinit_swapchain(&mut self, ash_device: &ash::Device) {
+        self.extension.destroy_swapchain(self.swapchain, None);
+        for frame in self.frames.drain(..) {
+            ash_device.destroy_image_view(frame.view, None);
+            ash_device.destroy_semaphore(frame.acquire_semaphore, None);
+        }
+    }
+}
+
 impl Drop for super::Context {
     fn drop(&mut self) {
         unsafe {
-            if let Some(surface) = &self.surface {
-                if let Some(surface_instance) = &self.instance.surface {
-                    surface_instance.destroy_surface(surface.lock().unwrap().raw, None);
+            if let Some(surface_mutex) = self.surface.take() {
+                let mut surface = surface_mutex.into_inner().unwrap();
+                surface.deinit_swapchain(&self.device.core);
+                self.device
+                    .core
+                    .destroy_semaphore(surface.next_semaphore, None);
+                if let Some(surface_instance) = self.instance.surface.take() {
+                    surface_instance.destroy_surface(surface.raw, None);
                 }
             }
             self.device.core.destroy_device(None);
             self.instance.core.destroy_instance(None);
+            if let Ok(queue) = self.queue.lock() {
+                self.device
+                    .core
+                    .destroy_semaphore(queue.timeline_semaphore, None);
+                self.device
+                    .core
+                    .destroy_semaphore(queue.present_semaphore, None);
+            }
         }
     }
 }
