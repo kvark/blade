@@ -1034,8 +1034,6 @@ impl Drop for super::Context {
                     surface_instance.destroy_surface(surface.raw, None);
                 }
             }
-            self.device.core.destroy_device(None);
-            self.instance.core.destroy_instance(None);
             if let Ok(queue) = self.queue.lock() {
                 self.device
                     .core
@@ -1044,6 +1042,8 @@ impl Drop for super::Context {
                     .core
                     .destroy_semaphore(queue.present_semaphore, None);
             }
+            self.device.core.destroy_device(None);
+            self.instance.core.destroy_instance(None);
         }
     }
 }
