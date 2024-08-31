@@ -314,11 +314,14 @@ impl super::Context {
             wg_size,
         }
     }
+}
 
-    pub fn create_compute_pipeline(
-        &self,
-        desc: crate::ComputePipelineDesc,
-    ) -> super::ComputePipeline {
+#[hidden_trait::expose]
+impl crate::traits::ShaderDevice for super::Context {
+    type ComputePipeline = super::ComputePipeline;
+    type RenderPipeline = super::RenderPipeline;
+
+    fn create_compute_pipeline(&self, desc: crate::ComputePipelineDesc) -> super::ComputePipeline {
         let mut layout = make_pipeline_layout(desc.data_layouts, 0);
 
         objc::rc::autoreleasepool(|| {
@@ -354,7 +357,11 @@ impl super::Context {
         })
     }
 
-    pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
+    fn destroy_compute_pipeline(&self, _pipeline: &mut super::ComputePipeline) {
+        //TODO: is there a way to release?
+    }
+
+    fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
         let mut layout = make_pipeline_layout(desc.data_layouts, desc.vertex_fetches.len() as u32);
 
         let triangle_fill_mode = match desc.primitive.wireframe {
@@ -518,5 +525,9 @@ impl super::Context {
                 depth_stencil,
             }
         })
+    }
+
+    fn destroy_render_pipeline(&self, _pipeline: &mut super::RenderPipeline) {
+        //TODO: is there a way to release?
     }
 }

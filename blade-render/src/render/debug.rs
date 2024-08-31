@@ -209,6 +209,8 @@ impl DebugRender {
         gpu.destroy_buffer(self.variance_buffer);
         gpu.destroy_buffer(self.entry_buffer);
         gpu.destroy_buffer(self.cpu_lines_buffer);
+        gpu.destroy_render_pipeline(&mut self.draw_pipeline);
+        gpu.destroy_render_pipeline(&mut self.blit_pipeline);
     }
 
     pub(super) fn recreate_draw_pipeline(

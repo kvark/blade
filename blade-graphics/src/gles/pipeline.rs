@@ -296,10 +296,18 @@ impl super::Context {
         }
     }
 
-    pub fn create_compute_pipeline(
-        &self,
-        desc: crate::ComputePipelineDesc,
-    ) -> super::ComputePipeline {
+    unsafe fn destroy_pipeline(&self, inner: &mut super::PipelineInner) {
+        let gl = self.lock();
+        gl.delete_program(inner.program);
+    }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::ShaderDevice for super::Context {
+    type ComputePipeline = super::ComputePipeline;
+    type RenderPipeline = super::RenderPipeline;
+
+    fn create_compute_pipeline(&self, desc: crate::ComputePipelineDesc) -> super::ComputePipeline {
         let wg_size = desc.compute.shader.module.entry_points[desc.compute.entry_point_index()]
             .workgroup_size;
         let inner = unsafe {
@@ -314,7 +322,13 @@ impl super::Context {
         super::ComputePipeline { inner, wg_size }
     }
 
-    pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
+    fn destroy_compute_pipeline(&self, pipeline: &mut super::ComputePipeline) {
+        unsafe {
+            self.destroy_pipeline(&mut pipeline.inner);
+        }
+    }
+
+    fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
         let extra_flags = if desc.primitive.topology == crate::PrimitiveTopology::PointList {
             glsl::WriterFlags::FORCE_POINT_SIZE
         } else {
@@ -345,6 +359,12 @@ impl super::Context {
         super::RenderPipeline {
             inner,
             topology: desc.primitive.topology,
+        }
+    }
+
+    fn destroy_render_pipeline(&self, pipeline: &mut super::RenderPipeline) {
+        unsafe {
+            self.destroy_pipeline(&mut pipeline.inner);
         }
     }
 }
