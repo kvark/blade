@@ -1,4 +1,5 @@
 use std::{fmt::Debug, hash::Hash};
+
 pub trait ResourceDevice {
     type Buffer: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
     type Texture: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
@@ -24,6 +25,16 @@ pub trait ResourceDevice {
         desc: super::AccelerationStructureDesc,
     ) -> Self::AccelerationStructure;
     fn destroy_acceleration_structure(&self, acceleration_structure: Self::AccelerationStructure);
+}
+
+pub trait ShaderDevice {
+    type ComputePipeline: Send + Sync;
+    type RenderPipeline: Send + Sync;
+
+    fn create_compute_pipeline(&self, desc: super::ComputePipelineDesc) -> Self::ComputePipeline;
+    fn destroy_compute_pipeline(&self, pipeline: &mut Self::ComputePipeline);
+    fn create_render_pipeline(&self, desc: super::RenderPipelineDesc) -> Self::RenderPipeline;
+    fn destroy_render_pipeline(&self, pipeline: &mut Self::RenderPipeline);
 }
 
 pub trait CommandDevice {

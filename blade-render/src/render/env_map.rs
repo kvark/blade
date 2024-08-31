@@ -80,6 +80,7 @@ impl EnvironmentMap {
         for view in self.weight_mips.drain(..) {
             gpu.destroy_texture_view(view);
         }
+        gpu.destroy_compute_pipeline(&mut self.prepare_pipeline);
     }
 
     pub fn assign(

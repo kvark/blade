@@ -327,9 +327,12 @@ impl Example {
             self.context.wait_for(&sp, !0);
         }
         self.context.destroy_buffer(self.vertex_buf);
+        self.context.destroy_texture_view(self.view);
         self.context.destroy_texture(self.texture);
+        self.context.destroy_sampler(self.sampler);
         self.context
             .destroy_command_encoder(&mut self.command_encoder);
+        self.context.destroy_render_pipeline(&mut self.pipeline);
     }
 }
 

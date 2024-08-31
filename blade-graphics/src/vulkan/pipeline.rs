@@ -284,10 +284,29 @@ impl super::Context {
         }
     }
 
-    pub fn create_compute_pipeline(
-        &self,
-        desc: crate::ComputePipelineDesc,
-    ) -> super::ComputePipeline {
+    fn destroy_pipeline_layout(&self, layout: &mut super::PipelineLayout) {
+        unsafe {
+            self.device.core.destroy_pipeline_layout(layout.raw, None);
+        }
+        for dsl in layout.descriptor_set_layouts.drain(..) {
+            unsafe {
+                self.device
+                    .core
+                    .destroy_descriptor_set_layout(dsl.raw, None);
+                self.device
+                    .core
+                    .destroy_descriptor_update_template(dsl.update_template, None);
+            }
+        }
+    }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::ShaderDevice for super::Context {
+    type ComputePipeline = super::ComputePipeline;
+    type RenderPipeline = super::RenderPipeline;
+
+    fn create_compute_pipeline(&self, desc: crate::ComputePipelineDesc) -> super::ComputePipeline {
         let mut group_infos = desc
             .data_layouts
             .iter()
@@ -343,7 +362,14 @@ impl super::Context {
         }
     }
 
-    pub fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
+    fn destroy_compute_pipeline(&self, pipeline: &mut super::ComputePipeline) {
+        self.destroy_pipeline_layout(&mut pipeline.layout);
+        unsafe {
+            self.device.core.destroy_pipeline(pipeline.raw, None);
+        }
+    }
+
+    fn create_render_pipeline(&self, desc: crate::RenderPipelineDesc) -> super::RenderPipeline {
         let mut group_infos = desc
             .data_layouts
             .iter()
@@ -528,6 +554,13 @@ impl super::Context {
             self.set_object_name(raw, desc.name);
         }
         super::RenderPipeline { raw, layout }
+    }
+
+    fn destroy_render_pipeline(&self, pipeline: &mut super::RenderPipeline) {
+        self.destroy_pipeline_layout(&mut pipeline.layout);
+        unsafe {
+            self.device.core.destroy_pipeline(pipeline.raw, None);
+        }
     }
 }
 

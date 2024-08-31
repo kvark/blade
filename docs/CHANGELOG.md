@@ -1,5 +1,10 @@
 Changelog for Blade
 
+## blade-graphics-0.6 (TBD)
+
+- graphics:
+  - API for destruction of pipelines
+
 ## blade-graphics-0.5, blade-macros-0.3, blade-egui-0.4, blade-util-0.1 (27 Aug 2024)
 
 - crate: `blade-util` for helper utilities
