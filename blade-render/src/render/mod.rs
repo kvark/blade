@@ -209,7 +209,7 @@ impl<const N: usize> RenderTarget<N> {
 }
 
 struct RestirTargets {
-    reservoir_buf: [blade_graphics::Buffer; 2],
+    reservoir_buf: blade_graphics::Buffer,
     debug: RenderTarget<1>,
     depth: RenderTarget<2>,
     basis: RenderTarget<2>,
@@ -228,14 +228,11 @@ impl RestirTargets {
         gpu: &blade_graphics::Context,
     ) -> Self {
         let total_reservoirs = size.width as usize * size.height as usize;
-        let mut reservoir_buf = [blade_graphics::Buffer::default(); 2];
-        for (i, rb) in reservoir_buf.iter_mut().enumerate() {
-            *rb = gpu.create_buffer(blade_graphics::BufferDesc {
-                name: &format!("reservoirs{i}"),
-                size: reservoir_size as u64 * total_reservoirs as u64,
-                memory: blade_graphics::Memory::Device,
-            });
-        }
+        let reservoir_buf = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "reservoirs",
+            size: reservoir_size as u64 * total_reservoirs as u64,
+            memory: blade_graphics::Memory::Device,
+        });
 
         Self {
             reservoir_buf,
@@ -287,9 +284,7 @@ impl RestirTargets {
     }
 
     fn destroy(&self, gpu: &blade_graphics::Context) {
-        for rb in self.reservoir_buf.iter() {
-            gpu.destroy_buffer(*rb);
-        }
+        gpu.destroy_buffer(self.reservoir_buf);
         self.debug.destroy(gpu);
         self.depth.destroy(gpu);
         self.basis.destroy(gpu);
@@ -420,7 +415,6 @@ struct MainData {
     t_motion: blade_graphics::TextureView,
     debug_buf: blade_graphics::BufferPiece,
     reservoirs: blade_graphics::BufferPiece,
-    prev_reservoirs: blade_graphics::BufferPiece,
     out_diffuse: blade_graphics::TextureView,
     out_debug: blade_graphics::TextureView,
 }
@@ -1106,13 +1100,11 @@ impl Renderer {
                 self.debug.reset_lines(&mut transfer);
             }
             let total_reservoirs = self.surface_size.width as u64 * self.surface_size.height as u64;
-            for reservoir_buf in self.targets.reservoir_buf.iter() {
-                transfer.fill_buffer(
-                    reservoir_buf.at(0),
-                    total_reservoirs * self.reservoir_size as u64,
-                    0,
-                );
-            }
+            transfer.fill_buffer(
+                self.targets.reservoir_buf.at(0),
+                total_reservoirs * self.reservoir_size as u64,
+                0,
+            );
         }
 
         if !config.frozen {
@@ -1224,8 +1216,7 @@ impl Renderer {
                     t_prev_flat_normal: self.targets.flat_normal.views[prev],
                     t_motion: self.targets.motion.views[0],
                     debug_buf: self.debug.buffer_resource(),
-                    reservoirs: self.targets.reservoir_buf[cur].into(),
-                    prev_reservoirs: self.targets.reservoir_buf[prev].into(),
+                    reservoirs: self.targets.reservoir_buf.into(),
                     out_diffuse: self.targets.light_diffuse.views[cur],
                     out_debug: self.targets.debug.views[0],
                 },
