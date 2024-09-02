@@ -57,7 +57,6 @@ struct StoredReservoir {
     confidence: f32,
 }
 var<storage, read_write> reservoirs: array<StoredReservoir>;
-var<storage, read> prev_reservoirs: array<StoredReservoir>;
 
 struct PixelCache {
     surface: Surface,
@@ -493,7 +492,7 @@ fn resample_temporal(
         return finalize_canonical(canonical);
     }
 
-    let prev_reservoir = prev_reservoirs[prev_reservoir_index];
+    let prev_reservoir = reservoirs[prev_reservoir_index];
     let prev_surface = read_prev_surface(prev_pixel);
     // if the surfaces are too different, there is no trust in this sample
     if (prev_reservoir.confidence == 0.0 || compare_surfaces(surface, prev_surface) < 0.1) {
