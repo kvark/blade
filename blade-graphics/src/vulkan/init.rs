@@ -1023,6 +1023,9 @@ impl super::Surface {
 
 impl Drop for super::Context {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
         unsafe {
             if let Some(surface_mutex) = self.surface.take() {
                 let mut surface = surface_mutex.into_inner().unwrap();

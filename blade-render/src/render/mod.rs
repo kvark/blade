@@ -10,7 +10,7 @@ pub use env_map::EnvironmentMap;
 
 use std::{collections::HashMap, mem, num::NonZeroU32, path::Path, ptr};
 
-const MAX_RESOURCES: u32 = 1000;
+const MAX_RESOURCES: u32 = 8192;
 const RADIANCE_FORMAT: blade_graphics::TextureFormat = blade_graphics::TextureFormat::Rgba16Float;
 
 fn mat4_transform(t: &blade_graphics::Transform) -> glam::Mat4 {
