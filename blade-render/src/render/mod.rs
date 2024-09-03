@@ -51,12 +51,13 @@ pub enum DebugMode {
     Normal = 2,
     Motion = 3,
     HitConsistency = 4,
-    TemporalMatch = 5,
-    TemporalMisCanonical = 6,
-    TemporalMisError = 7,
-    SpatialMatch = 8,
-    SpatialMisCanonical = 9,
-    SpatialMisError = 10,
+    Grouping = 5,
+    TemporalMatch = 10,
+    TemporalMisCanonical = 11,
+    TemporalMisError = 12,
+    SpatialMatch = 13,
+    SpatialMisCanonical = 14,
+    SpatialMisError = 15,
     Variance = 100,
 }
 
@@ -313,7 +314,6 @@ pub struct Renderer {
     shaders: Shaders,
     targets: RestirTargets,
     post_proc_input_index: usize,
-    fill_pipeline: blade_graphics::ComputePipeline,
     main_pipeline: blade_graphics::ComputePipeline,
     post_proc_pipeline: blade_graphics::RenderPipeline,
     blur: Blur,
@@ -375,46 +375,31 @@ struct MainParams {
 }
 
 #[derive(blade_macros::ShaderData)]
-struct FillData<'a> {
-    camera: CameraParams,
-    prev_camera: CameraParams,
-    debug: DebugParams,
-    acc_struct: blade_graphics::AccelerationStructure,
-    hit_entries: blade_graphics::BufferPiece,
-    index_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
-    vertex_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
-    textures: &'a blade_graphics::TextureArray<MAX_RESOURCES>,
-    sampler_linear: blade_graphics::Sampler,
-    debug_buf: blade_graphics::BufferPiece,
-    out_depth: blade_graphics::TextureView,
-    out_basis: blade_graphics::TextureView,
-    out_flat_normal: blade_graphics::TextureView,
-    out_albedo: blade_graphics::TextureView,
-    out_motion: blade_graphics::TextureView,
-    out_debug: blade_graphics::TextureView,
-}
-
-#[derive(blade_macros::ShaderData)]
-struct MainData {
+struct MainData<'a> {
     camera: CameraParams,
     prev_camera: CameraParams,
     debug: DebugParams,
     parameters: MainParams,
     acc_struct: blade_graphics::AccelerationStructure,
     prev_acc_struct: blade_graphics::AccelerationStructure,
+    hit_entries: blade_graphics::BufferPiece,
+    index_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
+    vertex_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
+    textures: &'a blade_graphics::TextureArray<MAX_RESOURCES>,
     sampler_linear: blade_graphics::Sampler,
     sampler_nearest: blade_graphics::Sampler,
     env_map: blade_graphics::TextureView,
     env_weights: blade_graphics::TextureView,
-    t_depth: blade_graphics::TextureView,
     t_prev_depth: blade_graphics::TextureView,
-    t_basis: blade_graphics::TextureView,
     t_prev_basis: blade_graphics::TextureView,
-    t_flat_normal: blade_graphics::TextureView,
     t_prev_flat_normal: blade_graphics::TextureView,
-    t_motion: blade_graphics::TextureView,
     debug_buf: blade_graphics::BufferPiece,
     reservoirs: blade_graphics::BufferPiece,
+    out_depth: blade_graphics::TextureView,
+    out_basis: blade_graphics::TextureView,
+    out_flat_normal: blade_graphics::TextureView,
+    out_albedo: blade_graphics::TextureView,
+    out_motion: blade_graphics::TextureView,
     out_diffuse: blade_graphics::TextureView,
     out_debug: blade_graphics::TextureView,
 }
@@ -492,7 +477,6 @@ struct HitEntry {
 #[derive(Clone, PartialEq)]
 pub struct Shaders {
     env_prepare: blade_asset::Handle<crate::Shader>,
-    fill_gbuf: blade_asset::Handle<crate::Shader>,
     ray_trace: blade_asset::Handle<crate::Shader>,
     blur: blade_asset::Handle<crate::Shader>,
     post_proc: blade_asset::Handle<crate::Shader>,
@@ -505,7 +489,6 @@ impl Shaders {
         let mut ctx = asset_hub.open_context(path, "shader finish");
         let shaders = Self {
             env_prepare: ctx.load_shader("env-prepare.wgsl"),
-            fill_gbuf: ctx.load_shader("fill-gbuf.wgsl"),
             ray_trace: ctx.load_shader("ray-trace.wgsl"),
             blur: ctx.load_shader("blur.wgsl"),
             post_proc: ctx.load_shader("post-proc.wgsl"),
@@ -517,7 +500,6 @@ impl Shaders {
 }
 
 struct ShaderPipelines {
-    fill: blade_graphics::ComputePipeline,
     main: blade_graphics::ComputePipeline,
     temporal_accum: blade_graphics::ComputePipeline,
     atrous: blade_graphics::ComputePipeline,
@@ -527,19 +509,6 @@ struct ShaderPipelines {
 }
 
 impl ShaderPipelines {
-    fn create_gbuf_fill(
-        shader: &blade_graphics::Shader,
-        gpu: &blade_graphics::Context,
-    ) -> blade_graphics::ComputePipeline {
-        shader.check_struct_size::<crate::Vertex>();
-        shader.check_struct_size::<HitEntry>();
-        let layout = <FillData as blade_graphics::ShaderData>::layout();
-        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
-            name: "fill-gbuf",
-            data_layouts: &[&layout],
-            compute: shader.at("main"),
-        })
-    }
     fn create_ray_trace(
         shader: &blade_graphics::Shader,
         gpu: &blade_graphics::Context,
@@ -617,7 +586,6 @@ impl ShaderPipelines {
         let sh_main = shader_man[shaders.ray_trace].raw.as_ref().unwrap();
         let sh_blur = shader_man[shaders.blur].raw.as_ref().unwrap();
         Ok(Self {
-            fill: Self::create_gbuf_fill(shader_man[shaders.fill_gbuf].raw.as_ref().unwrap(), gpu),
             main: Self::create_ray_trace(sh_main, gpu),
             temporal_accum: Self::create_temporal_accum(sh_blur, gpu),
             atrous: Self::create_atrous(sh_blur, gpu),
@@ -708,7 +676,6 @@ impl Renderer {
             shaders,
             targets,
             post_proc_input_index: 0,
-            fill_pipeline: sp.fill,
             main_pipeline: sp.main,
             post_proc_pipeline: sp.post_proc,
             blur: Blur {
@@ -755,7 +722,6 @@ impl Renderer {
         // pipelines
         gpu.destroy_compute_pipeline(&mut self.blur.temporal_accum_pipeline);
         gpu.destroy_compute_pipeline(&mut self.blur.atrous_pipeline);
-        gpu.destroy_compute_pipeline(&mut self.fill_pipeline);
         gpu.destroy_compute_pipeline(&mut self.main_pipeline);
         gpu.destroy_render_pipeline(&mut self.post_proc_pipeline);
     }
@@ -770,7 +736,6 @@ impl Renderer {
         let mut tasks = Vec::new();
         let old = self.shaders.clone();
 
-        tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.fill_gbuf));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.ray_trace));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.blur));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.post_proc));
@@ -787,11 +752,6 @@ impl Renderer {
             let _ = task.join();
         }
 
-        if self.shaders.fill_gbuf != old.fill_gbuf {
-            if let Ok(ref shader) = asset_hub.shaders[self.shaders.fill_gbuf].raw {
-                self.fill_pipeline = ShaderPipelines::create_gbuf_fill(shader, gpu);
-            }
-        }
         if self.shaders.ray_trace != old.ray_trace {
             if let Ok(ref shader) = asset_hub.shaders[self.shaders.ray_trace].raw {
                 assert_eq!(
@@ -1128,33 +1088,6 @@ impl Renderer {
         let (cur, prev) = self.work_indices();
 
         if let mut pass = command_encoder.compute() {
-            let mut pc = pass.with(&self.fill_pipeline);
-            let groups = self.fill_pipeline.get_dispatch_for(self.surface_size);
-            pc.bind(
-                0,
-                &FillData {
-                    camera: self.targets.camera_params[cur],
-                    prev_camera: self.targets.camera_params[prev],
-                    debug,
-                    acc_struct: self.acceleration_structure,
-                    hit_entries: self.hit_buffer.into(),
-                    index_buffers: &self.index_buffers,
-                    vertex_buffers: &self.vertex_buffers,
-                    textures: &self.textures,
-                    sampler_linear: self.samplers.linear,
-                    debug_buf: self.debug.buffer_resource(),
-                    out_depth: self.targets.depth.views[cur],
-                    out_basis: self.targets.basis.views[cur],
-                    out_flat_normal: self.targets.flat_normal.views[cur],
-                    out_albedo: self.targets.albedo.views[0],
-                    out_motion: self.targets.motion.views[0],
-                    out_debug: self.targets.debug.views[0],
-                },
-            );
-            pc.dispatch(groups);
-        }
-
-        if let mut pass = command_encoder.compute() {
             let grid_scale = {
                 let limit = ray_config.group_mixer;
                 let r = self.frame_index as u32 ^ 0x5A;
@@ -1204,19 +1137,24 @@ impl Renderer {
                     } else {
                         self.prev_acceleration_structure
                     },
+                    hit_entries: self.hit_buffer.into(),
+                    index_buffers: &self.index_buffers,
+                    vertex_buffers: &self.vertex_buffers,
+                    textures: &self.textures,
                     sampler_linear: self.samplers.linear,
                     sampler_nearest: self.samplers.nearest,
                     env_map: self.env_map.main_view,
                     env_weights: self.env_map.weight_view,
-                    t_depth: self.targets.depth.views[cur],
                     t_prev_depth: self.targets.depth.views[prev],
-                    t_basis: self.targets.basis.views[cur],
                     t_prev_basis: self.targets.basis.views[prev],
-                    t_flat_normal: self.targets.flat_normal.views[cur],
                     t_prev_flat_normal: self.targets.flat_normal.views[prev],
-                    t_motion: self.targets.motion.views[0],
                     debug_buf: self.debug.buffer_resource(),
                     reservoirs: self.targets.reservoir_buf.into(),
+                    out_depth: self.targets.depth.views[cur],
+                    out_basis: self.targets.basis.views[cur],
+                    out_flat_normal: self.targets.flat_normal.views[cur],
+                    out_albedo: self.targets.albedo.views[0],
+                    out_motion: self.targets.motion.views[0],
                     out_diffuse: self.targets.light_diffuse.views[cur],
                     out_debug: self.targets.debug.views[0],
                 },
