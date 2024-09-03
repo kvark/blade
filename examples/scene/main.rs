@@ -159,7 +159,6 @@ struct Example {
     last_render_time: time::Instant,
     render_times: VecDeque<u32>,
     ray_config: blade_render::RayConfig,
-    denoiser_enabled: bool,
     denoiser_config: blade_render::DenoiserConfig,
     post_proc_config: blade_render::PostProcConfig,
     debug_blit: Option<blade_render::DebugBlit>,
@@ -268,8 +267,8 @@ impl Example {
                 group_mixer: 10,
                 t_start: 0.1,
             },
-            denoiser_enabled: true,
             denoiser_config: blade_render::DenoiserConfig {
+                enabled: true,
                 num_passes: 3,
                 temporal_weight: 0.1,
             },
@@ -459,6 +458,7 @@ impl Example {
         // even while it's still being loaded.
         let do_render =
             self.scene_load_task.is_none() || (RENDER_WHILE_LOADING && self.scene_revision != 0);
+        let mut frame_key = blade_render::FrameKey::default();
         if do_render {
             self.renderer.prepare(
                 command_encoder,
@@ -475,11 +475,12 @@ impl Example {
             //TODO: figure out why the main RT pipeline
             // causes a GPU crash when there are no objects
             if !self.objects.is_empty() {
-                self.renderer
-                    .ray_trace(command_encoder, self.debug, self.ray_config);
-                if self.denoiser_enabled {
-                    self.renderer.denoise(command_encoder, self.denoiser_config);
-                }
+                frame_key = self.renderer.ray_trace(
+                    command_encoder,
+                    self.debug,
+                    self.ray_config,
+                    self.denoiser_config,
+                );
             }
         }
 
@@ -509,6 +510,7 @@ impl Example {
                 };
                 self.renderer.post_proc(
                     &mut pass,
+                    frame_key,
                     self.debug,
                     self.post_proc_config,
                     &[],
@@ -672,7 +674,6 @@ impl Example {
         egui::CollapsingHeader::new("Denoise")
             .default_open(false)
             .show(ui, |ui| {
-                ui.checkbox(&mut self.denoiser_enabled, "Enable");
                 self.denoiser_config.populate_hud(ui);
             });
 

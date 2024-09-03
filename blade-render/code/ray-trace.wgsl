@@ -8,6 +8,7 @@
 #include "surface.inc.wgsl"
 #include "geometry.inc.wgsl"
 #include "motion.inc.wgsl"
+#include "accum.inc.wgsl"
 
 const PI: f32 = 3.1415926;
 const MAX_RESAMPLE: u32 = 4u;
@@ -34,6 +35,7 @@ struct MainParams {
     t_start: f32,
     use_motion_vectors: u32,
     grid_scale: vec2<u32>,
+    temporal_accumulation_weight: f32,
 }
 
 var<uniform> camera: CameraParams;
@@ -62,6 +64,12 @@ struct PixelCache {
     world_pos: vec3<f32>,
 }
 var<workgroup> pixel_cache: array<PixelCache, GROUP_SIZE_TOTAL>;
+struct ReprojectionCache {
+    surface: Surface,
+    pixel_coord: vec2<i32>,
+    is_valid: bool,
+}
+var<workgroup> reprojection_cache: array<ReprojectionCache, GROUP_SIZE_TOTAL>;
 
 struct LightSample {
     radiance: vec3<f32>,
@@ -142,10 +150,11 @@ fn pack_reservoir(r: LiveReservoir) -> StoredReservoir {
     return pack_reservoir_detail(r, r.history);
 }
 
-var t_prev_depth: texture_2d<f32>;
-var t_prev_basis: texture_2d<f32>;
-var t_prev_flat_normal: texture_2d<f32>;
-var out_diffuse: texture_storage_2d<rgba16float, write>;
+var inout_depth: texture_storage_2d<r32float, read_write>;
+var inout_basis: texture_storage_2d<rgba8snorm, read_write>;
+var inout_flat_normal: texture_storage_2d<rgba8snorm, read_write>;
+var out_albedo: texture_storage_2d<rgba8unorm, write>;
+var out_motion: texture_storage_2d<rg8snorm, write>;
 var out_debug: texture_storage_2d<rgba8unorm, write>;
 
 fn sample_circle(random: f32) -> vec2<f32> {
@@ -201,9 +210,9 @@ fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample
 
 fn read_prev_surface(pixel: vec2<i32>) -> Surface {
     var surface: Surface;
-    surface.basis = normalize(textureLoad(t_prev_basis, pixel, 0));
-    surface.flat_normal = normalize(textureLoad(t_prev_flat_normal, pixel, 0).xyz);
-    surface.depth = textureLoad(t_prev_depth, pixel, 0).x;
+    surface.basis = normalize(textureLoad(inout_basis, pixel));
+    surface.flat_normal = normalize(textureLoad(inout_flat_normal, pixel).xyz);
+    surface.depth = textureLoad(inout_depth, pixel).x;
     return surface;
 }
 
@@ -458,8 +467,9 @@ fn finalize_resampling(
 
 fn resample_temporal(
     surface: Surface, motion: vec2<f32>, cur_pixel: vec2<i32>, position: vec3<f32>,
-    rng: ptr<function, RandomState>, debug_len: f32,
+    local_index: u32, rng: ptr<function, RandomState>, debug_len: f32,
 ) -> ResampleOutput {
+    reprojection_cache[local_index].is_valid = false;
     if (debug.view_mode == DebugMode_TemporalMatch || debug.view_mode == DebugMode_TemporalMisCanonical || debug.view_mode == DebugMode_TemporalMisError) {
         textureStore(out_debug, cur_pixel, vec4<f32>(0.0));
     }
@@ -469,27 +479,32 @@ fn resample_temporal(
     let canonical = produce_canonical(surface, position, rng, debug_len);
 
     //TODO: find best match in a 2x2 grid
-    let prev_pixel = vec2<i32>(get_prev_pixel(cur_pixel, position, motion));
+    var prev = ReprojectionCache();
+    prev.pixel_coord = vec2<i32>(get_prev_pixel(cur_pixel, position, motion));
 
-    let prev_reservoir_index = get_reservoir_index(prev_pixel, prev_camera);
+    let prev_reservoir_index = get_reservoir_index(prev.pixel_coord, prev_camera);
     if (parameters.temporal_tap == 0u || prev_reservoir_index < 0) {
         return finalize_canonical(canonical);
     }
 
     let prev_reservoir = reservoirs[prev_reservoir_index];
-    let prev_surface = read_prev_surface(prev_pixel);
+    prev.surface = read_prev_surface(prev.pixel_coord);
+    prev.is_valid = compare_surfaces(surface, prev.surface) > 0.1;
     // if the surfaces are too different, there is no trust in this sample
-    if (prev_reservoir.confidence == 0.0 || compare_surfaces(surface, prev_surface) < 0.1) {
+    if (prev_reservoir.confidence == 0.0 || !prev.is_valid) {
         return finalize_canonical(canonical);
     }
+
+    // Write down the reprojection cache, no need to carry this around
+    reprojection_cache[local_index] = prev;
 
     var reservoir = LiveReservoir();
     var color_and_weight = vec4<f32>(0.0);
     let base = ResampleBase(surface, canonical, position, 1.0);
 
-    let prev_dir = get_ray_direction(prev_camera, prev_pixel);
-    let prev_world_pos = prev_camera.position + prev_surface.depth * prev_dir;
-    let other = PixelCache(prev_surface, prev_reservoir, prev_world_pos);
+    let prev_dir = get_ray_direction(prev_camera, prev.pixel_coord);
+    let prev_world_pos = prev_camera.position + prev.surface.depth * prev_dir;
+    let other = PixelCache(prev.surface, prev_reservoir, prev_world_pos);
     let rr = resample(&reservoir, &color_and_weight, base, other, prev_acc_struct, parameters.temporal_history, rng, debug_len);
     let mis_canonical = 1.0 + rr.mis_canonical;
 
@@ -503,6 +518,7 @@ fn resample_temporal(
         let total = mis_canonical + rr.mis_sample;
         textureStore(out_debug, cur_pixel, vec4<f32>(abs(total - 1.0 - base.accepted_count)));
     }
+
     return finalize_resampling(&reservoir, &color_and_weight, base, mis_canonical, rng);
 }
 
@@ -575,7 +591,7 @@ fn compute_restir(
 ) -> vec3<f32> {
     let debug_len = select(0.0, rs.inner.depth * 0.2, enable_debug);
 
-    let temporal = resample_temporal(rs.inner, rs.motion, pixel, rs.position, rng, debug_len);
+    let temporal = resample_temporal(rs.inner, rs.motion, pixel, rs.position, local_index, rng, debug_len);
     pixel_cache[local_index] = PixelCache(rs.inner, temporal.reservoir, rs.position);
 
     // sync with the workgroup to ensure all reservoirs are available.
@@ -586,14 +602,17 @@ fn compute_restir(
 
     let pixel_index = get_reservoir_index(pixel, camera);
     reservoirs[pixel_index] = spatial.reservoir;
+
+    //Note: restoring it from the LDS allows to lower the register pressure during spatial re-use
+    let rc = reprojection_cache[local_index];
+    accumulate_temporal(
+        rs.inner, rs.position, pixel,
+        spatial.color, parameters.temporal_accumulation_weight,
+        rc.surface, rc.pixel_coord, rc.is_valid,
+    );
+
     return spatial.color;
 }
-
-var out_depth: texture_storage_2d<r32float, write>;
-var out_basis: texture_storage_2d<rgba8snorm, write>;
-var out_flat_normal: texture_storage_2d<rgba8snorm, write>;
-var out_albedo: texture_storage_2d<rgba8unorm, write>;
-var out_motion: texture_storage_2d<rg8snorm, write>;
 
 @compute @workgroup_size(GROUP_SIZE.x, GROUP_SIZE.y)
 fn main(
@@ -617,19 +636,19 @@ fn main(
     let enable_debug = all(pixel_coord == vec2<i32>(debug.mouse_pos));
     let rs = fetch_geometry(pixel_coord, true, enable_debug);
 
-    // TODO: option to avoid writing data for the sky
-    textureStore(out_depth, pixel_coord, vec4<f32>(rs.inner.depth, 0.0, 0.0, 0.0));
-    textureStore(out_basis, pixel_coord, rs.inner.basis);
-    textureStore(out_flat_normal, pixel_coord, vec4<f32>(rs.inner.flat_normal, 0.0));
-    textureStore(out_albedo, pixel_coord, vec4<f32>(rs.albedo, 0.0));
-    textureStore(out_motion, pixel_coord, vec4<f32>(rs.motion * MOTION_SCALE, 0.0, 0.0));
-
     let global_index = u32(pixel_coord.y) * camera.target_size.x + u32(pixel_coord.x);
     var rng = random_init(global_index, parameters.frame_index);
 
     let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
     let color = compute_restir(rs, pixel_coord, local_index, group_id, &rng, enable_restir_debug);
-    textureStore(out_diffuse, pixel_coord, vec4<f32>(color, 1.0));
+
+    //Note: important to do this after the temporal pass specifically
+    // TODO: option to avoid writing data for the sky
+    textureStore(inout_depth, pixel_coord, vec4<f32>(rs.inner.depth, 0.0, 0.0, 0.0));
+    textureStore(inout_basis, pixel_coord, rs.inner.basis);
+    textureStore(inout_flat_normal, pixel_coord, vec4<f32>(rs.inner.flat_normal, 0.0));
+    textureStore(out_albedo, pixel_coord, vec4<f32>(rs.albedo, 0.0));
+    textureStore(out_motion, pixel_coord, vec4<f32>(rs.motion * MOTION_SCALE, 0.0, 0.0));
 
     if (enable_debug) {
         debug_buf.variance.color_sum += color;
