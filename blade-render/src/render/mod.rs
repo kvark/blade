@@ -54,10 +54,8 @@ pub enum DebugMode {
     Grouping = 5,
     TemporalMatch = 10,
     TemporalMisCanonical = 11,
-    TemporalMisError = 12,
-    SpatialMatch = 13,
-    SpatialMisCanonical = 14,
-    SpatialMisError = 15,
+    SpatialMatch = 12,
+    SpatialMisCanonical = 13,
     Variance = 100,
 }
 

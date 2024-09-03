@@ -50,7 +50,7 @@ struct RichSurface {
     motion: vec2<f32>,
 }
 
-fn fetch_geometry(pixel_coord: vec2<i32>, enable_debug: bool, is_primary: bool) -> RichSurface {
+fn fetch_geometry(pixel_coord: vec2<i32>, is_primary: bool, enable_debug: bool) -> RichSurface {
     var rq: ray_query;
     let ray_dir = get_ray_direction(camera, pixel_coord);
     rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_CULL_NO_OPAQUE, 0xFFu, 0.0, camera.depth, camera.position, ray_dir));
@@ -151,9 +151,17 @@ fn fetch_geometry(pixel_coord: vec2<i32>, enable_debug: bool, is_primary: bool) 
         rs.albedo *= base_color_sample.xyz;
     }
 
+    let prev_position = (entry.prev_object_to_world * position_object).xyz;
+    let prev_screen = get_projected_pixel_float(prev_camera, prev_position);
+    //TODO: consider just storing integers here?
+    //TODO: technically this "0.5" is just a waste compute on both packing and unpacking
+    rs.motion = prev_screen - vec2<f32>(pixel_coord) - 0.5;
+    rs.position = hit_position;
+
     if (is_primary) {
         if (debug.view_mode == DebugMode_Depth) {
-            textureStore(out_debug, pixel_coord, vec4<f32>(intersection.t / camera.depth));
+            let value = 1.0 / intersection.t;
+            textureStore(out_debug, pixel_coord, vec4<f32>(value));
         }
         if (debug.view_mode == DebugMode_Normal) {
             textureStore(out_debug, pixel_coord, vec4<f32>(normal, 0.0));
@@ -165,14 +173,11 @@ fn fetch_geometry(pixel_coord: vec2<i32>, enable_debug: bool, is_primary: bool) 
             let consistency = vec4<f32>(length(barycentrics_pos_diff), length(camera_projection_diff), 0.0, 0.0);
             textureStore(out_debug, pixel_coord, consistency);
         }
+        if (debug.view_mode == DebugMode_Motion) {
+            let motion = rs.motion * MOTION_SCALE;
+            textureStore(out_debug, pixel_coord, vec4<f32>(motion, 0.0, 0.0));
+        }
     }
-
-    let prev_position = (entry.prev_object_to_world * position_object).xyz;
-    let prev_screen = get_projected_pixel_float(prev_camera, prev_position);
-    //TODO: consider just storing integers here?
-    //TODO: technically this "0.5" is just a waste compute on both packing and unpacking
-    rs.motion = prev_screen - vec2<f32>(pixel_coord) - 0.5;
-    rs.position = hit_position;
 
     // Write down the Surface
     rs.inner.basis = basis;

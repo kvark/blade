@@ -470,9 +470,6 @@ fn resample_temporal(
     local_index: u32, rng: ptr<function, RandomState>, debug_len: f32,
 ) -> ResampleOutput {
     reprojection_cache[local_index].is_valid = false;
-    if (debug.view_mode == DebugMode_TemporalMatch || debug.view_mode == DebugMode_TemporalMisCanonical || debug.view_mode == DebugMode_TemporalMisError) {
-        textureStore(out_debug, cur_pixel, vec4<f32>(0.0));
-    }
     if (surface.depth == 0.0) {
         return ResampleOutput();
     }
@@ -512,11 +509,8 @@ fn resample_temporal(
         textureStore(out_debug, cur_pixel, vec4<f32>(1.0));
     }
     if (debug.view_mode == DebugMode_TemporalMisCanonical) {
-        textureStore(out_debug, cur_pixel, vec4<f32>(mis_canonical / (1.0 + base.accepted_count)));
-    }
-    if (debug.view_mode == DebugMode_TemporalMisError) {
-        let total = mis_canonical + rr.mis_sample;
-        textureStore(out_debug, cur_pixel, vec4<f32>(abs(total - 1.0 - base.accepted_count)));
+        let mis = mis_canonical / (1.0 + base.accepted_count);
+        textureStore(out_debug, cur_pixel, vec4<f32>(mis));
     }
 
     return finalize_resampling(&reservoir, &color_and_weight, base, mis_canonical, rng);
@@ -528,9 +522,6 @@ fn resample_spatial(
     rng: ptr<function, RandomState>, debug_len: f32,
 ) -> ResampleOutput {
     if (surface.depth == 0.0) {
-        if (debug.view_mode == DebugMode_SpatialMatch || debug.view_mode == DebugMode_SpatialMisCanonical || debug.view_mode == DebugMode_SpatialMisError) {
-            textureStore(out_debug, cur_pixel, vec4<f32>(0.0));
-        }
         let dir = normalize(position - camera.position);
         var ro = ResampleOutput();
         ro.color = evaluate_environment(dir);
@@ -575,11 +566,8 @@ fn resample_spatial(
         textureStore(out_debug, cur_pixel, vec4<f32>(value));
     }
     if (debug.view_mode == DebugMode_SpatialMisCanonical) {
-        textureStore(out_debug, cur_pixel, vec4<f32>(mis_canonical / (1.0 + base.accepted_count)));
-    }
-    if (debug.view_mode == DebugMode_SpatialMisError) {
-        let total = mis_canonical + mis_sample_sum;
-        textureStore(out_debug, cur_pixel, vec4<f32>(abs(total - 1.0 - base.accepted_count)));
+        let mis = mis_canonical / (1.0 + base.accepted_count);
+        textureStore(out_debug, cur_pixel, vec4<f32>(mis));
     }
     return finalize_resampling(&reservoir, &color_and_weight, base, mis_canonical, rng);
 }
@@ -628,9 +616,10 @@ fn main(
     if (debug.view_mode == DebugMode_Grouping) {
         var rng = random_init(group_id.y * 1000u + group_id.x, 0u);
         let h = random_gen(&rng) * 360.0;
-        let color = hsv_to_rgb(h, 0.5, 1.0);
+        let color = hsv_to_rgb(h, 0.5, 1.0) + vec3<f32>(0.5);
         textureStore(out_debug, pixel_coord, vec4<f32>(color, 1.0));
-        return;
+    } else if (debug.view_mode != DebugMode_Final) {
+        textureStore(out_debug, pixel_coord, vec4<f32>(0.0));
     }
 
     let enable_debug = all(pixel_coord == vec2<i32>(debug.mouse_pos));
