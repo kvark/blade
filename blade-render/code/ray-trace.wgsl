@@ -6,10 +6,8 @@
 #include "debug-param.inc.wgsl"
 #include "camera.inc.wgsl"
 #include "surface.inc.wgsl"
-#include "gbuf.inc.wgsl"
-
-//TODO: https://github.com/gfx-rs/wgpu/pull/5429
-const RAY_FLAG_CULL_NO_OPAQUE: u32 = 0x80u;
+#include "geometry.inc.wgsl"
+#include "motion.inc.wgsl"
 
 const PI: f32 = 3.1415926;
 const MAX_RESAMPLE: u32 = 4u;
@@ -23,7 +21,6 @@ const DECOUPLED_SHADING: bool = false;
 //TODO: crashes on AMD 6850U if `GROUP_SIZE_TOTAL` > 32
 const GROUP_SIZE: vec2<u32> = vec2<u32>(8, 4);
 const GROUP_SIZE_TOTAL: u32 = GROUP_SIZE.x * GROUP_SIZE.y;
-const GROUP_VISUALIZE: bool = false;
 
 struct MainParams {
     frame_index: u32,
@@ -106,6 +103,7 @@ fn make_reservoir(ls: LightSample, light_index: u32, brdf: vec3<f32>) -> LiveRes
     r.history = 1.0;
     return r;
 }
+
 fn merge_reservoir(r: ptr<function, LiveReservoir>, other: LiveReservoir, random: f32) -> bool {
     (*r).weight_sum += other.weight_sum;
     (*r).history += other.history;
@@ -144,14 +142,9 @@ fn pack_reservoir(r: LiveReservoir) -> StoredReservoir {
     return pack_reservoir_detail(r, r.history);
 }
 
-var t_depth: texture_2d<f32>;
 var t_prev_depth: texture_2d<f32>;
-var t_basis: texture_2d<f32>;
-var t_prev_basis: texture_2d<f32>
-;
-var t_flat_normal: texture_2d<f32>;
+var t_prev_basis: texture_2d<f32>;
 var t_prev_flat_normal: texture_2d<f32>;
-var t_motion: texture_2d<f32>;
 var out_diffuse: texture_storage_2d<rgba16float, write>;
 var out_debug: texture_storage_2d<rgba8unorm, write>;
 
@@ -204,14 +197,6 @@ fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample
     // Note: this only works if the texels are sufficiently small
     ls.uv = (vec2<f32>(es.pixel) + vec2<f32>(random_gen(rng), random_gen(rng))) / vec2<f32>(dim);
     return ls;
-}
-
-fn read_surface(pixel: vec2<i32>) -> Surface {
-    var surface: Surface;
-    surface.basis = normalize(textureLoad(t_basis, pixel, 0));
-    surface.flat_normal = normalize(textureLoad(t_flat_normal, pixel, 0).xyz);
-    surface.depth = textureLoad(t_depth, pixel, 0).x;
-    return surface;
 }
 
 fn read_prev_surface(pixel: vec2<i32>) -> Surface {
@@ -268,9 +253,8 @@ fn evaluate_reflected_light(surface: Surface, light_index: u32, light_uv: vec2<f
     return radiance * brdf;
 }
 
-fn get_prev_pixel(pixel: vec2<i32>, pos_world: vec3<f32>) -> vec2<f32> {
+fn get_prev_pixel(pixel: vec2<i32>, pos_world: vec3<f32>, motion: vec2<f32>) -> vec2<f32> {
     if (USE_MOTION_VECTORS && parameters.use_motion_vectors != 0u) {
-        let motion = textureLoad(t_motion, pixel, 0).xy / MOTION_SCALE;
         return vec2<f32>(pixel) + 0.5 + motion;
     } else {
         return get_projected_pixel_float(prev_camera, pos_world);
@@ -473,7 +457,7 @@ fn finalize_resampling(
 }
 
 fn resample_temporal(
-    surface: Surface, cur_pixel: vec2<i32>, position: vec3<f32>,
+    surface: Surface, motion: vec2<f32>, cur_pixel: vec2<i32>, position: vec3<f32>,
     rng: ptr<function, RandomState>, debug_len: f32,
 ) -> ResampleOutput {
     if (debug.view_mode == DebugMode_TemporalMatch || debug.view_mode == DebugMode_TemporalMisCanonical || debug.view_mode == DebugMode_TemporalMisError) {
@@ -485,7 +469,7 @@ fn resample_temporal(
     let canonical = produce_canonical(surface, position, rng, debug_len);
 
     //TODO: find best match in a 2x2 grid
-    let prev_pixel = vec2<i32>(get_prev_pixel(cur_pixel, position));
+    let prev_pixel = vec2<i32>(get_prev_pixel(cur_pixel, position, motion));
 
     let prev_reservoir_index = get_reservoir_index(prev_pixel, prev_camera);
     if (parameters.temporal_tap == 0u || prev_reservoir_index < 0) {
@@ -585,64 +569,71 @@ fn resample_spatial(
 }
 
 fn compute_restir(
+    rs: RichSurface,
     pixel: vec2<i32>, local_index: u32, group_id: vec3<u32>,
     rng: ptr<function, RandomState>, enable_debug: bool,
 ) -> vec3<f32> {
-    let surface = read_surface(pixel);
-    if (debug.view_mode == DebugMode_Depth) {
-        textureStore(out_debug, pixel, vec4<f32>(surface.depth / camera.depth));
-    }
-    if (debug.view_mode == DebugMode_Normal) {
-        let normal = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
-        textureStore(out_debug, pixel, vec4<f32>(normal, 0.0));
-    }
-    let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
-    let ray_dir = get_ray_direction(camera, pixel);
-    let pixel_index = get_reservoir_index(pixel, camera);
-    let position = camera.position + surface.depth * ray_dir;
+    let debug_len = select(0.0, rs.inner.depth * 0.2, enable_debug);
 
-    let temporal = resample_temporal(surface, pixel, position, rng, debug_len);
-    pixel_cache[local_index] = PixelCache(surface, temporal.reservoir, position);
+    let temporal = resample_temporal(rs.inner, rs.motion, pixel, rs.position, rng, debug_len);
+    pixel_cache[local_index] = PixelCache(rs.inner, temporal.reservoir, rs.position);
 
     // sync with the workgroup to ensure all reservoirs are available.
     workgroupBarrier();
 
     let temporal_live = revive_canonical(temporal);
-    let spatial = resample_spatial(surface, pixel, position, group_id, temporal_live, rng, debug_len);
+    let spatial = resample_spatial(rs.inner, pixel, rs.position, group_id, temporal_live, rng, debug_len);
+
+    let pixel_index = get_reservoir_index(pixel, camera);
     reservoirs[pixel_index] = spatial.reservoir;
     return spatial.color;
 }
+
+var out_depth: texture_storage_2d<r32float, write>;
+var out_basis: texture_storage_2d<rgba8snorm, write>;
+var out_flat_normal: texture_storage_2d<rgba8snorm, write>;
+var out_albedo: texture_storage_2d<rgba8unorm, write>;
+var out_motion: texture_storage_2d<rg8snorm, write>;
 
 @compute @workgroup_size(GROUP_SIZE.x, GROUP_SIZE.y)
 fn main(
     @builtin(workgroup_id) group_id: vec3<u32>,
     @builtin(local_invocation_index) local_index: u32,
 ) {
-    pixel_cache[local_index].reservoir.confidence = 0.0;
+    pixel_cache[local_index] = PixelCache();
     let pixel_coord = thread_index_to_coord(local_index, group_id);
     if (any(vec2<u32>(pixel_coord) >= camera.target_size)) {
         return;
     }
-    if (GROUP_VISUALIZE)
-    {
+
+    if (debug.view_mode == DebugMode_Grouping) {
         var rng = random_init(group_id.y * 1000u + group_id.x, 0u);
         let h = random_gen(&rng) * 360.0;
         let color = hsv_to_rgb(h, 0.5, 1.0);
-        textureStore(out_diffuse, pixel_coord, vec4<f32>(color, 1.0));
+        textureStore(out_debug, pixel_coord, vec4<f32>(color, 1.0));
         return;
     }
+
+    let enable_debug = all(pixel_coord == vec2<i32>(debug.mouse_pos));
+    let rs = fetch_geometry(pixel_coord, true, enable_debug);
+
+    // TODO: option to avoid writing data for the sky
+    textureStore(out_depth, pixel_coord, vec4<f32>(rs.inner.depth, 0.0, 0.0, 0.0));
+    textureStore(out_basis, pixel_coord, rs.inner.basis);
+    textureStore(out_flat_normal, pixel_coord, vec4<f32>(rs.inner.flat_normal, 0.0));
+    textureStore(out_albedo, pixel_coord, vec4<f32>(rs.albedo, 0.0));
+    textureStore(out_motion, pixel_coord, vec4<f32>(rs.motion * MOTION_SCALE, 0.0, 0.0));
 
     let global_index = u32(pixel_coord.y) * camera.target_size.x + u32(pixel_coord.x);
     var rng = random_init(global_index, parameters.frame_index);
 
-    let enable_debug = all(pixel_coord == vec2<i32>(debug.mouse_pos));
     let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
-    let color = compute_restir(pixel_coord, local_index, group_id, &rng, enable_restir_debug);
+    let color = compute_restir(rs, pixel_coord, local_index, group_id, &rng, enable_restir_debug);
+    textureStore(out_diffuse, pixel_coord, vec4<f32>(color, 1.0));
 
     if (enable_debug) {
         debug_buf.variance.color_sum += color;
         debug_buf.variance.color2_sum += color * color;
         debug_buf.variance.count += 1u;
     }
-    textureStore(out_diffuse, pixel_coord, vec4<f32>(color, 1.0));
 }

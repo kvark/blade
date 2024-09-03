@@ -1,5 +1,5 @@
 #include "camera.inc.wgsl"
-#include "gbuf.inc.wgsl"
+#include "motion.inc.wgsl"
 #include "quaternion.inc.wgsl"
 #include "surface.inc.wgsl"
 
