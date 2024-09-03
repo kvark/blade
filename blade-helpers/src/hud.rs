@@ -37,6 +37,7 @@ impl ExposeHud for blade_render::RayConfig {
 
 impl ExposeHud for blade_render::DenoiserConfig {
     fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        ui.checkbox(&mut self.enabled, "Enable denoiser");
         ui.add(egui::Slider::new(&mut self.temporal_weight, 0.0..=1.0f32).text("Temporal weight"));
         ui.add(egui::Slider::new(&mut self.num_passes, 0..=5u32).text("A-trous passes"));
     }

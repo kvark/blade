@@ -378,7 +378,6 @@ pub struct Engine {
     debug: blade_render::DebugConfig,
     pub frame_config: blade_render::FrameConfig,
     pub ray_config: blade_render::RayConfig,
-    pub denoiser_enabled: bool,
     pub denoiser_config: blade_render::DenoiserConfig,
     pub post_proc_config: blade_render::PostProcConfig,
     track_hot_reloads: bool,
@@ -493,8 +492,8 @@ impl Engine {
                 group_mixer: 10,
                 t_start: 0.01,
             },
-            denoiser_enabled: true,
             denoiser_config: blade_render::DenoiserConfig {
+                enabled: true,
                 num_passes: 4,
                 temporal_weight: 0.1,
             },
@@ -573,6 +572,7 @@ impl Engine {
 
         // We should be able to update TLAS and render content
         // even while it's still being loaded.
+        let mut frame_key = blade_render::FrameKey::default();
         if self.load_tasks.is_empty() {
             self.render_objects.clear();
             for (_, object) in self.objects.iter_mut() {
@@ -628,11 +628,12 @@ impl Engine {
             self.frame_config.reset_reservoirs = false;
 
             if !self.render_objects.is_empty() {
-                self.renderer
-                    .ray_trace(command_encoder, self.debug, self.ray_config);
-                if self.denoiser_enabled {
-                    self.renderer.denoise(command_encoder, self.denoiser_config);
-                }
+                frame_key = self.renderer.ray_trace(
+                    command_encoder,
+                    self.debug,
+                    self.ray_config,
+                    self.denoiser_config,
+                );
             }
         }
 
@@ -702,6 +703,7 @@ impl Engine {
             if self.load_tasks.is_empty() {
                 self.renderer.post_proc(
                     &mut pass,
+                    frame_key,
                     self.debug,
                     self.post_proc_config,
                     &debug_lines,
@@ -736,7 +738,6 @@ impl Engine {
             .show(ui, |ui| {
                 self.ray_config.populate_hud(ui);
                 self.frame_config.reset_reservoirs |= ui.button("Reset Accumulation").clicked();
-                ui.checkbox(&mut self.denoiser_enabled, "Enable Denoiser");
                 self.denoiser_config.populate_hud(ui);
                 self.post_proc_config.populate_hud(ui);
             });
