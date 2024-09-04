@@ -616,7 +616,7 @@ fn main(
     if (debug.view_mode == DebugMode_Grouping) {
         var rng = random_init(group_id.y * 1000u + group_id.x, 0u);
         let h = random_gen(&rng) * 360.0;
-        let color = hsv_to_rgb(h, 0.5, 1.0) + vec3<f32>(0.5);
+        let color = hsv_to_rgb(h, 1.0, 1.0);
         textureStore(out_debug, pixel_coord, vec4<f32>(color, 1.0));
     } else if (debug.view_mode != DebugMode_Final) {
         textureStore(out_debug, pixel_coord, vec4<f32>(0.0));

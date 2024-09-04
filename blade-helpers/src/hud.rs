@@ -59,6 +59,15 @@ impl ExposeHud for blade_render::PostProcConfig {
     }
 }
 
+impl ExposeHud for blade_render::FrameConfig {
+    fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            self.reset_reservoirs |= ui.button("Reset Accumulation").clicked();
+            ui.toggle_value(&mut self.frozen, "Freeze");
+        });
+    }
+}
+
 impl ExposeHud for blade_render::DebugConfig {
     fn populate_hud(&mut self, ui: &mut egui::Ui) {
         use strum::IntoEnumIterator as _;
