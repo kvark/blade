@@ -737,7 +737,7 @@ impl Engine {
             .default_open(false)
             .show(ui, |ui| {
                 self.ray_config.populate_hud(ui);
-                self.frame_config.reset_reservoirs |= ui.button("Reset Accumulation").clicked();
+                self.frame_config.populate_hud(ui);
                 self.denoiser_config.populate_hud(ui);
                 self.post_proc_config.populate_hud(ui);
             });
