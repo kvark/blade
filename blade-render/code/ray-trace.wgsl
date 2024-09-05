@@ -473,25 +473,45 @@ fn resample_temporal(
     if (surface.depth == 0.0) {
         return ResampleOutput();
     }
+
     let canonical = produce_canonical(surface, position, rng, debug_len);
+    if (parameters.temporal_tap == 0u) {
+        return finalize_canonical(canonical);
+    }
 
-    //TODO: find best match in a 2x2 grid
+    // Find best match in a 2x2 grid
+    let center_coord = get_prev_pixel(cur_pixel, position, motion);
+    let center_pixel = vec2<i32>(center_coord);
+    // Trick to start with closer pixels
+    let center_sum = vec2<i32>(center_coord - 0.5) + vec2<i32>(center_coord + 0.5);
+    var prev_pixels = array<vec2<i32>, 4>(
+        center_pixel.xy,
+        vec2<i32>(center_sum.x - center_pixel.x, center_pixel.y),
+        center_sum - center_pixel,
+        vec2<i32>(center_pixel.x, center_sum.y - center_pixel.y),
+    );
     var prev = ReprojectionCache();
-    prev.pixel_coord = vec2<i32>(get_prev_pixel(cur_pixel, position, motion));
-
-    let prev_reservoir_index = get_reservoir_index(prev.pixel_coord, prev_camera);
-    if (parameters.temporal_tap == 0u || prev_reservoir_index < 0) {
-        return finalize_canonical(canonical);
+    var prev_reservoir = StoredReservoir();
+    for (var i = 0; i < 4 && !prev.is_valid; i += 1) {
+        prev.pixel_coord = prev_pixels[i];
+        let prev_reservoir_index = get_reservoir_index(prev.pixel_coord, prev_camera);
+        if (prev_reservoir_index < 0) {
+            continue;
+        }
+        prev_reservoir = reservoirs[prev_reservoir_index];
+        if (prev_reservoir.confidence == 0.0) {
+            continue;
+        }
+        prev.surface = read_prev_surface(prev.pixel_coord);
+        if (compare_surfaces(surface, prev.surface) < 0.1) {
+            continue;
+        }
+        prev.is_valid = true;
     }
 
-    let prev_reservoir = reservoirs[prev_reservoir_index];
-    prev.surface = read_prev_surface(prev.pixel_coord);
-    prev.is_valid = compare_surfaces(surface, prev.surface) > 0.1;
-    // if the surfaces are too different, there is no trust in this sample
-    if (prev_reservoir.confidence == 0.0 || !prev.is_valid) {
+    if (!prev.is_valid) {
         return finalize_canonical(canonical);
     }
-
     // Write down the reprojection cache, no need to carry this around
     reprojection_cache[local_index] = prev;
 
