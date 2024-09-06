@@ -64,12 +64,6 @@ struct PixelCache {
     world_pos: vec3<f32>,
 }
 var<workgroup> pixel_cache: array<PixelCache, GROUP_SIZE_TOTAL>;
-struct ReprojectionCache {
-    surface: Surface,
-    pixel_coord: vec2<i32>,
-    is_valid: bool,
-}
-var<workgroup> reprojection_cache: array<ReprojectionCache, GROUP_SIZE_TOTAL>;
 
 struct LightSample {
     radiance: vec3<f32>,
@@ -350,6 +344,50 @@ fn produce_canonical(
     return reservoir;
 }
 
+struct TemporalReprojection {
+    is_valid: bool,
+    pixel: vec2<i32>,
+    surface: Surface,
+    reservoir: StoredReservoir,
+}
+
+fn find_temporal(surface: Surface, center_coord: vec2<f32>) -> TemporalReprojection {
+    var tr = TemporalReprojection();
+    tr.is_valid = false;
+    if (surface.depth == 0.0) {
+        return tr;
+    }
+
+    // Find best match in a 2x2 grid
+    let center_pixel = vec2<i32>(center_coord);
+    // Trick to start with closer pixels
+    let center_sum = vec2<i32>(center_coord - 0.5) + vec2<i32>(center_coord + 0.5);
+    var prev_pixels = array<vec2<i32>, 4>(
+        center_pixel.xy,
+        vec2<i32>(center_sum.x - center_pixel.x, center_pixel.y),
+        center_sum - center_pixel,
+        vec2<i32>(center_pixel.x, center_sum.y - center_pixel.y),
+    );
+
+    for (var i = 0; i < 4 && !tr.is_valid; i += 1) {
+        tr.pixel = prev_pixels[i];
+        let prev_reservoir_index = get_reservoir_index(tr.pixel, prev_camera);
+        if (prev_reservoir_index < 0) {
+            continue;
+        }
+        tr.reservoir = reservoirs[prev_reservoir_index];
+        if (tr.reservoir.confidence == 0.0) {
+            continue;
+        }
+        tr.surface = read_prev_surface(tr.pixel);
+        if (compare_surfaces(surface, tr.surface) < 0.1) {
+            continue;
+        }
+        tr.is_valid = true;
+    }
+    return tr;
+}
+
 struct ResampleBase {
     surface: Surface,
     canonical: LiveReservoir,
@@ -466,62 +504,26 @@ fn finalize_resampling(
 }
 
 fn resample_temporal(
-    surface: Surface, motion: vec2<f32>, cur_pixel: vec2<i32>, position: vec3<f32>,
-    local_index: u32, rng: ptr<function, RandomState>, debug_len: f32,
+    surface: Surface, cur_pixel: vec2<i32>, position: vec3<f32>,
+    local_index: u32, tr: TemporalReprojection,
+    rng: ptr<function, RandomState>, debug_len: f32,
 ) -> ResampleOutput {
-    reprojection_cache[local_index].is_valid = false;
     if (surface.depth == 0.0) {
         return ResampleOutput();
     }
 
     let canonical = produce_canonical(surface, position, rng, debug_len);
-    if (parameters.temporal_tap == 0u) {
+    if (parameters.temporal_tap == 0u || !tr.is_valid) {
         return finalize_canonical(canonical);
     }
-
-    // Find best match in a 2x2 grid
-    let center_coord = get_prev_pixel(cur_pixel, position, motion);
-    let center_pixel = vec2<i32>(center_coord);
-    // Trick to start with closer pixels
-    let center_sum = vec2<i32>(center_coord - 0.5) + vec2<i32>(center_coord + 0.5);
-    var prev_pixels = array<vec2<i32>, 4>(
-        center_pixel.xy,
-        vec2<i32>(center_sum.x - center_pixel.x, center_pixel.y),
-        center_sum - center_pixel,
-        vec2<i32>(center_pixel.x, center_sum.y - center_pixel.y),
-    );
-    var prev = ReprojectionCache();
-    var prev_reservoir = StoredReservoir();
-    for (var i = 0; i < 4 && !prev.is_valid; i += 1) {
-        prev.pixel_coord = prev_pixels[i];
-        let prev_reservoir_index = get_reservoir_index(prev.pixel_coord, prev_camera);
-        if (prev_reservoir_index < 0) {
-            continue;
-        }
-        prev_reservoir = reservoirs[prev_reservoir_index];
-        if (prev_reservoir.confidence == 0.0) {
-            continue;
-        }
-        prev.surface = read_prev_surface(prev.pixel_coord);
-        if (compare_surfaces(surface, prev.surface) < 0.1) {
-            continue;
-        }
-        prev.is_valid = true;
-    }
-
-    if (!prev.is_valid) {
-        return finalize_canonical(canonical);
-    }
-    // Write down the reprojection cache, no need to carry this around
-    reprojection_cache[local_index] = prev;
 
     var reservoir = LiveReservoir();
     var color_and_weight = vec4<f32>(0.0);
     let base = ResampleBase(surface, canonical, position, 1.0);
 
-    let prev_dir = get_ray_direction(prev_camera, prev.pixel_coord);
-    let prev_world_pos = prev_camera.position + prev.surface.depth * prev_dir;
-    let other = PixelCache(prev.surface, prev_reservoir, prev_world_pos);
+    let prev_dir = get_ray_direction(prev_camera, tr.pixel);
+    let prev_world_pos = prev_camera.position + tr.surface.depth * prev_dir;
+    let other = PixelCache(tr.surface, tr.reservoir, prev_world_pos);
     let rr = resample(&reservoir, &color_and_weight, base, other, prev_acc_struct, parameters.temporal_history, rng, debug_len);
     let mis_canonical = 1.0 + rr.mis_canonical;
 
@@ -599,8 +601,12 @@ fn compute_restir(
 ) -> vec3<f32> {
     let debug_len = select(0.0, rs.inner.depth * 0.2, enable_debug);
 
-    let temporal = resample_temporal(rs.inner, rs.motion, pixel, rs.position, local_index, rng, debug_len);
+    let center_coord = get_prev_pixel(pixel, rs.position, rs.motion);
+    let tr = find_temporal(rs.inner, center_coord);
+
+    let temporal = resample_temporal(rs.inner, pixel, rs.position, local_index, tr, rng, debug_len);
     pixel_cache[local_index] = PixelCache(rs.inner, temporal.reservoir, rs.position);
+    var prev_pixel = select(vec2<i32>(-1), tr.pixel, tr.is_valid);
 
     // sync with the workgroup to ensure all reservoirs are available.
     workgroupBarrier();
@@ -611,14 +617,7 @@ fn compute_restir(
     let pixel_index = get_reservoir_index(pixel, camera);
     reservoirs[pixel_index] = spatial.reservoir;
 
-    //Note: restoring it from the LDS allows to lower the register pressure during spatial re-use
-    let rc = reprojection_cache[local_index];
-    accumulate_temporal(
-        rs.inner, rs.position, pixel,
-        spatial.color, parameters.temporal_accumulation_weight,
-        rc.surface, rc.pixel_coord, rc.is_valid,
-    );
-
+    accumulate_temporal(pixel, spatial.color, parameters.temporal_accumulation_weight, prev_pixel);
     return spatial.color;
 }
 
