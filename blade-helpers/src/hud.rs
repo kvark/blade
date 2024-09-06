@@ -15,12 +15,13 @@ impl ExposeHud for blade_render::RayConfig {
         );
         ui.checkbox(&mut self.temporal_tap, "Temporal tap");
         ui.add(
-            egui::widgets::Slider::new(&mut self.temporal_history, 0..=50).text("Temporal history"),
+            egui::widgets::Slider::new(&mut self.temporal_confidence, 0.0..=50.0)
+                .text("Temporal confidence"),
         );
         ui.add(egui::widgets::Slider::new(&mut self.spatial_taps, 0..=10).text("Spatial taps"));
         ui.add(
-            egui::widgets::Slider::new(&mut self.spatial_tap_history, 0..=50)
-                .text("Spatial tap history"),
+            egui::widgets::Slider::new(&mut self.spatial_confidence, 0.0..=50.0)
+                .text("Spatial confidence"),
         );
         ui.add(egui::widgets::Slider::new(&mut self.group_mixer, 1..=10).text("Group mixer"));
         ui.add(
