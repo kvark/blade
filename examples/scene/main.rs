@@ -258,7 +258,7 @@ impl Example {
             render_times: VecDeque::with_capacity(FRAME_TIME_HISTORY),
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
-                environment_importance_sampling: false,
+                environment_importance_sampling: true,
                 temporal_tap: true,
                 temporal_confidence: 10.0,
                 spatial_taps: 1,
@@ -266,6 +266,7 @@ impl Example {
                 spatial_min_distance: 4,
                 group_mixer: 10,
                 t_start: 0.1,
+                pairwise_mis: true,
             },
             denoiser_config: blade_render::DenoiserConfig {
                 enabled: true,

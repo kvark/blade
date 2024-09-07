@@ -33,6 +33,7 @@ impl ExposeHud for blade_render::RayConfig {
                 .text("T min")
                 .logarithmic(true),
         );
+        ui.checkbox(&mut self.pairwise_mis, "Pairwise MIS");
     }
 }
 
