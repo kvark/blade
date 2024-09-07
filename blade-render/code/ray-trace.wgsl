@@ -14,7 +14,7 @@ const PI: f32 = 3.1415926;
 const MAX_RESAMPLE: u32 = 4u;
 // See "9.1 pairwise mis for robust reservoir reuse"
 // "Correlations and Reuse for Fast and Accurate Physically Based Light Transport"
-const PAIRWISE_MIS: bool = false; //TODO
+const PAIRWISE_MIS: bool = true;
 // See "DECOUPLING SHADING AND REUSE" in
 // "Rearchitecting Spatiotemporal Resampling for Production"
 const DECOUPLED_SHADING: bool = false;
@@ -489,17 +489,17 @@ fn finalize_resampling(
     reservoir: ptr<function, LiveReservoir>, color_and_weight: ptr<function, vec4<f32>>,
     base: ResampleBase, mis_canonical: f32, rng: ptr<function, RandomState>,
 ) -> ResampleOutput {
-    var ro = ResampleOutput();
     var canonical = base.canonical;
-    canonical.weight_sum *= mis_canonical;
+    var effective_history = canonical.history;
+    if (PAIRWISE_MIS)
+    {
+        canonical.weight_sum *= mis_canonical / canonical.history;
+        effective_history = 1.0 + base.accepted_count;
+    }
     merge_reservoir(reservoir, canonical, random_gen(rng));
 
-    if (base.accepted_count > 0.0) {
-        let effective_history = select((*reservoir).history, 1.0 + base.accepted_count, PAIRWISE_MIS);
-        ro.reservoir = pack_reservoir_detail(*reservoir, effective_history);
-    } else {
-        ro.reservoir = pack_reservoir(canonical);
-    }
+    var ro = ResampleOutput();
+    ro.reservoir = pack_reservoir_detail(*reservoir, effective_history);
 
     if (DECOUPLED_SHADING) {
         if (canonical.selected_target_score > 0.0) {
