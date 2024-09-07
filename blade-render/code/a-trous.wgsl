@@ -1,4 +1,3 @@
-#include "camera.inc.wgsl"
 #include "quaternion.inc.wgsl"
 #include "surface.inc.wgsl"
 
@@ -12,12 +11,9 @@ struct Params {
     iteration: u32,
 }
 
-var<uniform> camera: CameraParams;
-var<uniform> prev_camera: CameraParams;
 var<uniform> params: Params;
 var t_depth: texture_2d<f32>;
 var t_flat_normal: texture_2d<f32>;
-var t_motion: texture_2d<f32>;
 var input: texture_2d<f32>;
 var output: texture_storage_2d<rgba16float, write>;
 

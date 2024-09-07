@@ -18,6 +18,9 @@ const PAIRWISE_MIS: bool = true;
 // See "DECOUPLING SHADING AND REUSE" in
 // "Rearchitecting Spatiotemporal Resampling for Production"
 const DECOUPLED_SHADING: bool = false;
+const WRITE_DEBUG_IMAGE: bool = false;
+//TODO: currently unused
+const WRITE_MOTION_VECTORS: bool = false;
 
 //TODO: crashes on AMD 6850U if `GROUP_SIZE_TOTAL` > 32
 const GROUP_SIZE: vec2<u32> = vec2<u32>(8, 4);
@@ -256,14 +259,6 @@ fn evaluate_reflected_light(surface: Surface, light_index: u32, light_uv: vec2<f
     return radiance * brdf;
 }
 
-fn get_prev_pixel(pixel: vec2<i32>, pos_world: vec3<f32>, motion: vec2<f32>) -> vec2<f32> {
-    if (USE_MOTION_VECTORS && parameters.use_motion_vectors != 0u) {
-        return vec2<f32>(pixel) + 0.5 + motion;
-    } else {
-        return get_projected_pixel_float(prev_camera, pos_world);
-    }
-}
-
 struct TargetScore {
     color: vec3<f32>,
     score: f32,
@@ -385,7 +380,7 @@ fn find_temporal(surface: Surface, pixel: vec2<i32>, center_coord: vec2<f32>) ->
         }
         tr.is_valid = true;
 
-        if (debug.view_mode == DebugMode_Reprojection) {
+        if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Reprojection) {
             var colors = array<vec3<f32>, 4>(
                 vec3<f32>(1.0, 1.0, 1.0),
                 vec3<f32>(1.0, 0.0, 0.0),
@@ -537,10 +532,10 @@ fn resample_temporal(
     let rr = resample(&reservoir, &color_and_weight, base, other, prev_acc_struct, parameters.temporal_tap_confidence, rng, debug_len);
     let mis_canonical = 1.0 + rr.mis_canonical;
 
-    if (debug.view_mode == DebugMode_TemporalMatch) {
+    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_TemporalMatch) {
         textureStore(out_debug, cur_pixel, vec4<f32>(1.0));
     }
-    if (debug.view_mode == DebugMode_TemporalMisCanonical) {
+    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_TemporalMisCanonical) {
         let mis = mis_canonical / (1.0 + base.accepted_count);
         textureStore(out_debug, cur_pixel, vec4<f32>(mis));
     }
@@ -591,11 +586,11 @@ fn resample_spatial(
         mis_canonical += rr.mis_canonical;
     }
 
-    if (debug.view_mode == DebugMode_SpatialMatch) {
+    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_SpatialMatch) {
         let value = base.accepted_count / max(1.0, f32(parameters.spatial_taps));
         textureStore(out_debug, cur_pixel, vec4<f32>(value));
     }
-    if (debug.view_mode == DebugMode_SpatialMisCanonical) {
+    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_SpatialMisCanonical) {
         let mis = mis_canonical / (1.0 + base.accepted_count);
         textureStore(out_debug, cur_pixel, vec4<f32>(mis));
     }
@@ -609,8 +604,9 @@ fn compute_restir(
 ) -> vec3<f32> {
     let debug_len = select(0.0, rs.inner.depth * 0.2, enable_debug);
 
-    let center_coord = get_prev_pixel(pixel, rs.position, rs.motion);
+    let center_coord = vec2<f32>(pixel) + 0.5 + select(vec2<f32>(0.0), rs.motion, parameters.use_motion_vectors != 0u);
     let tr = find_temporal(rs.inner, pixel, center_coord);
+    let motion_sqr = dot(rs.motion, rs.motion);
 
     let temporal = resample_temporal(rs.inner, pixel, rs.position, local_index, tr, rng, debug_len);
     pixel_cache[local_index] = PixelCache(rs.inner, temporal.reservoir, rs.position);
@@ -625,7 +621,7 @@ fn compute_restir(
     let pixel_index = get_reservoir_index(pixel, camera);
     reservoirs[pixel_index] = spatial.reservoir;
 
-    accumulate_temporal(pixel, spatial.color, parameters.temporal_accumulation_weight, prev_pixel);
+    accumulate_temporal(pixel, spatial.color, parameters.temporal_accumulation_weight, prev_pixel, motion_sqr);
     return spatial.color;
 }
 
@@ -640,13 +636,14 @@ fn main(
         return;
     }
 
-    if (debug.view_mode == DebugMode_Grouping) {
-        var rng = random_init(group_id.y * 1000u + group_id.x, 0u);
-        let h = random_gen(&rng) * 360.0;
-        let color = hsv_to_rgb(h, 1.0, 1.0);
-        textureStore(out_debug, pixel_coord, vec4<f32>(color, 1.0));
-    } else if (debug.view_mode != DebugMode_Final) {
-        textureStore(out_debug, pixel_coord, vec4<f32>(0.0));
+    if (WRITE_DEBUG_IMAGE) {
+        var default_color = vec3<f32>(0.0);
+        if (debug.view_mode == DebugMode_Grouping) {
+            var rng = random_init(group_id.y * 1000u + group_id.x, 0u);
+            let h = random_gen(&rng) * 360.0;
+            default_color = hsv_to_rgb(h, 1.0, 1.0);
+        }
+        textureStore(out_debug, pixel_coord, vec4<f32>(default_color, 0.0));
     }
 
     let enable_debug = all(pixel_coord == vec2<i32>(debug.mouse_pos));
@@ -664,7 +661,9 @@ fn main(
     textureStore(inout_basis, pixel_coord, rs.inner.basis);
     textureStore(inout_flat_normal, pixel_coord, vec4<f32>(rs.inner.flat_normal, 0.0));
     textureStore(out_albedo, pixel_coord, vec4<f32>(rs.albedo, 0.0));
-    textureStore(out_motion, pixel_coord, vec4<f32>(rs.motion * MOTION_SCALE, 0.0, 0.0));
+    if (WRITE_MOTION_VECTORS) {
+        textureStore(out_motion, pixel_coord, vec4<f32>(rs.motion * MOTION_SCALE, 0.0, 0.0));
+    }
 
     if (enable_debug) {
         debug_buf.variance.color_sum += color;
