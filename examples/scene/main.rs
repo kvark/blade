@@ -947,6 +947,9 @@ fn main() {
                             }
                             last_mouse_pos = [position.x as i32, position.y as i32];
                         }
+                        winit::event::WindowEvent::MouseWheel { delta, .. } => {
+                            example.camera.on_wheel(delta);
+                        }
                         winit::event::WindowEvent::HoveredFile(_) => {
                             example.is_file_hovered = true;
                             example
