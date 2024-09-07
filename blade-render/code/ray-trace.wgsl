@@ -12,9 +12,6 @@
 
 const PI: f32 = 3.1415926;
 const MAX_RESAMPLE: u32 = 4u;
-// See "9.1 pairwise mis for robust reservoir reuse"
-// "Correlations and Reuse for Fast and Accurate Physically Based Light Transport"
-const PAIRWISE_MIS: bool = true;
 // See "DECOUPLING SHADING AND REUSE" in
 // "Rearchitecting Spatiotemporal Resampling for Production"
 const DECOUPLED_SHADING: bool = false;
@@ -36,9 +33,10 @@ struct MainParams {
     spatial_tap_confidence: f32,
     spatial_min_distance: i32,
     t_start: f32,
+    use_pairwise_mis: u32,
     use_motion_vectors: u32,
-    grid_scale: vec2<u32>,
     temporal_accumulation_weight: f32,
+    grid_scale: vec2<u32>,
 }
 
 var<uniform> camera: CameraParams;
@@ -414,7 +412,7 @@ fn resample(
     var src: LiveReservoir;
     let neighbor = other.reservoir;
     var rr = ResampleResult();
-    if (PAIRWISE_MIS) {
+    if (parameters.use_pairwise_mis != 0u) {
         let canonical = base.canonical;
         let neighbor_history = min(neighbor.confidence, max_confidence);
         {   // scoping this to hint the register allocation
@@ -485,14 +483,12 @@ fn finalize_resampling(
     base: ResampleBase, mis_canonical: f32, rng: ptr<function, RandomState>,
 ) -> ResampleOutput {
     var canonical = base.canonical;
-    var effective_history = canonical.history;
-    if (PAIRWISE_MIS)
-    {
+    if (parameters.use_pairwise_mis != 0u) {
         canonical.weight_sum *= mis_canonical / canonical.history;
-        effective_history = 1.0 + base.accepted_count;
     }
     merge_reservoir(reservoir, canonical, random_gen(rng));
 
+    let effective_history = select((*reservoir).history, 1.0 + base.accepted_count, parameters.use_pairwise_mis != 0u);
     var ro = ResampleOutput();
     ro.reservoir = pack_reservoir_detail(*reservoir, effective_history);
 

@@ -105,6 +105,9 @@ pub struct RayConfig {
     /// outside of the original workgroup pixel bounds.
     pub group_mixer: u32,
     pub t_start: f32,
+    /// See "9.1 pairwise mis for robust reservoir reuse"
+    /// "Correlations and Reuse for Fast and Accurate Physically Based Light Transport"
+    pub pairwise_mis: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
@@ -370,10 +373,10 @@ struct MainParams {
     spatial_confidence: f32,
     spatial_min_distance: u32,
     t_start: f32,
+    use_pairwise_mis: u32,
     use_motion_vectors: u32,
-    grid_scale: [u32; 2],
     temporal_accumulation_weight: f32,
-    pad: f32,
+    grid_scale: [u32; 2],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -1094,14 +1097,14 @@ impl Renderer {
                         spatial_confidence: ray_config.spatial_confidence,
                         spatial_min_distance: ray_config.spatial_min_distance,
                         t_start: ray_config.t_start,
+                        use_pairwise_mis: ray_config.pairwise_mis as u32,
                         use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
-                        grid_scale,
                         temporal_accumulation_weight: if denoiser_config.enabled {
                             denoiser_config.temporal_weight
                         } else {
                             1.0
                         },
-                        pad: 0.0,
+                        grid_scale,
                     },
                     acc_struct: self.acceleration_structure,
                     prev_acc_struct: if self.frame_scene_built < self.frame_index
