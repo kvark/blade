@@ -44,6 +44,7 @@ struct AdapterCapabilities {
     buffer_marker: bool,
     shader_info: bool,
     full_screen_exclusive: bool,
+    timing: bool,
     bugs: SystemBugs,
 }
 
@@ -153,6 +154,7 @@ unsafe fn inspect_adapter(
         vk::PhysicalDeviceInlineUniformBlockFeaturesEXT::default();
     let mut timeline_semaphore_features = vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR::default();
     let mut dynamic_rendering_features = vk::PhysicalDeviceDynamicRenderingFeaturesKHR::default();
+    let mut host_query_reset_features = vk::PhysicalDeviceHostQueryResetFeatures::default();
     let mut descriptor_indexing_features =
         vk::PhysicalDeviceDescriptorIndexingFeaturesEXT::default();
     let mut buffer_device_address_features =
@@ -163,6 +165,7 @@ unsafe fn inspect_adapter(
     let mut features2_khr = vk::PhysicalDeviceFeatures2::default()
         .push_next(&mut inline_uniform_block_features)
         .push_next(&mut timeline_semaphore_features)
+        .push_next(&mut host_query_reset_features)
         .push_next(&mut dynamic_rendering_features)
         .push_next(&mut descriptor_indexing_features)
         .push_next(&mut buffer_device_address_features)
@@ -201,6 +204,19 @@ unsafe fn inspect_adapter(
         );
         return None;
     }
+
+    let timing = if properties.limits.timestamp_compute_and_graphics == vk::FALSE {
+        log::info!("No timing because of queue support");
+        false
+    } else if host_query_reset_features.host_query_reset == vk::FALSE {
+        log::info!(
+            "No timing because of the host query reset. Features = {:?}",
+            host_query_reset_features
+        );
+        false
+    } else {
+        true
+    };
 
     let ray_tracing = if !supported_extensions.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME)
         || !supported_extensions.contains(&vk::KHR_RAY_QUERY_NAME)
@@ -269,6 +285,7 @@ unsafe fn inspect_adapter(
         buffer_marker,
         shader_info,
         full_screen_exclusive,
+        timing,
         bugs,
     })
 }
@@ -491,6 +508,17 @@ impl super::Context {
                 .push_next(&mut khr_timeline_semaphore)
                 .push_next(&mut khr_dynamic_rendering);
 
+            let mut khr_host_query_reset;
+            if desc.timing && capabilities.timing {
+                khr_host_query_reset = vk::PhysicalDeviceHostQueryResetFeatures {
+                    host_query_reset: vk::TRUE,
+                    ..Default::default()
+                };
+                device_create_info = device_create_info.push_next(&mut khr_host_query_reset);
+            } else if desc.timing {
+                log::warn!("Unable to gather timestamp information");
+            }
+
             let mut ext_descriptor_indexing;
             let mut khr_buffer_device_address;
             let mut khr_acceleration_structure;
@@ -559,6 +587,13 @@ impl super::Context {
                     &instance.core,
                     &device_core,
                 ))
+            } else {
+                None
+            },
+            timing: if desc.timing && capabilities.timing {
+                Some(super::TimingDevice {
+                    period: capabilities.properties.limits.timestamp_period,
+                })
             } else {
                 None
             },

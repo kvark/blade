@@ -82,11 +82,14 @@ pub use hal::*;
 
 use std::{fmt, num::NonZeroU32};
 
+//TODO: switch to bitflags?
 #[derive(Clone, Debug, Default)]
 pub struct ContextDesc {
     /// Enable validation of the GAPI, shaders,
     /// and insert crash markers into command buffers.
     pub validation: bool,
+    /// Enable GPU timing of all passes.
+    pub timing: bool,
     /// Enable capture support with GAPI tools.
     pub capture: bool,
     /// Enable GAPI overlay.

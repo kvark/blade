@@ -5,7 +5,7 @@ use ash::vk;
 const COUNT_BASE: u32 = 16;
 
 #[derive(Debug)]
-pub struct DescriptorPool {
+pub(super) struct DescriptorPool {
     sub_pools: Vec<vk::DescriptorPool>,
     growth_iter: usize,
 }

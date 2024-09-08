@@ -415,6 +415,7 @@ impl Engine {
                 window,
                 gpu::ContextDesc {
                     validation: cfg!(debug_assertions),
+                    timing: cfg!(debug_assertions),
                     capture: false,
                     overlay: false,
                 },

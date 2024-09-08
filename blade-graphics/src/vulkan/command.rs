@@ -1,5 +1,5 @@
 use ash::vk;
-use std::str;
+use std::{str, time::Duration};
 
 impl super::CrashHandler {
     fn add_marker(&mut self, marker: &str) -> u32 {
@@ -217,10 +217,44 @@ impl super::CommandEncoder {
         }
     }
 
+    fn timestamp(&mut self) {
+        if let Some(_) = self.device.timing {
+            let (vk_pool, index) = self.device.allocate_query(&mut self.buffers[0].query_pool);
+            unsafe {
+                self.device.core.cmd_write_timestamp(
+                    self.buffers[0].raw,
+                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                    vk_pool,
+                    index,
+                );
+            }
+        }
+    }
+
+    fn checkpoint(&mut self, name: &str) {
+        self.barrier();
+        self.timestamp();
+        self.mark(name);
+    }
+
     pub fn start(&mut self) {
         self.buffers.rotate_left(1);
+        let cmd_buf = self.buffers.first_mut().unwrap();
         self.device
-            .reset_descriptor_pool(&mut self.buffers[0].descriptor_pool);
+            .reset_descriptor_pool(&mut cmd_buf.descriptor_pool);
+        if let Some(ref timing) = self.device.timing {
+            let timestamps = self.device.get_query_pool_results(&cmd_buf.query_pool);
+            self.timings.clear();
+            if !timestamps.is_empty() {
+                let mut prev = timestamps[0];
+                for &ts in timestamps[1..].iter() {
+                    let diff = (ts - prev) as f32 * timing.period;
+                    prev = ts;
+                    self.timings.push(Duration::from_nanos(diff as _));
+                }
+            }
+            self.device.reset_query_pool(&mut cmd_buf.query_pool);
+        }
 
         let vk_info = vk::CommandBufferBeginInfo {
             flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
@@ -229,14 +263,14 @@ impl super::CommandEncoder {
         unsafe {
             self.device
                 .core
-                .begin_command_buffer(self.buffers[0].raw, &vk_info)
+                .begin_command_buffer(cmd_buf.raw, &vk_info)
                 .unwrap();
         }
+        self.timestamp();
     }
 
     pub(super) fn finish(&mut self) -> vk::CommandBuffer {
-        self.barrier();
-        self.mark("finish");
+        self.checkpoint("finish");
         let raw = self.buffers[0].raw;
         unsafe { self.device.core.end_command_buffer(raw).unwrap() }
         raw
@@ -331,8 +365,7 @@ impl super::CommandEncoder {
     }
 
     pub fn transfer(&mut self) -> super::TransferCommandEncoder {
-        self.barrier();
-        self.mark("pass/transfer");
+        self.checkpoint("pass/transfer");
         super::TransferCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
@@ -340,8 +373,7 @@ impl super::CommandEncoder {
     }
 
     pub fn acceleration_structure(&mut self) -> super::AccelerationStructureCommandEncoder {
-        self.barrier();
-        self.mark("pass/acc-struct");
+        self.checkpoint("pass/acc-struct");
         super::AccelerationStructureCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
@@ -349,8 +381,7 @@ impl super::CommandEncoder {
     }
 
     pub fn compute(&mut self) -> super::ComputeCommandEncoder {
-        self.barrier();
-        self.mark("pass/compute");
+        self.checkpoint("pass/compute");
         super::ComputeCommandEncoder {
             cmd_buf: self.buffers.first_mut().unwrap(),
             device: &self.device,
@@ -359,8 +390,7 @@ impl super::CommandEncoder {
     }
 
     pub fn render(&mut self, targets: crate::RenderTargetSet) -> super::RenderCommandEncoder {
-        self.barrier();
-        self.mark("pass/render");
+        self.checkpoint("pass/render");
 
         let mut target_size = [0u16; 2];
         let mut color_attachments = Vec::with_capacity(targets.colors.len());
@@ -445,6 +475,10 @@ impl super::CommandEncoder {
             }
             Err(other) => panic!("GPU error {}", other),
         }
+    }
+
+    pub fn timings(&self) -> &[Duration] {
+        &self.timings
     }
 }
 

@@ -1,10 +1,11 @@
 use ash::{khr, vk};
-use std::{num::NonZeroU32, path::PathBuf, ptr, sync::Mutex};
+use std::{num::NonZeroU32, path::PathBuf, ptr, sync::Mutex, time::Duration};
 
 mod command;
 mod descriptor;
 mod init;
 mod pipeline;
+mod query;
 mod resource;
 
 struct Instance {
@@ -18,6 +19,11 @@ struct Instance {
 #[derive(Clone)]
 struct RayTracingDevice {
     acceleration_structure: khr::acceleration_structure::Device,
+}
+
+#[derive(Clone)]
+struct TimingDevice {
+    period: f32,
 }
 
 #[derive(Clone)]
@@ -38,6 +44,7 @@ struct Device {
     buffer_marker: Option<ash::amd::buffer_marker::Device>,
     shader_info: Option<ash::amd::shader_info::Device>,
     full_screen_exclusive: Option<ash::ext::full_screen_exclusive::Device>,
+    timing: Option<TimingDevice>,
     workarounds: Workarounds,
 }
 
@@ -217,6 +224,7 @@ pub struct RenderPipeline {
 struct CommandBuffer {
     raw: vk::CommandBuffer,
     descriptor_pool: descriptor::DescriptorPool,
+    query_pool: query::QueryPool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -237,6 +245,7 @@ pub struct CommandEncoder {
     buffers: Box<[CommandBuffer]>,
     device: Device,
     update_data: Vec<u8>,
+    timings: Vec<Duration>,
     present: Option<Presentation>,
     crash_handler: Option<CrashHandler>,
 }
@@ -338,9 +347,11 @@ impl crate::traits::CommandDevice for Context {
                     self.set_object_name(raw, desc.name);
                 };
                 let descriptor_pool = self.device.create_descriptor_pool();
+                let query_pool = self.device.create_query_pool();
                 CommandBuffer {
                     raw,
                     descriptor_pool,
+                    query_pool,
                 }
             })
             .collect();
@@ -365,6 +376,7 @@ impl crate::traits::CommandDevice for Context {
             buffers,
             device: self.device.clone(),
             update_data: Vec::new(),
+            timings: Vec::new(),
             present: None,
             crash_handler,
         }
@@ -380,6 +392,7 @@ impl crate::traits::CommandDevice for Context {
             }
             self.device
                 .destroy_descriptor_pool(&mut cmd_buf.descriptor_pool);
+            self.device.destroy_query_pool(&mut cmd_buf.query_pool);
         }
         unsafe {
             self.device

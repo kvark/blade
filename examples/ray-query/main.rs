@@ -46,17 +46,8 @@ struct Example {
 impl Example {
     fn new(window: &winit::window::Window) -> Self {
         let window_size = window.inner_size();
-        let context = unsafe {
-            gpu::Context::init_windowed(
-                window,
-                gpu::ContextDesc {
-                    validation: cfg!(debug_assertions),
-                    capture: false,
-                    overlay: false,
-                },
-            )
-            .unwrap()
-        };
+        let context =
+            unsafe { gpu::Context::init_windowed(window, gpu::ContextDesc::default()).unwrap() };
         let capabilities = context.capabilities();
         assert!(capabilities
             .ray_query
