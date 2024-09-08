@@ -383,13 +383,17 @@ impl super::ComputeCommandEncoder<'_> {
         self.raw.push_debug_group(&pipeline.name);
         self.raw.set_compute_pipeline_state(&pipeline.raw);
         if let Some(index) = pipeline.layout.sizes_buffer_slot {
-            //TODO: get real sizes
+            //TODO: get real sizes? shouldn't matter without bounds checks
             let runtime_sizes = [0u8; 8];
             self.raw.set_bytes(
                 index as _,
                 runtime_sizes.len() as _,
                 runtime_sizes.as_ptr() as *const _,
             );
+        }
+        for (index, &size) in pipeline.wg_memory_sizes.iter().enumerate() {
+            self.raw
+                .set_threadgroup_memory_length(index as _, size as _);
         }
 
         super::ComputePipelineContext {

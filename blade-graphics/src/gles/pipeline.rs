@@ -115,6 +115,7 @@ impl super::Context {
         for &sf in shaders {
             let ep_index = sf.entry_point_index();
             let ep = &sf.shader.module.entry_points[ep_index];
+            let _ = sf.shader.source;
 
             let mut module = sf.shader.module.clone();
             if force_explicit_bindings {
