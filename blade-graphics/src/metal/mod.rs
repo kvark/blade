@@ -206,6 +206,7 @@ pub struct ComputePipeline {
     lib: metal::Library,
     layout: PipelineLayout,
     wg_size: metal::MTLSize,
+    wg_memory_sizes: Box<[u32]>,
 }
 
 impl ComputePipeline {

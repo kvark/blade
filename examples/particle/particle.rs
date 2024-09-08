@@ -31,6 +31,11 @@ struct MainData {
     free_list: gpu::BufferPiece,
 }
 
+#[derive(blade_macros::ShaderData)]
+struct EmitData {
+    parameters: Parameters,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct UpdateParams {
@@ -72,6 +77,7 @@ impl System {
         let particle_size = shader.get_struct_size("Particle");
 
         let main_layout = <MainData as gpu::ShaderData>::layout();
+        let emit_layout = <EmitData as gpu::ShaderData>::layout();
         let update_layout = <UpdateData as gpu::ShaderData>::layout();
         let draw_layout = <DrawData as gpu::ShaderData>::layout();
 
@@ -82,7 +88,7 @@ impl System {
         });
         let emit_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
             name: &format!("{} - emit", desc.name),
-            data_layouts: &[&main_layout, &update_layout],
+            data_layouts: &[&main_layout, &emit_layout],
             compute: shader.at("emit"),
         });
         let update_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
@@ -178,6 +184,12 @@ impl System {
         if let mut pass = encoder.compute() {
             let mut pc = pass.with(&self.emit_pipeline);
             pc.bind(0, &main_data);
+            pc.bind(
+                1,
+                &EmitData {
+                    parameters: self.params,
+                },
+            );
             pc.dispatch([1, 1, 1]);
         }
     }
