@@ -555,7 +555,7 @@ fn resample_spatial(
     var accepted_count = 0u;
     var accepted_local_indices = array<u32, MAX_RESAMPLE>();
     let max_accepted = min(MAX_RESAMPLE, parameters.spatial_taps);
-    let num_candidates = parameters.spatial_taps * 3u;
+    let num_candidates = parameters.spatial_taps * 4u;
     for (var i = 0u; i < num_candidates && accepted_count < max_accepted; i += 1u) {
         let other_cache_index = random_u32(rng) % GROUP_SIZE_TOTAL;
         let diff = thread_index_to_coord(other_cache_index, group_id) - cur_pixel;
