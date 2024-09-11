@@ -61,7 +61,6 @@ struct Example {
 
 impl Example {
     fn new(window: &winit::window::Window) -> Self {
-        let window_size = window.inner_size();
         let context = unsafe {
             gpu::Context::init_windowed(
                 window,
@@ -75,6 +74,8 @@ impl Example {
             .unwrap()
         };
         println!("{:?}", context.device_information());
+        let window_size = window.inner_size();
+        log::info!("Initial size: {:?}", window_size);
 
         let surface_info = context.resize(gpu::SurfaceConfig {
             size: gpu::Extent {
@@ -274,6 +275,9 @@ impl Example {
     }
 
     fn render(&mut self) {
+        if self.window_size == Default::default() {
+            return;
+        }
         let frame = self.context.acquire_frame();
 
         self.command_encoder.start();
@@ -354,7 +358,7 @@ fn main() {
     {
         use winit::platform::web::WindowExtWebSys as _;
 
-        std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+        console_error_panic_hook::set_once();
         console_log::init().expect("could not initialize logger");
         // On wasm, append the canvas to the document body
         let canvas = window.canvas().unwrap();
