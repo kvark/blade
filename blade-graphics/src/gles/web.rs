@@ -10,17 +10,14 @@ struct Swapchain {
     extent: Cell<crate::Extent>,
 }
 
-pub struct Context {
+pub struct PlatformContext {
     #[allow(unused)]
     webgl2: web_sys::WebGl2RenderingContext,
     glow: glow::Context,
     swapchain: Swapchain,
-    pub(super) capabilities: super::Capabilities,
-    pub(super) limits: super::Limits,
-    pub(super) device_information: crate::DeviceInformation,
 }
 
-impl Context {
+impl super::Context {
     pub unsafe fn init(_desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
         Err(crate::NotSupportedError::PlatformNotSupported)
     }
@@ -82,10 +79,13 @@ impl Context {
         };
 
         Ok(Self {
-            webgl2,
-            glow,
-            swapchain,
+            platform: PlatformContext {
+                webgl2,
+                glow,
+                swapchain,
+            },
             capabilities,
+            toggles: super::Toggles::default(),
             limits,
             device_information,
         })
@@ -93,9 +93,9 @@ impl Context {
 
     pub fn resize(&self, config: crate::SurfaceConfig) -> crate::SurfaceInfo {
         //TODO: create WebGL context here
-        let sc = &self.swapchain;
+        let sc = &self.platform.swapchain;
         let format_desc = super::describe_texture_format(sc.format);
-        let gl = &self.glow;
+        let gl = &self.platform.glow;
         //Note: this code can be shared with EGL
         unsafe {
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(sc.renderbuf));
@@ -123,7 +123,7 @@ impl Context {
     }
 
     pub fn acquire_frame(&self) -> super::Frame {
-        let sc = &self.swapchain;
+        let sc = &self.platform.swapchain;
         let size = sc.extent.get();
         super::Frame {
             texture: super::Texture {
@@ -137,13 +137,13 @@ impl Context {
     /// Obtain a lock to the EGL context and get handle to the [`glow::Context`] that can be used to
     /// do rendering.
     pub(super) fn lock(&self) -> &glow::Context {
-        &self.glow
+        &self.platform.glow
     }
 
     pub(super) fn present(&self) {
-        let sc = &self.swapchain;
+        let sc = &self.platform.swapchain;
         unsafe {
-            super::present_blit(&self.glow, sc.framebuf, sc.extent.get());
+            super::present_blit(&self.platform.glow, sc.framebuf, sc.extent.get());
         }
     }
 }

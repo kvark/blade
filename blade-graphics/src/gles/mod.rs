@@ -5,12 +5,11 @@ mod pipeline;
 mod platform;
 mod resource;
 
-type BindTarget = u32;
-
-pub use platform::Context;
 use std::{marker::PhantomData, ops::Range};
 
+type BindTarget = u32;
 const DEBUG_ID: u32 = 0;
+const MAX_TIMEOUT: u64 = 1_000_000_000; // MAX_CLIENT_WAIT_TIMEOUT_WEBGL;
 
 bitflags::bitflags! {
     struct Capabilities: u32 {
@@ -22,6 +21,19 @@ bitflags::bitflags! {
 #[derive(Clone, Debug)]
 struct Limits {
     uniform_buffer_alignment: u32,
+}
+
+#[derive(Debug, Default)]
+struct Toggles {
+    timing: bool,
+}
+
+pub struct Context {
+    platform: platform::PlatformContext,
+    capabilities: Capabilities,
+    toggles: Toggles,
+    limits: Limits,
+    device_information: crate::DeviceInformation,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
@@ -483,7 +495,7 @@ impl crate::traits::CommandDevice for Context {
             timeout_ms as u64 * 1_000_000
         };
         //TODO: https://github.com/grovesNL/glow/issues/287
-        let timeout_ns_i32 = timeout_ns.min(std::i32::MAX as u64) as i32;
+        let timeout_ns_i32 = timeout_ns.min(MAX_TIMEOUT) as i32;
 
         let status =
             unsafe { gl.client_wait_sync(sp.fence, glow::SYNC_FLUSH_COMMANDS_BIT, timeout_ns_i32) };
