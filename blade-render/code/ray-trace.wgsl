@@ -12,6 +12,8 @@
 
 const PI: f32 = 3.1415926;
 const MAX_RESAMPLE: u32 = 4u;
+
+const DRAW_DEBUG: bool = false;
 // See "DECOUPLING SHADING AND REUSE" in
 // "Rearchitecting Spatiotemporal Resampling for Production"
 const DECOUPLED_SHADING: bool = false;
@@ -236,7 +238,7 @@ fn check_ray_occluded(acs: acceleration_structure, position: vec3<f32>, directio
     let intersection = rayQueryGetCommittedIntersection(&rq);
 
     let occluded = intersection.kind != RAY_QUERY_INTERSECTION_NONE;
-    if (debug_len != 0.0) {
+    if (DRAW_DEBUG && debug_len != 0.0) {
         let color = select(0xFFFFFFu, 0x0000FFu, occluded);
         debug_line(position, position + debug_len * direction, color);
     }
@@ -642,7 +644,7 @@ fn main(
         textureStore(out_debug, pixel_coord, vec4<f32>(default_color, 0.0));
     }
 
-    let enable_debug = all(pixel_coord == vec2<i32>(debug.mouse_pos));
+    let enable_debug = DRAW_DEBUG && all(pixel_coord == vec2<i32>(debug.mouse_pos));
     let rs = fetch_geometry(pixel_coord, true, enable_debug);
 
     let global_index = u32(pixel_coord.y) * camera.target_size.x + u32(pixel_coord.x);
