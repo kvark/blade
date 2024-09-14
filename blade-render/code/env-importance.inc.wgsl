@@ -11,7 +11,7 @@ fn compute_texel_solid_angle(itc: vec2<i32>, dim: vec2<u32>) -> f32 {
     return meridian_solid_angle * meridian_part;
 }
 
-fn generate_environment_sample(rng: ptr<function, RandomState>, dim: vec2<u32>) -> EnvImportantSample {
+fn generate_environment_sample(rng: ptr<private, RandomState>, dim: vec2<u32>) -> EnvImportantSample {
     var es = EnvImportantSample();
     es.pdf = 1.0;
     var mip = i32(textureNumLevels(env_weights));

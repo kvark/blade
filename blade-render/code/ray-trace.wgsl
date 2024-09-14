@@ -25,6 +25,9 @@ const WRITE_MOTION_VECTORS: bool = false;
 const GROUP_SIZE: vec2<u32> = vec2<u32>(8, 4);
 const GROUP_SIZE_TOTAL: u32 = GROUP_SIZE.x * GROUP_SIZE.y;
 
+var<private> p_debug_len: f32;
+var<private> p_rng: RandomState;
+
 struct MainParams {
     frame_index: u32,
     num_environment_samples: u32,
@@ -109,9 +112,10 @@ fn make_reservoir(ls: LightSample, light_index: u32, brdf: vec3<f32>) -> LiveRes
     return r;
 }
 
-fn merge_reservoir(r: ptr<function, LiveReservoir>, other: LiveReservoir, random: f32) -> bool {
+fn merge_reservoir(r: ptr<function, LiveReservoir>, other: LiveReservoir) -> bool {
     (*r).weight_sum += other.weight_sum;
     (*r).history += other.history;
+    let random = random_gen(&p_rng);
     if ((*r).weight_sum * random < other.weight_sum) {
         (*r).selected_light_index = other.selected_light_index;
         (*r).selected_uv = other.selected_uv;
@@ -180,9 +184,9 @@ fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
     return textureSampleLevel(env_map, sampler_linear, uv, 0.0).xyz;
 }
 
-fn sample_light_from_sphere(rng: ptr<function, RandomState>) -> LightSample {
-    let a = random_gen(rng);
-    let h = 1.0 - 2.0 * random_gen(rng); // make sure to allow h==1
+fn sample_light_from_sphere() -> LightSample {
+    let a = random_gen(&p_rng);
+    let h = 1.0 - 2.0 * random_gen(&p_rng); // make sure to allow h==1
     let tangential = sqrt(1.0 - square(h)) * sample_circle(a);
     let dir = vec3<f32>(tangential.x, h, tangential.y);
     var ls = LightSample();
@@ -192,16 +196,16 @@ fn sample_light_from_sphere(rng: ptr<function, RandomState>) -> LightSample {
     return ls;
 }
 
-fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample {
+fn sample_light_from_environment() -> LightSample {
     let dim = textureDimensions(env_map, 0);
-    let es = generate_environment_sample(rng, dim);
+    let es = generate_environment_sample(&p_rng, dim);
     var ls = LightSample();
     ls.pdf = es.pdf;
     // sample the incoming radiance
     ls.radiance = textureLoad(env_map, es.pixel, 0).xyz;
     // for determining direction - offset randomly within the texel
     // Note: this only works if the texels are sufficiently small
-    ls.uv = (vec2<f32>(es.pixel) + vec2<f32>(random_gen(rng), random_gen(rng))) / vec2<f32>(dim);
+    ls.uv = (vec2<f32>(es.pixel) + vec2<f32>(random_gen(&p_rng), random_gen(&p_rng))) / vec2<f32>(dim);
     return ls;
 }
 
@@ -228,7 +232,7 @@ fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> f32 {
     return lambert_brdf * max(0.0, lambert_term);
 }
 
-fn check_ray_occluded(acs: acceleration_structure, position: vec3<f32>, direction: vec3<f32>, debug_len: f32) -> bool {
+fn check_ray_occluded(acs: acceleration_structure, position: vec3<f32>, direction: vec3<f32>) -> bool {
     var rq: ray_query;
     let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
     rayQueryInitialize(&rq, acs,
@@ -238,9 +242,9 @@ fn check_ray_occluded(acs: acceleration_structure, position: vec3<f32>, directio
     let intersection = rayQueryGetCommittedIntersection(&rq);
 
     let occluded = intersection.kind != RAY_QUERY_INTERSECTION_NONE;
-    if (DRAW_DEBUG && debug_len != 0.0) {
+    if (DRAW_DEBUG && p_debug_len != 0.0) {
         let color = select(0xFFFFFFu, 0x0000FFu, occluded);
-        debug_line(position, position + debug_len * direction, color);
+        debug_line(position, position + p_debug_len * direction, color);
     }
     return occluded;
 }
@@ -269,7 +273,7 @@ fn make_target_score(color: vec3<f32>) -> TargetScore {
 }
 
 fn estimate_target_score_with_occlusion(
-    surface: Surface, position: vec3<f32>, light_index: u32, light_uv: vec2<f32>, acs: acceleration_structure, debug_len: f32
+    surface: Surface, position: vec3<f32>, light_index: u32, light_uv: vec2<f32>, acs: acceleration_structure,
 ) -> TargetScore {
     if (light_index != 0u) {
         return TargetScore();
@@ -283,7 +287,7 @@ fn estimate_target_score_with_occlusion(
         return TargetScore();
     }
 
-    if (check_ray_occluded(acs, position, direction, debug_len)) {
+    if (check_ray_occluded(acs, position, direction)) {
         return TargetScore();
     }
 
@@ -292,7 +296,7 @@ fn estimate_target_score_with_occlusion(
     return make_target_score(brdf * radiance);
 }
 
-fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debug_len: f32) -> f32 {
+fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>) -> f32 {
     let dir = map_equirect_uv_to_dir(ls.uv);
     if (dot(dir, surface.flat_normal) <= 0.0) {
         return 0.0;
@@ -308,7 +312,7 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debu
         return 0.0;
     }
 
-    if (check_ray_occluded(acc_struct, start_pos, dir, debug_len)) {
+    if (check_ray_occluded(acc_struct, start_pos, dir)) {
         return 0.0;
     }
 
@@ -317,21 +321,20 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debu
 
 fn produce_canonical(
     surface: Surface, position: vec3<f32>,
-    rng: ptr<function, RandomState>, debug_len: f32,
 ) -> LiveReservoir {
     var reservoir = LiveReservoir();
     for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
         var ls: LightSample;
         if (parameters.environment_importance_sampling != 0u) {
-            ls = sample_light_from_environment(rng);
+            ls = sample_light_from_environment();
         } else {
-            ls = sample_light_from_sphere(rng);
+            ls = sample_light_from_sphere();
         }
 
-        let brdf = evaluate_sample(ls, surface, position, debug_len);
+        let brdf = evaluate_sample(ls, surface, position);
         if (brdf > 0.0) {
             let other = make_reservoir(ls, 0u, vec3<f32>(brdf));
-            merge_reservoir(&reservoir, other, random_gen(rng));
+            merge_reservoir(&reservoir, other);
         } else {
             bump_reservoir(&reservoir, 1.0);
         }
@@ -409,7 +412,7 @@ struct ResampleResult {
 fn resample(
     dst: ptr<function, LiveReservoir>, color_and_weight: ptr<function, vec4<f32>>,
     base: ResampleBase, other: PixelCache, other_acs: acceleration_structure,
-    max_confidence: f32, rng: ptr<function, RandomState>, debug_len: f32,
+    max_confidence: f32,
 ) -> ResampleResult {
     var src: LiveReservoir;
     let neighbor = other.reservoir;
@@ -419,19 +422,14 @@ fn resample(
         let neighbor_history = min(neighbor.confidence, max_confidence);
         {   // scoping this to hint the register allocation
             let t_canonical_at_neighbor = estimate_target_score_with_occlusion(
-                other.surface, other.world_pos, canonical.selected_light_index, canonical.selected_uv, other_acs, debug_len);
+                other.surface, other.world_pos, canonical.selected_light_index, canonical.selected_uv, other_acs);
             let nom = canonical.selected_target_score * canonical.history / base.accepted_count;
             let denom = t_canonical_at_neighbor.score * neighbor_history + nom;
             rr.mis_canonical = select(0.0, nom / denom, denom > 0.0);
         }
 
-        // Notes about t_neighbor_at_neighbor:
-        // 1. we assume lights aren't moving. Technically we should check if the
-        //   target light has moved, and re-evaluate the occlusion.
-        // 2. we can use the cached target score, and there is no use of the target color
-        //let t_neighbor_at_neighbor = estimate_target_pdf(neighbor_surface, neighbor_position, neighbor.selected_dir);
         let t_neighbor_at_canonical = estimate_target_score_with_occlusion(
-            base.surface, base.world_pos, neighbor.light_index, neighbor.light_uv, acc_struct, debug_len);
+            base.surface, base.world_pos, neighbor.light_index, neighbor.light_uv, acc_struct);
         let nom = neighbor.target_score * neighbor_history;
         let denom = nom + t_neighbor_at_canonical.score * canonical.history / base.accepted_count;
         let mis_neighbor = select(0.0, nom / denom, denom > 0.0);
@@ -451,13 +449,12 @@ fn resample(
     }
 
     if (DECOUPLED_SHADING) {
-        //TODO: use `mis_neighbor`O
         *color_and_weight += src.weight_sum * vec4<f32>(neighbor.contribution_weight * src.radiance, 1.0);
     }
     if (src.weight_sum <= 0.0) {
         bump_reservoir(dst, src.history);
     } else {
-        merge_reservoir(dst, src, random_gen(rng));
+        merge_reservoir(dst, src);
         rr.selected = true;
     }
     return rr;
@@ -482,13 +479,13 @@ fn finalize_canonical(reservoir: LiveReservoir) -> ResampleOutput {
 
 fn finalize_resampling(
     reservoir: ptr<function, LiveReservoir>, color_and_weight: ptr<function, vec4<f32>>,
-    base: ResampleBase, mis_canonical: f32, rng: ptr<function, RandomState>,
+    base: ResampleBase, mis_canonical: f32,
 ) -> ResampleOutput {
     var canonical = base.canonical;
     if (parameters.use_pairwise_mis != 0u) {
         canonical.weight_sum *= mis_canonical / canonical.history;
     }
-    merge_reservoir(reservoir, canonical, random_gen(rng));
+    merge_reservoir(reservoir, canonical);
 
     let effective_history = select((*reservoir).history, 1.0 + base.accepted_count, parameters.use_pairwise_mis != 0u);
     var ro = ResampleOutput();
@@ -509,13 +506,12 @@ fn finalize_resampling(
 fn resample_temporal(
     surface: Surface, cur_pixel: vec2<i32>, position: vec3<f32>,
     local_index: u32, tr: TemporalReprojection,
-    rng: ptr<function, RandomState>, debug_len: f32,
 ) -> ResampleOutput {
     if (surface.depth == 0.0) {
         return ResampleOutput();
     }
 
-    let canonical = produce_canonical(surface, position, rng, debug_len);
+    let canonical = produce_canonical(surface, position);
     if (parameters.temporal_tap == 0u || !tr.is_valid) {
         return finalize_canonical(canonical);
     }
@@ -527,7 +523,7 @@ fn resample_temporal(
     let prev_dir = get_ray_direction(prev_camera, tr.pixel);
     let prev_world_pos = prev_camera.position + tr.surface.depth * prev_dir;
     let other = PixelCache(tr.surface, tr.reservoir, prev_world_pos);
-    let rr = resample(&reservoir, &color_and_weight, base, other, prev_acc_struct, parameters.temporal_tap_confidence, rng, debug_len);
+    let rr = resample(&reservoir, &color_and_weight, base, other, prev_acc_struct, parameters.temporal_tap_confidence);
     let mis_canonical = 1.0 + rr.mis_canonical;
 
     if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_TemporalMatch) {
@@ -538,13 +534,12 @@ fn resample_temporal(
         textureStore(out_debug, cur_pixel, vec4<f32>(mis));
     }
 
-    return finalize_resampling(&reservoir, &color_and_weight, base, mis_canonical, rng);
+    return finalize_resampling(&reservoir, &color_and_weight, base, mis_canonical);
 }
 
 fn resample_spatial(
     surface: Surface, cur_pixel: vec2<i32>, position: vec3<f32>,
     group_id: vec3<u32>, canonical: LiveReservoir,
-    rng: ptr<function, RandomState>, debug_len: f32,
 ) -> ResampleOutput {
     if (surface.depth == 0.0) {
         let dir = normalize(position - camera.position);
@@ -559,7 +554,7 @@ fn resample_spatial(
     let max_accepted = min(MAX_RESAMPLE, parameters.spatial_taps);
     let num_candidates = parameters.spatial_taps * 4u;
     for (var i = 0u; i < num_candidates && accepted_count < max_accepted; i += 1u) {
-        let other_cache_index = random_u32(rng) % GROUP_SIZE_TOTAL;
+        let other_cache_index = random_u32(&p_rng) % GROUP_SIZE_TOTAL;
         let diff = thread_index_to_coord(other_cache_index, group_id) - cur_pixel;
         if (dot(diff, diff) < parameters.spatial_min_distance * parameters.spatial_min_distance) {
             continue;
@@ -580,7 +575,7 @@ fn resample_spatial(
     // evaluate the MIS of each of the samples versus the canonical one.
     for (var lid = 0u; lid < accepted_count; lid += 1u) {
         let other = pixel_cache[accepted_local_indices[lid]];
-        let rr = resample(&reservoir, &color_and_weight, base, other, acc_struct, parameters.spatial_tap_confidence, rng, debug_len);
+        let rr = resample(&reservoir, &color_and_weight, base, other, acc_struct, parameters.spatial_tap_confidence);
         mis_canonical += rr.mis_canonical;
     }
 
@@ -592,21 +587,17 @@ fn resample_spatial(
         let mis = mis_canonical / (1.0 + base.accepted_count);
         textureStore(out_debug, cur_pixel, vec4<f32>(mis));
     }
-    return finalize_resampling(&reservoir, &color_and_weight, base, mis_canonical, rng);
+    return finalize_resampling(&reservoir, &color_and_weight, base, mis_canonical);
 }
 
 fn compute_restir(
-    rs: RichSurface,
-    pixel: vec2<i32>, local_index: u32, group_id: vec3<u32>,
-    rng: ptr<function, RandomState>, enable_debug: bool,
+    rs: RichSurface, pixel: vec2<i32>, local_index: u32, group_id: vec3<u32>,
 ) -> vec3<f32> {
-    let debug_len = select(0.0, rs.inner.depth * 0.2, enable_debug);
-
     let center_coord = vec2<f32>(pixel) + 0.5 + select(vec2<f32>(0.0), rs.motion, parameters.use_motion_vectors != 0u);
     let tr = find_temporal(rs.inner, pixel, center_coord);
     let motion_sqr = dot(rs.motion, rs.motion);
 
-    let temporal = resample_temporal(rs.inner, pixel, rs.position, local_index, tr, rng, debug_len);
+    let temporal = resample_temporal(rs.inner, pixel, rs.position, local_index, tr);
     pixel_cache[local_index] = PixelCache(rs.inner, temporal.reservoir, rs.position);
     var prev_pixel = select(vec2<i32>(-1), tr.pixel, tr.is_valid);
 
@@ -614,7 +605,7 @@ fn compute_restir(
     workgroupBarrier();
 
     let temporal_live = revive_canonical(temporal);
-    let spatial = resample_spatial(rs.inner, pixel, rs.position, group_id, temporal_live, rng, debug_len);
+    let spatial = resample_spatial(rs.inner, pixel, rs.position, group_id, temporal_live);
 
     let pixel_index = get_reservoir_index(pixel, camera);
     reservoirs[pixel_index] = spatial.reservoir;
@@ -637,8 +628,8 @@ fn main(
     if (WRITE_DEBUG_IMAGE) {
         var default_color = vec3<f32>(0.0);
         if (debug.view_mode == DebugMode_Grouping) {
-            var rng = random_init(group_id.y * 1000u + group_id.x, 0u);
-            let h = random_gen(&rng) * 360.0;
+            p_rng = random_init(group_id.y * 1000u + group_id.x, 0u);
+            let h = random_gen(&p_rng) * 360.0;
             default_color = hsv_to_rgb(h, 1.0, 1.0);
         }
         textureStore(out_debug, pixel_coord, vec4<f32>(default_color, 0.0));
@@ -648,10 +639,11 @@ fn main(
     let rs = fetch_geometry(pixel_coord, true, enable_debug);
 
     let global_index = u32(pixel_coord.y) * camera.target_size.x + u32(pixel_coord.x);
-    var rng = random_init(global_index, parameters.frame_index);
+    p_rng = random_init(global_index, parameters.frame_index);
 
     let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
-    let color = compute_restir(rs, pixel_coord, local_index, group_id, &rng, enable_restir_debug);
+    p_debug_len = select(0.0, rs.inner.depth * 0.2, enable_restir_debug);
+    let color = compute_restir(rs, pixel_coord, local_index, group_id);
 
     //Note: important to do this after the temporal pass specifically
     // TODO: option to avoid writing data for the sky
