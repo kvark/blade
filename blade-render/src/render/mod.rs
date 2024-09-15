@@ -53,10 +53,8 @@ pub enum DebugMode {
     HitConsistency = 4,
     Grouping = 5,
     Reprojection = 6,
-    TemporalMatch = 10,
-    TemporalMisCanonical = 11,
-    SpatialMatch = 12,
-    SpatialMisCanonical = 13,
+    PassMatch = 10,
+    PassMisCanonical = 11,
     Variance = 100,
 }
 
@@ -86,6 +84,7 @@ bitflags::bitflags! {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DebugConfig {
     pub view_mode: DebugMode,
+    pub pass_index: u32,
     pub draw_flags: DebugDrawFlags,
     pub texture_flags: DebugTextureFlags,
     pub mouse_pos: Option<[i32; 2]>,
@@ -355,9 +354,9 @@ struct CameraParams {
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct DebugParams {
     view_mode: u32,
+    pass_index: u32,
     draw_flags: u32,
     texture_flags: u32,
-    unused: u32,
     mouse_pos: [i32; 2],
 }
 
@@ -972,9 +971,9 @@ impl Renderer {
     fn make_debug_params(&self, config: &DebugConfig) -> DebugParams {
         DebugParams {
             view_mode: config.view_mode as u32,
+            pass_index: config.pass_index,
             draw_flags: config.draw_flags.bits(),
             texture_flags: config.texture_flags.bits(),
-            unused: 0,
             mouse_pos: match config.mouse_pos {
                 Some(p) => [p[0], self.surface_size.height as i32 - p[1]],
                 None => [-1; 2],
