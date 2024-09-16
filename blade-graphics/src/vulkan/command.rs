@@ -120,6 +120,13 @@ impl crate::ShaderBindable for super::AccelerationStructure {
         ctx.write(index, self.raw);
     }
 }
+impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable
+    for &'a crate::AccelerationStructureArray<N>
+{
+    fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        ctx.write_array(index, self.data.iter().map(|acs| acs.raw));
+    }
+}
 
 impl crate::TexturePiece {
     fn subresource_layers(&self, aspects: crate::TexelAspects) -> vk::ImageSubresourceLayers {

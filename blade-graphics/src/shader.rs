@@ -133,6 +133,7 @@ impl super::Shader {
                             let count = match proto_binding {
                                 crate::ShaderBinding::TextureArray { count } => count,
                                 crate::ShaderBinding::BufferArray { count } => count,
+                                crate::ShaderBinding::AccelerationStructureArray { count } => count,
                                 _ => 0,
                             };
                             let proto = match module.types[base].inner {
@@ -141,6 +142,9 @@ impl super::Shader {
                                 }
                                 naga::TypeInner::Struct { .. } => {
                                     crate::ShaderBinding::BufferArray { count }
+                                }
+                                naga::TypeInner::AccelerationStructure => {
+                                    crate::ShaderBinding::AccelerationStructureArray { count }
                                 }
                                 ref other => panic!("Unsupported binding array for {:?}", other),
                             };

@@ -50,10 +50,12 @@ struct RichSurface {
     motion: vec2<f32>,
 }
 
+//TODO: pass acceleration structure here as an argument
+// https://github.com/gfx-rs/wgpu/issues/6283
 fn fetch_geometry(pixel_coord: vec2<i32>, is_primary: bool, enable_debug: bool) -> RichSurface {
     var rq: ray_query;
     let ray_dir = get_ray_direction(camera, pixel_coord);
-    rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_CULL_NO_OPAQUE, 0xFFu, 0.0, camera.depth, camera.position, ray_dir));
+    rayQueryInitialize(&rq, acceleration_structures[0], RayDesc(RAY_FLAG_CULL_NO_OPAQUE, 0xFFu, 0.0, camera.depth, camera.position, ray_dir));
     rayQueryProceed(&rq);
     let intersection = rayQueryGetCommittedIntersection(&rq);
 

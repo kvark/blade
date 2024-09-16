@@ -328,6 +328,7 @@ pub struct Renderer {
     index_buffers: blade_graphics::BufferArray<MAX_RESOURCES>,
     textures: blade_graphics::TextureArray<MAX_RESOURCES>,
     samplers: Samplers,
+    acceleration_structures: blade_graphics::AccelerationStructureArray<2>,
     reservoir_size: u32,
     debug: DebugRender,
     surface_size: blade_graphics::Extent,
@@ -384,8 +385,7 @@ struct MainData<'a> {
     prev_camera: CameraParams,
     debug: DebugParams,
     parameters: MainParams,
-    acc_struct: blade_graphics::AccelerationStructure,
-    prev_acc_struct: blade_graphics::AccelerationStructure,
+    acceleration_structures: &'a blade_graphics::AccelerationStructureArray<2>,
     hit_entries: blade_graphics::BufferPiece,
     index_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
     vertex_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
@@ -664,6 +664,7 @@ impl Renderer {
             index_buffers: blade_graphics::BufferArray::new(),
             textures: blade_graphics::TextureArray::new(),
             samplers,
+            acceleration_structures: blade_graphics::AccelerationStructureArray::new(),
             reservoir_size: sp.reservoir_size,
             debug,
             surface_size: config.surface_size,
@@ -1041,6 +1042,20 @@ impl Renderer {
             self.frame_index += 1;
         }
         self.targets.camera_params[self.frame_index % 2] = self.make_camera_params(camera);
+
+        self.acceleration_structures.clear();
+        self.acceleration_structures
+            .alloc(self.acceleration_structure);
+        self.acceleration_structures.alloc(
+            if self.frame_scene_built < self.frame_index
+                || self.prev_acceleration_structure
+                    == blade_graphics::AccelerationStructure::default()
+            {
+                self.acceleration_structure
+            } else {
+                self.prev_acceleration_structure
+            },
+        );
     }
 
     /// Ray trace the scene.
@@ -1105,15 +1120,7 @@ impl Renderer {
                         },
                         grid_scale,
                     },
-                    acc_struct: self.acceleration_structure,
-                    prev_acc_struct: if self.frame_scene_built < self.frame_index
-                        || self.prev_acceleration_structure
-                            == blade_graphics::AccelerationStructure::default()
-                    {
-                        self.acceleration_structure
-                    } else {
-                        self.prev_acceleration_structure
-                    },
+                    acceleration_structures: &self.acceleration_structures,
                     hit_entries: self.hit_buffer.into(),
                     index_buffers: &self.index_buffers,
                     vertex_buffers: &self.vertex_buffers,

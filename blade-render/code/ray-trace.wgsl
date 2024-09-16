@@ -48,8 +48,7 @@ var<uniform> camera: CameraParams;
 var<uniform> prev_camera: CameraParams;
 var<uniform> parameters: MainParams;
 var<uniform> debug: DebugParams;
-var acc_struct: acceleration_structure;
-var prev_acc_struct: acceleration_structure;
+var acceleration_structures: binding_array<acceleration_structure, 2>;
 var env_map: texture_2d<f32>;
 var sampler_linear: sampler;
 var sampler_nearest: sampler;
@@ -232,12 +231,18 @@ fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> f32 {
     return lambert_brdf * max(0.0, lambert_term);
 }
 
-fn check_ray_occluded(acs: acceleration_structure, position: vec3<f32>, direction: vec3<f32>) -> bool {
+fn check_ray_occluded(acs: i32, position: vec3<f32>, direction: vec3<f32>) -> bool {
     var rq: ray_query;
     let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
-    rayQueryInitialize(&rq, acs,
-        RayDesc(flags, 0xFFu, parameters.t_start, camera.depth, position, direction)
-    );
+    //TODO: either properly enable non-uniform indexing for acceleration structures,
+    // or find a way to convince WGSL that this index is uniform.
+    let desc = RayDesc(flags, 0xFFu, parameters.t_start, camera.depth, position, direction);
+    if (acs == 0) {
+        rayQueryInitialize(&rq, acceleration_structures[0], desc);
+    } else {
+        rayQueryInitialize(&rq, acceleration_structures[1], desc);
+    }
+
     rayQueryProceed(&rq);
     let intersection = rayQueryGetCommittedIntersection(&rq);
 
@@ -273,7 +278,7 @@ fn make_target_score(color: vec3<f32>) -> TargetScore {
 }
 
 fn estimate_target_score_with_occlusion(
-    surface: Surface, position: vec3<f32>, light_index: u32, light_uv: vec2<f32>, acs: acceleration_structure,
+    surface: Surface, position: vec3<f32>, light_index: u32, light_uv: vec2<f32>, acs_index: i32,
 ) -> TargetScore {
     if (light_index != 0u) {
         return TargetScore();
@@ -287,7 +292,7 @@ fn estimate_target_score_with_occlusion(
         return TargetScore();
     }
 
-    if (check_ray_occluded(acs, position, direction)) {
+    if (check_ray_occluded(acs_index, position, direction)) {
         return TargetScore();
     }
 
@@ -296,7 +301,7 @@ fn estimate_target_score_with_occlusion(
     return make_target_score(brdf * radiance);
 }
 
-fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>) -> f32 {
+fn evaluate_light_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>) -> f32 {
     let dir = map_equirect_uv_to_dir(ls.uv);
     if (dot(dir, surface.flat_normal) <= 0.0) {
         return 0.0;
@@ -312,7 +317,7 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>) -> f
         return 0.0;
     }
 
-    if (check_ray_occluded(acc_struct, start_pos, dir)) {
+    if (check_ray_occluded(0, start_pos, dir)) {
         return 0.0;
     }
 
@@ -331,7 +336,7 @@ fn produce_canonical(
             ls = sample_light_from_sphere();
         }
 
-        let brdf = evaluate_sample(ls, surface, position);
+        let brdf = evaluate_light_sample(ls, surface, position);
         if (brdf > 0.0) {
             let other = make_reservoir(ls, 0u, vec3<f32>(brdf));
             merge_reservoir(&reservoir, other);
@@ -411,7 +416,7 @@ struct ShiftSample {
 
 // Resample following Algorithm 8 in section 9.1 of Bitterli thesis
 fn shift_sample(
-    base: ResampleBase, other: PixelCache, other_acs: acceleration_structure,
+    base: ResampleBase, other: PixelCache, other_acs: i32,
     max_confidence: f32,
 ) -> ShiftSample {
     var ss = ShiftSample();
@@ -428,7 +433,7 @@ fn shift_sample(
         }
 
         let t_neighbor_at_canonical = estimate_target_score_with_occlusion(
-            base.surface, base.world_pos, neighbor.light_index, neighbor.light_uv, acc_struct);
+            base.surface, base.world_pos, neighbor.light_index, neighbor.light_uv, 0);
         let nom = neighbor.target_score * neighbor_history;
         let denom = nom + t_neighbor_at_canonical.score * canonical.history / base.accepted_count;
         let mis_neighbor = select(0.0, nom / denom, denom > 0.0);
@@ -567,13 +572,12 @@ fn compute_restir(
             let base = ResampleBase(rs.inner, input, rs.position, f32(accepted_count));
 
             mis_canonical = 1.0;
-            //TODO: how to make this selection work?
-            let other_acc_struct = select(acc_struct, prev_acc_struct, ps.is_temporal);
+            let other_acs = select(0, 1, ps.is_temporal);
             // evaluate the MIS of each of the samples versus the canonical one.
             for (var lid = 0u; lid < accepted_count; lid += 1u) {
                 let other = pixel_cache[accepted_local_indices[lid]];
 
-                let ss = shift_sample(base, other, other_acc_struct, ps.confidence);
+                let ss = shift_sample(base, other, other_acs, ps.confidence);
                 mis_canonical += ss.mis_canonical;
 
                 if (DECOUPLED_SHADING) {

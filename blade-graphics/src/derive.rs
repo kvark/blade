@@ -19,14 +19,17 @@ impl HasShaderBinding for super::Sampler {
 impl HasShaderBinding for super::BufferPiece {
     const TYPE: ShaderBinding = ShaderBinding::Buffer;
 }
+impl HasShaderBinding for super::AccelerationStructure {
+    const TYPE: ShaderBinding = ShaderBinding::AccelerationStructure;
+}
 impl<'a, const N: ResourceIndex> HasShaderBinding for &'a super::BufferArray<N> {
     const TYPE: ShaderBinding = ShaderBinding::BufferArray { count: N };
 }
 impl<'a, const N: ResourceIndex> HasShaderBinding for &'a super::TextureArray<N> {
     const TYPE: ShaderBinding = ShaderBinding::TextureArray { count: N };
 }
-impl HasShaderBinding for super::AccelerationStructure {
-    const TYPE: ShaderBinding = ShaderBinding::AccelerationStructure;
+impl<'a, const N: ResourceIndex> HasShaderBinding for &'a super::AccelerationStructureArray<N> {
+    const TYPE: ShaderBinding = ShaderBinding::AccelerationStructureArray { count: N };
 }
 
 pub trait HasVertexAttribute {

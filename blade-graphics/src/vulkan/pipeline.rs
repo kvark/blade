@@ -20,7 +20,8 @@ impl super::Context {
             for (binding_index, &(_, binding)) in layout.bindings.iter().enumerate() {
                 match binding {
                     crate::ShaderBinding::TextureArray { count }
-                    | crate::ShaderBinding::BufferArray { count } => {
+                    | crate::ShaderBinding::BufferArray { count }
+                    | crate::ShaderBinding::AccelerationStructureArray { count } => {
                         let rb = naga::ResourceBinding {
                             group: group_index as u32,
                             binding: binding_index as u32,
@@ -220,6 +221,12 @@ impl super::Context {
                     mem::size_of::<vk::AccelerationStructureKHR>(),
                     1u32,
                     vk::DescriptorBindingFlags::empty(),
+                ),
+                crate::ShaderBinding::AccelerationStructureArray { count } => (
+                    vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                    mem::size_of::<vk::AccelerationStructureKHR>(),
+                    count,
+                    vk::DescriptorBindingFlags::PARTIALLY_BOUND,
                 ),
                 crate::ShaderBinding::Plain { size } => (
                     vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
