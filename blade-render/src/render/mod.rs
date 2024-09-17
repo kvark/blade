@@ -51,7 +51,14 @@ pub enum DebugMode {
     Normal = 2,
     Motion = 3,
     HitConsistency = 4,
-    Variance = 5,
+    Grouping = 5,
+    TemporalMatch = 10,
+    TemporalMisCanonical = 11,
+    TemporalMisError = 12,
+    SpatialMatch = 13,
+    SpatialMisCanonical = 14,
+    SpatialMisError = 15,
+    Variance = 100,
 }
 
 impl Default for DebugMode {
@@ -93,7 +100,11 @@ pub struct RayConfig {
     pub temporal_history: u32,
     pub spatial_taps: u32,
     pub spatial_tap_history: u32,
-    pub spatial_radius: u32,
+    /// Minimal distance to a spatially reused pixel (in the current frame).
+    pub spatial_min_distance: u32,
+    /// Scale and mix the groups into clusters, to allow spatial samples to mix
+    /// outside of the original workgroup pixel bounds.
+    pub group_mixer: u32,
     pub t_start: f32,
 }
 
@@ -199,7 +210,7 @@ impl<const N: usize> RenderTarget<N> {
 }
 
 struct RestirTargets {
-    reservoir_buf: [blade_graphics::Buffer; 2],
+    reservoir_buf: blade_graphics::Buffer,
     debug: RenderTarget<1>,
     depth: RenderTarget<2>,
     basis: RenderTarget<2>,
@@ -218,14 +229,11 @@ impl RestirTargets {
         gpu: &blade_graphics::Context,
     ) -> Self {
         let total_reservoirs = size.width as usize * size.height as usize;
-        let mut reservoir_buf = [blade_graphics::Buffer::default(); 2];
-        for (i, rb) in reservoir_buf.iter_mut().enumerate() {
-            *rb = gpu.create_buffer(blade_graphics::BufferDesc {
-                name: &format!("reservoirs{i}"),
-                size: reservoir_size as u64 * total_reservoirs as u64,
-                memory: blade_graphics::Memory::Device,
-            });
-        }
+        let reservoir_buf = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "reservoirs",
+            size: reservoir_size as u64 * total_reservoirs as u64,
+            memory: blade_graphics::Memory::Device,
+        });
 
         Self {
             reservoir_buf,
@@ -277,9 +285,7 @@ impl RestirTargets {
     }
 
     fn destroy(&self, gpu: &blade_graphics::Context) {
-        for rb in self.reservoir_buf.iter() {
-            gpu.destroy_buffer(*rb);
-        }
+        gpu.destroy_buffer(self.reservoir_buf);
         self.debug.destroy(gpu);
         self.depth.destroy(gpu);
         self.basis.destroy(gpu);
@@ -308,7 +314,6 @@ pub struct Renderer {
     shaders: Shaders,
     targets: RestirTargets,
     post_proc_input_index: usize,
-    fill_pipeline: blade_graphics::ComputePipeline,
     main_pipeline: blade_graphics::ComputePipeline,
     post_proc_pipeline: blade_graphics::RenderPipeline,
     blur: Blur,
@@ -363,53 +368,38 @@ struct MainParams {
     temporal_history: u32,
     spatial_taps: u32,
     spatial_tap_history: u32,
-    spatial_radius: u32,
+    spatial_min_distance: u32,
     t_start: f32,
     use_motion_vectors: u32,
+    grid_scale: [u32; 2],
 }
 
 #[derive(blade_macros::ShaderData)]
-struct FillData<'a> {
-    camera: CameraParams,
-    prev_camera: CameraParams,
-    debug: DebugParams,
-    acc_struct: blade_graphics::AccelerationStructure,
-    hit_entries: blade_graphics::BufferPiece,
-    index_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
-    vertex_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
-    textures: &'a blade_graphics::TextureArray<MAX_RESOURCES>,
-    sampler_linear: blade_graphics::Sampler,
-    debug_buf: blade_graphics::BufferPiece,
-    out_depth: blade_graphics::TextureView,
-    out_basis: blade_graphics::TextureView,
-    out_flat_normal: blade_graphics::TextureView,
-    out_albedo: blade_graphics::TextureView,
-    out_motion: blade_graphics::TextureView,
-    out_debug: blade_graphics::TextureView,
-}
-
-#[derive(blade_macros::ShaderData)]
-struct MainData {
+struct MainData<'a> {
     camera: CameraParams,
     prev_camera: CameraParams,
     debug: DebugParams,
     parameters: MainParams,
     acc_struct: blade_graphics::AccelerationStructure,
     prev_acc_struct: blade_graphics::AccelerationStructure,
+    hit_entries: blade_graphics::BufferPiece,
+    index_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
+    vertex_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
+    textures: &'a blade_graphics::TextureArray<MAX_RESOURCES>,
     sampler_linear: blade_graphics::Sampler,
     sampler_nearest: blade_graphics::Sampler,
     env_map: blade_graphics::TextureView,
     env_weights: blade_graphics::TextureView,
-    t_depth: blade_graphics::TextureView,
     t_prev_depth: blade_graphics::TextureView,
-    t_basis: blade_graphics::TextureView,
     t_prev_basis: blade_graphics::TextureView,
-    t_flat_normal: blade_graphics::TextureView,
     t_prev_flat_normal: blade_graphics::TextureView,
-    t_motion: blade_graphics::TextureView,
     debug_buf: blade_graphics::BufferPiece,
     reservoirs: blade_graphics::BufferPiece,
-    prev_reservoirs: blade_graphics::BufferPiece,
+    out_depth: blade_graphics::TextureView,
+    out_basis: blade_graphics::TextureView,
+    out_flat_normal: blade_graphics::TextureView,
+    out_albedo: blade_graphics::TextureView,
+    out_motion: blade_graphics::TextureView,
     out_diffuse: blade_graphics::TextureView,
     out_debug: blade_graphics::TextureView,
 }
@@ -487,7 +477,6 @@ struct HitEntry {
 #[derive(Clone, PartialEq)]
 pub struct Shaders {
     env_prepare: blade_asset::Handle<crate::Shader>,
-    fill_gbuf: blade_asset::Handle<crate::Shader>,
     ray_trace: blade_asset::Handle<crate::Shader>,
     blur: blade_asset::Handle<crate::Shader>,
     post_proc: blade_asset::Handle<crate::Shader>,
@@ -500,7 +489,6 @@ impl Shaders {
         let mut ctx = asset_hub.open_context(path, "shader finish");
         let shaders = Self {
             env_prepare: ctx.load_shader("env-prepare.wgsl"),
-            fill_gbuf: ctx.load_shader("fill-gbuf.wgsl"),
             ray_trace: ctx.load_shader("ray-trace.wgsl"),
             blur: ctx.load_shader("blur.wgsl"),
             post_proc: ctx.load_shader("post-proc.wgsl"),
@@ -512,7 +500,6 @@ impl Shaders {
 }
 
 struct ShaderPipelines {
-    fill: blade_graphics::ComputePipeline,
     main: blade_graphics::ComputePipeline,
     temporal_accum: blade_graphics::ComputePipeline,
     atrous: blade_graphics::ComputePipeline,
@@ -522,19 +509,6 @@ struct ShaderPipelines {
 }
 
 impl ShaderPipelines {
-    fn create_gbuf_fill(
-        shader: &blade_graphics::Shader,
-        gpu: &blade_graphics::Context,
-    ) -> blade_graphics::ComputePipeline {
-        shader.check_struct_size::<crate::Vertex>();
-        shader.check_struct_size::<HitEntry>();
-        let layout = <FillData as blade_graphics::ShaderData>::layout();
-        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
-            name: "fill-gbuf",
-            data_layouts: &[&layout],
-            compute: shader.at("main"),
-        })
-    }
     fn create_ray_trace(
         shader: &blade_graphics::Shader,
         gpu: &blade_graphics::Context,
@@ -545,11 +519,17 @@ impl ShaderPipelines {
         shader.check_struct_size::<DebugVariance>();
         shader.check_struct_size::<DebugEntry>();
         let layout = <MainData as blade_graphics::ShaderData>::layout();
-        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+        let pipeline = gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "ray-trace",
             data_layouts: &[&layout],
             compute: shader.at("main"),
-        })
+        });
+
+        let pl_struct_size = shader.get_struct_size("PixelCache");
+        let group_size = pipeline.get_workgroup_size();
+        let wg_required = pl_struct_size * group_size[0] * group_size[1];
+        log::info!("Using {} workgroup memory for RT", wg_required);
+        pipeline
     }
 
     fn create_temporal_accum(
@@ -606,7 +586,6 @@ impl ShaderPipelines {
         let sh_main = shader_man[shaders.ray_trace].raw.as_ref().unwrap();
         let sh_blur = shader_man[shaders.blur].raw.as_ref().unwrap();
         Ok(Self {
-            fill: Self::create_gbuf_fill(shader_man[shaders.fill_gbuf].raw.as_ref().unwrap(), gpu),
             main: Self::create_ray_trace(sh_main, gpu),
             temporal_accum: Self::create_temporal_accum(sh_blur, gpu),
             atrous: Self::create_atrous(sh_blur, gpu),
@@ -697,7 +676,6 @@ impl Renderer {
             shaders,
             targets,
             post_proc_input_index: 0,
-            fill_pipeline: sp.fill,
             main_pipeline: sp.main,
             post_proc_pipeline: sp.post_proc,
             blur: Blur {
@@ -744,7 +722,6 @@ impl Renderer {
         // pipelines
         gpu.destroy_compute_pipeline(&mut self.blur.temporal_accum_pipeline);
         gpu.destroy_compute_pipeline(&mut self.blur.atrous_pipeline);
-        gpu.destroy_compute_pipeline(&mut self.fill_pipeline);
         gpu.destroy_compute_pipeline(&mut self.main_pipeline);
         gpu.destroy_render_pipeline(&mut self.post_proc_pipeline);
     }
@@ -759,7 +736,6 @@ impl Renderer {
         let mut tasks = Vec::new();
         let old = self.shaders.clone();
 
-        tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.fill_gbuf));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.ray_trace));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.blur));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.post_proc));
@@ -776,11 +752,6 @@ impl Renderer {
             let _ = task.join();
         }
 
-        if self.shaders.fill_gbuf != old.fill_gbuf {
-            if let Ok(ref shader) = asset_hub.shaders[self.shaders.fill_gbuf].raw {
-                self.fill_pipeline = ShaderPipelines::create_gbuf_fill(shader, gpu);
-            }
-        }
         if self.shaders.ray_trace != old.ray_trace {
             if let Ok(ref shader) = asset_hub.shaders[self.shaders.ray_trace].raw {
                 assert_eq!(
@@ -1089,13 +1060,11 @@ impl Renderer {
                 self.debug.reset_lines(&mut transfer);
             }
             let total_reservoirs = self.surface_size.width as u64 * self.surface_size.height as u64;
-            for reservoir_buf in self.targets.reservoir_buf.iter() {
-                transfer.fill_buffer(
-                    reservoir_buf.at(0),
-                    total_reservoirs * self.reservoir_size as u64,
-                    0,
-                );
-            }
+            transfer.fill_buffer(
+                self.targets.reservoir_buf.at(0),
+                total_reservoirs * self.reservoir_size as u64,
+                0,
+            );
         }
 
         if !config.frozen {
@@ -1119,35 +1088,26 @@ impl Renderer {
         let (cur, prev) = self.work_indices();
 
         if let mut pass = command_encoder.compute() {
-            let mut pc = pass.with(&self.fill_pipeline);
-            let groups = self.fill_pipeline.get_dispatch_for(self.surface_size);
-            pc.bind(
-                0,
-                &FillData {
-                    camera: self.targets.camera_params[cur],
-                    prev_camera: self.targets.camera_params[prev],
-                    debug,
-                    acc_struct: self.acceleration_structure,
-                    hit_entries: self.hit_buffer.into(),
-                    index_buffers: &self.index_buffers,
-                    vertex_buffers: &self.vertex_buffers,
-                    textures: &self.textures,
-                    sampler_linear: self.samplers.linear,
-                    debug_buf: self.debug.buffer_resource(),
-                    out_depth: self.targets.depth.views[cur],
-                    out_basis: self.targets.basis.views[cur],
-                    out_flat_normal: self.targets.flat_normal.views[cur],
-                    out_albedo: self.targets.albedo.views[0],
-                    out_motion: self.targets.motion.views[0],
-                    out_debug: self.targets.debug.views[0],
-                },
-            );
-            pc.dispatch(groups);
-        }
-
-        if let mut pass = command_encoder.compute() {
+            let grid_scale = {
+                let limit = ray_config.group_mixer;
+                let r = self.frame_index as u32 ^ 0x5A;
+                [r % limit + 1, (r / limit) % limit + 1]
+            };
+            let groups = {
+                let wg_size = self.main_pipeline.get_workgroup_size();
+                let cluster_size = [
+                    wg_size[0] * grid_scale[0],
+                    wg_size[1] * grid_scale[1],
+                    wg_size[2],
+                ];
+                let clusters = self.surface_size.group_by(cluster_size);
+                [
+                    clusters[0] * grid_scale[0],
+                    clusters[1] * grid_scale[1],
+                    clusters[2],
+                ]
+            };
             let mut pc = pass.with(&self.main_pipeline);
-            let groups = self.main_pipeline.get_dispatch_for(self.surface_size);
             pc.bind(
                 0,
                 &MainData {
@@ -1163,9 +1123,10 @@ impl Renderer {
                         temporal_history: ray_config.temporal_history,
                         spatial_taps: ray_config.spatial_taps,
                         spatial_tap_history: ray_config.spatial_tap_history,
-                        spatial_radius: ray_config.spatial_radius,
+                        spatial_min_distance: ray_config.spatial_min_distance,
                         t_start: ray_config.t_start,
                         use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
+                        grid_scale,
                     },
                     acc_struct: self.acceleration_structure,
                     prev_acc_struct: if self.frame_scene_built < self.frame_index
@@ -1176,20 +1137,24 @@ impl Renderer {
                     } else {
                         self.prev_acceleration_structure
                     },
+                    hit_entries: self.hit_buffer.into(),
+                    index_buffers: &self.index_buffers,
+                    vertex_buffers: &self.vertex_buffers,
+                    textures: &self.textures,
                     sampler_linear: self.samplers.linear,
                     sampler_nearest: self.samplers.nearest,
                     env_map: self.env_map.main_view,
                     env_weights: self.env_map.weight_view,
-                    t_depth: self.targets.depth.views[cur],
                     t_prev_depth: self.targets.depth.views[prev],
-                    t_basis: self.targets.basis.views[cur],
                     t_prev_basis: self.targets.basis.views[prev],
-                    t_flat_normal: self.targets.flat_normal.views[cur],
                     t_prev_flat_normal: self.targets.flat_normal.views[prev],
-                    t_motion: self.targets.motion.views[0],
                     debug_buf: self.debug.buffer_resource(),
-                    reservoirs: self.targets.reservoir_buf[cur].into(),
-                    prev_reservoirs: self.targets.reservoir_buf[prev].into(),
+                    reservoirs: self.targets.reservoir_buf.into(),
+                    out_depth: self.targets.depth.views[cur],
+                    out_basis: self.targets.basis.views[cur],
+                    out_flat_normal: self.targets.flat_normal.views[cur],
+                    out_albedo: self.targets.albedo.views[0],
+                    out_motion: self.targets.motion.views[0],
                     out_diffuse: self.targets.light_diffuse.views[cur],
                     out_debug: self.targets.debug.views[0],
                 },

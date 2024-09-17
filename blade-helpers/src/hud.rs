@@ -22,9 +22,10 @@ impl ExposeHud for blade_render::RayConfig {
             egui::widgets::Slider::new(&mut self.spatial_tap_history, 0..=50)
                 .text("Spatial tap history"),
         );
+        ui.add(egui::widgets::Slider::new(&mut self.group_mixer, 1..=10).text("Group mixer"));
         ui.add(
-            egui::widgets::Slider::new(&mut self.spatial_radius, 1..=50)
-                .text("Spatial radius (px)"),
+            egui::widgets::Slider::new(&mut self.spatial_min_distance, 1..=10)
+                .text("Spatial minimum distance (px)"),
         );
         ui.add(
             egui::widgets::Slider::new(&mut self.t_start, 0.001..=0.5)

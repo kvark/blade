@@ -264,7 +264,8 @@ impl Example {
                 temporal_history: 10,
                 spatial_taps: 1,
                 spatial_tap_history: 5,
-                spatial_radius: 10,
+                spatial_min_distance: 4,
+                group_mixer: 10,
                 t_start: 0.1,
             },
             denoiser_enabled: true,
@@ -581,6 +582,8 @@ impl Example {
             }
             return;
         }
+
+        ui.checkbox(&mut self.track_hot_reloads, "Hot reloading");
 
         let mut selection = blade_render::SelectionInfo::default();
         if self.debug.mouse_pos.is_some() {
