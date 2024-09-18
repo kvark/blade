@@ -1,5 +1,7 @@
 use super::ExposeHud;
 
+const MAX_FLY_SPEED: f32 = 1000000.0;
+
 pub struct ControlledCamera {
     pub inner: blade_render::Camera,
     pub fly_speed: f32,
@@ -86,6 +88,14 @@ impl ControlledCamera {
 
         true
     }
+
+    pub fn on_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
+        let shift = match delta {
+            winit::event::MouseScrollDelta::LineDelta(_, lines) => lines,
+            winit::event::MouseScrollDelta::PixelDelta(position) => position.y as f32,
+        };
+        self.fly_speed = (self.fly_speed * shift.exp()).clamp(1.0, MAX_FLY_SPEED);
+    }
 }
 
 impl ExposeHud for ControlledCamera {
@@ -105,7 +115,7 @@ impl ExposeHud for ControlledCamera {
         });
         ui.add(egui::Slider::new(&mut self.inner.fov_y, 0.5f32..=2.0f32).text("FOV"));
         ui.add(
-            egui::Slider::new(&mut self.fly_speed, 1f32..=100000f32)
+            egui::Slider::new(&mut self.fly_speed, 1f32..=MAX_FLY_SPEED)
                 .text("Fly speed")
                 .logarithmic(true),
         );

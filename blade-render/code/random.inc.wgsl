@@ -28,7 +28,7 @@ fn rot32(x: u32, bits: u32) -> u32 {
 }
 
 // https://en.wikipedia.org/wiki/MurmurHash
-fn murmur3(rng: ptr<function, RandomState>) -> u32 {
+fn murmur3(rng: ptr<private, RandomState>) -> u32 {
     let c1 = 0xcc9e2d51u;
     let c2 = 0x1b873593u;
     let r1 = 15u;
@@ -56,7 +56,11 @@ fn murmur3(rng: ptr<function, RandomState>) -> u32 {
     return hash;
 }
 
-fn random_gen(rng: ptr<function, RandomState>) -> f32 {
+fn random_u32(rng: ptr<private, RandomState>) -> u32 {
+    return murmur3(rng);
+}
+
+fn random_gen(rng: ptr<private, RandomState>) -> f32 {
     let v = murmur3(rng);
     let one = bitcast<u32>(1.0);
     let mask = (1u << 23u) - 1u;

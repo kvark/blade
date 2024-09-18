@@ -159,7 +159,6 @@ struct Example {
     last_render_time: time::Instant,
     render_times: VecDeque<u32>,
     ray_config: blade_render::RayConfig,
-    denoiser_enabled: bool,
     denoiser_config: blade_render::DenoiserConfig,
     post_proc_config: blade_render::PostProcConfig,
     debug_blit: Option<blade_render::DebugBlit>,
@@ -259,16 +258,19 @@ impl Example {
             render_times: VecDeque::with_capacity(FRAME_TIME_HISTORY),
             ray_config: blade_render::RayConfig {
                 num_environment_samples: 1,
-                environment_importance_sampling: false,
+                environment_importance_sampling: true,
                 temporal_tap: true,
-                temporal_history: 10,
+                temporal_confidence: 10.0,
                 spatial_taps: 1,
-                spatial_tap_history: 5,
-                spatial_radius: 10,
+                spatial_confidence: 5.0,
+                spatial_min_distance: 2,
+                group_mixer: 10,
                 t_start: 0.1,
+                pairwise_mis: true,
+                defensive_mis: 0.0,
             },
-            denoiser_enabled: true,
             denoiser_config: blade_render::DenoiserConfig {
+                enabled: true,
                 num_passes: 3,
                 temporal_weight: 0.1,
             },
@@ -458,6 +460,7 @@ impl Example {
         // even while it's still being loaded.
         let do_render =
             self.scene_load_task.is_none() || (RENDER_WHILE_LOADING && self.scene_revision != 0);
+        let mut frame_key = blade_render::FrameKey::default();
         if do_render {
             self.renderer.prepare(
                 command_encoder,
@@ -474,11 +477,12 @@ impl Example {
             //TODO: figure out why the main RT pipeline
             // causes a GPU crash when there are no objects
             if !self.objects.is_empty() {
-                self.renderer
-                    .ray_trace(command_encoder, self.debug, self.ray_config);
-                if self.denoiser_enabled {
-                    self.renderer.denoise(command_encoder, self.denoiser_config);
-                }
+                frame_key = self.renderer.ray_trace(
+                    command_encoder,
+                    self.debug,
+                    self.ray_config,
+                    self.denoiser_config,
+                );
             }
         }
 
@@ -508,6 +512,7 @@ impl Example {
                 };
                 self.renderer.post_proc(
                     &mut pass,
+                    frame_key,
                     self.debug,
                     self.post_proc_config,
                     &[],
@@ -581,6 +586,8 @@ impl Example {
             }
             return;
         }
+
+        ui.checkbox(&mut self.track_hot_reloads, "Hot reloading");
 
         let mut selection = blade_render::SelectionInfo::default();
         if self.debug.mouse_pos.is_some() {
@@ -669,7 +676,6 @@ impl Example {
         egui::CollapsingHeader::new("Denoise")
             .default_open(false)
             .show(ui, |ui| {
-                ui.checkbox(&mut self.denoiser_enabled, "Enable");
                 self.denoiser_config.populate_hud(ui);
             });
 
@@ -944,6 +950,9 @@ fn main() {
                                 example.debug.mouse_pos = None;
                             }
                             last_mouse_pos = [position.x as i32, position.y as i32];
+                        }
+                        winit::event::WindowEvent::MouseWheel { delta, .. } => {
+                            example.camera.on_wheel(delta);
                         }
                         winit::event::WindowEvent::HoveredFile(_) => {
                             example.is_file_hovered = true;

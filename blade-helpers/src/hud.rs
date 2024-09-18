@@ -15,27 +15,34 @@ impl ExposeHud for blade_render::RayConfig {
         );
         ui.checkbox(&mut self.temporal_tap, "Temporal tap");
         ui.add(
-            egui::widgets::Slider::new(&mut self.temporal_history, 0..=50).text("Temporal history"),
+            egui::widgets::Slider::new(&mut self.temporal_confidence, 0.0..=50.0)
+                .text("Temporal confidence"),
         );
         ui.add(egui::widgets::Slider::new(&mut self.spatial_taps, 0..=10).text("Spatial taps"));
         ui.add(
-            egui::widgets::Slider::new(&mut self.spatial_tap_history, 0..=50)
-                .text("Spatial tap history"),
+            egui::widgets::Slider::new(&mut self.spatial_confidence, 0.0..=50.0)
+                .text("Spatial confidence"),
         );
+        ui.add(egui::widgets::Slider::new(&mut self.group_mixer, 1..=10).text("Group mixer"));
         ui.add(
-            egui::widgets::Slider::new(&mut self.spatial_radius, 1..=50)
-                .text("Spatial radius (px)"),
+            egui::widgets::Slider::new(&mut self.spatial_min_distance, 1..=10)
+                .text("Spatial minimum distance (px)"),
         );
         ui.add(
             egui::widgets::Slider::new(&mut self.t_start, 0.001..=0.5)
                 .text("T min")
                 .logarithmic(true),
         );
+        ui.checkbox(&mut self.pairwise_mis, "Pairwise MIS");
+        ui.add(
+            egui::widgets::Slider::new(&mut self.defensive_mis, 0.0..=1.0).text("Defensive MIS"),
+        );
     }
 }
 
 impl ExposeHud for blade_render::DenoiserConfig {
     fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        ui.checkbox(&mut self.enabled, "Enable denoiser");
         ui.add(egui::Slider::new(&mut self.temporal_weight, 0.0..=1.0f32).text("Temporal weight"));
         ui.add(egui::Slider::new(&mut self.num_passes, 0..=5u32).text("A-trous passes"));
     }
@@ -54,6 +61,15 @@ impl ExposeHud for blade_render::PostProcConfig {
                 .logarithmic(true),
         );
         ui.add(egui::Slider::new(&mut self.white_level, 0.1f32..=2f32).text("White level"));
+    }
+}
+
+impl ExposeHud for blade_render::FrameConfig {
+    fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            self.reset_reservoirs |= ui.button("Reset Accumulation").clicked();
+            ui.toggle_value(&mut self.frozen, "Freeze");
+        });
     }
 }
 

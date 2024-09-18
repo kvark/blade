@@ -5,12 +5,13 @@ const PI: f32 = 3.1415926;
 const BUMP: f32 = 0.025;
 
 var env_main: texture_2d<f32>;
+var<private> p_rng: RandomState;
 
 @vertex
 fn vs_accum(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
-    var rng = random_init(vi, 0u);
     let dim = textureDimensions(env_main);
-    let es = generate_environment_sample(&rng, dim);
+    p_rng = random_init(vi, 0u);
+    let es = generate_environment_sample(&p_rng, dim);
     let extent = textureDimensions(env_weights, 0);
     let relative = (vec2<f32>(es.pixel) + vec2<f32>(0.5)) / vec2<f32>(extent);
     return vec4<f32>(relative.x - 1.0, 1.0 - relative.y, 0.0, 1.0);
