@@ -487,11 +487,12 @@ impl Engine {
                 temporal_tap: true,
                 temporal_confidence: 10.0,
                 spatial_taps: 1,
-                spatial_confidence: 5.0,
+                spatial_confidence: 10.0,
                 spatial_min_distance: 2,
                 group_mixer: 10,
                 t_start: 0.01,
                 pairwise_mis: true,
+                defensive_mis: 0.1,
             },
             denoiser_config: blade_render::DenoiserConfig {
                 enabled: true,

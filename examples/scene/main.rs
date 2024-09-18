@@ -267,6 +267,7 @@ impl Example {
                 group_mixer: 10,
                 t_start: 0.1,
                 pairwise_mis: true,
+                defensive_mis: 0.0,
             },
             denoiser_config: blade_render::DenoiserConfig {
                 enabled: true,

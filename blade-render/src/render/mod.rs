@@ -108,6 +108,7 @@ pub struct RayConfig {
     /// See "9.1 pairwise mis for robust reservoir reuse"
     /// "Correlations and Reuse for Fast and Accurate Physically Based Light Transport"
     pub pairwise_mis: bool,
+    pub defensive_mis: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
@@ -374,8 +375,10 @@ struct MainParams {
     spatial_min_distance: u32,
     t_start: f32,
     use_pairwise_mis: u32,
+    defensive_mis: f32,
     use_motion_vectors: u32,
     temporal_accumulation_weight: f32,
+    pad: u32,
     grid_scale: [u32; 2],
 }
 
@@ -1098,12 +1101,14 @@ impl Renderer {
                         spatial_min_distance: ray_config.spatial_min_distance,
                         t_start: ray_config.t_start,
                         use_pairwise_mis: ray_config.pairwise_mis as u32,
+                        defensive_mis: ray_config.defensive_mis,
                         use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
                         temporal_accumulation_weight: if denoiser_config.enabled {
                             denoiser_config.temporal_weight
                         } else {
                             1.0
                         },
+                        pad: 0,
                         grid_scale,
                     },
                     acc_struct: self.acceleration_structure,

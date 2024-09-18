@@ -39,8 +39,10 @@ struct MainParams {
     spatial_min_distance: i32,
     t_start: f32,
     use_pairwise_mis: u32,
+    defensive_mis: f32,
     use_motion_vectors: u32,
     temporal_accumulation_weight: f32,
+    pad: f32,
     grid_scale: vec2<u32>,
 }
 
@@ -424,15 +426,18 @@ fn resample(
     if (parameters.use_pairwise_mis != 0u) {
         let canonical = base.canonical;
         let neighbor_history = min(neighbor.confidence, max_confidence);
+        let mis_scale = 1.0 / (base.accepted_count + parameters.defensive_mis);
         {   // scoping this to hint the register allocation
             let t_canonical_at_neighbor = estimate_target_score_with_occlusion(
                 other.surface, other.world_pos, canonical.selected_light_index, canonical.selected_uv, other_acs);
-            rr.mis_canonical = ratio(canonical.selected_target_score, t_canonical_at_neighbor.score) / base.accepted_count;
+            let r_canonical = ratio(canonical.history * canonical.selected_target_score / base.accepted_count, neighbor_history * t_canonical_at_neighbor.score);
+            rr.mis_canonical = mis_scale * (parameters.defensive_mis / base.accepted_count + r_canonical);
         }
 
         let t_neighbor_at_canonical = estimate_target_score_with_occlusion(
             base.surface, base.world_pos, neighbor.light_index, neighbor.light_uv, acc_struct);
-        rr.mis_sample = ratio(neighbor.target_score, t_neighbor_at_canonical.score) / base.accepted_count;
+        let r_neighbor = ratio(neighbor_history * neighbor.target_score, canonical.history * t_neighbor_at_canonical.score / base.accepted_count);
+        rr.mis_sample = mis_scale * r_neighbor;
 
         src.history = neighbor_history;
         src.selected_light_index = neighbor.light_index;
@@ -523,15 +528,16 @@ fn resample_temporal(
     let prev_world_pos = prev_camera.position + tr.surface.depth * prev_dir;
     let other = PixelCache(tr.surface, tr.reservoir, prev_world_pos);
     let rr = resample(&reservoir, &color_and_weight, base, other, prev_acc_struct, parameters.temporal_tap_confidence);
+    let mis_canonical = rr.mis_canonical;
 
     if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_TemporalMatch) {
         textureStore(out_debug, cur_pixel, vec4<f32>(1.0));
     }
     if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_TemporalMisCanonical) {
-        textureStore(out_debug, cur_pixel, vec4<f32>(rr.mis_canonical));
+        textureStore(out_debug, cur_pixel, vec4<f32>(mis_canonical));
     }
 
-    return finalize_resampling(&reservoir, &color_and_weight, base, rr.mis_canonical);
+    return finalize_resampling(&reservoir, &color_and_weight, base, mis_canonical);
 }
 
 fn resample_spatial(

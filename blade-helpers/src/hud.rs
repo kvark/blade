@@ -34,6 +34,9 @@ impl ExposeHud for blade_render::RayConfig {
                 .logarithmic(true),
         );
         ui.checkbox(&mut self.pairwise_mis, "Pairwise MIS");
+        ui.add(
+            egui::widgets::Slider::new(&mut self.defensive_mis, 0.0..=1.0).text("Defensive MIS"),
+        );
     }
 }
 
