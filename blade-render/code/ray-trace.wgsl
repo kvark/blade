@@ -137,13 +137,13 @@ fn unpack_reservoir(f: StoredReservoir, max_confidence: f32, radiance: vec3<f32>
     r.history = history;
     return r;
 }
-fn pack_reservoir_detail(r: LiveReservoir, denom_factor: f32) -> StoredReservoir {
+fn pack_reservoir_detail(r: LiveReservoir, effective_history: f32) -> StoredReservoir {
     var f: StoredReservoir;
     f.light_index = r.selected_light_index;
     f.light_uv = r.selected_uv;
     f.target_score = r.selected_target_score;
     f.confidence = r.history;
-    let denom = f.target_score * denom_factor;
+    let denom = f.target_score * effective_history;
     f.contribution_weight = select(0.0, r.weight_sum / denom, denom > 0.0);
     return f;
 }
@@ -408,6 +408,10 @@ struct ResampleResult {
     mis_sample: f32,
 }
 
+fn ratio(a: f32, b: f32) -> f32 {
+    return select(0.0, a / (a+b), a+b > 0.0);
+}
+
 // Resample following Algorithm 8 in section 9.1 of Bitterli thesis
 fn resample(
     dst: ptr<function, LiveReservoir>, color_and_weight: ptr<function, vec4<f32>>,
@@ -423,26 +427,21 @@ fn resample(
         {   // scoping this to hint the register allocation
             let t_canonical_at_neighbor = estimate_target_score_with_occlusion(
                 other.surface, other.world_pos, canonical.selected_light_index, canonical.selected_uv, other_acs);
-            let nom = canonical.selected_target_score * canonical.history / base.accepted_count;
-            let denom = t_canonical_at_neighbor.score * neighbor_history + nom;
-            rr.mis_canonical = select(0.0, nom / denom, denom > 0.0);
+            rr.mis_canonical = ratio(canonical.selected_target_score, t_canonical_at_neighbor.score) / base.accepted_count;
         }
 
         let t_neighbor_at_canonical = estimate_target_score_with_occlusion(
             base.surface, base.world_pos, neighbor.light_index, neighbor.light_uv, acc_struct);
-        let nom = neighbor.target_score * neighbor_history;
-        let denom = nom + t_neighbor_at_canonical.score * canonical.history / base.accepted_count;
-        let mis_neighbor = select(0.0, nom / denom, denom > 0.0);
-        rr.mis_sample  = mis_neighbor;
+        rr.mis_sample = ratio(neighbor.target_score, t_neighbor_at_canonical.score) / base.accepted_count;
 
         src.history = neighbor_history;
         src.selected_light_index = neighbor.light_index;
         src.selected_uv = neighbor.light_uv;
         src.selected_target_score = t_neighbor_at_canonical.score;
-        src.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor;
+        src.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * rr.mis_sample;
         src.radiance = t_neighbor_at_canonical.color;
     } else {
-        rr.mis_canonical = 0.0;
+        rr.mis_canonical = 1.0;
         rr.mis_sample = 1.0;
         let radiance = evaluate_reflected_light(base.surface, neighbor.light_index, neighbor.light_uv);
         src = unpack_reservoir(neighbor, max_confidence, radiance);
@@ -487,7 +486,7 @@ fn finalize_resampling(
     }
     merge_reservoir(reservoir, canonical);
 
-    let effective_history = select((*reservoir).history, 1.0 + base.accepted_count, parameters.use_pairwise_mis != 0u);
+    let effective_history = select((*reservoir).history, 1.0, parameters.use_pairwise_mis != 0u);
     var ro = ResampleOutput();
     ro.reservoir = pack_reservoir_detail(*reservoir, effective_history);
 
@@ -524,17 +523,15 @@ fn resample_temporal(
     let prev_world_pos = prev_camera.position + tr.surface.depth * prev_dir;
     let other = PixelCache(tr.surface, tr.reservoir, prev_world_pos);
     let rr = resample(&reservoir, &color_and_weight, base, other, prev_acc_struct, parameters.temporal_tap_confidence);
-    let mis_canonical = 1.0 + rr.mis_canonical;
 
     if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_TemporalMatch) {
         textureStore(out_debug, cur_pixel, vec4<f32>(1.0));
     }
     if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_TemporalMisCanonical) {
-        let mis = mis_canonical / (1.0 + base.accepted_count);
-        textureStore(out_debug, cur_pixel, vec4<f32>(mis));
+        textureStore(out_debug, cur_pixel, vec4<f32>(rr.mis_canonical));
     }
 
-    return finalize_resampling(&reservoir, &color_and_weight, base, mis_canonical);
+    return finalize_resampling(&reservoir, &color_and_weight, base, rr.mis_canonical);
 }
 
 fn resample_spatial(
@@ -570,7 +567,7 @@ fn resample_spatial(
     var reservoir = LiveReservoir();
     var color_and_weight = vec4<f32>(0.0);
     let base = ResampleBase(surface, canonical, position, f32(accepted_count));
-    var mis_canonical = 1.0;
+    var mis_canonical = f32(accepted_count == 0u);
 
     // evaluate the MIS of each of the samples versus the canonical one.
     for (var lid = 0u; lid < accepted_count; lid += 1u) {
@@ -584,8 +581,7 @@ fn resample_spatial(
         textureStore(out_debug, cur_pixel, vec4<f32>(value));
     }
     if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_SpatialMisCanonical) {
-        let mis = mis_canonical / (1.0 + base.accepted_count);
-        textureStore(out_debug, cur_pixel, vec4<f32>(mis));
+        textureStore(out_debug, cur_pixel, vec4<f32>(mis_canonical));
     }
     return finalize_resampling(&reservoir, &color_and_weight, base, mis_canonical);
 }
