@@ -96,6 +96,8 @@ impl super::Context {
             naga_options_debug.debug_info = Some(naga::back::spv::DebugInfo {
                 source_code: &sf.shader.source,
                 file_name: &file_path,
+                //TODO: switch to WGSL once NSight Graphics recognizes it
+                language: naga::back::spv::SourceLanguage::GLSL,
             });
             &naga_options_debug
         } else {

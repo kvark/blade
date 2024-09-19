@@ -21,7 +21,10 @@ glam = { version = "0.27", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
-naga = { version = "22", features = ["wgsl-in"] }
+#TODO: switch to crates once https://github.com/gfx-rs/wgpu/pull/6256 is published
+naga = { git = "https://github.com/gfx-rs/wgpu", rev = "dfc384a7fd4ab7250a75d59c6f831d9ffb220f7e", features = [
+    "wgsl-in",
+] }
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.25", features = ["derive"] }
