@@ -12,13 +12,6 @@ const RAY_FLAG_CULL_NO_OPAQUE: u32 = 0x80u;
 
 const PI: f32 = 3.1415926;
 const MAX_RESERVOIRS: u32 = 2u;
-// See "9.1 pairwise mis for robust reservoir reuse"
-// "Correlations and Reuse for Fast and Accurate Physically Based Light Transport"
-const PAIRWISE_MIS: bool = true;
-// Base MIS for canonical samples. The constant isolates a critical difference between
-// Bitterli's pseudocode (where it's 1) and NVidia's RTXDI implementation (where it's 0).
-// With Bitterli's 1 we have MIS not respecting the prior history enough.
-const BASE_CANONICAL_MIS: f32 = 0.05;
 // See "DECOUPLING SHADING AND REUSE" in
 // "Rearchitecting Spatiotemporal Resampling for Production"
 const DECOUPLED_SHADING: bool = false;
@@ -33,6 +26,8 @@ struct MainParams {
     spatial_tap_history: u32,
     spatial_radius: i32,
     t_start: f32,
+    use_pairwise_mis: u32,
+    defensive_mis: f32,
     use_motion_vectors: u32,
 };
 
@@ -320,17 +315,8 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debu
     return brdf;
 }
 
-struct HeuristicFactors {
-    weight: f32,
-    //history: f32,
-}
-
-fn balance_heuristic(w0: f32, w1: f32, h0: f32, h1: f32) -> HeuristicFactors {
-    var hf: HeuristicFactors;
-    let balance_denom = h0 * w0 + h1 * w1;
-    hf.weight = select(h0 * w0 / balance_denom, 0.0, balance_denom <= 0.0);
-    //hf.history = select(pow(clamp(w1 / w0, 0.0, 1.0), 8.0), 1.0, w0 <= 0.0);
-    return hf;
+fn ratio(a: f32, b: f32) -> f32 {
+    return select(0.0, a / (a+b), a+b > 0.0);
 }
 
 struct RestirOutput {
@@ -381,7 +367,9 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     var accepted_reservoir_indices = array<i32, MAX_RESERVOIRS>();
     var accepted_count = 0u;
     var temporal_index = ~0u;
-    for (var tap = 0u; tap <= parameters.spatial_taps; tap += 1u) {
+    let spatial_candidates = parameters.spatial_taps + 4u;
+    let max_samples = min(MAX_RESERVOIRS, 1u + parameters.spatial_taps);
+    for (var tap = 0u; tap <= spatial_candidates && accepted_count < max_samples; tap += 1u) {
         var other_pixel = prev_pixel;
         if (tap != 0u) {
             let r0 = max(prev_pixel - vec2<i32>(parameters.spatial_radius), vec2<i32>(0));
@@ -411,23 +399,23 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
             temporal_index = accepted_count;
         }
         accepted_reservoir_indices[accepted_count] = other_index;
-        if (accepted_count < MAX_RESERVOIRS) {
-            accepted_count += 1u;
-        }
+        accepted_count += 1u;
     }
 
     // Next, evaluate the MIS of each of the samples versus the canonical one.
     var reservoir = LiveReservoir();
-    var shaded_color = vec3<f32>(0.0);
-    var mis_canonical = BASE_CANONICAL_MIS;
     var color_and_weight = vec4<f32>(0.0);
+    let mis_scale = 1.0 / (f32(accepted_count) + parameters.defensive_mis);
+    var mis_canonical = select(mis_scale * parameters.defensive_mis, 1.0, accepted_count == 0u || parameters.use_pairwise_mis == 0u);
+    let inv_count = 1.0 / f32(accepted_count);
+
     for (var rid = 0u; rid < accepted_count; rid += 1u) {
         let neighbor_index = accepted_reservoir_indices[rid];
         let neighbor = prev_reservoirs[neighbor_index];
 
         let max_history = select(parameters.spatial_tap_history, parameters.temporal_history, rid == temporal_index);
         var other: LiveReservoir;
-        if (PAIRWISE_MIS) {
+        if (parameters.use_pairwise_mis != 0u) {
             let neighbor_pixel = get_pixel_from_reservoir_index(neighbor_index, prev_camera);
             let neighbor_history = min(neighbor.confidence, f32(max_history));
             {   // scoping this to hint the register allocation
@@ -437,30 +425,20 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
 
                 let t_canonical_at_neighbor = estimate_target_score_with_occlusion(
                     neighbor_surface, neighbor_position, canonical.selected_light_index, canonical.selected_uv, prev_acc_struct, debug_len);
-                let mis_sub_canonical = balance_heuristic(
-                    t_canonical_at_neighbor.score, canonical.selected_target_score,
-                    neighbor_history * f32(accepted_count), canonical.history);
-                mis_canonical += 1.0 - mis_sub_canonical.weight;
+                let r_canonical = ratio(canonical.history * canonical.selected_target_score * inv_count, neighbor_history * t_canonical_at_neighbor.score);
+                mis_canonical += mis_scale * r_canonical;
             }
 
-            // Notes about t_neighbor_at_neighbor:
-            // 1. we assume lights aren't moving. Technically we should check if the
-            //   target light has moved, and re-evaluate the occlusion.
-            // 2. we can use the cached target score, and there is no use of the target color
-            //let t_neighbor_at_neighbor = estimate_target_pdf(neighbor_surface, neighbor_position, neighbor.selected_dir);
             let t_neighbor_at_canonical = estimate_target_score_with_occlusion(
                 surface, position, neighbor.light_index, neighbor.light_uv, acc_struct, debug_len);
-            let mis_neighbor = balance_heuristic(
-                neighbor.target_score, t_neighbor_at_canonical.score,
-                neighbor_history * f32(accepted_count), canonical.history);
+            let r_neighbor = ratio(neighbor_history * neighbor.target_score, canonical.history * t_neighbor_at_canonical.score * inv_count);
+            let mis_neighbor = mis_scale * r_neighbor;
 
             other.history = neighbor_history;
             other.selected_light_index = neighbor.light_index;
             other.selected_uv = neighbor.light_uv;
             other.selected_target_score = t_neighbor_at_canonical.score;
-            other.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor.weight;
-            //Note: should be needed according to the paper
-            // other.history *= min(mis_neighbor.history, mis_sub_canonical.history);
+            other.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor;
             other.radiance = t_neighbor_at_canonical.color;
         } else {
             other = unpack_reservoir(neighbor, max_history);
@@ -478,17 +456,16 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     }
 
     // Finally, merge in the canonical sample
-    if (PAIRWISE_MIS) {
+    if (parameters.use_pairwise_mis != 0) {
         canonical.weight_sum *= mis_canonical / canonical.history;
     }
     if (DECOUPLED_SHADING) {
-        //FIXME: issue with near zero denominator. Do we need do use BASE_CANONICAL_MIS?
-        let cw = canonical.weight_sum / max(canonical.selected_target_score * mis_canonical, 0.1);
+        let cw = canonical.weight_sum / max(canonical.selected_target_score, 0.1);
         color_and_weight += canonical.weight_sum * vec4<f32>(cw * canonical.radiance, 1.0);
     }
     merge_reservoir(&reservoir, canonical, random_gen(rng));
 
-    let effective_history = select(reservoir.history, BASE_CANONICAL_MIS + f32(accepted_count), PAIRWISE_MIS);
+    let effective_history = select(reservoir.history, 1.0, parameters.use_pairwise_mis != 0);
     let stored = pack_reservoir_detail(reservoir, effective_history);
     reservoirs[pixel_index] = stored;
     var ro = RestirOutput();

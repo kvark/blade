@@ -95,6 +95,12 @@ pub struct RayConfig {
     pub spatial_tap_history: u32,
     pub spatial_radius: u32,
     pub t_start: f32,
+    /// Evaluate MIS factor for ReSTIR in a pair-wise fashion.
+    /// Adds 2 extra visibility rays per reused sample.
+    pub pairwise_mis: bool,
+    /// Defensive MIS factor for the canonical sample.
+    /// Can be between 0 and 1.
+    pub defensive_mis: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
@@ -365,6 +371,8 @@ struct MainParams {
     spatial_tap_history: u32,
     spatial_radius: u32,
     t_start: f32,
+    use_pairwise_mis: u32,
+    defensive_mis: f32,
     use_motion_vectors: u32,
 }
 
@@ -1165,6 +1173,8 @@ impl Renderer {
                         spatial_tap_history: ray_config.spatial_tap_history,
                         spatial_radius: ray_config.spatial_radius,
                         t_start: ray_config.t_start,
+                        use_pairwise_mis: ray_config.pairwise_mis as u32,
+                        defensive_mis: ray_config.defensive_mis,
                         use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
                     },
                     acc_struct: self.acceleration_structure,
