@@ -263,9 +263,11 @@ impl Example {
                 temporal_tap: true,
                 temporal_history: 10,
                 spatial_taps: 1,
-                spatial_tap_history: 5,
+                spatial_tap_history: 10,
                 spatial_radius: 10,
                 t_start: 0.1,
+                pairwise_mis: true,
+                defensive_mis: 0.0,
             },
             denoiser_enabled: true,
             denoiser_config: blade_render::DenoiserConfig {
