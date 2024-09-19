@@ -14,7 +14,7 @@ const PI: f32 = 3.1415926;
 const MAX_RESERVOIRS: u32 = 2u;
 // See "DECOUPLING SHADING AND REUSE" in
 // "Rearchitecting Spatiotemporal Resampling for Production"
-const DECOUPLED_SHADING: bool = false;
+const DECOUPLED_SHADING: bool = true;
 
 struct MainParams {
     frame_index: u32,
@@ -324,7 +324,7 @@ struct RestirOutput {
 }
 
 fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, enable_debug: bool) -> RestirOutput {
-    if (debug.view_mode == DebugMode_Depth) {
+    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Depth) {
         textureStore(out_debug, pixel, vec4<f32>(surface.depth / camera.depth));
     }
     let ray_dir = get_ray_direction(camera, pixel);
@@ -338,7 +338,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
     let position = camera.position + surface.depth * ray_dir;
     let normal = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
-    if (debug.view_mode == DebugMode_Normal) {
+    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Normal) {
         textureStore(out_debug, pixel, vec4<f32>(normal, 0.0));
     }
 

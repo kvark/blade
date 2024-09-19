@@ -170,7 +170,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             albedo = (base_color_factor * base_color_sample).xyz;
         }
 
-        if (debug.view_mode == DebugMode_HitConsistency) {
+        if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_HitConsistency) {
             let reprojected = get_projected_pixel(camera, hit_position);
             let barycentrics_pos_diff = (intersection.object_to_world * position_object).xyz - hit_position;
             let camera_projection_diff = vec2<f32>(global_id.xy) - vec2<f32>(reprojected);
@@ -183,14 +183,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         //TODO: consider just storing integers here?
         //TODO: technically this "0.5" is just a waste compute on both packing and unpacking
         motion = prev_screen - vec2<f32>(global_id.xy) - 0.5;
-        if (debug.view_mode == DebugMode_Motion) {
+        if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Motion) {
             textureStore(out_debug, global_id.xy, vec4<f32>(motion * MOTION_SCALE + vec2<f32>(0.5), 0.0, 1.0));
         }
     } else {
         if (enable_debug) {
             debug_buf.entry = DebugEntry();
         }
-        if (debug.view_mode != DebugMode_Final) {
+        if (WRITE_DEBUG_IMAGE && debug.view_mode != DebugMode_Final) {
             textureStore(out_debug, global_id.xy, vec4<f32>(0.0));
         }
     }
