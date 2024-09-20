@@ -30,7 +30,7 @@ fn postfx_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
 
 @fragment
 fn postfx_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
-    let tc = vec2<i32>(i32(vo.clip_pos.x), i32(vo.input_size.y) - i32(vo.clip_pos.y) - 1);
+    let tc = vec2<i32>(i32(vo.clip_pos.x), i32(vo.clip_pos.y));
     let illumunation = textureLoad(light_diffuse, tc, 0);
     if (debug_params.view_mode == DebugMode_Final) {
         let albedo = textureLoad(t_albedo, tc, 0).xyz;
