@@ -16,6 +16,13 @@ const MAX_RESERVOIRS: u32 = 2u;
 // "Rearchitecting Spatiotemporal Resampling for Production"
 const DECOUPLED_SHADING: bool = true;
 
+// We are considering 2x2 grid, so must be <= 4
+const FACTOR_TEMPORAL_CANDIDATES: u32 = 1u;
+// How many more candidates to consder than the taps we need
+const FACTOR_SPATIAL_CANDIDATES: u32 = 3u;
+// Has to be at least discarding the 2x2 block
+const MIN_SPATIAL_REUSE_DISTANCE: i32 = 7;
+
 struct MainParams {
     frame_index: u32,
     num_environment_samples: u32,
@@ -324,9 +331,6 @@ struct RestirOutput {
 }
 
 fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, enable_debug: bool) -> RestirOutput {
-    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Depth) {
-        textureStore(out_debug, pixel, vec4<f32>(surface.depth / camera.depth));
-    }
     let ray_dir = get_ray_direction(camera, pixel);
     let pixel_index = get_reservoir_index(pixel, camera);
     if (surface.depth == 0.0) {
@@ -335,6 +339,9 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         return RestirOutput(env);
     }
 
+    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Depth) {
+        textureStore(out_debug, pixel, vec4<f32>(1.0 / surface.depth));
+    }
     let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
     let position = camera.position + surface.depth * ray_dir;
     let normal = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
@@ -360,24 +367,36 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         }
     }
 
-    //TODO: find best match in a 2x2 grid
-    let prev_pixel = vec2<i32>(get_prev_pixel(pixel, position));
+    let center_coord = get_prev_pixel(pixel, position);
+    let center_pixel = vec2<i32>(center_coord);
+    // Trick to start with closer pixels: we derive the "further"
+    // pixel in 2x2 grid by considering the sum.
+    let further_pixel = vec2<i32>(center_coord - 0.5) + vec2<i32>(center_coord + 0.5) - center_pixel;
 
     // First, gather the list of reservoirs to merge with
     var accepted_reservoir_indices = array<i32, MAX_RESERVOIRS>();
     var accepted_count = 0u;
     var temporal_index = ~0u;
-    let spatial_candidates = parameters.spatial_taps + 4u;
+    let num_temporal_candidates = parameters.temporal_tap * FACTOR_TEMPORAL_CANDIDATES;
+    let num_candidates = num_temporal_candidates + parameters.spatial_taps * FACTOR_SPATIAL_CANDIDATES;
     let max_samples = min(MAX_RESERVOIRS, 1u + parameters.spatial_taps);
-    for (var tap = 0u; tap <= spatial_candidates && accepted_count < max_samples; tap += 1u) {
-        var other_pixel = prev_pixel;
-        if (tap != 0u) {
-            let r0 = max(prev_pixel - vec2<i32>(parameters.spatial_radius), vec2<i32>(0));
-            let r1 = min(prev_pixel + vec2<i32>(parameters.spatial_radius + 1), vec2<i32>(prev_camera.target_size));
+
+    for (var tap = 0u; tap <= num_candidates && accepted_count < max_samples; tap += 1u) {
+        var other_pixel = center_pixel;
+        if (tap < num_temporal_candidates) {
+            if (temporal_index < tap) {
+                continue;
+            }
+            let mask = vec2<u32>(tap) & vec2<u32>(1u, 2u);
+            other_pixel = select(center_pixel, further_pixel, mask != vec2<u32>(0u));
+        } else {
+            let r0 = max(center_pixel - vec2<i32>(parameters.spatial_radius), vec2<i32>(0));
+            let r1 = min(center_pixel + vec2<i32>(parameters.spatial_radius + 1), vec2<i32>(prev_camera.target_size));
             other_pixel = vec2<i32>(mix(vec2<f32>(r0), vec2<f32>(r1), vec2<f32>(random_gen(rng), random_gen(rng))));
-        } else if (parameters.temporal_tap == 0u)
-        {
-            continue;
+            let diff = other_pixel - center_pixel;
+            if (dot(diff, diff) < MIN_SPATIAL_REUSE_DISTANCE) {
+                continue;
+            }
         }
 
         let other_index = get_reservoir_index(other_pixel, prev_camera);
@@ -395,11 +414,19 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
             continue;
         }
 
-        if (tap == 0u) {
+        if (tap < num_temporal_candidates) {
             temporal_index = accepted_count;
         }
         accepted_reservoir_indices[accepted_count] = other_index;
         accepted_count += 1u;
+    }
+
+    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_SampleReuse) {
+        var color = vec4<f32>(0.0);
+        for (var i = 0u; i < min(3u, accepted_count); i += 1u) {
+            color[i] = 1.0;
+        }
+        textureStore(out_debug, pixel, color);
     }
 
     // Next, evaluate the MIS of each of the samples versus the canonical one.

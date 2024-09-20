@@ -68,6 +68,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (any(global_id.xy >= camera.target_size)) {
         return;
     }
+    if (WRITE_DEBUG_IMAGE && debug.view_mode != DebugMode_Final) {
+        textureStore(out_debug, global_id.xy, vec4<f32>(0.0));
+    }
 
     var rq: ray_query;
     let ray_dir = get_ray_direction(camera, vec2<i32>(global_id.xy));
@@ -189,9 +192,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     } else {
         if (enable_debug) {
             debug_buf.entry = DebugEntry();
-        }
-        if (WRITE_DEBUG_IMAGE && debug.view_mode != DebugMode_Final) {
-            textureStore(out_debug, global_id.xy, vec4<f32>(0.0));
         }
     }
 

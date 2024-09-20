@@ -51,7 +51,8 @@ pub enum DebugMode {
     Normal = 2,
     Motion = 3,
     HitConsistency = 4,
-    Variance = 5,
+    SampleReuse = 5,
+    Variance = 10,
 }
 
 impl Default for DebugMode {
@@ -236,7 +237,7 @@ impl RestirTargets {
         Self {
             reservoir_buf,
             debug: RenderTarget::new(
-                "deubg",
+                "debug",
                 blade_graphics::TextureFormat::Rgba8Unorm,
                 size,
                 encoder,
