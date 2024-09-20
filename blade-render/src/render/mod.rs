@@ -334,6 +334,7 @@ pub struct Renderer {
     surface_info: blade_graphics::SurfaceInfo,
     frame_index: usize,
     frame_scene_built: usize,
+    is_frozen: bool,
     //TODO: refactor `ResourceArray` to not carry the freelist logic
     // This way we can embed user info into the allocator.
     texture_resource_lookup:
@@ -598,9 +599,9 @@ impl ShaderPipelines {
                 topology: blade_graphics::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
             },
-            vertex: shader.at("blit_vs"),
+            vertex: shader.at("postfx_vs"),
             vertex_fetches: &[],
-            fragment: shader.at("blit_fs"),
+            fragment: shader.at("postfx_fs"),
             color_targets: &[info.format.into()],
             depth_stencil: None,
         })
@@ -728,6 +729,7 @@ impl Renderer {
             surface_info: config.surface_info,
             frame_index: 0,
             frame_scene_built: 0,
+            is_frozen: false,
             texture_resource_lookup: HashMap::default(),
         }
     }
@@ -1110,6 +1112,7 @@ impl Renderer {
         if !config.frozen {
             self.frame_index += 1;
         }
+        self.is_frozen = config.frozen;
         self.targets.camera_params[self.frame_index % 2] = self.make_camera_params(camera);
         self.post_proc_input_index = self.frame_index % 2;
     }
@@ -1126,6 +1129,7 @@ impl Renderer {
     ) {
         let debug = self.make_debug_params(&debug_config);
         let (cur, prev) = self.work_indices();
+        assert_eq!(cur, self.post_proc_input_index);
 
         if let mut pass = command_encoder.compute() {
             let mut pc = pass.with(&self.fill_pipeline);
@@ -1176,7 +1180,7 @@ impl Renderer {
                         t_start: ray_config.t_start,
                         use_pairwise_mis: ray_config.pairwise_mis as u32,
                         defensive_mis: ray_config.defensive_mis,
-                        use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
+                        use_motion_vectors: (self.frame_scene_built >= self.frame_index) as u32,
                     },
                     acc_struct: self.acceleration_structure,
                     prev_acc_struct: if self.frame_scene_built < self.frame_index
@@ -1220,7 +1224,7 @@ impl Renderer {
             extent: [self.surface_size.width, self.surface_size.height],
             temporal_weight: denoiser_config.temporal_weight,
             iteration: 0,
-            use_motion_vectors: (self.frame_scene_built == self.frame_index) as u32,
+            use_motion_vectors: (self.frame_scene_built >= self.frame_index) as u32,
             pad: 0,
         };
         let (cur, prev) = self.work_indices();
@@ -1254,7 +1258,8 @@ impl Renderer {
             self.targets.light_diffuse.views.swap(cur, temp);
         }
 
-        let mut ping_pong = [temp, prev];
+        assert_eq!(cur, self.post_proc_input_index);
+        let mut ping_pong = [temp, if self.is_frozen { cur } else { prev }];
         for _ in 0..denoiser_config.num_passes {
             let mut pass = command_encoder.compute();
             let mut pc = pass.with(&self.blur.atrous_pipeline);
