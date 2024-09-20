@@ -21,7 +21,7 @@ struct VertexOutput {
 }
 
 @vertex
-fn blit_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
+fn postfx_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
     var vo: VertexOutput;
     vo.clip_pos = vec4<f32>(f32(vi & 1u) * 4.0 - 1.0, f32(vi & 2u) * 2.0 - 1.0, 0.0, 1.0);
     vo.input_size = textureDimensions(light_diffuse, 0);
@@ -29,7 +29,7 @@ fn blit_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
 }
 
 @fragment
-fn blit_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
+fn postfx_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
     let tc = vec2<i32>(i32(vo.clip_pos.x), i32(vo.input_size.y) - i32(vo.clip_pos.y) - 1);
     let illumunation = textureLoad(light_diffuse, tc, 0);
     if (debug_params.view_mode == DebugMode_Final) {

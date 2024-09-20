@@ -607,14 +607,16 @@ impl Engine {
             }
 
             // Rebuilding every frame
-            self.renderer.build_scene(
-                command_encoder,
-                &self.render_objects,
-                self.environment_map,
-                &self.asset_hub,
-                &self.gpu_context,
-                temp,
-            );
+            if !self.frame_config.frozen {
+                self.renderer.build_scene(
+                    command_encoder,
+                    &self.render_objects,
+                    self.environment_map,
+                    &self.asset_hub,
+                    &self.gpu_context,
+                    temp,
+                );
+            }
 
             self.renderer.prepare(
                 command_encoder,
