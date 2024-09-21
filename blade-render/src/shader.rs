@@ -19,17 +19,20 @@ pub struct Shader {
     pub raw: Result<blade_graphics::Shader, &'static str>,
 }
 
-pub struct Expansion(HashMap<String, u32>);
+pub enum Expansion {
+    Values(HashMap<String, u32>),
+    Bool(bool),
+}
 impl Expansion {
     pub fn from_enum<E: strum::IntoEnumIterator + fmt::Debug + Into<u32>>() -> Self {
-        Self(
+        Self::Values(
             E::iter()
                 .map(|variant| (format!("{variant:?}"), variant.into()))
                 .collect(),
         )
     }
     pub fn from_bitflags<F: bitflags::Flags<Bits = u32>>() -> Self {
-        Self(
+        Self::Values(
             F::FLAGS
                 .iter()
                 .map(|flag| (flag.name().to_string(), flag.value().bits()))
@@ -64,6 +67,11 @@ impl Baker {
     pub fn register_bitflags<F: bitflags::Flags<Bits = u32>>(&mut self) {
         self.register::<F>(Expansion::from_bitflags::<F>());
     }
+
+    pub fn register_bool(&mut self, name: &str, value: bool) {
+        self.expansions
+            .insert(name.to_string(), Expansion::Bool(value));
+    }
 }
 
 fn parse_impl(
@@ -93,8 +101,16 @@ fn parse_impl(
             );
         } else if line.starts_with("#use") {
             let type_name = line.split_whitespace().last().unwrap();
-            for (key, value) in expansions[type_name].0.iter() {
-                writeln!(text_out, "const {}_{}: u32 = {}u;", type_name, key, value).unwrap();
+            match expansions[type_name] {
+                Expansion::Values(ref map) => {
+                    for (key, value) in map.iter() {
+                        writeln!(text_out, "const {}_{}: u32 = {}u;", type_name, key, value)
+                            .unwrap();
+                    }
+                }
+                Expansion::Bool(value) => {
+                    writeln!(text_out, "const {}: bool = {};", type_name, value).unwrap();
+                }
             }
         } else {
             *text_out += line;
