@@ -514,7 +514,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var rng = random_init(global_index, parameters.frame_index);
 
     let surface = read_surface(vec2<i32>(global_id.xy));
-    let enable_debug = all(global_id.xy == debug.mouse_pos);
+    let enable_debug = DEBUG_MODE && all(global_id.xy == debug.mouse_pos);
     let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
     let ro = compute_restir(surface, vec2<i32>(global_id.xy), &rng, enable_restir_debug);
     let color = ro.radiance;
