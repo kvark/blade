@@ -1044,10 +1044,7 @@ impl Renderer {
             draw_flags: config.draw_flags.bits(),
             texture_flags: config.texture_flags.bits(),
             unused: 0,
-            mouse_pos: match config.mouse_pos {
-                Some(p) => [p[0], self.surface_size.height as i32 - p[1]],
-                None => [-1; 2],
-            },
+            mouse_pos: config.mouse_pos.unwrap_or([-1; 2]),
         }
     }
 
