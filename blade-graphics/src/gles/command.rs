@@ -91,7 +91,7 @@ impl super::CommandEncoder {
         self.has_present = true;
     }
 
-    pub fn transfer(&mut self) -> super::PassEncoder<()> {
+    pub fn transfer(&mut self, _label: &str) -> super::PassEncoder<()> {
         super::PassEncoder {
             commands: &mut self.commands,
             plain_data: &mut self.plain_data,
@@ -102,11 +102,11 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn acceleration_structure(&mut self) -> super::PassEncoder<()> {
+    pub fn acceleration_structure(&mut self, _label: &str) -> super::PassEncoder<()> {
         unimplemented!()
     }
 
-    pub fn compute(&mut self) -> super::PassEncoder<super::ComputePipeline> {
+    pub fn compute(&mut self, _label: &str) -> super::PassEncoder<super::ComputePipeline> {
         super::PassEncoder {
             commands: &mut self.commands,
             plain_data: &mut self.plain_data,
@@ -119,6 +119,7 @@ impl super::CommandEncoder {
 
     pub fn render(
         &mut self,
+        _label: &str,
         targets: crate::RenderTargetSet,
     ) -> super::PassEncoder<super::RenderPipeline> {
         let mut target_size = [0u16; 2];

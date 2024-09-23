@@ -904,7 +904,7 @@ impl Renderer {
         });
         temp.buffers.push(hit_staging);
         {
-            let mut transfers = command_encoder.transfer();
+            let mut transfers = command_encoder.transfer("build-scene");
             transfers.copy_buffer_to_buffer(hit_staging.at(0), self.hit_buffer.at(0), hit_size);
         }
 
@@ -1024,7 +1024,7 @@ impl Renderer {
             memory: blade_graphics::Memory::Device,
         });
 
-        let mut tlas_encoder = command_encoder.acceleration_structure();
+        let mut tlas_encoder = command_encoder.acceleration_structure("TLAS");
         tlas_encoder.build_top_level(
             self.acceleration_structure,
             &blases,
@@ -1076,7 +1076,7 @@ impl Renderer {
         camera: &crate::Camera,
         config: FrameConfig,
     ) {
-        let mut transfer = command_encoder.transfer();
+        let mut transfer = command_encoder.transfer("prepare");
 
         if config.debug_draw {
             self.debug.reset_lines(&mut transfer);
@@ -1128,7 +1128,7 @@ impl Renderer {
         let (cur, prev) = self.work_indices();
         assert_eq!(cur, self.post_proc_input_index);
 
-        if let mut pass = command_encoder.compute() {
+        if let mut pass = command_encoder.compute("fill-gbuf") {
             let mut pc = pass.with(&self.fill_pipeline);
             let groups = self.fill_pipeline.get_dispatch_for(self.surface_size);
             pc.bind(
@@ -1155,7 +1155,7 @@ impl Renderer {
             pc.dispatch(groups);
         }
 
-        if let mut pass = command_encoder.compute() {
+        if let mut pass = command_encoder.compute("ray-trace") {
             let mut pc = pass.with(&self.main_pipeline);
             let groups = self.main_pipeline.get_dispatch_for(self.surface_size);
             pc.bind(
@@ -1228,7 +1228,7 @@ impl Renderer {
         let temp = 2;
 
         if denoiser_config.temporal_weight < 1.0 {
-            let mut pass = command_encoder.compute();
+            let mut pass = command_encoder.compute("temporal-accum");
             let mut pc = pass.with(&self.blur.temporal_accum_pipeline);
             let groups = self
                 .blur
@@ -1258,7 +1258,7 @@ impl Renderer {
         assert_eq!(cur, self.post_proc_input_index);
         let mut ping_pong = [temp, if self.is_frozen { cur } else { prev }];
         for _ in 0..denoiser_config.num_passes {
-            let mut pass = command_encoder.compute();
+            let mut pass = command_encoder.compute("a-trous");
             let mut pc = pass.with(&self.blur.a_trous_pipeline);
             let groups = self
                 .blur

@@ -210,11 +210,11 @@ impl Example {
         });
         command_encoder.start();
         command_encoder.init_texture(target);
-        if let mut pass = command_encoder.acceleration_structure() {
+        if let mut pass = command_encoder.acceleration_structure("BLAS") {
             pass.build_bottom_level(blas, &meshes, scratch_buffer.at(0));
         }
         //Note: separate pass in order to enforce synchronization
-        if let mut pass = command_encoder.acceleration_structure() {
+        if let mut pass = command_encoder.acceleration_structure("TLAS") {
             pass.build_top_level(
                 tlas,
                 &[blas],
@@ -264,7 +264,7 @@ impl Example {
     fn render(&mut self) {
         self.command_encoder.start();
 
-        if let mut pass = self.command_encoder.compute() {
+        if let mut pass = self.command_encoder.compute("ray-trace") {
             let groups = self.rt_pipeline.get_dispatch_for(self.screen_size);
             if let mut pc = pass.with(&self.rt_pipeline) {
                 let fov_y = 0.3;
@@ -293,14 +293,17 @@ impl Example {
         let frame = self.context.acquire_frame();
         self.command_encoder.init_texture(frame.texture());
 
-        if let mut pass = self.command_encoder.render(gpu::RenderTargetSet {
-            colors: &[gpu::RenderTarget {
-                view: frame.texture_view(),
-                init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
-                finish_op: gpu::FinishOp::Store,
-            }],
-            depth_stencil: None,
-        }) {
+        if let mut pass = self.command_encoder.render(
+            "draw",
+            gpu::RenderTargetSet {
+                colors: &[gpu::RenderTarget {
+                    view: frame.texture_view(),
+                    init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
+                    finish_op: gpu::FinishOp::Store,
+                }],
+                depth_stencil: None,
+            },
+        ) {
             if let mut pc = pass.with(&self.draw_pipeline) {
                 pc.bind(
                     0,

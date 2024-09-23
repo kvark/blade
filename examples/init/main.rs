@@ -92,14 +92,17 @@ impl EnvMapSampler {
         env_weights: gpu::TextureView,
     ) {
         command_encoder.init_texture(self.accum_texture);
-        let mut pass = command_encoder.render(gpu::RenderTargetSet {
-            colors: &[gpu::RenderTarget {
-                view: self.accum_view,
-                init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
-                finish_op: gpu::FinishOp::Store,
-            }],
-            depth_stencil: None,
-        });
+        let mut pass = command_encoder.render(
+            "accumulate",
+            gpu::RenderTargetSet {
+                colors: &[gpu::RenderTarget {
+                    view: self.accum_view,
+                    init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
+                    finish_op: gpu::FinishOp::Store,
+                }],
+                depth_stencil: None,
+            },
+        );
         if let mut encoder = pass.with(&self.init_pipeline) {
             encoder.bind(
                 0,

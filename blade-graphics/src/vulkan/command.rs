@@ -330,27 +330,30 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn transfer(&mut self) -> super::TransferCommandEncoder {
+    pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder {
         self.barrier();
-        self.mark("pass/transfer");
+        self.mark(label);
         super::TransferCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
         }
     }
 
-    pub fn acceleration_structure(&mut self) -> super::AccelerationStructureCommandEncoder {
+    pub fn acceleration_structure(
+        &mut self,
+        label: &str,
+    ) -> super::AccelerationStructureCommandEncoder {
         self.barrier();
-        self.mark("pass/acc-struct");
+        self.mark(label);
         super::AccelerationStructureCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
         }
     }
 
-    pub fn compute(&mut self) -> super::ComputeCommandEncoder {
+    pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder {
         self.barrier();
-        self.mark("pass/compute");
+        self.mark(label);
         super::ComputeCommandEncoder {
             cmd_buf: self.buffers.first_mut().unwrap(),
             device: &self.device,
@@ -358,9 +361,13 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn render(&mut self, targets: crate::RenderTargetSet) -> super::RenderCommandEncoder {
+    pub fn render(
+        &mut self,
+        label: &str,
+        targets: crate::RenderTargetSet,
+    ) -> super::RenderCommandEncoder {
         self.barrier();
-        self.mark("pass/render");
+        self.mark(label);
 
         let mut target_size = [0u16; 2];
         let mut color_attachments = Vec::with_capacity(targets.colors.len());

@@ -89,14 +89,17 @@ impl Example {
 
         self.particle_system.update(&mut self.command_encoder);
 
-        if let mut pass = self.command_encoder.render(gpu::RenderTargetSet {
-            colors: &[gpu::RenderTarget {
-                view: frame.texture_view(),
-                init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
-                finish_op: gpu::FinishOp::Store,
-            }],
-            depth_stencil: None,
-        }) {
+        if let mut pass = self.command_encoder.render(
+            "draw",
+            gpu::RenderTargetSet {
+                colors: &[gpu::RenderTarget {
+                    view: frame.texture_view(),
+                    init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
+                    finish_op: gpu::FinishOp::Store,
+                }],
+                depth_stencil: None,
+            },
+        ) {
             self.particle_system.draw(&mut pass);
             self.gui_painter
                 .paint(&mut pass, gui_primitives, screen_desc, &self.context);
