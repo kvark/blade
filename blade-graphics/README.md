@@ -42,7 +42,7 @@ All of these required extensions are supported in software by the driver on any 
 
 GLES is also supported at a basic level. It's enabled for `wasm32-unknown-unknown` target, and can also be force-enabled on native:
 ```bash
-RUSTFLAGS="--cfg gles" CARGO_TARGET_DIR=./target-gl cargo test
+RUSTFLAGS="--cfg gles" CARGO_TARGET_DIR=./target-gl cargo run --example bunnymark
 ```
 
 This path can be activated on all platforms via Angle library.

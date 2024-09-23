@@ -106,12 +106,13 @@ impl super::CommandEncoder {
         self.raw.as_mut().unwrap().present_drawable(&frame.drawable);
     }
 
-    pub fn transfer(&mut self) -> super::TransferCommandEncoder {
+    pub fn transfer(&mut self, _label: &str) -> super::TransferCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
+            let descriptor = metal::BlitPassDescriptor::new();
             self.raw
                 .as_mut()
                 .unwrap()
-                .new_blit_command_encoder()
+                .blit_command_encoder_with_descriptor(&descriptor)
                 .to_owned()
         });
         super::TransferCommandEncoder {
@@ -120,7 +121,10 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn acceleration_structure(&mut self) -> super::AccelerationStructureCommandEncoder {
+    pub fn acceleration_structure(
+        &mut self,
+        _label: &str,
+    ) -> super::AccelerationStructureCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
             self.raw
                 .as_mut()
@@ -134,12 +138,13 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn compute(&mut self) -> super::ComputeCommandEncoder {
+    pub fn compute(&mut self, _label: &str) -> super::ComputeCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
+            let descriptor = metal::ComputePassDescriptor::new();
             self.raw
                 .as_mut()
                 .unwrap()
-                .new_compute_command_encoder()
+                .compute_command_encoder_with_descriptor(&descriptor)
                 .to_owned()
         });
         super::ComputeCommandEncoder {
@@ -148,7 +153,11 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn render(&mut self, targets: crate::RenderTargetSet) -> super::RenderCommandEncoder {
+    pub fn render(
+        &mut self,
+        _label: &str,
+        targets: crate::RenderTargetSet,
+    ) -> super::RenderCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
             let descriptor = metal::RenderPassDescriptor::new();
 

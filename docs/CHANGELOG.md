@@ -4,6 +4,7 @@ Changelog for Blade
 
 - graphics:
   - API for destruction of pipelines
+  - every pass now takes a label
   - Metal:
     - support for workgroup memory
 

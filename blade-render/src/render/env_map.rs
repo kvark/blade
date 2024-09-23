@@ -144,7 +144,7 @@ impl EnvironmentMap {
             let groups = self
                 .prepare_pipeline
                 .get_dispatch_for(weight_extent.at_mip_level(target_level));
-            let mut compute = encoder.compute();
+            let mut compute = encoder.compute("pre-process env map");
             let mut pass = compute.with(&self.prepare_pipeline);
             pass.bind(
                 0,

@@ -200,7 +200,7 @@ impl Example {
         });
         command_encoder.start();
         command_encoder.init_texture(texture);
-        if let mut transfer = command_encoder.transfer() {
+        if let mut transfer = command_encoder.transfer("init texture") {
             transfer.copy_buffer_to_texture(upload_buffer.into(), 4, texture.into(), extent);
         }
         let sync_point = context.submit(&mut command_encoder);
@@ -278,14 +278,17 @@ impl Example {
         self.command_encoder.start();
         self.command_encoder.init_texture(frame.texture());
 
-        if let mut pass = self.command_encoder.render(gpu::RenderTargetSet {
-            colors: &[gpu::RenderTarget {
-                view: frame.texture_view(),
-                init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
-                finish_op: gpu::FinishOp::Store,
-            }],
-            depth_stencil: None,
-        }) {
+        if let mut pass = self.command_encoder.render(
+            "main",
+            gpu::RenderTargetSet {
+                colors: &[gpu::RenderTarget {
+                    view: frame.texture_view(),
+                    init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
+                    finish_op: gpu::FinishOp::Store,
+                }],
+                depth_stencil: None,
+            },
+        ) {
             let mut rc = pass.with(&self.pipeline);
             rc.bind(
                 0,

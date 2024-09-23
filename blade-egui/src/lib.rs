@@ -265,7 +265,7 @@ impl GuiPainter {
             copies.push((src, dst, extent));
         }
 
-        if let mut transfer = command_encoder.transfer() {
+        if let mut transfer = command_encoder.transfer("update egui textures") {
             for (src, dst, extent) in copies {
                 transfer.copy_buffer_to_texture(src, 4 * extent.width, dst, extent);
             }

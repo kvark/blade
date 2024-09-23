@@ -111,7 +111,7 @@ fn main() {
     command_encoder.start();
     command_encoder.init_texture(texture);
 
-    if let mut transfer = command_encoder.transfer() {
+    if let mut transfer = command_encoder.transfer("gen-mips") {
         transfer.copy_buffer_to_texture(
             upload_buffer.into(),
             extent.width * 4,
@@ -120,7 +120,7 @@ fn main() {
         );
     }
     for i in 1..mip_level_count {
-        if let mut compute = command_encoder.compute() {
+        if let mut compute = command_encoder.compute("generate mips") {
             if let mut pc = compute.with(&pipeline) {
                 let groups = pipeline.get_dispatch_for(extent.at_mip_level(i));
                 pc.bind(
@@ -139,7 +139,7 @@ fn main() {
             }
         }
     }
-    if let mut tranfer = command_encoder.transfer() {
+    if let mut tranfer = command_encoder.transfer("init 1x2 texture") {
         tranfer.copy_texture_to_buffer(
             gpu::TexturePiece {
                 texture,

@@ -81,7 +81,7 @@ impl Baker {
             encoder.init_texture(init.dst);
         }
         if !pending_ops.transfers.is_empty() {
-            let mut pass = encoder.transfer();
+            let mut pass = encoder.transfer("init textures");
             for transfer in pending_ops.transfers.drain(..) {
                 let dst = blade_graphics::TexturePiece {
                     texture: transfer.dst,

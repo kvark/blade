@@ -79,7 +79,7 @@ impl DummyResources {
         command_encoder.init_texture(white_texture);
         command_encoder.init_texture(black_texture);
         command_encoder.init_texture(red_texture);
-        let mut transfers = command_encoder.transfer();
+        let mut transfers = command_encoder.transfer("init dummy");
         let staging_buf = gpu.create_buffer(blade_graphics::BufferDesc {
             name: "dummy/staging",
             size: 4 * 3,

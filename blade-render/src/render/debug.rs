@@ -194,7 +194,7 @@ impl DebugRender {
             );
         }
 
-        let mut transfers = encoder.transfer();
+        let mut transfers = encoder.transfer("upload debug");
         transfers.copy_buffer_to_buffer(
             this.entry_buffer.at(0),
             this.buffer.at(0),

@@ -381,7 +381,7 @@ impl Baker {
     ) {
         let mut pending_ops = self.pending_operations.lock().unwrap();
         if !pending_ops.transfers.is_empty() {
-            let mut pass = encoder.transfer();
+            let mut pass = encoder.transfer("init models");
             for transfer in pending_ops.transfers.drain(..) {
                 pass.copy_buffer_to_buffer(
                     transfer.stage.into(),
@@ -392,7 +392,7 @@ impl Baker {
             }
         }
         if !pending_ops.blas_constructs.is_empty() {
-            let mut pass = encoder.acceleration_structure();
+            let mut pass = encoder.acceleration_structure("BLAS");
             for construct in pending_ops.blas_constructs.drain(..) {
                 pass.build_bottom_level(construct.dst, &construct.meshes, construct.scratch.into());
                 temp_buffers.push(construct.scratch);
