@@ -20,6 +20,11 @@ struct RayTracingDevice {
     acceleration_structure: khr::acceleration_structure::Device,
 }
 
+#[derive(Clone, Default)]
+struct Toggles {
+    command_scopes: bool,
+}
+
 #[derive(Clone)]
 struct Workarounds {
     extra_sync_src_access: vk::AccessFlags,
@@ -38,6 +43,7 @@ struct Device {
     buffer_marker: Option<ash::amd::buffer_marker::Device>,
     shader_info: Option<ash::amd::shader_info::Device>,
     full_screen_exclusive: Option<ash::ext::full_screen_exclusive::Device>,
+    toggles: Toggles,
     workarounds: Workarounds,
 }
 
@@ -239,6 +245,7 @@ pub struct CommandEncoder {
     update_data: Vec<u8>,
     present: Option<Presentation>,
     crash_handler: Option<CrashHandler>,
+    temp_label: Vec<u8>,
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
@@ -367,6 +374,7 @@ impl crate::traits::CommandDevice for Context {
             update_data: Vec::new(),
             present: None,
             crash_handler,
+            temp_label: Vec::new(),
         }
     }
 

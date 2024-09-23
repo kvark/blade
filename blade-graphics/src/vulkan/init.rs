@@ -564,6 +564,9 @@ impl super::Context {
             },
             core: device_core,
             device_information: capabilities.device_information,
+            toggles: super::Toggles {
+                command_scopes: desc.capture,
+            },
             //TODO: detect GPU family
             workarounds: super::Workarounds {
                 extra_sync_src_access: vk::AccessFlags::TRANSFER_WRITE,
