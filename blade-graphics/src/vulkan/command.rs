@@ -197,8 +197,16 @@ fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo<'s
     vk_info
 }
 
+fn end_pass(device: &super::Device, cmd_buf: vk::CommandBuffer) {
+    if device.toggles.command_scopes {
+        unsafe {
+            device.debug_utils.cmd_end_debug_utils_label(cmd_buf);
+        }
+    }
+}
+
 impl super::CommandEncoder {
-    pub fn mark(&mut self, marker: &str) {
+    fn add_marker(&mut self, marker: &str) {
         if let Some(ref mut ch) = self.crash_handler {
             let id = ch.add_marker(marker);
             unsafe {
@@ -217,10 +225,30 @@ impl super::CommandEncoder {
         }
     }
 
+    fn begin_pass(&mut self, label: &str) {
+        self.barrier();
+        self.add_marker(label);
+        if self.device.toggles.command_scopes {
+            self.temp_label.clear();
+            self.temp_label.extend_from_slice(label.as_bytes());
+            self.temp_label.push(0);
+            unsafe {
+                self.device.debug_utils.cmd_begin_debug_utils_label(
+                    self.buffers[0].raw,
+                    &vk::DebugUtilsLabelEXT {
+                        p_label_name: self.temp_label.as_ptr() as *const _,
+                        ..Default::default()
+                    },
+                )
+            }
+        }
+    }
+
     pub fn start(&mut self) {
         self.buffers.rotate_left(1);
+        let cmd_buf = self.buffers.first_mut().unwrap();
         self.device
-            .reset_descriptor_pool(&mut self.buffers[0].descriptor_pool);
+            .reset_descriptor_pool(&mut cmd_buf.descriptor_pool);
 
         let vk_info = vk::CommandBufferBeginInfo {
             flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
@@ -229,14 +257,14 @@ impl super::CommandEncoder {
         unsafe {
             self.device
                 .core
-                .begin_command_buffer(self.buffers[0].raw, &vk_info)
+                .begin_command_buffer(cmd_buf.raw, &vk_info)
                 .unwrap();
         }
     }
 
     pub(super) fn finish(&mut self) -> vk::CommandBuffer {
         self.barrier();
-        self.mark("finish");
+        self.add_marker("finish");
         let raw = self.buffers[0].raw;
         unsafe { self.device.core.end_command_buffer(raw).unwrap() }
         raw
@@ -331,8 +359,7 @@ impl super::CommandEncoder {
     }
 
     pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder {
-        self.barrier();
-        self.mark(label);
+        self.begin_pass(label);
         super::TransferCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
@@ -343,8 +370,7 @@ impl super::CommandEncoder {
         &mut self,
         label: &str,
     ) -> super::AccelerationStructureCommandEncoder {
-        self.barrier();
-        self.mark(label);
+        self.begin_pass(label);
         super::AccelerationStructureCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
@@ -352,8 +378,7 @@ impl super::CommandEncoder {
     }
 
     pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder {
-        self.barrier();
-        self.mark(label);
+        self.begin_pass(label);
         super::ComputeCommandEncoder {
             cmd_buf: self.buffers.first_mut().unwrap(),
             device: &self.device,
@@ -366,8 +391,7 @@ impl super::CommandEncoder {
         label: &str,
         targets: crate::RenderTargetSet,
     ) -> super::RenderCommandEncoder {
-        self.barrier();
-        self.mark(label);
+        self.begin_pass(label);
 
         let mut target_size = [0u16; 2];
         let mut color_attachments = Vec::with_capacity(targets.colors.len());
@@ -551,6 +575,12 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
     }
 }
 
+impl Drop for super::TransferCommandEncoder<'_> {
+    fn drop(&mut self) {
+        end_pass(self.device, self.raw);
+    }
+}
+
 #[hidden_trait::expose]
 impl crate::traits::AccelerationStructureEncoder
     for super::AccelerationStructureCommandEncoder<'_>
@@ -635,6 +665,12 @@ impl crate::traits::AccelerationStructureEncoder
     }
 }
 
+impl Drop for super::AccelerationStructureCommandEncoder<'_> {
+    fn drop(&mut self) {
+        end_pass(self.device, self.raw);
+    }
+}
+
 impl<'a> super::ComputeCommandEncoder<'a> {
     pub fn with<'b, 'p>(
         &'b mut self,
@@ -648,6 +684,12 @@ impl<'a> super::ComputeCommandEncoder<'a> {
             update_data: self.update_data,
         }
         .init(pipeline.raw)
+    }
+}
+
+impl Drop for super::ComputeCommandEncoder<'_> {
+    fn drop(&mut self) {
+        end_pass(self.device, self.cmd_buf.raw);
     }
 }
 
@@ -692,6 +734,7 @@ impl Drop for super::RenderCommandEncoder<'_> {
                 .dynamic_rendering
                 .cmd_end_rendering(self.cmd_buf.raw)
         };
+        end_pass(self.device, self.cmd_buf.raw);
     }
 }
 
