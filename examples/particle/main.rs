@@ -20,6 +20,7 @@ impl Example {
                 window,
                 gpu::ContextDesc {
                     validation: cfg!(debug_assertions),
+                    timing: true,
                     capture: false,
                     overlay: false,
                 },
@@ -113,6 +114,19 @@ impl Example {
         }
         self.prev_sync_point = Some(sync_point);
     }
+
+    fn add_gui(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Particle System");
+        self.particle_system.add_gui(ui);
+        ui.heading("Timings");
+        for &(ref name, time) in self.command_encoder.timings() {
+            let millis = time.as_secs_f32() * 1000.0;
+            ui.horizontal(|ui| {
+                ui.label(name);
+                ui.colored_label(egui::Color32::WHITE, format!("{:.2} ms", millis));
+            });
+        }
+    }
 }
 
 fn main() {
@@ -167,9 +181,8 @@ fn main() {
                         winit::event::WindowEvent::RedrawRequested => {
                             let raw_input = egui_winit.take_egui_input(&window);
                             let egui_output = egui_winit.egui_ctx().run(raw_input, |egui_ctx| {
-                                egui::SidePanel::left("my_side_panel").show(egui_ctx, |ui| {
-                                    ui.heading("Particle System");
-                                    example.particle_system.add_gui(ui);
+                                egui::SidePanel::left("info").show(egui_ctx, |ui| {
+                                    example.add_gui(ui);
                                     if ui.button("Quit").clicked() {
                                         target.exit();
                                     }

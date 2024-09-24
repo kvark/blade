@@ -72,9 +72,15 @@ mod shader;
 mod traits;
 pub mod util;
 pub mod limits {
+    /// Max number of passes inside a command encoder.
+    pub const PASS_COUNT: usize = 100;
+    /// Max plain data size for a pipeline.
     pub const PLAIN_DATA_SIZE: u32 = 256;
+    /// Max number of resources in a bind group.
     pub const RESOURCES_IN_GROUP: u32 = 8;
+    /// Min storage buffer alignment.
     pub const STORAGE_BUFFER_ALIGNMENT: u64 = 256;
+    /// Min acceleration structure scratch buffer alignment.
     pub const ACCELERATION_STRUCTURE_SCRATCH_ALIGNMENT: u64 = 256;
 }
 
@@ -87,6 +93,8 @@ pub struct ContextDesc {
     /// Enable validation of the GAPI, shaders,
     /// and insert crash markers into command buffers.
     pub validation: bool,
+    /// Enable GPU timing of all passes.
+    pub timing: bool,
     /// Enable capture support with GAPI tools.
     pub capture: bool,
     /// Enable GAPI overlay.

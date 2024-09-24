@@ -1,5 +1,5 @@
 use ash::vk;
-use std::str;
+use std::{str, time::Duration};
 
 impl super::CrashHandler {
     fn add_marker(&mut self, marker: &str) -> u32 {
@@ -198,7 +198,7 @@ fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo<'s
 }
 
 fn end_pass(device: &super::Device, cmd_buf: vk::CommandBuffer) {
-    if device.toggles.command_scopes {
+    if device.command_scope.is_some() {
         unsafe {
             device.debug_utils.cmd_end_debug_utils_label(cmd_buf);
         }
@@ -225,10 +225,32 @@ impl super::CommandEncoder {
         }
     }
 
+    fn add_timestamp(&mut self, label: &str) {
+        if let Some(_) = self.device.timing {
+            let cmd_buf = self.buffers.first_mut().unwrap();
+            if cmd_buf.timed_pass_names.len() == crate::limits::PASS_COUNT {
+                log::warn!("Reached the maximum for `limits::PASS_COUNT`, skipping the timer");
+                return;
+            }
+            let index = cmd_buf.timed_pass_names.len() as u32;
+            unsafe {
+                self.device.core.cmd_write_timestamp(
+                    cmd_buf.raw,
+                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                    cmd_buf.query_pool,
+                    index,
+                );
+            }
+            cmd_buf.timed_pass_names.push(label.to_string());
+        }
+    }
+
     fn begin_pass(&mut self, label: &str) {
         self.barrier();
         self.add_marker(label);
-        if self.device.toggles.command_scopes {
+        self.add_timestamp(label);
+
+        if let Some(_) = self.device.command_scope {
             self.temp_label.clear();
             self.temp_label.extend_from_slice(label.as_bytes());
             self.temp_label.push(0);
@@ -260,14 +282,61 @@ impl super::CommandEncoder {
                 .begin_command_buffer(cmd_buf.raw, &vk_info)
                 .unwrap();
         }
+
+        if let Some(ref timing) = self.device.timing {
+            self.timings.clear();
+            if !cmd_buf.timed_pass_names.is_empty() {
+                let mut timestamps = [0u64; super::QUERY_POOL_SIZE];
+                unsafe {
+                    self.device
+                        .core
+                        .get_query_pool_results(
+                            cmd_buf.query_pool,
+                            0,
+                            &mut timestamps[..cmd_buf.timed_pass_names.len() + 1],
+                            vk::QueryResultFlags::TYPE_64,
+                        )
+                        .unwrap();
+                }
+                let mut prev = timestamps[0];
+                for (name, &ts) in cmd_buf
+                    .timed_pass_names
+                    .drain(..)
+                    .zip(timestamps[1..].iter())
+                {
+                    let diff = (ts - prev) as f32 * timing.period;
+                    prev = ts;
+                    self.timings.push((name, Duration::from_nanos(diff as _)));
+                }
+            }
+            unsafe {
+                self.device.core.cmd_reset_query_pool(
+                    cmd_buf.raw,
+                    cmd_buf.query_pool,
+                    0,
+                    super::QUERY_POOL_SIZE as u32,
+                );
+            }
+        }
     }
 
     pub(super) fn finish(&mut self) -> vk::CommandBuffer {
         self.barrier();
         self.add_marker("finish");
-        let raw = self.buffers[0].raw;
-        unsafe { self.device.core.end_command_buffer(raw).unwrap() }
-        raw
+        let cmd_buf = self.buffers.first_mut().unwrap();
+        unsafe {
+            if self.device.timing.is_some() {
+                let index = cmd_buf.timed_pass_names.len() as u32;
+                self.device.core.cmd_write_timestamp(
+                    cmd_buf.raw,
+                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                    cmd_buf.query_pool,
+                    index,
+                );
+            }
+            self.device.core.end_command_buffer(cmd_buf.raw).unwrap();
+        }
+        cmd_buf.raw
     }
 
     fn barrier(&mut self) {
@@ -476,6 +545,10 @@ impl super::CommandEncoder {
             }
             Err(other) => panic!("GPU error {}", other),
         }
+    }
+
+    pub fn timings(&self) -> &[(String, Duration)] {
+        &self.timings
     }
 }
 

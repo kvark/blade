@@ -5,6 +5,8 @@ Changelog for Blade
 - graphics:
   - API for destruction of pipelines
   - every pass now takes a label
+  - automatic GPU pass markers
+  - ability to capture pass GPU timings
   - Metal:
     - support for workgroup memory
 

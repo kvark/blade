@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, mem};
+use std::{marker::PhantomData, mem, time::Duration};
 
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
@@ -225,6 +225,10 @@ impl super::CommandEncoder {
             raw,
             phantom: PhantomData,
         }
+    }
+
+    pub fn timings(&self) -> &[(String, Duration)] {
+        &[]
     }
 }
 
