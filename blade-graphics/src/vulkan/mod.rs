@@ -1,11 +1,13 @@
 use ash::{khr, vk};
-use std::{num::NonZeroU32, path::PathBuf, ptr, sync::Mutex};
+use std::{num::NonZeroU32, path::PathBuf, ptr, sync::Mutex, time::Duration};
 
 mod command;
 mod descriptor;
 mod init;
 mod pipeline;
 mod resource;
+
+const QUERY_POOL_SIZE: usize = crate::limits::PASS_COUNT + 1;
 
 struct Instance {
     core: ash::Instance,
@@ -21,8 +23,10 @@ struct RayTracingDevice {
 }
 
 #[derive(Clone, Default)]
-struct Toggles {
-    command_scopes: bool,
+struct CommandScopeDevice {}
+#[derive(Clone, Default)]
+struct TimingDevice {
+    period: f32,
 }
 
 #[derive(Clone)]
@@ -43,7 +47,8 @@ struct Device {
     buffer_marker: Option<ash::amd::buffer_marker::Device>,
     shader_info: Option<ash::amd::shader_info::Device>,
     full_screen_exclusive: Option<ash::ext::full_screen_exclusive::Device>,
-    toggles: Toggles,
+    command_scope: Option<CommandScopeDevice>,
+    timing: Option<TimingDevice>,
     workarounds: Workarounds,
 }
 
@@ -223,6 +228,8 @@ pub struct RenderPipeline {
 struct CommandBuffer {
     raw: vk::CommandBuffer,
     descriptor_pool: descriptor::DescriptorPool,
+    query_pool: vk::QueryPool,
+    timed_pass_names: Vec<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -246,6 +253,7 @@ pub struct CommandEncoder {
     present: Option<Presentation>,
     crash_handler: Option<CrashHandler>,
     temp_label: Vec<u8>,
+    timings: Vec<(String, Duration)>,
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
@@ -345,9 +353,24 @@ impl crate::traits::CommandDevice for Context {
                     self.set_object_name(raw, desc.name);
                 };
                 let descriptor_pool = self.device.create_descriptor_pool();
+                let query_pool = if self.device.timing.is_some() {
+                    let query_pool_info = vk::QueryPoolCreateInfo::default()
+                        .query_type(vk::QueryType::TIMESTAMP)
+                        .query_count(QUERY_POOL_SIZE as u32);
+                    unsafe {
+                        self.device
+                            .core
+                            .create_query_pool(&query_pool_info, None)
+                            .unwrap()
+                    }
+                } else {
+                    vk::QueryPool::null()
+                };
                 CommandBuffer {
                     raw,
                     descriptor_pool,
+                    query_pool,
+                    timed_pass_names: Vec::new(),
                 }
             })
             .collect();
@@ -375,6 +398,7 @@ impl crate::traits::CommandDevice for Context {
             present: None,
             crash_handler,
             temp_label: Vec::new(),
+            timings: Vec::new(),
         }
     }
 
@@ -388,6 +412,13 @@ impl crate::traits::CommandDevice for Context {
             }
             self.device
                 .destroy_descriptor_pool(&mut cmd_buf.descriptor_pool);
+            if self.device.timing.is_some() {
+                unsafe {
+                    self.device
+                        .core
+                        .destroy_query_pool(cmd_buf.query_pool, None);
+                }
+            }
         }
         unsafe {
             self.device

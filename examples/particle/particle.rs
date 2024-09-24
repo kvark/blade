@@ -146,6 +146,10 @@ impl System {
     pub fn destroy(&mut self, context: &gpu::Context) {
         context.destroy_buffer(self.particle_buf);
         context.destroy_buffer(self.free_list_buf);
+        context.destroy_compute_pipeline(&mut self.reset_pipeline);
+        context.destroy_compute_pipeline(&mut self.emit_pipeline);
+        context.destroy_compute_pipeline(&mut self.update_pipeline);
+        context.destroy_render_pipeline(&mut self.draw_pipeline);
     }
 
     fn main_data(&self) -> MainData {

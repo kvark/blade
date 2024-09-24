@@ -44,6 +44,7 @@ struct AdapterCapabilities {
     buffer_marker: bool,
     shader_info: bool,
     full_screen_exclusive: bool,
+    timing: bool,
     bugs: SystemBugs,
 }
 
@@ -202,6 +203,13 @@ unsafe fn inspect_adapter(
         return None;
     }
 
+    let timing = if properties.limits.timestamp_compute_and_graphics == vk::FALSE {
+        log::info!("No timing because of queue support");
+        false
+    } else {
+        true
+    };
+
     let ray_tracing = if !supported_extensions.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME)
         || !supported_extensions.contains(&vk::KHR_RAY_QUERY_NAME)
     {
@@ -269,6 +277,7 @@ unsafe fn inspect_adapter(
         buffer_marker,
         shader_info,
         full_screen_exclusive,
+        timing,
         bugs,
     })
 }
@@ -564,8 +573,17 @@ impl super::Context {
             },
             core: device_core,
             device_information: capabilities.device_information,
-            toggles: super::Toggles {
-                command_scopes: desc.capture,
+            command_scope: if desc.capture {
+                Some(super::CommandScopeDevice {})
+            } else {
+                None
+            },
+            timing: if desc.timing && capabilities.timing {
+                Some(super::TimingDevice {
+                    period: capabilities.properties.limits.timestamp_period,
+                })
+            } else {
+                None
             },
             //TODO: detect GPU family
             workarounds: super::Workarounds {

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 const COLOR_ATTACHMENTS: &[u32] = &[
     glow::COLOR_ATTACHMENT0,
     glow::COLOR_ATTACHMENT1,
@@ -200,6 +202,10 @@ impl super::CommandEncoder {
             pipeline: Default::default(),
             limits: &self.limits,
         }
+    }
+
+    pub fn timings(&self) -> &[(String, Duration)] {
+        &[]
     }
 }
 
