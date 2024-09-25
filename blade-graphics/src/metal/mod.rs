@@ -44,7 +44,8 @@ impl Frame {
 #[derive(Debug, Clone)]
 struct PrivateInfo {
     language_version: metal::MTLLanguageVersion,
-    supports_dispatch_type: bool,
+    enable_debug_groups: bool,
+    enable_dispatch_type: bool,
     timestamp_counter_set: Option<metal::CounterSet>,
 }
 
@@ -194,7 +195,9 @@ pub struct CommandEncoder {
     raw: Option<metal::CommandBuffer>,
     name: String,
     queue: Arc<Mutex<metal::CommandQueue>>,
-    supports_dispatch_type: bool,
+    enable_debug_groups: bool,
+    enable_dispatch_type: bool,
+    has_open_debug_group: bool,
     timing_datas: Option<Box<[TimingData]>>,
     timings: Vec<(String, time::Duration)>,
 }
@@ -417,7 +420,8 @@ impl Context {
             .ok_or(super::NotSupportedError::NoSupportedDeviceFound)?;
         let queue = device.new_command_queue();
 
-        let capture = if desc.capture {
+        let auto_capture_everything = false;
+        let capture = if desc.capture && auto_capture_everything {
             objc::rc::autoreleasepool(|| {
                 let capture_manager = metal::CaptureManager::shared();
                 let default_capture_scope = capture_manager.new_capture_scope_with_device(&device);
@@ -461,7 +465,8 @@ impl Context {
             info: PrivateInfo {
                 //TODO: determine based on OS version
                 language_version: metal::MTLLanguageVersion::V2_4,
-                supports_dispatch_type: true,
+                enable_debug_groups: desc.capture,
+                enable_dispatch_type: true,
                 timestamp_counter_set,
             },
             device_information,
@@ -559,7 +564,9 @@ impl crate::traits::CommandDevice for Context {
             raw: None,
             name: desc.name.to_string(),
             queue: Arc::clone(&self.queue),
-            supports_dispatch_type: self.info.supports_dispatch_type,
+            enable_debug_groups: self.info.enable_debug_groups,
+            enable_dispatch_type: self.info.enable_dispatch_type,
+            has_open_debug_group: false,
             timing_datas,
             timings: Vec::new(),
         }
@@ -568,7 +575,7 @@ impl crate::traits::CommandDevice for Context {
     fn destroy_command_encoder(&self, _command_encoder: &mut CommandEncoder) {}
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
-        let cmd_buf = encoder.raw.take().unwrap();
+        let cmd_buf = encoder.finish();
         cmd_buf.commit();
         SyncPoint { cmd_buf }
     }

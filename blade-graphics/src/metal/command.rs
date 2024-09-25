@@ -97,6 +97,25 @@ impl super::TimingData {
 }
 
 impl super::CommandEncoder {
+    fn begin_pass(&mut self, label: &str) {
+        if self.enable_debug_groups {
+            //HACK: close the previous group
+            if self.has_open_debug_group {
+                self.raw.as_mut().unwrap().pop_debug_group();
+            } else {
+                self.has_open_debug_group = true;
+            }
+            self.raw.as_mut().unwrap().push_debug_group(label);
+        }
+    }
+
+    pub(super) fn finish(&mut self) -> metal::CommandBuffer {
+        if self.has_open_debug_group {
+            self.raw.as_mut().unwrap().pop_debug_group();
+        }
+        self.raw.take().unwrap()
+    }
+
     pub fn start(&mut self) {
         if let Some(ref mut td_array) = self.timing_datas {
             self.timings.clear();
@@ -121,6 +140,7 @@ impl super::CommandEncoder {
             }
             cmd_buf.to_owned()
         }));
+        self.has_open_debug_group = false;
     }
 
     pub fn init_texture(&mut self, _texture: super::Texture) {}
@@ -130,6 +150,7 @@ impl super::CommandEncoder {
     }
 
     pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder {
+        self.begin_pass(label);
         let raw = objc::rc::autoreleasepool(|| {
             let descriptor = metal::BlitPassDescriptor::new();
 
@@ -185,7 +206,7 @@ impl super::CommandEncoder {
     pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
             let descriptor = metal::ComputePassDescriptor::new();
-            if self.supports_dispatch_type {
+            if self.enable_dispatch_type {
                 descriptor.set_dispatch_type(metal::MTLDispatchType::Concurrent);
             }
 
