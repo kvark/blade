@@ -88,8 +88,31 @@ impl crate::ShaderBindable for crate::AccelerationStructure {
     }
 }
 
+impl super::TimingData {
+    fn add(&mut self, label: &str) -> u64 {
+        let counter_index = self.pass_names.len() as u64 * 2;
+        self.pass_names.push(label.to_string());
+        counter_index
+    }
+}
+
 impl super::CommandEncoder {
     pub fn start(&mut self) {
+        if let Some(ref mut td_array) = self.timing_datas {
+            self.timings.clear();
+            td_array.rotate_left(1);
+            let td = td_array.first_mut().unwrap();
+            if !td.pass_names.is_empty() {
+                let counters = td
+                    .sample_buffer
+                    .resolve_counter_range(metal::NSRange::new(0, td.pass_names.len() as u64 * 2));
+                for (name, chunk) in td.pass_names.drain(..).zip(counters.chunks(2)) {
+                    let duration = Duration::from_nanos(chunk[1] - chunk[0]);
+                    self.timings.push((name, duration));
+                }
+            }
+        }
+
         let queue = self.queue.lock().unwrap();
         self.raw = Some(objc::rc::autoreleasepool(|| {
             let cmd_buf = queue.new_command_buffer_with_unretained_references();
@@ -106,9 +129,19 @@ impl super::CommandEncoder {
         self.raw.as_mut().unwrap().present_drawable(&frame.drawable);
     }
 
-    pub fn transfer(&mut self, _label: &str) -> super::TransferCommandEncoder {
+    pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
             let descriptor = metal::BlitPassDescriptor::new();
+
+            if let Some(ref mut td_array) = self.timing_datas {
+                let td = td_array.first_mut().unwrap();
+                let counter_index = td.add(label);
+                let sba = descriptor.sample_buffer_attachments().object_at(0).unwrap();
+                sba.set_sample_buffer(&td.sample_buffer);
+                sba.set_start_of_encoder_sample_index(counter_index);
+                sba.set_end_of_encoder_sample_index(counter_index + 1);
+            }
+
             self.raw
                 .as_mut()
                 .unwrap()
@@ -123,9 +156,20 @@ impl super::CommandEncoder {
 
     pub fn acceleration_structure(
         &mut self,
-        _label: &str,
+        label: &str,
     ) -> super::AccelerationStructureCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
+            let descriptor = metal::AccelerationStructurePassDescriptor::new();
+
+            if let Some(ref mut td_array) = self.timing_datas {
+                let td = td_array.first_mut().unwrap();
+                let counter_index = td.add(label);
+                let sba = descriptor.sample_buffer_attachments().object_at(0).unwrap();
+                sba.set_sample_buffer(&td.sample_buffer);
+                sba.set_start_of_encoder_sample_index(counter_index);
+                sba.set_end_of_encoder_sample_index(counter_index + 1);
+            }
+
             self.raw
                 .as_mut()
                 .unwrap()
@@ -138,12 +182,22 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn compute(&mut self, _label: &str) -> super::ComputeCommandEncoder {
+    pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
             let descriptor = metal::ComputePassDescriptor::new();
-            if self.private_info.supports_dispatch_type {
+            if self.supports_dispatch_type {
                 descriptor.set_dispatch_type(metal::MTLDispatchType::Concurrent);
             }
+
+            if let Some(ref mut td_array) = self.timing_datas {
+                let td = td_array.first_mut().unwrap();
+                let counter_index = td.add(label);
+                let sba = descriptor.sample_buffer_attachments().object_at(0).unwrap();
+                sba.set_sample_buffer(&td.sample_buffer);
+                sba.set_start_of_encoder_sample_index(counter_index);
+                sba.set_end_of_encoder_sample_index(counter_index + 1);
+            }
+
             self.raw
                 .as_mut()
                 .unwrap()
@@ -158,7 +212,7 @@ impl super::CommandEncoder {
 
     pub fn render(
         &mut self,
-        _label: &str,
+        label: &str,
         targets: crate::RenderTargetSet,
     ) -> super::RenderCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
@@ -217,6 +271,15 @@ impl super::CommandEncoder {
                 at_descriptor.set_store_action(store_action);
             }
 
+            if let Some(ref mut td_array) = self.timing_datas {
+                let td = td_array.first_mut().unwrap();
+                let counter_index = td.add(label);
+                let sba = descriptor.sample_buffer_attachments().object_at(0).unwrap();
+                sba.set_sample_buffer(&td.sample_buffer);
+                sba.set_start_of_vertex_sample_index(counter_index);
+                sba.set_end_of_fragment_sample_index(counter_index + 1);
+            }
+
             self.raw
                 .as_mut()
                 .unwrap()
@@ -231,7 +294,7 @@ impl super::CommandEncoder {
     }
 
     pub fn timings(&self) -> &[(String, Duration)] {
-        &[]
+        &self.timings
     }
 }
 

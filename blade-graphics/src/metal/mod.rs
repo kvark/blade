@@ -12,6 +12,8 @@ mod pipeline;
 mod resource;
 mod surface;
 
+const MAX_TIMESTAMPS: u64 = crate::limits::PASS_COUNT as u64 * 2;
+
 struct Surface {
     view: *mut objc::runtime::Object,
     render_layer: metal::MetalLayer,
@@ -43,6 +45,7 @@ impl Frame {
 struct PrivateInfo {
     language_version: metal::MTLLanguageVersion,
     supports_dispatch_type: bool,
+    timestamp_counter_set: Option<metal::CounterSet>,
 }
 
 pub struct Context {
@@ -181,11 +184,19 @@ pub struct SyncPoint {
 }
 
 #[derive(Debug)]
+struct TimingData {
+    pass_names: Vec<String>,
+    sample_buffer: metal::CounterSampleBuffer,
+}
+
+#[derive(Debug)]
 pub struct CommandEncoder {
     raw: Option<metal::CommandBuffer>,
     name: String,
     queue: Arc<Mutex<metal::CommandQueue>>,
-    private_info: PrivateInfo,
+    supports_dispatch_type: bool,
+    timing_datas: Option<Box<[TimingData]>>,
+    timings: Vec<(String, time::Duration)>,
 }
 
 #[derive(Debug)]
@@ -425,6 +436,23 @@ impl Context {
             driver_info: "".to_string(),
         };
 
+        let mut timestamp_counter_set = None;
+        if desc.timing {
+            for counter_set in device.counter_sets() {
+                if counter_set.name() == "timestamp" {
+                    timestamp_counter_set = Some(counter_set);
+                }
+            }
+            if timestamp_counter_set.is_none() {
+                log::warn!("Timing counters are not supported by the device");
+            } else if !device
+                .supports_counter_sampling(metal::MTLCounterSamplingPoint::AtStageBoundary)
+            {
+                log::warn!("Timing counters do not support stage boundary");
+                timestamp_counter_set = None;
+            }
+        }
+
         Ok(Context {
             device: Mutex::new(device),
             queue: Arc::new(Mutex::new(queue)),
@@ -434,6 +462,7 @@ impl Context {
                 //TODO: determine based on OS version
                 language_version: metal::MTLLanguageVersion::V2_4,
                 supports_dispatch_type: true,
+                timestamp_counter_set,
             },
             device_information,
         })
@@ -503,11 +532,36 @@ impl crate::traits::CommandDevice for Context {
     type SyncPoint = SyncPoint;
 
     fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
+        let timing_datas = if let Some(ref counter_set) = self.info.timestamp_counter_set {
+            let mut array = Vec::with_capacity(desc.buffer_count as usize);
+            let csb_desc = metal::CounterSampleBufferDescriptor::new();
+            csb_desc.set_counter_set(counter_set);
+            csb_desc.set_storage_mode(metal::MTLStorageMode::Shared);
+            csb_desc.set_sample_count(MAX_TIMESTAMPS);
+            for i in 0..desc.buffer_count {
+                csb_desc.set_label(&format!("{}/counter{}", desc.name, i));
+                let sample_buffer = self
+                    .device
+                    .lock()
+                    .unwrap()
+                    .new_counter_sample_buffer_with_descriptor(&csb_desc)
+                    .unwrap();
+                array.push(TimingData {
+                    sample_buffer,
+                    pass_names: Vec::new(),
+                });
+            }
+            Some(array.into_boxed_slice())
+        } else {
+            None
+        };
         CommandEncoder {
             raw: None,
             name: desc.name.to_string(),
             queue: Arc::clone(&self.queue),
-            private_info: self.info.clone(),
+            supports_dispatch_type: self.info.supports_dispatch_type,
+            timing_datas,
+            timings: Vec::new(),
         }
     }
 

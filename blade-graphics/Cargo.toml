@@ -23,7 +23,10 @@ raw-window-handle = "0.6"
 block = "0.1"
 core-graphics-types = "0.1"
 #TODO: switch to crates once https://github.com/gfx-rs/metal-rs/pull/335 is published
-metal = { git = "https://github.com/gfx-rs/metal-rs", rev = "9bbe74b1d3706e46ddf41bc8aad58ee74b0bf844" }
+#TODO: switch to upstream once these are merged:
+# - https://github.com/gfx-rs/metal-rs/pull/336
+# - https://github.com/gfx-rs/metal-rs/pull/337
+metal = { git = "https://github.com/kvark/metal-rs", branch = "blade" }
 objc = "0.2.5"
 naga = { workspace = true, features = ["msl-out"] }
 
