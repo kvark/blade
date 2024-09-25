@@ -39,8 +39,10 @@ impl Frame {
     }
 }
 
-struct DeviceInfo {
+#[derive(Debug, Clone)]
+struct PrivateInfo {
     language_version: metal::MTLLanguageVersion,
+    supports_dispatch_type: bool,
 }
 
 pub struct Context {
@@ -48,7 +50,7 @@ pub struct Context {
     queue: Arc<Mutex<metal::CommandQueue>>,
     surface: Option<Mutex<Surface>>,
     capture: Option<metal::CaptureManager>,
-    info: DeviceInfo,
+    info: PrivateInfo,
     device_information: crate::DeviceInformation,
 }
 
@@ -183,6 +185,7 @@ pub struct CommandEncoder {
     raw: Option<metal::CommandBuffer>,
     name: String,
     queue: Arc<Mutex<metal::CommandQueue>>,
+    private_info: PrivateInfo,
 }
 
 #[derive(Debug)]
@@ -427,9 +430,10 @@ impl Context {
             queue: Arc::new(Mutex::new(queue)),
             surface: None,
             capture,
-            info: DeviceInfo {
+            info: PrivateInfo {
                 //TODO: determine based on OS version
                 language_version: metal::MTLLanguageVersion::V2_4,
+                supports_dispatch_type: true,
             },
             device_information,
         })
@@ -503,6 +507,7 @@ impl crate::traits::CommandDevice for Context {
             raw: None,
             name: desc.name.to_string(),
             queue: Arc::clone(&self.queue),
+            private_info: self.info.clone(),
         }
     }
 

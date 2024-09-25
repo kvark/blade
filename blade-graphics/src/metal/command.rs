@@ -141,6 +141,9 @@ impl super::CommandEncoder {
     pub fn compute(&mut self, _label: &str) -> super::ComputeCommandEncoder {
         let raw = objc::rc::autoreleasepool(|| {
             let descriptor = metal::ComputePassDescriptor::new();
+            if self.private_info.supports_dispatch_type {
+                descriptor.set_dispatch_type(metal::MTLDispatchType::Concurrent);
+            }
             self.raw
                 .as_mut()
                 .unwrap()
