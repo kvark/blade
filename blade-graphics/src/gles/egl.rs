@@ -775,18 +775,22 @@ impl EglContext {
                 .get_proc_address(name)
                 .map_or(ptr::null(), |p| p as *const _)
         });
-        if desc.validation && gl.supports_debug() {
-            log::info!("Enabling GLES debug output");
-            gl.enable(glow::DEBUG_OUTPUT);
-            gl.debug_message_callback(gl_debug_message_callback);
-            for &(level, severity) in LOG_LEVEL_SEVERITY.iter() {
-                gl.debug_message_control(
-                    glow::DONT_CARE,
-                    glow::DONT_CARE,
-                    severity,
-                    &[],
-                    level <= log::max_level(),
-                );
+        if desc.validation {
+            if gl.supports_debug() {
+                log::info!("Enabling GLES debug output");
+                gl.enable(glow::DEBUG_OUTPUT);
+                gl.debug_message_callback(gl_debug_message_callback);
+                for &(level, severity) in LOG_LEVEL_SEVERITY.iter() {
+                    gl.debug_message_control(
+                        glow::DONT_CARE,
+                        glow::DONT_CARE,
+                        severity,
+                        &[],
+                        level <= log::max_level(),
+                    );
+                }
+            } else {
+                log::warn!("Can't enable validation");
             }
         }
 

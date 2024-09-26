@@ -81,10 +81,62 @@ impl crate::ShaderBindable for super::AccelerationStructure {
 }
 
 impl super::CommandEncoder {
+    fn begin_pass(&mut self, label: &str) {
+        if let Some(ref mut timing_datas) = self.timing_datas {
+            let td = timing_datas.first_mut().unwrap();
+            let id = td.pass_names.len();
+            self.commands.push(super::Command::QueryCounter {
+                query: td.queries[id],
+            });
+            td.pass_names.push(label.to_string());
+        }
+    }
+
     pub fn start(&mut self) {
         self.commands.clear();
         self.plain_data.clear();
         self.has_present = false;
+    }
+
+    pub(super) fn finish(&mut self, gl: &glow::Context) {
+        use glow::HasContext as _;
+        #[allow(trivial_casts)]
+        if let Some(ref mut timing_datas) = self.timing_datas {
+            {
+                let td = timing_datas.first_mut().unwrap();
+                let id = td.pass_names.len();
+                self.commands.push(super::Command::QueryCounter {
+                    query: td.queries[id],
+                });
+            }
+
+            timing_datas.rotate_left(1);
+            self.timings.clear();
+            let td = timing_datas.first_mut().unwrap();
+            if !td.pass_names.is_empty() {
+                let mut prev = 0;
+                unsafe {
+                    gl.get_query_parameter_u64_with_offset(
+                        td.queries[0],
+                        glow::QUERY_RESULT,
+                        &mut prev as *mut _ as usize,
+                    );
+                }
+                for (pass_name, &query) in td.pass_names.drain(..).zip(td.queries[1..].iter()) {
+                    let mut result: u64 = 0;
+                    unsafe {
+                        gl.get_query_parameter_u64_with_offset(
+                            query,
+                            glow::QUERY_RESULT,
+                            &mut result as *mut _ as usize,
+                        );
+                    }
+                    let time = Duration::from_nanos(result - prev);
+                    self.timings.push((pass_name, time));
+                    prev = result
+                }
+            }
+        }
     }
 
     pub fn init_texture(&mut self, _texture: super::Texture) {}
@@ -93,7 +145,8 @@ impl super::CommandEncoder {
         self.has_present = true;
     }
 
-    pub fn transfer(&mut self, _label: &str) -> super::PassEncoder<()> {
+    pub fn transfer(&mut self, label: &str) -> super::PassEncoder<()> {
+        self.begin_pass(label);
         super::PassEncoder {
             commands: &mut self.commands,
             plain_data: &mut self.plain_data,
@@ -108,7 +161,8 @@ impl super::CommandEncoder {
         unimplemented!()
     }
 
-    pub fn compute(&mut self, _label: &str) -> super::PassEncoder<super::ComputePipeline> {
+    pub fn compute(&mut self, label: &str) -> super::PassEncoder<super::ComputePipeline> {
+        self.begin_pass(label);
         super::PassEncoder {
             commands: &mut self.commands,
             plain_data: &mut self.plain_data,
@@ -121,9 +175,11 @@ impl super::CommandEncoder {
 
     pub fn render(
         &mut self,
-        _label: &str,
+        label: &str,
         targets: crate::RenderTargetSet,
     ) -> super::PassEncoder<super::RenderPipeline> {
+        self.begin_pass(label);
+
         let mut target_size = [0u16; 2];
         let mut invalidate_attachments = Vec::new();
         for (i, rt) in targets.colors.iter().enumerate() {
@@ -205,7 +261,7 @@ impl super::CommandEncoder {
     }
 
     pub fn timings(&self) -> &[(String, Duration)] {
-        &[]
+        &self.timings
     }
 }
 
@@ -400,6 +456,7 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
     }
 
     fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
+        assert_eq!(index, 0);
         self.commands.push(super::Command::BindVertex {
             buffer: vertex_buf.buffer.raw,
         });
@@ -612,9 +669,9 @@ impl super::Command {
                 gl.dispatch_compute_indirect(indirect_buf.offset as i32);
             }
             Self::FillBuffer {
-                ref dst,
-                size,
-                value,
+                dst: ref _dst,
+                size: _size,
+                value: _value,
             } => unimplemented!(),
             Self::CopyBufferToBuffer {
                 ref src,
@@ -987,6 +1044,9 @@ impl super::Command {
                 for slot in 0..4 {
                     gl.bind_sampler(slot, None);
                 }
+            }
+            Self::QueryCounter { query } => {
+                gl.query_counter(query, glow::TIMESTAMP);
             }
         }
     }

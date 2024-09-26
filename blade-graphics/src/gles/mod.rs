@@ -5,16 +5,18 @@ mod pipeline;
 mod platform;
 mod resource;
 
-use std::{marker::PhantomData, ops::Range};
+use std::{marker::PhantomData, ops::Range, time::Duration};
 
 type BindTarget = u32;
 const DEBUG_ID: u32 = 0;
 const MAX_TIMEOUT: u64 = 1_000_000_000; // MAX_CLIENT_WAIT_TIMEOUT_WEBGL;
+const MAX_QUERIES: usize = crate::limits::PASS_COUNT + 1;
 
 bitflags::bitflags! {
     struct Capabilities: u32 {
         const BUFFER_STORAGE = 1 << 0;
         const DRAW_BUFFERS_INDEXED = 1 << 1;
+        const DISJOINT_TIMER_QUERY = 1 << 2;
     }
 }
 
@@ -344,6 +346,14 @@ enum Command {
         binding: ImageBinding,
     },
     ResetAllSamplers,
+    QueryCounter {
+        query: glow::Query,
+    },
+}
+
+struct TimingData {
+    pass_names: Vec<String>,
+    queries: Box<[glow::Query]>,
 }
 
 pub struct CommandEncoder {
@@ -352,6 +362,8 @@ pub struct CommandEncoder {
     plain_data: Vec<u8>,
     has_present: bool,
     limits: Limits,
+    timing_datas: Option<Box<[TimingData]>>,
+    timings: Vec<(String, Duration)>,
 }
 
 enum PassKind {
@@ -428,22 +440,56 @@ impl crate::traits::CommandDevice for Context {
     type SyncPoint = SyncPoint;
 
     fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
+        use glow::HasContext as _;
+
+        let timing_datas = if self.toggles.timing {
+            let gl = self.lock();
+            let mut array = Vec::new();
+            // Allocating one extra set of timers because we are resolving them
+            // in submit() as opposed to start().
+            for _ in 0..desc.buffer_count + 1 {
+                array.push(TimingData {
+                    pass_names: Vec::new(),
+                    queries: (0..MAX_QUERIES)
+                        .map(|_| unsafe { gl.create_query().unwrap() })
+                        .collect(),
+                });
+            }
+            Some(array.into_boxed_slice())
+        } else {
+            None
+        };
         CommandEncoder {
             name: desc.name.to_string(),
             commands: Vec::new(),
             plain_data: Vec::new(),
             has_present: false,
             limits: self.limits.clone(),
+            timing_datas,
+            timings: Vec::new(),
         }
     }
 
-    fn destroy_command_encoder(&self, _command_encoder: &mut CommandEncoder) {}
+    fn destroy_command_encoder(&self, encoder: &mut CommandEncoder) {
+        use glow::HasContext as _;
+
+        if let Some(timing_datas) = encoder.timing_datas.take() {
+            let gl = self.lock();
+            for td in timing_datas {
+                for query in td.queries {
+                    unsafe { gl.delete_query(query) };
+                }
+            }
+        }
+    }
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         use glow::HasContext as _;
 
         let fence = {
             let gl = self.lock();
+            encoder.finish(&gl);
+
             let push_group = !encoder.name.is_empty() && gl.supports_debug();
             let ec = unsafe {
                 if push_group {

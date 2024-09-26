@@ -21,7 +21,7 @@ impl Example {
                 gpu::ContextDesc {
                     validation: cfg!(debug_assertions),
                     timing: true,
-                    capture: false,
+                    capture: true,
                     overlay: false,
                 },
             )
