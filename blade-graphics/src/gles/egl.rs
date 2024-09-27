@@ -826,6 +826,11 @@ impl EglContext {
         );
 
         let toggles = super::Toggles {
+            scoping: desc.capture
+                && (gl.supports_debug() || {
+                    log::warn!("Scoping is not supported");
+                    false
+                }),
             timing: desc.timing
                 && (extensions.contains("GL_EXT_disjoint_timer_query") || {
                     log::warn!("Timing is not supported");
