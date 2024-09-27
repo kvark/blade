@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{str, time::Duration};
 
 const COLOR_ATTACHMENTS: &[u32] = &[
     glow::COLOR_ATTACHMENT0,
@@ -82,6 +82,13 @@ impl crate::ShaderBindable for super::AccelerationStructure {
 
 impl super::CommandEncoder {
     fn begin_pass(&mut self, label: &str) {
+        if self.needs_scopes {
+            let start = self.string_data.len();
+            self.string_data.extend_from_slice(label.as_bytes());
+            self.commands.push(super::Command::PushScope {
+                name_range: start..self.string_data.len(),
+            });
+        }
         if let Some(ref mut timing_datas) = self.timing_datas {
             let td = timing_datas.first_mut().unwrap();
             let id = td.pass_names.len();
@@ -92,9 +99,22 @@ impl super::CommandEncoder {
         }
     }
 
+    fn pass<P>(&mut self, kind: super::PassKind) -> super::PassEncoder<P> {
+        super::PassEncoder {
+            commands: &mut self.commands,
+            plain_data: &mut self.plain_data,
+            kind,
+            invalidate_attachments: Vec::new(),
+            pipeline: Default::default(),
+            limits: &self.limits,
+            has_scope: self.needs_scopes,
+        }
+    }
+
     pub fn start(&mut self) {
         self.commands.clear();
         self.plain_data.clear();
+        self.string_data.clear();
         self.has_present = false;
     }
 
@@ -147,14 +167,7 @@ impl super::CommandEncoder {
 
     pub fn transfer(&mut self, label: &str) -> super::PassEncoder<()> {
         self.begin_pass(label);
-        super::PassEncoder {
-            commands: &mut self.commands,
-            plain_data: &mut self.plain_data,
-            kind: super::PassKind::Transfer,
-            invalidate_attachments: Vec::new(),
-            pipeline: Default::default(),
-            limits: &self.limits,
-        }
+        self.pass(super::PassKind::Transfer)
     }
 
     pub fn acceleration_structure(&mut self, _label: &str) -> super::PassEncoder<()> {
@@ -163,14 +176,7 @@ impl super::CommandEncoder {
 
     pub fn compute(&mut self, label: &str) -> super::PassEncoder<super::ComputePipeline> {
         self.begin_pass(label);
-        super::PassEncoder {
-            commands: &mut self.commands,
-            plain_data: &mut self.plain_data,
-            kind: super::PassKind::Compute,
-            invalidate_attachments: Vec::new(),
-            pipeline: Default::default(),
-            limits: &self.limits,
-        }
+        self.pass(super::PassKind::Compute)
     }
 
     pub fn render(
@@ -250,14 +256,9 @@ impl super::CommandEncoder {
             }
         }
 
-        super::PassEncoder {
-            commands: &mut self.commands,
-            plain_data: &mut self.plain_data,
-            kind: super::PassKind::Render,
-            invalidate_attachments,
-            pipeline: Default::default(),
-            limits: &self.limits,
-        }
+        let mut pass = self.pass(super::PassKind::Render);
+        pass.invalidate_attachments = invalidate_attachments;
+        pass
     }
 
     pub fn timings(&self) -> &[(String, Duration)] {
@@ -329,6 +330,9 @@ impl<T> Drop for super::PassEncoder<'_, T> {
                 self.commands.push(super::Command::ResetFramebuffer);
             }
         }
+        if self.has_scope {
+            self.commands.push(super::Command::PopScope);
+        }
     }
 }
 
@@ -398,33 +402,6 @@ impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
             bytes_per_row,
             size,
         });
-    }
-}
-
-#[hidden_trait::expose]
-impl crate::traits::AccelerationStructureEncoder for super::PassEncoder<'_, ()> {
-    type AccelerationStructure = crate::AccelerationStructure;
-    type AccelerationStructureMesh = crate::AccelerationStructureMesh;
-    type BufferPiece = crate::BufferPiece;
-
-    fn build_bottom_level(
-        &mut self,
-        _acceleration_structure: super::AccelerationStructure,
-        _meshes: &[crate::AccelerationStructureMesh],
-        _scratch_data: crate::BufferPiece,
-    ) {
-        unimplemented!()
-    }
-
-    fn build_top_level(
-        &mut self,
-        _acceleration_structure: super::AccelerationStructure,
-        _bottom_level: &[super::AccelerationStructure],
-        _instance_count: u32,
-        _instance_data: crate::BufferPiece,
-        _scratch_data: crate::BufferPiece,
-    ) {
-        unimplemented!()
     }
 }
 
@@ -1047,6 +1024,13 @@ impl super::Command {
             }
             Self::QueryCounter { query } => {
                 gl.query_counter(query, glow::TIMESTAMP);
+            }
+            Self::PushScope { ref name_range } => {
+                let name = str::from_utf8(&ec.string_data[name_range.clone()]).unwrap();
+                gl.push_debug_group(glow::DEBUG_SOURCE_APPLICATION, super::DEBUG_ID, name);
+            }
+            Self::PopScope => {
+                gl.pop_debug_group();
             }
         }
     }

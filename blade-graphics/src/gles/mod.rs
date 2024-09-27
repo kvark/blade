@@ -5,7 +5,7 @@ mod pipeline;
 mod platform;
 mod resource;
 
-use std::{marker::PhantomData, ops::Range, time::Duration};
+use std::{marker::PhantomData, mem, ops::Range, time::Duration};
 
 type BindTarget = u32;
 const DEBUG_ID: u32 = 0;
@@ -27,6 +27,7 @@ struct Limits {
 
 #[derive(Debug, Default)]
 struct Toggles {
+    scoping: bool,
     timing: bool,
 }
 
@@ -349,6 +350,10 @@ enum Command {
     QueryCounter {
         query: glow::Query,
     },
+    PushScope {
+        name_range: Range<usize>,
+    },
+    PopScope,
 }
 
 struct TimingData {
@@ -360,6 +365,8 @@ pub struct CommandEncoder {
     name: String,
     commands: Vec<Command>,
     plain_data: Vec<u8>,
+    string_data: Vec<u8>,
+    needs_scopes: bool,
     has_present: bool,
     limits: Limits,
     timing_datas: Option<Box<[TimingData]>>,
@@ -380,6 +387,7 @@ pub struct PassEncoder<'a, P> {
     invalidate_attachments: Vec<u32>,
     pipeline: PhantomData<P>,
     limits: &'a Limits,
+    has_scope: bool,
 }
 
 pub type ComputeCommandEncoder<'a> = PassEncoder<'a, ComputePipeline>;
@@ -420,6 +428,7 @@ pub struct SyncPoint {
 struct ExecutionContext {
     framebuf: glow::Framebuffer,
     plain_buffer: glow::Buffer,
+    string_data: Box<[u8]>,
 }
 
 impl Context {
@@ -463,6 +472,8 @@ impl crate::traits::CommandDevice for Context {
             name: desc.name.to_string(),
             commands: Vec::new(),
             plain_data: Vec::new(),
+            string_data: Vec::new(),
+            needs_scopes: self.toggles.scoping,
             has_present: false,
             limits: self.limits.clone(),
             timing_datas,
@@ -510,6 +521,7 @@ impl crate::traits::CommandDevice for Context {
                 ExecutionContext {
                     framebuf,
                     plain_buffer,
+                    string_data: mem::take(&mut encoder.string_data).into_boxed_slice(),
                 }
             };
             for command in encoder.commands.iter() {
