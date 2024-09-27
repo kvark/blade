@@ -568,11 +568,16 @@ unsafe fn present_blit(gl: &glow::Context, source: glow::Framebuffer, size: crat
     gl.color_mask(true, true, true, true);
     gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
     gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(source));
+    // Note: the Y-flipping here. GL's presentation is not flipped,
+    // but main rendering is. Therefore, we Y-flip the output positions
+    // in the shader, and also this blit.
+    // Note2: we could avoid doing both and get correct rendering for the main window
+    // but then other render targets would be screwed.
     gl.blit_framebuffer(
         0,
-        0,
-        size.width as i32,
         size.height as i32,
+        size.width as i32,
+        0,
         0,
         0,
         size.width as i32,
