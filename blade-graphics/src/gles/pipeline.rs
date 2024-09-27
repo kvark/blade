@@ -35,7 +35,7 @@ impl super::Context {
                 version: if force_explicit_bindings { 320 } else { 300 },
                 is_webgl: cfg!(target_arch = "wasm32"),
             },
-            writer_flags: extra_flags,
+            writer_flags: extra_flags | glsl::WriterFlags::ADJUST_COORDINATE_SPACE,
             binding_map: Default::default(),
             zero_initialize_workgroup_memory: false,
         };
