@@ -543,28 +543,8 @@ impl ContextInner {
             .swap_interval(self.egl.display, sc.swap_interval)
             .unwrap();
 
-        let gl = &self.glow;
         unsafe {
-            gl.disable(glow::SCISSOR_TEST);
-            gl.color_mask(true, true, true, true);
-            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
-            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(wsi.framebuf));
-            // Note the Y-flipping here. GL's presentation is not flipped,
-            // but main rendering is. Therefore, we Y-flip the output positions
-            // in the shader, and also this blit.
-            gl.blit_framebuffer(
-                0,
-                sc.extent.height as i32,
-                sc.extent.width as i32,
-                0,
-                0,
-                0,
-                sc.extent.width as i32,
-                sc.extent.height as i32,
-                glow::COLOR_BUFFER_BIT,
-                glow::NEAREST,
-            );
-            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+            super::present_blit(&self.glow, wsi.framebuf, sc.extent);
         }
 
         self.egl

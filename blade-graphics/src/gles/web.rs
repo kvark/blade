@@ -142,29 +142,8 @@ impl Context {
 
     pub(super) fn present(&self) {
         let sc = &self.swapchain;
-        let size = sc.extent.get();
-        let gl = &self.glow;
         unsafe {
-            gl.disable(glow::SCISSOR_TEST);
-            gl.color_mask(true, true, true, true);
-            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
-            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(sc.framebuf));
-            // Note the Y-flipping here. GL's presentation is not flipped,
-            // but main rendering is. Therefore, we Y-flip the output positions
-            // in the shader, and also this blit.
-            gl.blit_framebuffer(
-                0,
-                size.height as i32,
-                size.width as i32,
-                0,
-                0,
-                0,
-                size.width as i32,
-                size.height as i32,
-                glow::COLOR_BUFFER_BIT,
-                glow::NEAREST,
-            );
-            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+            super::present_blit(&self.glow, sc.framebuf, sc.extent.get());
         }
     }
 }
