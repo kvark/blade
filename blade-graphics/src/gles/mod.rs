@@ -560,3 +560,25 @@ fn map_compare_func(fun: crate::CompareFunction) -> u32 {
         Cf::Always => glow::ALWAYS,
     }
 }
+
+unsafe fn present_blit(gl: &glow::Context, source: glow::Framebuffer, size: crate::Extent) {
+    use glow::HasContext as _;
+
+    gl.disable(glow::SCISSOR_TEST);
+    gl.color_mask(true, true, true, true);
+    gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
+    gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(source));
+    gl.blit_framebuffer(
+        0,
+        0,
+        size.width as i32,
+        size.height as i32,
+        0,
+        0,
+        size.width as i32,
+        size.height as i32,
+        glow::COLOR_BUFFER_BIT,
+        glow::NEAREST,
+    );
+    gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+}
