@@ -851,38 +851,66 @@ impl super::Context {
 
         let queue_families = [self.queue_family_index];
 
-        let supported_formats = unsafe {
-            surface_khr
-                .get_physical_device_surface_formats(self.physical_device, surface.raw)
-                .unwrap()
-        };
-        let (format, surface_format) = match config.color_space {
-            crate::ColorSpace::Linear => {
-                let surface_format = vk::SurfaceFormatKHR {
-                    format: vk::Format::B8G8R8A8_UNORM,
-                    color_space: vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT,
+        let mut supported_formats = Vec::new();
+        let (format, surface_format) =
+            if let Some(&super::Frame { format, .. }) = surface.frames.first() {
+                log::info!("Retaining current format: {:?}", format);
+                let vk_color_space = match (format, config.color_space) {
+                    (crate::TextureFormat::Bgra8Unorm, crate::ColorSpace::Srgb) => {
+                        vk::ColorSpaceKHR::SRGB_NONLINEAR
+                    }
+                    (crate::TextureFormat::Bgra8Unorm, crate::ColorSpace::Linear) => {
+                        vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT
+                    }
+                    (crate::TextureFormat::Bgra8UnormSrgb, crate::ColorSpace::Linear) => {
+                        vk::ColorSpaceKHR::default()
+                    }
+                    _ => panic!(
+                        "Unexpected format {:?} under color space {:?}",
+                        format, config.color_space
+                    ),
                 };
-                if supported_formats.contains(&surface_format) {
-                    log::info!("Using linear SRGB color space");
-                    (crate::TextureFormat::Bgra8Unorm, surface_format)
-                } else {
-                    (
-                        crate::TextureFormat::Bgra8UnormSrgb,
+                (
+                    format,
+                    vk::SurfaceFormatKHR {
+                        format: super::map_texture_format(format),
+                        color_space: vk_color_space,
+                    },
+                )
+            } else {
+                supported_formats = unsafe {
+                    surface_khr
+                        .get_physical_device_surface_formats(self.physical_device, surface.raw)
+                        .unwrap()
+                };
+                match config.color_space {
+                    crate::ColorSpace::Linear => {
+                        let surface_format = vk::SurfaceFormatKHR {
+                            format: vk::Format::B8G8R8A8_UNORM,
+                            color_space: vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT,
+                        };
+                        if supported_formats.contains(&surface_format) {
+                            log::info!("Using linear SRGB color space");
+                            (crate::TextureFormat::Bgra8Unorm, surface_format)
+                        } else {
+                            (
+                                crate::TextureFormat::Bgra8UnormSrgb,
+                                vk::SurfaceFormatKHR {
+                                    format: vk::Format::B8G8R8A8_SRGB,
+                                    color_space: vk::ColorSpaceKHR::default(),
+                                },
+                            )
+                        }
+                    }
+                    crate::ColorSpace::Srgb => (
+                        crate::TextureFormat::Bgra8Unorm,
                         vk::SurfaceFormatKHR {
-                            format: vk::Format::B8G8R8A8_SRGB,
-                            color_space: vk::ColorSpaceKHR::default(),
+                            format: vk::Format::B8G8R8A8_UNORM,
+                            color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
                         },
-                    )
+                    ),
                 }
-            }
-            crate::ColorSpace::Srgb => (
-                crate::TextureFormat::Bgra8Unorm,
-                vk::SurfaceFormatKHR {
-                    format: vk::Format::B8G8R8A8_UNORM,
-                    color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
-                },
-            ),
-        };
+            };
         if !supported_formats.is_empty() && !supported_formats.contains(&surface_format) {
             log::error!("Surface formats are incompatible: {:?}", supported_formats);
         }
@@ -926,7 +954,7 @@ impl super::Context {
         if self.device.full_screen_exclusive.is_some() {
             create_info = create_info.push_next(&mut full_screen_exclusive_info);
         } else if !config.allow_exclusive_full_screen {
-            log::warn!("Unable to forbid exclusive full screen");
+            log::info!("Unable to forbid exclusive full screen");
         }
         let new_swapchain = unsafe {
             surface
