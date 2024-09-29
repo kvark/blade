@@ -330,31 +330,8 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debu
     return brdf;
 }
 
-fn ratio(a: f32, b: f32) -> f32 {
-    return select(0.0, a / (a+b), a+b > 0.0);
-}
-
-struct RestirOutput {
-    radiance: vec3<f32>,
-}
-
-fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, enable_debug: bool) -> RestirOutput {
-    let ray_dir = get_ray_direction(camera, pixel);
-    let pixel_index = get_reservoir_index(pixel, camera);
-    if (surface.depth == 0.0) {
-        reservoirs[pixel_index] = StoredReservoir();
-        let env = evaluate_environment(ray_dir);
-        return RestirOutput(env);
-    }
-
-    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Depth) {
-        textureStore(out_debug, pixel, vec4<f32>(1.0 / surface.depth));
-    }
-    let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
-    let position = camera.position + surface.depth * ray_dir;
-    let normal = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
-
-    var canonical = LiveReservoir();
+fn produce_canonical(surface: Surface, position: vec3<f32>, rng: ptr<function, RandomState>, debug_len: f32) -> LiveReservoir {
+    var reservoir = LiveReservoir();
     for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
         var ls: LightSample;
         if (parameters.environment_importance_sampling != 0u) {
@@ -366,11 +343,31 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         let brdf = evaluate_sample(ls, surface, position, debug_len);
         if (brdf > 0.0) {
             let other = make_reservoir(ls, 0u, vec3<f32>(brdf));
-            merge_reservoir(&canonical, other, random_gen(rng));
+            merge_reservoir(&reservoir, other, random_gen(rng));
         } else {
-            bump_reservoir(&canonical, 1.0);
+            bump_reservoir(&reservoir, 1.0);
         }
     }
+    return reservoir;
+}
+
+struct Neighborhood {
+    canonical: LiveReservoir,
+    reservoir_indices: array<i32, MAX_RESERVOIRS>,
+    temporal_index: u32,
+    count: u32,
+}
+
+fn gather_neighborhood(
+    surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, enable_debug: bool
+) -> Neighborhood {
+    if (surface.depth == 0.0) {
+        return Neighborhood();
+    }
+
+    let ray_dir = get_ray_direction(camera, pixel);
+    let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
+    let position = camera.position + surface.depth * ray_dir;
 
     let center_coord = get_prev_pixel(pixel, position);
     let center_pixel = vec2<i32>(center_coord);
@@ -379,17 +376,17 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     let further_pixel = vec2<i32>(center_coord - 0.5) + vec2<i32>(center_coord + 0.5) - center_pixel;
 
     // First, gather the list of reservoirs to merge with
-    var accepted_reservoir_indices = array<i32, MAX_RESERVOIRS>();
-    var accepted_count = 0u;
-    var temporal_index = ~0u;
+    var nh = Neighborhood();
+    nh.canonical = produce_canonical(surface, position, rng, debug_len);
+    nh.temporal_index = ~0u;
     let num_temporal_candidates = parameters.temporal_tap * FACTOR_TEMPORAL_CANDIDATES;
     let num_candidates = num_temporal_candidates + parameters.spatial_taps * FACTOR_SPATIAL_CANDIDATES;
     let max_samples = min(MAX_RESERVOIRS, 1u + parameters.spatial_taps);
 
-    for (var tap = 0u; tap < num_candidates && accepted_count < max_samples; tap += 1u) {
+    for (var tap = 0u; tap < num_candidates && nh.count < max_samples; tap += 1u) {
         var other_pixel = center_pixel;
         if (tap < num_temporal_candidates) {
-            if (temporal_index < tap) {
+            if (nh.temporal_index < tap) {
                 continue;
             }
             let mask = vec2<u32>(tap) & vec2<u32>(1u, 2u);
@@ -420,32 +417,57 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         }
 
         if (tap < num_temporal_candidates) {
-            temporal_index = accepted_count;
+            nh.temporal_index = nh.count;
         }
-        accepted_reservoir_indices[accepted_count] = other_index;
-        accepted_count += 1u;
+        nh.reservoir_indices[nh.count] = other_index;
+        nh.count += 1u;
     }
 
     if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_SampleReuse) {
         var color = vec4<f32>(0.0);
-        for (var i = 0u; i < min(3u, accepted_count); i += 1u) {
+        for (var i = 0u; i < min(3u, nh.count); i += 1u) {
             color[i] = 1.0;
         }
         textureStore(out_debug, pixel, color);
     }
 
-    // Next, evaluate the MIS of each of the samples versus the canonical one.
+    return nh;
+}
+
+struct RestirOutput {
+    reservoir: StoredReservoir,
+    radiance: vec3<f32>,
+}
+
+fn ratio(a: f32, b: f32) -> f32 {
+    return select(0.0, a / (a+b), a+b > 0.0);
+}
+
+fn compute_restir(
+    surface: Surface, ray_dir: vec3<f32>, nh: Neighborhood,
+    rng: ptr<function, RandomState>, enable_debug: bool,
+) -> RestirOutput {
+    if (surface.depth == 0.0) {
+        var ro = RestirOutput();
+        ro.radiance = evaluate_environment(ray_dir);
+        return ro;
+    }
+
+    let position = camera.position + surface.depth * ray_dir;
+    let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
+    var accepted_reservoir_indices = nh.reservoir_indices;
+    // evaluate the MIS of each of the samples versus the canonical one.
     var reservoir = LiveReservoir();
     var color_and_weight = vec4<f32>(0.0);
-    let mis_scale = 1.0 / (f32(accepted_count) + parameters.defensive_mis);
-    var mis_canonical = select(mis_scale * parameters.defensive_mis, 1.0, accepted_count == 0u || parameters.use_pairwise_mis == 0u);
-    let inv_count = 1.0 / f32(accepted_count);
+    let mis_scale = 1.0 / (f32(nh.count) + parameters.defensive_mis);
+    var mis_canonical = select(mis_scale * parameters.defensive_mis, 1.0, nh.count == 0u || parameters.use_pairwise_mis == 0u);
+    let inv_count = 1.0 / f32(nh.count);
 
-    for (var rid = 0u; rid < accepted_count; rid += 1u) {
+    for (var rid = 0u; rid < nh.count; rid += 1u) {
         let neighbor_index = accepted_reservoir_indices[rid];
         let neighbor = prev_reservoirs[neighbor_index];
 
-        let max_history = select(parameters.spatial_tap_history, parameters.temporal_history, rid == temporal_index);
+        let max_history = select(parameters.spatial_tap_history, parameters.temporal_history, rid == nh.temporal_index);
         var other: LiveReservoir;
         if (parameters.use_pairwise_mis != 0u) {
             let neighbor_pixel = get_pixel_from_reservoir_index(neighbor_index, prev_camera);
@@ -456,14 +478,14 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
                 let neighbor_position = prev_camera.position + neighbor_surface.depth * neighbor_dir;
 
                 let t_canonical_at_neighbor = estimate_target_score_with_occlusion(
-                    neighbor_surface, neighbor_position, canonical.selected_light_index, canonical.selected_uv, prev_acc_struct, debug_len);
-                let r_canonical = ratio(canonical.history * canonical.selected_target_score * inv_count, neighbor_history * t_canonical_at_neighbor.score);
+                    neighbor_surface, neighbor_position, nh.canonical.selected_light_index, nh.canonical.selected_uv, prev_acc_struct, debug_len);
+                let r_canonical = ratio(nh.canonical.history * nh.canonical.selected_target_score * inv_count, neighbor_history * t_canonical_at_neighbor.score);
                 mis_canonical += mis_scale * r_canonical;
             }
 
             let t_neighbor_at_canonical = estimate_target_score_with_occlusion(
                 surface, position, neighbor.light_index, neighbor.light_uv, acc_struct, debug_len);
-            let r_neighbor = ratio(neighbor_history * neighbor.target_score, canonical.history * t_neighbor_at_canonical.score * inv_count);
+            let r_neighbor = ratio(neighbor_history * neighbor.target_score, nh.canonical.history * t_neighbor_at_canonical.score * inv_count);
             let mis_neighbor = mis_scale * r_neighbor;
 
             other.history = neighbor_history;
@@ -489,6 +511,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     }
 
     // Finally, merge in the canonical sample
+    var canonical = nh.canonical;
     if (parameters.use_pairwise_mis != 0) {
         normalize_reservoir(&canonical, mis_canonical);
     }
@@ -499,13 +522,12 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     merge_reservoir(&reservoir, canonical, random_gen(rng));
 
     let effective_history = select(reservoir.history, 1.0, parameters.use_pairwise_mis != 0);
-    let stored = pack_reservoir_detail(reservoir, effective_history);
-    reservoirs[pixel_index] = stored;
     var ro = RestirOutput();
+    ro.reservoir = pack_reservoir_detail(reservoir, effective_history);
     if (DECOUPLED_SHADING) {
         ro.radiance = color_and_weight.xyz / max(color_and_weight.w, 0.001);
     } else {
-        ro.radiance = stored.contribution_weight * reservoir.selected_radiance;
+        ro.radiance = ro.reservoir.contribution_weight * reservoir.selected_radiance;
     }
     return ro;
 }
@@ -520,9 +542,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var rng = random_init(global_index, parameters.frame_index);
 
     let surface = read_surface(vec2<i32>(global_id.xy));
+    let pixel = vec2<i32>(global_id.xy);
     let enable_debug = DEBUG_MODE && all(global_id.xy == debug.mouse_pos);
     let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
-    let ro = compute_restir(surface, vec2<i32>(global_id.xy), &rng, enable_restir_debug);
+
+    let neighborhood = gather_neighborhood(surface, pixel, &rng, enable_restir_debug);
+    let ray_dir = get_ray_direction(camera, pixel);
+    let ro = compute_restir(surface, ray_dir, neighborhood, &rng, enable_restir_debug);
+    let pixel_index = get_reservoir_index(pixel, camera);
+    reservoirs[pixel_index] = ro.reservoir;
 
     let color = ro.radiance;
     if (enable_debug) {
