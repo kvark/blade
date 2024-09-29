@@ -71,7 +71,6 @@ winit = { workspace = true }
 blade-render = { version = "0.3", path = "blade-render" }
 
 [dev-dependencies]
-egui_plot = "0.28"
 blade-macros = { version = "0.3", path = "blade-macros" }
 bytemuck = { workspace = true }
 choir = { workspace = true }
