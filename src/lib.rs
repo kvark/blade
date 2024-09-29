@@ -763,6 +763,16 @@ impl Engine {
                 }
             });
 
+        egui::CollapsingHeader::new("Performance").show(ui, |ui| {
+            for (name, time) in self.pacer.timings() {
+                let millis = time.as_secs_f32() * 1000.0;
+                ui.horizontal(|ui| {
+                    ui.label(name);
+                    ui.colored_label(egui::Color32::WHITE, format!("{:.2} ms", millis));
+                });
+            }
+        });
+
         egui::CollapsingHeader::new("Objects")
             .default_open(true)
             .show(ui, |ui| {

@@ -64,4 +64,8 @@ impl FramePacer {
         mem::swap(&mut self.prev_resources, &mut self.next_resources);
         self.prev_sync_point.as_ref().unwrap()
     }
+
+    pub fn timings(&self) -> &blade_graphics::Timings {
+        self.command_encoder.timings()
+    }
 }

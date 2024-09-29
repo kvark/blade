@@ -4,14 +4,12 @@
 use blade_graphics as gpu;
 use blade_helpers::ControlledCamera;
 use std::{
-    collections::VecDeque,
     fmt, fs,
     path::{Path, PathBuf},
     sync::Arc,
     time,
 };
 
-const FRAME_TIME_HISTORY: usize = 30;
 const RENDER_WHILE_LOADING: bool = true;
 const MAX_DEPTH: f32 = 1e9;
 
@@ -156,8 +154,6 @@ struct Example {
     need_accumulation_reset: bool,
     is_point_selected: bool,
     is_file_hovered: bool,
-    last_render_time: time::Instant,
-    render_times: VecDeque<u32>,
     ray_config: blade_render::RayConfig,
     denoiser_enabled: bool,
     denoiser_config: blade_render::DenoiserConfig,
@@ -254,8 +250,6 @@ impl Example {
             need_accumulation_reset: true,
             is_point_selected: false,
             is_file_hovered: false,
-            last_render_time: time::Instant::now(),
-            render_times: VecDeque::with_capacity(FRAME_TIME_HISTORY),
             ray_config: blade_helpers::default_ray_config(),
             denoiser_enabled: true,
             denoiser_config: blade_render::DenoiserConfig {
@@ -556,13 +550,6 @@ impl Example {
         use blade_helpers::{populate_debug_selection, ExposeHud as _};
         use strum::IntoEnumIterator as _;
 
-        let delta = self.last_render_time.elapsed();
-        self.last_render_time += delta;
-        while self.render_times.len() >= FRAME_TIME_HISTORY {
-            self.render_times.pop_back();
-        }
-        self.render_times.push_front(delta.as_millis() as u32);
-
         if self.scene_load_task.is_some() {
             ui.horizontal(|ui| {
                 ui.label("Loading...");
@@ -668,30 +655,6 @@ impl Example {
 
         egui::CollapsingHeader::new("Tone Map").show(ui, |ui| {
             self.post_proc_config.populate_hud(ui);
-        });
-
-        egui::CollapsingHeader::new("Performance").show(ui, |ui| {
-            let times = self.render_times.as_slices();
-            let fd_points = egui_plot::PlotPoints::from_iter(
-                times
-                    .0
-                    .iter()
-                    .chain(times.1.iter())
-                    .enumerate()
-                    .map(|(x, &y)| [x as f64, y as f64]),
-            );
-            let fd_line = egui_plot::Line::new(fd_points).name("last");
-            egui_plot::Plot::new("Frame time")
-                .allow_zoom(false)
-                .allow_scroll(false)
-                .allow_drag(false)
-                .show_x(false)
-                .include_y(0.0)
-                .show_axes([false, true])
-                .show(ui, |plot_ui| {
-                    plot_ui.line(fd_line);
-                    plot_ui.hline(egui_plot::HLine::new(1000.0 / 60.0).name("smooth"));
-                });
         });
     }
 
