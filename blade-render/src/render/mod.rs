@@ -56,7 +56,8 @@ pub enum DebugMode {
     ShadingNormal = 7,
     Motion = 8,
     HitConsistency = 9,
-    SampleReuse = 10,
+    TemporalReuse = 10,
+    SpatialReuse = 11,
     Variance = 15,
 }
 
@@ -97,6 +98,7 @@ pub struct RayConfig {
     pub environment_importance_sampling: bool,
     pub temporal_tap: bool,
     pub temporal_history: u32,
+    pub spatial_pass: bool,
     pub spatial_taps: u32,
     pub spatial_tap_history: u32,
     pub spatial_radius: u32,
@@ -319,9 +321,9 @@ struct Blur {
 pub struct Renderer {
     shaders: Shaders,
     targets: RestirTargets,
-    post_proc_input_index: usize,
     fill_pipeline: blade_graphics::ComputePipeline,
     main_pipeline: blade_graphics::ComputePipeline,
+    spatial_pipeline: blade_graphics::ComputePipeline,
     post_proc_pipeline: blade_graphics::RenderPipeline,
     blur: Blur,
     acceleration_structure: blade_graphics::AccelerationStructure,
@@ -426,6 +428,7 @@ struct MainData {
     reservoirs: blade_graphics::BufferPiece,
     prev_reservoirs: blade_graphics::BufferPiece,
     out_diffuse: blade_graphics::TextureView,
+    in_diffuse: blade_graphics::TextureView,
     out_debug: blade_graphics::TextureView,
 }
 
@@ -528,6 +531,7 @@ impl Shaders {
 struct ShaderPipelines {
     fill: blade_graphics::ComputePipeline,
     main: blade_graphics::ComputePipeline,
+    spatial: blade_graphics::ComputePipeline,
     temporal_accum: blade_graphics::ComputePipeline,
     a_trous: blade_graphics::ComputePipeline,
     post_proc: blade_graphics::RenderPipeline,
@@ -549,7 +553,7 @@ impl ShaderPipelines {
             compute: shader.at("main"),
         })
     }
-    fn create_ray_trace(
+    fn create_ray_trace_main(
         shader: &blade_graphics::Shader,
         gpu: &blade_graphics::Context,
     ) -> blade_graphics::ComputePipeline {
@@ -563,6 +567,21 @@ impl ShaderPipelines {
             name: "ray-trace",
             data_layouts: &[&layout],
             compute: shader.at("main"),
+        })
+    }
+
+    fn create_ray_trace_spatial(
+        shader: &blade_graphics::Shader,
+        gpu: &blade_graphics::Context,
+    ) -> blade_graphics::ComputePipeline {
+        //Note: technically the spatial reuse shader could use a reduced
+        // set of resources, but in terms of code reuse it's much easier
+        // to just bind the new data as the old one.
+        let layout = <MainData as blade_graphics::ShaderData>::layout();
+        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+            name: "ray-trace-spatial",
+            data_layouts: &[&layout],
+            compute: shader.at("main_spatial"),
         })
     }
 
@@ -621,7 +640,8 @@ impl ShaderPipelines {
         let sh_a_trous = shader_man[shaders.a_trous].raw.as_ref().unwrap();
         Ok(Self {
             fill: Self::create_gbuf_fill(shader_man[shaders.fill_gbuf].raw.as_ref().unwrap(), gpu),
-            main: Self::create_ray_trace(sh_main, gpu),
+            main: Self::create_ray_trace_main(sh_main, gpu),
+            spatial: Self::create_ray_trace_spatial(sh_main, gpu),
             temporal_accum: Self::create_temporal_accum(sh_a_trous, gpu),
             a_trous: Self::create_a_trous(sh_a_trous, gpu),
             post_proc: Self::create_post_proc(
@@ -710,9 +730,9 @@ impl Renderer {
         Self {
             shaders,
             targets,
-            post_proc_input_index: 0,
             fill_pipeline: sp.fill,
             main_pipeline: sp.main,
+            spatial_pipeline: sp.spatial,
             post_proc_pipeline: sp.post_proc,
             blur: Blur {
                 temporal_accum_pipeline: sp.temporal_accum,
@@ -761,6 +781,7 @@ impl Renderer {
         gpu.destroy_compute_pipeline(&mut self.blur.a_trous_pipeline);
         gpu.destroy_compute_pipeline(&mut self.fill_pipeline);
         gpu.destroy_compute_pipeline(&mut self.main_pipeline);
+        gpu.destroy_compute_pipeline(&mut self.spatial_pipeline);
         gpu.destroy_render_pipeline(&mut self.post_proc_pipeline);
     }
 
@@ -802,7 +823,8 @@ impl Renderer {
                     shader.get_struct_size("StoredReservoir"),
                     self.reservoir_size
                 );
-                self.main_pipeline = ShaderPipelines::create_ray_trace(shader, gpu);
+                self.main_pipeline = ShaderPipelines::create_ray_trace_main(shader, gpu);
+                self.spatial_pipeline = ShaderPipelines::create_ray_trace_spatial(shader, gpu);
             }
         }
         if self.shaders.a_trous != old.a_trous {
@@ -1115,7 +1137,6 @@ impl Renderer {
         }
         self.is_frozen = config.frozen;
         self.targets.camera_params[self.frame_index % 2] = self.make_camera_params(camera);
-        self.post_proc_input_index = self.frame_index % 2;
     }
 
     /// Ray trace the scene.
@@ -1130,7 +1151,6 @@ impl Renderer {
     ) {
         let debug = self.make_debug_params(&debug_config);
         let (cur, prev) = self.work_indices();
-        assert_eq!(cur, self.post_proc_input_index);
 
         if let mut pass = command_encoder.compute("fill-gbuf") {
             let mut pc = pass.with(&self.fill_pipeline);
@@ -1159,7 +1179,22 @@ impl Renderer {
             pc.dispatch(groups);
         }
 
-        if let mut pass = command_encoder.compute("ray-trace") {
+        let parameters = MainParams {
+            frame_index: self.frame_index as u32,
+            num_environment_samples: ray_config.num_environment_samples,
+            environment_importance_sampling: ray_config.environment_importance_sampling as u32,
+            temporal_tap: ray_config.temporal_tap as u32,
+            temporal_history: ray_config.temporal_history,
+            spatial_taps: ray_config.spatial_taps,
+            spatial_tap_history: ray_config.spatial_tap_history,
+            spatial_radius: ray_config.spatial_radius,
+            t_start: ray_config.t_start,
+            use_pairwise_mis: ray_config.pairwise_mis as u32,
+            defensive_mis: ray_config.defensive_mis,
+            use_motion_vectors: (self.frame_scene_built >= self.frame_index) as u32,
+        };
+
+        if let mut pass = command_encoder.compute("ray-trace-main") {
             let mut pc = pass.with(&self.main_pipeline);
             let groups = self.main_pipeline.get_dispatch_for(self.surface_size);
             pc.bind(
@@ -1168,21 +1203,7 @@ impl Renderer {
                     camera: self.targets.camera_params[cur],
                     prev_camera: self.targets.camera_params[prev],
                     debug,
-                    parameters: MainParams {
-                        frame_index: self.frame_index as u32,
-                        num_environment_samples: ray_config.num_environment_samples,
-                        environment_importance_sampling: ray_config.environment_importance_sampling
-                            as u32,
-                        temporal_tap: ray_config.temporal_tap as u32,
-                        temporal_history: ray_config.temporal_history,
-                        spatial_taps: ray_config.spatial_taps,
-                        spatial_tap_history: ray_config.spatial_tap_history,
-                        spatial_radius: ray_config.spatial_radius,
-                        t_start: ray_config.t_start,
-                        use_pairwise_mis: ray_config.pairwise_mis as u32,
-                        defensive_mis: ray_config.defensive_mis,
-                        use_motion_vectors: (self.frame_scene_built >= self.frame_index) as u32,
-                    },
+                    parameters,
                     acc_struct: self.acceleration_structure,
                     prev_acc_struct: if self.frame_scene_built < self.frame_index
                         || self.prev_acceleration_structure
@@ -1204,9 +1225,45 @@ impl Renderer {
                     t_prev_flat_normal: self.targets.flat_normal.views[prev],
                     t_motion: self.targets.motion.views[0],
                     debug_buf: self.debug.buffer_resource(),
-                    reservoirs: self.targets.reservoir_buf[cur].into(),
-                    prev_reservoirs: self.targets.reservoir_buf[prev].into(),
-                    out_diffuse: self.targets.light_diffuse.views[cur],
+                    reservoirs: self.targets.reservoir_buf[1].into(),
+                    prev_reservoirs: self.targets.reservoir_buf[0].into(),
+                    out_diffuse: self.targets.light_diffuse.views[1],
+                    in_diffuse: self.targets.light_diffuse.views[0],
+                    out_debug: self.targets.debug.views[0],
+                },
+            );
+            pc.dispatch(groups);
+        }
+
+        //TODO: control by `ray_config.spatial_pass`
+        if let mut pass = command_encoder.compute("ray-trace-spatial") {
+            let mut pc = pass.with(&self.spatial_pipeline);
+            let groups = self.spatial_pipeline.get_dispatch_for(self.surface_size);
+            pc.bind(
+                0,
+                &MainData {
+                    camera: self.targets.camera_params[cur],
+                    prev_camera: self.targets.camera_params[cur],
+                    debug,
+                    parameters,
+                    acc_struct: self.acceleration_structure,
+                    prev_acc_struct: self.acceleration_structure,
+                    sampler_linear: self.samplers.linear,
+                    sampler_nearest: self.samplers.nearest,
+                    env_map: self.env_map.main_view,
+                    env_weights: self.env_map.weight_view,
+                    t_depth: self.targets.depth.views[cur],
+                    t_prev_depth: self.targets.depth.views[cur],
+                    t_basis: self.targets.basis.views[cur],
+                    t_prev_basis: self.targets.basis.views[cur],
+                    t_flat_normal: self.targets.flat_normal.views[cur],
+                    t_prev_flat_normal: self.targets.flat_normal.views[cur],
+                    t_motion: self.targets.motion.views[0],
+                    debug_buf: self.debug.buffer_resource(),
+                    reservoirs: self.targets.reservoir_buf[0].into(),
+                    prev_reservoirs: self.targets.reservoir_buf[1].into(),
+                    out_diffuse: self.targets.light_diffuse.views[0],
+                    in_diffuse: self.targets.light_diffuse.views[1],
                     out_debug: self.targets.debug.views[0],
                 },
             );
@@ -1229,7 +1286,6 @@ impl Renderer {
             pad: 0,
         };
         let (cur, prev) = self.work_indices();
-        let temp = 2;
 
         if denoiser_config.temporal_weight < 1.0 {
             let mut pass = command_encoder.compute("temporal-accum");
@@ -1244,24 +1300,23 @@ impl Renderer {
                     camera: self.targets.camera_params[cur],
                     prev_camera: self.targets.camera_params[prev],
                     params,
-                    input: self.targets.light_diffuse.views[cur],
-                    prev_input: self.targets.light_diffuse.views[prev],
+                    input: self.targets.light_diffuse.views[0],
+                    prev_input: self.targets.light_diffuse.views[2],
                     t_depth: self.targets.depth.views[cur],
                     t_prev_depth: self.targets.depth.views[prev],
                     t_flat_normal: self.targets.flat_normal.views[cur],
                     t_prev_flat_normal: self.targets.flat_normal.views[prev],
                     t_motion: self.targets.motion.views[0],
-                    output: self.targets.light_diffuse.views[temp],
+                    output: self.targets.light_diffuse.views[1],
                 },
             );
             pc.dispatch(groups);
-            //Note: making `cur` contain the latest reprojection output
-            self.targets.light_diffuse.views.swap(cur, temp);
+            //Note: making `2` contain the latest reprojection output
+            self.targets.light_diffuse.views.swap(1, 2);
         }
 
-        assert_eq!(cur, self.post_proc_input_index);
-        let mut ping_pong = [temp, if self.is_frozen { cur } else { prev }];
         for _ in 0..denoiser_config.num_passes {
+            self.targets.light_diffuse.views.swap(0, 1);
             let mut pass = command_encoder.compute("a-trous");
             let mut pc = pass.with(&self.blur.a_trous_pipeline);
             let groups = self
@@ -1272,15 +1327,14 @@ impl Renderer {
                 0,
                 &ATrousData {
                     params,
-                    input: self.targets.light_diffuse.views[self.post_proc_input_index],
+                    input: self.targets.light_diffuse.views
+                        [if params.iteration == 0 { 2 } else { 1 }],
                     t_depth: self.targets.depth.views[cur],
                     t_flat_normal: self.targets.flat_normal.views[cur],
-                    output: self.targets.light_diffuse.views[ping_pong[0]],
+                    output: self.targets.light_diffuse.views[0],
                 },
             );
             pc.dispatch(groups);
-            self.post_proc_input_index = ping_pong[0];
-            ping_pong.swap(0, 1);
             params.iteration += 1;
         }
     }
@@ -1302,7 +1356,7 @@ impl Renderer {
                 0,
                 &PostProcData {
                     t_albedo: self.targets.albedo.views[0],
-                    light_diffuse: self.targets.light_diffuse.views[self.post_proc_input_index],
+                    light_diffuse: self.targets.light_diffuse.views[0],
                     t_debug: self.targets.debug.views[0],
                     tone_map_params: ToneMapParams {
                         enabled: 1,
