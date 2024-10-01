@@ -122,9 +122,9 @@ impl crate::ShaderBindable for super::AccelerationStructure {
 }
 
 impl crate::TexturePiece {
-    fn subresource_layers(&self, aspects: crate::TexelAspects) -> vk::ImageSubresourceLayers {
+    fn subresource_layers(&self) -> vk::ImageSubresourceLayers {
         vk::ImageSubresourceLayers {
-            aspect_mask: super::map_aspects(aspects),
+            aspect_mask: super::map_aspects(self.texture.format.aspects()),
             mip_level: self.mip_level,
             base_array_layer: self.array_layer,
             layer_count: 1,
@@ -152,7 +152,7 @@ fn make_buffer_image_copy(
         buffer_row_length: block_info.dimensions.0 as u32
             * (bytes_per_row / block_info.size as u32),
         buffer_image_height: 0,
-        image_subresource: texture.subresource_layers(texture.texture.format.aspects()),
+        image_subresource: texture.subresource_layers(),
         image_offset: map_origin(&texture.origin),
         image_extent: super::map_extent_3d(size),
     }
@@ -591,9 +591,9 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
         size: crate::Extent,
     ) {
         let copy = vk::ImageCopy {
-            src_subresource: src.subresource_layers(crate::TexelAspects::all()),
+            src_subresource: src.subresource_layers(),
             src_offset: map_origin(&src.origin),
-            dst_subresource: dst.subresource_layers(crate::TexelAspects::all()),
+            dst_subresource: dst.subresource_layers(),
             dst_offset: map_origin(&dst.origin),
             extent: super::map_extent_3d(&size),
         };
