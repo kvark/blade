@@ -341,6 +341,7 @@ pub struct Renderer {
     surface_info: blade_graphics::SurfaceInfo,
     frame_index: usize,
     frame_scene_built: usize,
+    frame_resize: usize,
     is_frozen: bool,
     //TODO: refactor `ResourceArray` to not carry the freelist logic
     // This way we can embed user info into the allocator.
@@ -448,7 +449,6 @@ struct TemporalAccumData {
     prev_camera: CameraParams,
     params: BlurParams,
     input: blade_graphics::TextureView,
-    prev_input: blade_graphics::TextureView,
     t_depth: blade_graphics::TextureView,
     t_prev_depth: blade_graphics::TextureView,
     t_flat_normal: blade_graphics::TextureView,
@@ -753,6 +753,7 @@ impl Renderer {
             surface_info: config.surface_info,
             frame_index: 0,
             frame_scene_built: 0,
+            frame_resize: 0,
             is_frozen: false,
             texture_resource_lookup: HashMap::default(),
         }
@@ -878,6 +879,7 @@ impl Renderer {
         self.surface_size = size;
         self.targets.destroy(gpu);
         self.targets = RestirTargets::new(size, self.reservoir_size, encoder, gpu);
+        self.frame_resize = self.frame_index + 1;
     }
 
     #[profiling::function]
@@ -1118,7 +1120,7 @@ impl Renderer {
         }
         self.debug.update_entry(&mut transfer);
 
-        if config.reset_reservoirs {
+        if config.reset_reservoirs || self.frame_resize == self.frame_index {
             if !config.debug_draw {
                 self.debug.reset_lines(&mut transfer);
             }
@@ -1144,7 +1146,7 @@ impl Renderer {
     /// The result is stored internally in an HDR render target.
     #[profiling::function]
     pub fn ray_trace(
-        &self,
+        &mut self,
         command_encoder: &mut blade_graphics::CommandEncoder,
         debug_config: DebugConfig,
         ray_config: RayConfig,
@@ -1235,8 +1237,8 @@ impl Renderer {
             pc.dispatch(groups);
         }
 
-        //TODO: control by `ray_config.spatial_pass`
-        if let mut pass = command_encoder.compute("ray-trace-spatial") {
+        if ray_config.spatial_pass {
+            let mut pass = command_encoder.compute("ray-trace-spatial");
             let mut pc = pass.with(&self.spatial_pipeline);
             let groups = self.spatial_pipeline.get_dispatch_for(self.surface_size);
             pc.bind(
@@ -1268,19 +1270,25 @@ impl Renderer {
                 },
             );
             pc.dispatch(groups);
+            // Make sure the output is still in [0]
+            self.targets.light_diffuse.views.swap(0, 1);
         }
     }
 
     /// Perform noise reduction using SVGF.
     #[profiling::function]
     pub fn denoise(
-        &mut self, //TODO: borrow immutably
+        &mut self,
         command_encoder: &mut blade_graphics::CommandEncoder,
         denoiser_config: DenoiserConfig,
     ) {
         let mut params = BlurParams {
             extent: [self.surface_size.width, self.surface_size.height],
-            temporal_weight: denoiser_config.temporal_weight,
+            temporal_weight: if self.frame_resize < self.frame_index {
+                denoiser_config.temporal_weight
+            } else {
+                1.0
+            },
             iteration: 0,
             use_motion_vectors: (self.frame_scene_built >= self.frame_index) as u32,
             pad: 0,
@@ -1300,23 +1308,24 @@ impl Renderer {
                     camera: self.targets.camera_params[cur],
                     prev_camera: self.targets.camera_params[prev],
                     params,
-                    input: self.targets.light_diffuse.views[0],
-                    prev_input: self.targets.light_diffuse.views[2],
+                    input: self.targets.light_diffuse.views[2],
                     t_depth: self.targets.depth.views[cur],
                     t_prev_depth: self.targets.depth.views[prev],
                     t_flat_normal: self.targets.flat_normal.views[cur],
                     t_prev_flat_normal: self.targets.flat_normal.views[prev],
                     t_motion: self.targets.motion.views[0],
-                    output: self.targets.light_diffuse.views[1],
+                    output: self.targets.light_diffuse.views[0],
                 },
             );
             pc.dispatch(groups);
-            //Note: making `2` contain the latest reprojection output
-            self.targets.light_diffuse.views.swap(1, 2);
         }
 
+        // Make sure the accumulated result is in [2]
+        self.targets.light_diffuse.views.swap(0, 2);
+
+        let mut input_index = 2;
         for _ in 0..denoiser_config.num_passes {
-            self.targets.light_diffuse.views.swap(0, 1);
+            let output_index = if input_index == 0 { 1 } else { 0 };
             let mut pass = command_encoder.compute("a-trous");
             let mut pc = pass.with(&self.blur.a_trous_pipeline);
             let groups = self
@@ -1327,15 +1336,18 @@ impl Renderer {
                 0,
                 &ATrousData {
                     params,
-                    input: self.targets.light_diffuse.views
-                        [if params.iteration == 0 { 2 } else { 1 }],
+                    input: self.targets.light_diffuse.views[input_index],
                     t_depth: self.targets.depth.views[cur],
                     t_flat_normal: self.targets.flat_normal.views[cur],
-                    output: self.targets.light_diffuse.views[0],
+                    output: self.targets.light_diffuse.views[output_index],
                 },
             );
             pc.dispatch(groups);
             params.iteration += 1;
+            input_index = output_index;
+        }
+        if input_index != 0 {
+            self.targets.light_diffuse.views.swap(0, input_index);
         }
     }
 
