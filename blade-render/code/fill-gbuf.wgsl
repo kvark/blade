@@ -142,11 +142,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             debug_buf.entry.flat_normal = flat_normal;
         }
         if (enable_debug && (debug.draw_flags & DebugDrawFlags_SPACE) != 0u) {
-            let normal_len = 0.15 * intersection.t;
-            let side = 0.05 * intersection.t;
-            debug_line(hit_position, hit_position + normal_len * qrot(geo_to_world_rot, normal_geo), 0xFFFFFFu);
-            debug_line(hit_position - side * tangent_geo, hit_position + side * tangent_geo, 0x808080u);
-            debug_line(hit_position - side * bitangent_geo, hit_position + side * bitangent_geo, 0x808080u);
+            let normal_w = 0.15 * intersection.t * qrot(geo_to_world_rot, normal_geo);
+            let tangent_w = 0.05 * intersection.t * qrot(geo_to_world_rot, tangent_geo);
+            let bitangent_w = 0.05 * intersection.t * qrot(geo_to_world_rot, bitangent_geo);
+            debug_line(hit_position, hit_position + normal_w, 0xFFFFFFu);
+            debug_line(hit_position - tangent_w, hit_position + tangent_w, 0x808080u);
+            debug_line(hit_position - bitangent_w, hit_position + bitangent_w, 0x808080u);
         }
         if (enable_debug && (debug.draw_flags & DebugDrawFlags_GEOMETRY) != 0u) {
             let debug_len = intersection.t * 0.2;

@@ -549,7 +549,7 @@ impl blade_asset::Baker for Baker {
                         },
                         base_color_factor: pbr.base_color_factor(),
                         normal: TextureReference {
-                            source_index: match pbr.base_color_texture() {
+                            source_index: match g_material.normal_texture() {
                                 Some(info) => sources.insert(self.cook_texture(
                                     info.texture(),
                                     META_NORMAL,
