@@ -246,7 +246,7 @@ impl Example {
             scene_revision: 0,
             camera: ControlledCamera::default(),
             debug: blade_render::DebugConfig::default(),
-            track_hot_reloads: false,
+            track_hot_reloads: true,
             need_accumulation_reset: true,
             is_point_selected: false,
             is_file_hovered: false,
