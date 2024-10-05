@@ -490,8 +490,7 @@ struct HitEntry {
     base_color_texture: u32,
     base_color_factor: [u8; 4],
     normal_texture: u32,
-    // make sure the end of the struct is aligned
-    finish_pad: [u32; 1],
+    normal_scale: f32,
 }
 
 #[derive(Clone, PartialEq)]
@@ -984,7 +983,7 @@ impl Renderer {
                         }),
                         None => dummy_black,
                     },
-                    finish_pad: [0; 1],
+                    normal_scale: material.normal_scale,
                 };
 
                 log::debug!("Entry[{geometry_index}] = {hit_entry:?}");

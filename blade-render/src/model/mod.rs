@@ -45,6 +45,7 @@ pub struct Material {
     pub base_color_texture: Option<blade_asset::Handle<crate::Texture>>,
     pub base_color_factor: [f32; 4],
     pub normal_texture: Option<blade_asset::Handle<crate::Texture>>,
+    pub normal_scale: f32,
     pub transparent: bool,
 }
 
@@ -72,6 +73,7 @@ struct CookedMaterial<'a> {
     base_color: TextureReference<'a>,
     base_color_factor: [f32; 4],
     normal: TextureReference<'a>,
+    normal_scale: f32,
     transparent: bool,
 }
 
@@ -560,6 +562,7 @@ impl blade_asset::Baker for Baker {
                             },
                             ..Default::default()
                         },
+                        normal_scale: g_material.normal_texture().map_or(1.0, |info| info.scale()),
                         transparent: g_material.alpha_mode() != gltf::material::AlphaMode::Opaque,
                     });
                 }
@@ -631,6 +634,7 @@ impl blade_asset::Baker for Baker {
                 ),
                 base_color_factor: material.base_color_factor,
                 normal_texture: self.serve_texture(&material.normal, META_NORMAL, exe_context),
+                normal_scale: material.normal_scale,
                 transparent: material.transparent,
             });
         }
