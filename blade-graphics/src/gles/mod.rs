@@ -5,7 +5,7 @@ mod pipeline;
 mod platform;
 mod resource;
 
-use std::{marker::PhantomData, mem, ops::Range, time::Duration};
+use std::{marker::PhantomData, mem, ops::Range};
 
 type BindTarget = u32;
 const DEBUG_ID: u32 = 0;
@@ -135,6 +135,7 @@ pub struct RenderPipeline {
     topology: crate::PrimitiveTopology,
 }
 
+#[derive(Debug)]
 pub struct Frame {
     texture: Texture,
 }
@@ -370,7 +371,7 @@ pub struct CommandEncoder {
     has_present: bool,
     limits: Limits,
     timing_datas: Option<Box<[TimingData]>>,
-    timings: Vec<(String, Duration)>,
+    timings: crate::Timings,
 }
 
 enum PassKind {
@@ -477,7 +478,7 @@ impl crate::traits::CommandDevice for Context {
             has_present: false,
             limits: self.limits.clone(),
             timing_datas,
-            timings: Vec::new(),
+            timings: Default::default(),
         }
     }
 

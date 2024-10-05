@@ -1110,3 +1110,5 @@ pub struct ScissorRect {
     pub w: u32,
     pub h: u32,
 }
+
+pub type Timings = std::collections::HashMap<String, std::time::Duration>;

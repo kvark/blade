@@ -1,5 +1,5 @@
 use ash::{khr, vk};
-use std::{num::NonZeroU32, path::PathBuf, ptr, sync::Mutex, time::Duration};
+use std::{num::NonZeroU32, path::PathBuf, ptr, sync::Mutex};
 
 mod command;
 mod descriptor;
@@ -253,7 +253,7 @@ pub struct CommandEncoder {
     present: Option<Presentation>,
     crash_handler: Option<CrashHandler>,
     temp_label: Vec<u8>,
-    timings: Vec<(String, Duration)>,
+    timings: crate::Timings,
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
@@ -398,7 +398,7 @@ impl crate::traits::CommandDevice for Context {
             present: None,
             crash_handler,
             temp_label: Vec::new(),
-            timings: Vec::new(),
+            timings: Default::default(),
         }
     }
 

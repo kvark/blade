@@ -47,6 +47,15 @@ pub trait CommandDevice {
     fn wait_for(&self, sp: &Self::SyncPoint, timeout_ms: u32) -> bool;
 }
 
+pub trait CommandEncoder {
+    type Texture: Send + Sync + Clone + Copy + Debug;
+    type Frame: Send + Sync + Debug;
+    fn start(&mut self);
+    fn init_texture(&mut self, texture: Self::Texture);
+    fn present(&mut self, frame: Self::Frame);
+    fn timings(&self) -> &super::Timings;
+}
+
 pub trait TransferEncoder {
     type BufferPiece: Send + Sync + Clone + Copy + Debug;
     type TexturePiece: Send + Sync + Clone + Copy + Debug;

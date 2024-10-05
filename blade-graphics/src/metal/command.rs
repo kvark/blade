@@ -116,39 +116,6 @@ impl super::CommandEncoder {
         self.raw.take().unwrap()
     }
 
-    pub fn start(&mut self) {
-        if let Some(ref mut td_array) = self.timing_datas {
-            self.timings.clear();
-            td_array.rotate_left(1);
-            let td = td_array.first_mut().unwrap();
-            if !td.pass_names.is_empty() {
-                let counters = td
-                    .sample_buffer
-                    .resolve_counter_range(metal::NSRange::new(0, td.pass_names.len() as u64 * 2));
-                for (name, chunk) in td.pass_names.drain(..).zip(counters.chunks(2)) {
-                    let duration = Duration::from_nanos(chunk[1] - chunk[0]);
-                    self.timings.push((name, duration));
-                }
-            }
-        }
-
-        let queue = self.queue.lock().unwrap();
-        self.raw = Some(objc::rc::autoreleasepool(|| {
-            let cmd_buf = queue.new_command_buffer_with_unretained_references();
-            if !self.name.is_empty() {
-                cmd_buf.set_label(&self.name);
-            }
-            cmd_buf.to_owned()
-        }));
-        self.has_open_debug_group = false;
-    }
-
-    pub fn init_texture(&mut self, _texture: super::Texture) {}
-
-    pub fn present(&mut self, frame: super::Frame) {
-        self.raw.as_mut().unwrap().present_drawable(&frame.drawable);
-    }
-
     pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder {
         self.begin_pass(label);
         let raw = objc::rc::autoreleasepool(|| {
@@ -313,8 +280,47 @@ impl super::CommandEncoder {
             phantom: PhantomData,
         }
     }
+}
 
-    pub fn timings(&self) -> &[(String, Duration)] {
+#[hidden_trait::expose]
+impl crate::traits::CommandEncoder for super::CommandEncoder {
+    type Texture = super::Texture;
+    type Frame = super::Frame;
+
+    fn start(&mut self) {
+        if let Some(ref mut td_array) = self.timing_datas {
+            self.timings.clear();
+            td_array.rotate_left(1);
+            let td = td_array.first_mut().unwrap();
+            if !td.pass_names.is_empty() {
+                let counters = td
+                    .sample_buffer
+                    .resolve_counter_range(metal::NSRange::new(0, td.pass_names.len() as u64 * 2));
+                for (name, chunk) in td.pass_names.drain(..).zip(counters.chunks(2)) {
+                    let duration = Duration::from_nanos(chunk[1] - chunk[0]);
+                    *self.timings.entry(name).or_default() += duration;
+                }
+            }
+        }
+
+        let queue = self.queue.lock().unwrap();
+        self.raw = Some(objc::rc::autoreleasepool(|| {
+            let cmd_buf = queue.new_command_buffer_with_unretained_references();
+            if !self.name.is_empty() {
+                cmd_buf.set_label(&self.name);
+            }
+            cmd_buf.to_owned()
+        }));
+        self.has_open_debug_group = false;
+    }
+
+    fn init_texture(&mut self, _texture: super::Texture) {}
+
+    fn present(&mut self, frame: super::Frame) {
+        self.raw.as_mut().unwrap().present_drawable(&frame.drawable);
+    }
+
+    fn timings(&self) -> &crate::Timings {
         &self.timings
     }
 }
