@@ -119,7 +119,7 @@ impl Example {
         ui.heading("Particle System");
         self.particle_system.add_gui(ui);
         ui.heading("Timings");
-        for &(ref name, time) in self.command_encoder.timings() {
+        for (name, time) in self.command_encoder.timings() {
             let millis = time.as_secs_f32() * 1000.0;
             ui.horizontal(|ui| {
                 ui.label(name);

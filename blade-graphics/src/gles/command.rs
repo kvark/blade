@@ -111,13 +111,6 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn start(&mut self) {
-        self.commands.clear();
-        self.plain_data.clear();
-        self.string_data.clear();
-        self.has_present = false;
-    }
-
     pub(super) fn finish(&mut self, gl: &glow::Context) {
         use glow::HasContext as _;
         #[allow(trivial_casts)]
@@ -152,17 +145,11 @@ impl super::CommandEncoder {
                         );
                     }
                     let time = Duration::from_nanos(result - prev);
-                    self.timings.push((pass_name, time));
+                    *self.timings.entry(pass_name).or_default() += time;
                     prev = result
                 }
             }
         }
-    }
-
-    pub fn init_texture(&mut self, _texture: super::Texture) {}
-
-    pub fn present(&mut self, _frame: super::Frame) {
-        self.has_present = true;
     }
 
     pub fn transfer(&mut self, label: &str) -> super::PassEncoder<()> {
@@ -260,8 +247,27 @@ impl super::CommandEncoder {
         pass.invalidate_attachments = invalidate_attachments;
         pass
     }
+}
 
-    pub fn timings(&self) -> &[(String, Duration)] {
+#[hidden_trait::expose]
+impl crate::traits::CommandEncoder for super::CommandEncoder {
+    type Texture = super::Texture;
+    type Frame = super::Frame;
+
+    fn start(&mut self) {
+        self.commands.clear();
+        self.plain_data.clear();
+        self.string_data.clear();
+        self.has_present = false;
+    }
+
+    fn init_texture(&mut self, _texture: super::Texture) {}
+
+    fn present(&mut self, _frame: super::Frame) {
+        self.has_present = true;
+    }
+
+    fn timings(&self) -> &crate::Timings {
         &self.timings
     }
 }

@@ -266,60 +266,6 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn start(&mut self) {
-        self.buffers.rotate_left(1);
-        let cmd_buf = self.buffers.first_mut().unwrap();
-        self.device
-            .reset_descriptor_pool(&mut cmd_buf.descriptor_pool);
-
-        let vk_info = vk::CommandBufferBeginInfo {
-            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
-            ..Default::default()
-        };
-        unsafe {
-            self.device
-                .core
-                .begin_command_buffer(cmd_buf.raw, &vk_info)
-                .unwrap();
-        }
-
-        if let Some(ref timing) = self.device.timing {
-            self.timings.clear();
-            if !cmd_buf.timed_pass_names.is_empty() {
-                let mut timestamps = [0u64; super::QUERY_POOL_SIZE];
-                unsafe {
-                    self.device
-                        .core
-                        .get_query_pool_results(
-                            cmd_buf.query_pool,
-                            0,
-                            &mut timestamps[..cmd_buf.timed_pass_names.len() + 1],
-                            vk::QueryResultFlags::TYPE_64,
-                        )
-                        .unwrap();
-                }
-                let mut prev = timestamps[0];
-                for (name, &ts) in cmd_buf
-                    .timed_pass_names
-                    .drain(..)
-                    .zip(timestamps[1..].iter())
-                {
-                    let diff = (ts - prev) as f32 * timing.period;
-                    prev = ts;
-                    self.timings.push((name, Duration::from_nanos(diff as _)));
-                }
-            }
-            unsafe {
-                self.device.core.cmd_reset_query_pool(
-                    cmd_buf.raw,
-                    cmd_buf.query_pool,
-                    0,
-                    super::QUERY_POOL_SIZE as u32,
-                );
-            }
-        }
-    }
-
     pub(super) fn finish(&mut self) -> vk::CommandBuffer {
         self.barrier();
         self.add_marker("finish");
@@ -357,72 +303,6 @@ impl super::CommandEncoder {
                 &[barrier],
                 &[],
                 &[],
-            );
-        }
-    }
-
-    pub fn init_texture(&mut self, texture: super::Texture) {
-        let barrier = vk::ImageMemoryBarrier {
-            old_layout: vk::ImageLayout::UNDEFINED,
-            new_layout: vk::ImageLayout::GENERAL,
-            image: texture.raw,
-            subresource_range: vk::ImageSubresourceRange {
-                aspect_mask: super::map_aspects(texture.format.aspects()),
-                base_mip_level: 0,
-                level_count: vk::REMAINING_MIP_LEVELS,
-                base_array_layer: 0,
-                layer_count: vk::REMAINING_ARRAY_LAYERS,
-            },
-            ..Default::default()
-        };
-        unsafe {
-            self.device.core.cmd_pipeline_barrier(
-                self.buffers[0].raw,
-                vk::PipelineStageFlags::TOP_OF_PIPE,
-                vk::PipelineStageFlags::ALL_COMMANDS,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier],
-            );
-        }
-    }
-
-    pub fn present(&mut self, frame: super::Frame) {
-        if frame.acquire_semaphore == vk::Semaphore::null() {
-            return;
-        }
-
-        assert_eq!(self.present, None);
-        let wa = &self.device.workarounds;
-        self.present = Some(super::Presentation {
-            image_index: frame.image_index,
-            acquire_semaphore: frame.acquire_semaphore,
-        });
-
-        let barrier = vk::ImageMemoryBarrier {
-            old_layout: vk::ImageLayout::GENERAL,
-            new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-            image: frame.image,
-            subresource_range: vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
-            src_access_mask: vk::AccessFlags::MEMORY_WRITE | wa.extra_sync_src_access,
-            ..Default::default()
-        };
-        unsafe {
-            self.device.core.cmd_pipeline_barrier(
-                self.buffers[0].raw,
-                vk::PipelineStageFlags::ALL_COMMANDS,
-                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier],
             );
         }
     }
@@ -546,8 +426,134 @@ impl super::CommandEncoder {
             Err(other) => panic!("GPU error {}", other),
         }
     }
+}
 
-    pub fn timings(&self) -> &[(String, Duration)] {
+#[hidden_trait::expose]
+impl crate::traits::CommandEncoder for super::CommandEncoder {
+    type Texture = super::Texture;
+    type Frame = super::Frame;
+
+    fn start(&mut self) {
+        self.buffers.rotate_left(1);
+        let cmd_buf = self.buffers.first_mut().unwrap();
+        self.device
+            .reset_descriptor_pool(&mut cmd_buf.descriptor_pool);
+
+        let vk_info = vk::CommandBufferBeginInfo {
+            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            ..Default::default()
+        };
+        unsafe {
+            self.device
+                .core
+                .begin_command_buffer(cmd_buf.raw, &vk_info)
+                .unwrap();
+        }
+
+        if let Some(ref timing) = self.device.timing {
+            self.timings.clear();
+            if !cmd_buf.timed_pass_names.is_empty() {
+                let mut timestamps = [0u64; super::QUERY_POOL_SIZE];
+                unsafe {
+                    self.device
+                        .core
+                        .get_query_pool_results(
+                            cmd_buf.query_pool,
+                            0,
+                            &mut timestamps[..cmd_buf.timed_pass_names.len() + 1],
+                            vk::QueryResultFlags::TYPE_64,
+                        )
+                        .unwrap();
+                }
+                let mut prev = timestamps[0];
+                for (name, &ts) in cmd_buf
+                    .timed_pass_names
+                    .drain(..)
+                    .zip(timestamps[1..].iter())
+                {
+                    let diff = (ts - prev) as f32 * timing.period;
+                    prev = ts;
+                    *self.timings.entry(name).or_default() += Duration::from_nanos(diff as _);
+                }
+            }
+            unsafe {
+                self.device.core.cmd_reset_query_pool(
+                    cmd_buf.raw,
+                    cmd_buf.query_pool,
+                    0,
+                    super::QUERY_POOL_SIZE as u32,
+                );
+            }
+        }
+    }
+
+    fn init_texture(&mut self, texture: super::Texture) {
+        let barrier = vk::ImageMemoryBarrier {
+            old_layout: vk::ImageLayout::UNDEFINED,
+            new_layout: vk::ImageLayout::GENERAL,
+            image: texture.raw,
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: super::map_aspects(texture.format.aspects()),
+                base_mip_level: 0,
+                level_count: vk::REMAINING_MIP_LEVELS,
+                base_array_layer: 0,
+                layer_count: vk::REMAINING_ARRAY_LAYERS,
+            },
+            ..Default::default()
+        };
+        unsafe {
+            self.device.core.cmd_pipeline_barrier(
+                self.buffers[0].raw,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier],
+            );
+        }
+    }
+
+    fn present(&mut self, frame: super::Frame) {
+        if frame.acquire_semaphore == vk::Semaphore::null() {
+            return;
+        }
+
+        assert_eq!(self.present, None);
+        let wa = &self.device.workarounds;
+        self.present = Some(super::Presentation {
+            image_index: frame.image_index,
+            acquire_semaphore: frame.acquire_semaphore,
+        });
+
+        let barrier = vk::ImageMemoryBarrier {
+            old_layout: vk::ImageLayout::GENERAL,
+            new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+            image: frame.image,
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            src_access_mask: vk::AccessFlags::MEMORY_WRITE | wa.extra_sync_src_access,
+            ..Default::default()
+        };
+        unsafe {
+            self.device.core.cmd_pipeline_barrier(
+                self.buffers[0].raw,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier],
+            );
+        }
+    }
+
+    fn timings(&self) -> &crate::Timings {
         &self.timings
     }
 }
