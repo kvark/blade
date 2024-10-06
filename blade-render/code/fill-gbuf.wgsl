@@ -175,12 +175,32 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             albedo = (base_color_factor * base_color_sample).xyz;
         }
 
-        if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_HitConsistency) {
-            let reprojected = get_projected_pixel(camera, hit_position);
-            let barycentrics_pos_diff = (intersection.object_to_world * position_object).xyz - hit_position;
-            let camera_projection_diff = vec2<f32>(global_id.xy) - vec2<f32>(reprojected);
-            let consistency = vec4<f32>(length(barycentrics_pos_diff), length(camera_projection_diff), 0.0, 0.0);
-            textureStore(out_debug, global_id.xy, consistency);
+        if (WRITE_DEBUG_IMAGE) {
+            if (debug.view_mode == DebugMode_DiffuseAlbedoTexture) {
+                textureStore(out_debug, global_id.xy, vec4<f32>(albedo, 0.0));
+            }
+            if (debug.view_mode == DebugMode_DiffuseAlbedoFactor) {
+                textureStore(out_debug, global_id.xy, base_color_factor);
+            }
+            if (debug.view_mode == DebugMode_NormalTexture) {
+                textureStore(out_debug, global_id.xy, vec4<f32>(normal_local, 0.0));
+            }
+            if (debug.view_mode == DebugMode_NormalFactor) {
+                textureStore(out_debug, global_id.xy, vec4<f32>(entry.normal_scale));
+            }
+            if (debug.view_mode == DebugMode_GeometryNormal) {
+                textureStore(out_debug, global_id.xy, vec4<f32>(normal_geo, 0.0));
+            }
+            if (debug.view_mode == DebugMode_ShadingNormal) {
+                textureStore(out_debug, global_id.xy, vec4<f32>(normal, 0.0));
+            }
+            if (debug.view_mode == DebugMode_HitConsistency) {
+                let reprojected = get_projected_pixel(camera, hit_position);
+                let barycentrics_pos_diff = (intersection.object_to_world * position_object).xyz - hit_position;
+                let camera_projection_diff = vec2<f32>(global_id.xy) - vec2<f32>(reprojected);
+                let consistency = vec4<f32>(length(barycentrics_pos_diff), length(camera_projection_diff), 0.0, 0.0);
+                textureStore(out_debug, global_id.xy, consistency);
+            }
         }
 
         let prev_position = (entry.prev_object_to_world * position_object).xyz;

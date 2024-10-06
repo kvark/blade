@@ -345,9 +345,6 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
     let position = camera.position + surface.depth * ray_dir;
     let normal = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
-    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Normal) {
-        textureStore(out_debug, pixel, vec4<f32>(normal, 0.0));
-    }
 
     var canonical = LiveReservoir();
     for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
