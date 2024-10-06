@@ -48,11 +48,16 @@ struct Samplers {
 pub enum DebugMode {
     Final = 0,
     Depth = 1,
-    Normal = 2,
-    Motion = 3,
-    HitConsistency = 4,
-    SampleReuse = 5,
-    Variance = 10,
+    DiffuseAlbedoTexture = 2,
+    DiffuseAlbedoFactor = 3,
+    NormalTexture = 4,
+    NormalFactor = 5,
+    GeometryNormal = 6,
+    ShadingNormal = 7,
+    Motion = 8,
+    HitConsistency = 9,
+    SampleReuse = 10,
+    Variance = 15,
 }
 
 impl Default for DebugMode {
