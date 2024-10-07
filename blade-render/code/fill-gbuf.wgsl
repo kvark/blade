@@ -126,7 +126,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if ((debug.texture_flags & DebugTextureFlags_NORMAL) != 0u) {
             normal_local = vec3<f32>(0.0, 0.0, 1.0); // ignore normal map
         } else {
-            let n_xy = entry.normal_scale * textureSampleLevel(textures[entry.normal_texture], sampler_linear, tex_coords, lod).xy;
+            let raw_unorm = textureSampleLevel(textures[entry.normal_texture], sampler_linear, tex_coords, lod).xy;
+            let n_xy = entry.normal_scale * (2.0 * raw_unorm - 1.0);
             normal_local = vec3<f32>(n_xy, sqrt(max(0.0, 1.0 - dot(n_xy, n_xy))));
         }
         var normal = qrot(geo_to_world_rot, tangent_space_geo * normal_local);
@@ -185,7 +186,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (debug.view_mode == DebugMode_NormalTexture) {
                 textureStore(out_debug, global_id.xy, vec4<f32>(normal_local, 0.0));
             }
-            if (debug.view_mode == DebugMode_NormalFactor) {
+            if (debug.view_mode == DebugMode_NormalScale) {
                 textureStore(out_debug, global_id.xy, vec4<f32>(entry.normal_scale));
             }
             if (debug.view_mode == DebugMode_GeometryNormal) {

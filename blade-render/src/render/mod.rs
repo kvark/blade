@@ -51,7 +51,7 @@ pub enum DebugMode {
     DiffuseAlbedoTexture = 2,
     DiffuseAlbedoFactor = 3,
     NormalTexture = 4,
-    NormalFactor = 5,
+    NormalScale = 5,
     GeometryNormal = 6,
     ShadingNormal = 7,
     Motion = 8,

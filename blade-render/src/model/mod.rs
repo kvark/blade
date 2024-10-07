@@ -15,7 +15,8 @@ const META_BASE_COLOR: crate::texture::Meta = crate::texture::Meta {
     y_flip: false,
 };
 const META_NORMAL: crate::texture::Meta = crate::texture::Meta {
-    format: blade_graphics::TextureFormat::Bc5Snorm,
+    //Note: "texpresso" doesn't know how to produce signed normalized
+    format: blade_graphics::TextureFormat::Bc5Unorm,
     generate_mips: false,
     y_flip: false,
 };
