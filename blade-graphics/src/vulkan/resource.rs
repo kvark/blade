@@ -323,7 +323,7 @@ impl crate::traits::ResourceDevice for super::Context {
             image: texture.raw,
             view_type: map_view_dimension(desc.dimension),
             format: super::map_texture_format(desc.format),
-            subresource_range: subresource_range,
+            subresource_range,
             ..Default::default()
         };
 
