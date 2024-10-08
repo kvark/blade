@@ -1270,7 +1270,9 @@ impl Renderer {
                 },
             );
             pc.dispatch(groups);
+        } else {
             // Make sure the output is still in [0]
+            self.targets.reservoir_buf.swap(0, 1);
             self.targets.light_diffuse.views.swap(0, 1);
         }
     }

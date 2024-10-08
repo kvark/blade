@@ -68,7 +68,7 @@ struct LiveReservoir {
     selected_uv: vec2<f32>,
     selected_light_index: u32,
     selected_target_score: f32,
-    radiance: vec3<f32>,
+    selected_radiance: vec3<f32>,
     weight_sum: f32,
     history: f32,
 }
@@ -96,10 +96,10 @@ fn bump_reservoir(r: ptr<function, LiveReservoir>, history: f32) {
 }
 fn make_reservoir(ls: LightSample, light_index: u32, brdf: vec3<f32>) -> LiveReservoir {
     var r: LiveReservoir;
-    r.radiance = ls.radiance * brdf;
+    r.selected_radiance = ls.radiance * brdf;
     r.selected_uv = ls.uv;
     r.selected_light_index = light_index;
-    r.selected_target_score = compute_target_score(r.radiance);
+    r.selected_target_score = compute_target_score(r.selected_radiance);
     r.weight_sum = r.selected_target_score / ls.pdf;
     r.history = 1.0;
     return r;
@@ -111,10 +111,17 @@ fn merge_reservoir(r: ptr<function, LiveReservoir>, other: LiveReservoir, random
         (*r).selected_light_index = other.selected_light_index;
         (*r).selected_uv = other.selected_uv;
         (*r).selected_target_score = other.selected_target_score;
-        (*r).radiance = other.radiance;
+        (*r).selected_radiance = other.selected_radiance;
         return true;
     } else {
         return false;
+    }
+}
+fn normalize_reservoir(r: ptr<function, LiveReservoir>, history: f32) {
+    let h = (*r).history;
+    if (h > 0.0) {
+        (*r).weight_sum *= history / h;
+        (*r).history = history;
     }
 }
 fn unpack_reservoir(f: StoredReservoir, max_history: u32, radiance: vec3<f32>) -> LiveReservoir {
@@ -122,7 +129,7 @@ fn unpack_reservoir(f: StoredReservoir, max_history: u32, radiance: vec3<f32>) -
     r.selected_light_index = f.light_index;
     r.selected_uv = f.light_uv;
     r.selected_target_score = f.target_score;
-    r.radiance = radiance;
+    r.selected_radiance = radiance;
     let history = min(f.confidence, f32(max_history));
     r.weight_sum = f.contribution_weight * f.target_score * history;
     r.history = history;
@@ -138,6 +145,7 @@ fn pack_reservoir_detail(r: LiveReservoir, denom_factor: f32) -> StoredReservoir
     f.contribution_weight = select(0.0, r.weight_sum / denom, denom > 0.0);
     return f;
 }
+
 fn pack_reservoir(r: LiveReservoir) -> StoredReservoir {
     return pack_reservoir_detail(r, r.history);
 }
@@ -342,6 +350,8 @@ fn produce_canonical(surface: Surface, position: vec3<f32>, rng: ptr<function, R
             bump_reservoir(&reservoir, 1.0);
         }
     }
+
+    normalize_reservoir(&reservoir, 1.0);
     return reservoir;
 }
 
@@ -353,7 +363,7 @@ struct Neighborhood {
 fn gather_neighborhood_temporal(
     surface: Surface, position: vec3<f32>, pixel: vec2<i32>, rng: ptr<function, RandomState>
 ) -> Neighborhood {
-    if (surface.depth == 0.0) {
+    if (surface.depth == 0.0 || parameters.temporal_tap == 0u) {
         return Neighborhood();
     }
 
@@ -367,7 +377,7 @@ fn gather_neighborhood_temporal(
     var nh = Neighborhood();
     let num_candidates = parameters.temporal_tap * FACTOR_TEMPORAL_CANDIDATES;
 
-    for (var tap = 0u; tap <= num_candidates && nh.count == 0u; tap += 1u) {
+    for (var tap = 0u; tap < num_candidates && nh.count == 0u; tap += 1u) {
         let mask = vec2<u32>(tap) & vec2<u32>(1u, 2u);
         let other_pixel = select(center_pixel, further_pixel, mask != vec2<u32>(0u));
 
@@ -401,7 +411,7 @@ fn gather_neighborhood_temporal(
 fn gather_neighborhood_spatial(
     surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>
 ) -> Neighborhood {
-    if (surface.depth == 0.0) {
+    if (surface.depth == 0.0 || parameters.spatial_taps == 0u) {
         return Neighborhood();
     }
 
@@ -410,7 +420,7 @@ fn gather_neighborhood_spatial(
     let num_candidates = parameters.spatial_taps * FACTOR_SPATIAL_CANDIDATES;
     let max_samples = min(MAX_RESERVOIRS, parameters.spatial_taps);
 
-    for (var tap = 0u; tap <= num_candidates && nh.count < max_samples; tap += 1u) {
+    for (var tap = 0u; tap < num_candidates && nh.count < max_samples; tap += 1u) {
         let r0 = max(pixel - vec2<i32>(parameters.spatial_radius), vec2<i32>(0));
         let r1 = min(pixel + vec2<i32>(parameters.spatial_radius + 1), vec2<i32>(prev_camera.target_size));
         let other_pixel = vec2<i32>(mix(vec2<f32>(r0), vec2<f32>(r1), vec2<f32>(random_gen(rng), random_gen(rng))));
@@ -508,15 +518,16 @@ fn compute_restir(
             other.selected_light_index = neighbor.light_index;
             other.selected_uv = neighbor.light_uv;
             other.selected_target_score = t_neighbor_at_canonical.score;
+            other.selected_radiance = t_neighbor_at_canonical.color;
             other.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor;
-            other.radiance = t_neighbor_at_canonical.color;
         } else {
             let radiance = evaluate_reflected_light(surface, neighbor.light_index, neighbor.light_uv);
             other = unpack_reservoir(neighbor, max_history, radiance);
         }
 
         if (DECOUPLED_SHADING) {
-            color_and_weight += other.weight_sum * vec4<f32>(neighbor.contribution_weight * other.radiance, 1.0);
+            let color = neighbor.contribution_weight * other.selected_radiance;
+            color_and_weight += other.weight_sum * vec4<f32>(color, 1.0);
         }
         if (other.weight_sum <= 0.0) {
             bump_reservoir(&reservoir, other.history);
@@ -528,11 +539,11 @@ fn compute_restir(
     // Finally, merge in the canonical sample
     var canonical_mod = canonical;
     if (parameters.use_pairwise_mis != 0) {
-        canonical_mod.weight_sum *= mis_canonical / canonical.history;
+        normalize_reservoir(&canonical_mod, mis_canonical);
     }
     if (DECOUPLED_SHADING) {
         let cw = canonical_mod.weight_sum / max(canonical_mod.selected_target_score, 0.1);
-        color_and_weight += canonical_mod.weight_sum * vec4<f32>(cw * canonical_mod.radiance, 1.0);
+        color_and_weight += canonical_mod.weight_sum * vec4<f32>(cw * canonical_mod.selected_radiance, 1.0);
     }
     merge_reservoir(&reservoir, canonical_mod, random_gen(rng));
 
@@ -542,7 +553,7 @@ fn compute_restir(
     if (DECOUPLED_SHADING) {
         ro.radiance = color_and_weight.xyz / max(color_and_weight.w, 0.001);
     } else {
-        ro.radiance = ro.reservoir.contribution_weight * reservoir.radiance;
+        ro.radiance = ro.reservoir.contribution_weight * reservoir.selected_radiance;
     }
     return ro;
 }
@@ -565,9 +576,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let neighborhood = gather_neighborhood_temporal(surface, position, pixel, &rng);
     let canonical = produce_canonical(surface, position, &rng, enable_debug);
     let ro = compute_restir(surface, ray_dir, canonical, neighborhood, parameters.temporal_history, &rng, enable_debug);
+
     let pixel_index = get_reservoir_index(pixel, camera);
     reservoirs[pixel_index] = ro.reservoir;
-
     textureStore(out_diffuse, pixel, vec4<f32>(ro.radiance, 1.0));
 }
 
@@ -576,9 +587,6 @@ fn main_spatial(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (any(global_id.xy >= camera.target_size)) {
         return;
     }
-
-    let global_index = global_id.y * camera.target_size.x + global_id.x;
-    var rng = random_init(global_index, parameters.frame_index * 2u);
 
     let surface = read_surface(vec2<i32>(global_id.xy));
     let pixel = vec2<i32>(global_id.xy);
@@ -592,6 +600,8 @@ fn main_spatial(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let enable_debug = DEBUG_MODE && all(global_id.xy == debug.mouse_pos);
+    let global_index = global_id.y * camera.target_size.x + global_id.x;
+    var rng = random_init(global_index, parameters.frame_index * 2u);
 
     let neighborhood = gather_neighborhood_spatial(surface, pixel, &rng);
     let old_reservoir = prev_reservoirs[pixel_index];
