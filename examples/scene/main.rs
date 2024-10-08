@@ -187,6 +187,7 @@ impl Example {
                 window,
                 gpu::ContextDesc {
                     validation: cfg!(debug_assertions),
+                    capture: true,
                     ..Default::default()
                 },
             )

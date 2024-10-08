@@ -147,9 +147,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let normal_w = 0.15 * intersection.t * qrot(geo_to_world_rot, normal_geo);
             let tangent_w = 0.05 * intersection.t * qrot(geo_to_world_rot, tangent_geo);
             let bitangent_w = 0.05 * intersection.t * qrot(geo_to_world_rot, bitangent_geo);
-            debug_line(hit_position, hit_position + normal_w, 0xFFFFFFu);
-            debug_line(hit_position - tangent_w, hit_position + tangent_w, 0x808080u);
-            debug_line(hit_position - bitangent_w, hit_position + bitangent_w, 0x808080u);
+            debug_line(hit_position, hit_position + normal_w, 0xFF8000u);
+            debug_line(hit_position - 0.5 * tangent_w, hit_position + tangent_w, 0x8080FFu);
+            debug_line(hit_position - 0.5 * bitangent_w, hit_position + bitangent_w, 0x80FF80u);
         }
         if (enable_debug && (debug.draw_flags & DebugDrawFlags_GEOMETRY) != 0u) {
             let debug_len = intersection.t * 0.2;
@@ -177,6 +177,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         if (WRITE_DEBUG_IMAGE) {
+            if (debug.view_mode == DebugMode_Depth) {
+                textureStore(out_debug, global_id.xy, vec4<f32>(1.0 / depth));
+            }
             if (debug.view_mode == DebugMode_DiffuseAlbedoTexture) {
                 textureStore(out_debug, global_id.xy, vec4<f32>(albedo, 0.0));
             }

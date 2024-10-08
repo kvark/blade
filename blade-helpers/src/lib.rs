@@ -13,6 +13,7 @@ pub fn default_ray_config() -> blade_render::RayConfig {
         environment_importance_sampling: false,
         temporal_tap: true,
         temporal_history: 10,
+        spatial_pass: true,
         spatial_taps: 1,
         spatial_tap_history: 10,
         spatial_radius: 20,
