@@ -563,7 +563,7 @@ impl blade_asset::Baker for Baker {
                             },
                             ..Default::default()
                         },
-                        normal_scale: g_material.normal_texture().map_or(1.0, |info| info.scale()),
+                        normal_scale: g_material.normal_texture().map_or(0.0, |info| info.scale()),
                         transparent: g_material.alpha_mode() != gltf::material::AlphaMode::Opaque,
                     });
                 }
