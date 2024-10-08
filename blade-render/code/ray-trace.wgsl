@@ -68,7 +68,7 @@ struct LiveReservoir {
     selected_uv: vec2<f32>,
     selected_light_index: u32,
     selected_target_score: f32,
-    radiance: vec3<f32>,
+    selected_radiance: vec3<f32>,
     weight_sum: f32,
     history: f32,
 }
@@ -96,10 +96,10 @@ fn bump_reservoir(r: ptr<function, LiveReservoir>, history: f32) {
 }
 fn make_reservoir(ls: LightSample, light_index: u32, brdf: vec3<f32>) -> LiveReservoir {
     var r: LiveReservoir;
-    r.radiance = ls.radiance * brdf;
+    r.selected_radiance = ls.radiance * brdf;
     r.selected_uv = ls.uv;
     r.selected_light_index = light_index;
-    r.selected_target_score = compute_target_score(r.radiance);
+    r.selected_target_score = compute_target_score(r.selected_radiance);
     r.weight_sum = r.selected_target_score / ls.pdf;
     r.history = 1.0;
     return r;
@@ -111,18 +111,25 @@ fn merge_reservoir(r: ptr<function, LiveReservoir>, other: LiveReservoir, random
         (*r).selected_light_index = other.selected_light_index;
         (*r).selected_uv = other.selected_uv;
         (*r).selected_target_score = other.selected_target_score;
-        (*r).radiance = other.radiance;
+        (*r).selected_radiance = other.selected_radiance;
         return true;
     } else {
         return false;
     }
 }
-fn unpack_reservoir(f: StoredReservoir, max_history: u32) -> LiveReservoir {
+fn normalize_reservoir(r: ptr<function, LiveReservoir>, history: f32) {
+    let h = (*r).history;
+    if (h > 0.0) {
+        (*r).weight_sum *= history / h;
+        (*r).history = history;
+    }
+}
+fn unpack_reservoir(f: StoredReservoir, max_history: u32, radiance: vec3<f32>) -> LiveReservoir {
     var r: LiveReservoir;
     r.selected_light_index = f.light_index;
     r.selected_uv = f.light_uv;
     r.selected_target_score = f.target_score;
-    r.radiance = vec3<f32>(0.0); // to be continued...
+    r.selected_radiance = radiance;
     let history = min(f.confidence, f32(max_history));
     r.weight_sum = f.contribution_weight * f.target_score * history;
     r.history = history;
@@ -138,6 +145,7 @@ fn pack_reservoir_detail(r: LiveReservoir, denom_factor: f32) -> StoredReservoir
     f.contribution_weight = select(0.0, r.weight_sum / denom, denom > 0.0);
     return f;
 }
+
 fn pack_reservoir(r: LiveReservoir) -> StoredReservoir {
     return pack_reservoir_detail(r, r.history);
 }
@@ -462,15 +470,16 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
             other.selected_light_index = neighbor.light_index;
             other.selected_uv = neighbor.light_uv;
             other.selected_target_score = t_neighbor_at_canonical.score;
+            other.selected_radiance = t_neighbor_at_canonical.color;
             other.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor;
-            other.radiance = t_neighbor_at_canonical.color;
         } else {
-            other = unpack_reservoir(neighbor, max_history);
-            other.radiance = evaluate_reflected_light(surface, other.selected_light_index, other.selected_uv);
+            let radiance = evaluate_reflected_light(surface, other.selected_light_index, other.selected_uv);
+            other = unpack_reservoir(neighbor, max_history, radiance);
         }
 
         if (DECOUPLED_SHADING) {
-            color_and_weight += other.weight_sum * vec4<f32>(neighbor.contribution_weight * other.radiance, 1.0);
+            let color = neighbor.contribution_weight * other.selected_radiance;
+            color_and_weight += other.weight_sum * vec4<f32>(color, 1.0);
         }
         if (other.weight_sum <= 0.0) {
             bump_reservoir(&reservoir, other.history);
@@ -481,11 +490,11 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
 
     // Finally, merge in the canonical sample
     if (parameters.use_pairwise_mis != 0) {
-        canonical.weight_sum *= mis_canonical / canonical.history;
+        normalize_reservoir(&canonical, mis_canonical);
     }
     if (DECOUPLED_SHADING) {
         let cw = canonical.weight_sum / max(canonical.selected_target_score, 0.1);
-        color_and_weight += canonical.weight_sum * vec4<f32>(cw * canonical.radiance, 1.0);
+        color_and_weight += canonical.weight_sum * vec4<f32>(cw * canonical.selected_radiance, 1.0);
     }
     merge_reservoir(&reservoir, canonical, random_gen(rng));
 
@@ -496,7 +505,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     if (DECOUPLED_SHADING) {
         ro.radiance = color_and_weight.xyz / max(color_and_weight.w, 0.001);
     } else {
-        ro.radiance = stored.contribution_weight * reservoir.radiance;
+        ro.radiance = stored.contribution_weight * reservoir.selected_radiance;
     }
     return ro;
 }
@@ -514,6 +523,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let enable_debug = DEBUG_MODE && all(global_id.xy == debug.mouse_pos);
     let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
     let ro = compute_restir(surface, vec2<i32>(global_id.xy), &rng, enable_restir_debug);
+
     let color = ro.radiance;
     if (enable_debug) {
         debug_buf.variance.color_sum += color;
