@@ -14,7 +14,7 @@ const PI: f32 = 3.1415926;
 const MAX_RESERVOIRS: u32 = 2u;
 // See "DECOUPLING SHADING AND REUSE" in
 // "Rearchitecting Spatiotemporal Resampling for Production"
-const DECOUPLED_SHADING: bool = true;
+const DECOUPLED_SHADING: bool = false;
 
 // We are considering 2x2 grid, so must be <= 4
 const FACTOR_TEMPORAL_CANDIDATES: u32 = 1u;
