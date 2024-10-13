@@ -378,7 +378,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     let num_candidates = num_temporal_candidates + parameters.spatial_taps * FACTOR_SPATIAL_CANDIDATES;
     let max_samples = min(MAX_RESERVOIRS, 1u + parameters.spatial_taps);
 
-    for (var tap = 0u; tap <= num_candidates && accepted_count < max_samples; tap += 1u) {
+    for (var tap = 0u; tap < num_candidates && accepted_count < max_samples; tap += 1u) {
         var other_pixel = center_pixel;
         if (tap < num_temporal_candidates) {
             if (temporal_index < tap) {
