@@ -17,6 +17,7 @@ impl ExposeHud for blade_render::RayConfig {
         ui.add(
             egui::widgets::Slider::new(&mut self.temporal_history, 0..=50).text("Temporal history"),
         );
+        ui.checkbox(&mut self.spatial_pass, "Spatial pass");
         ui.add(egui::widgets::Slider::new(&mut self.spatial_taps, 0..=10).text("Spatial taps"));
         ui.add(
             egui::widgets::Slider::new(&mut self.spatial_tap_history, 0..=50)

@@ -177,6 +177,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         if (WRITE_DEBUG_IMAGE) {
+            if (debug.view_mode == DebugMode_Depth) {
+                textureStore(out_debug, global_id.xy, vec4<f32>(1.0 / depth));
+            }
             if (debug.view_mode == DebugMode_DiffuseAlbedoTexture) {
                 textureStore(out_debug, global_id.xy, vec4<f32>(albedo, 0.0));
             }
