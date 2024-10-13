@@ -445,7 +445,6 @@ struct TemporalAccumData {
     prev_camera: CameraParams,
     params: BlurParams,
     input: blade_graphics::TextureView,
-    prev_input: blade_graphics::TextureView,
     t_depth: blade_graphics::TextureView,
     t_prev_depth: blade_graphics::TextureView,
     t_flat_normal: blade_graphics::TextureView,
@@ -1229,7 +1228,6 @@ impl Renderer {
             pad: 0,
         };
         let (cur, prev) = self.work_indices();
-        let temp = 2;
 
         if denoiser_config.temporal_weight < 1.0 {
             let mut pass = command_encoder.compute("temporal-accum");
@@ -1244,23 +1242,20 @@ impl Renderer {
                     camera: self.targets.camera_params[cur],
                     prev_camera: self.targets.camera_params[prev],
                     params,
-                    input: self.targets.light_diffuse.views[cur],
-                    prev_input: self.targets.light_diffuse.views[prev],
+                    input: self.targets.light_diffuse.views[prev],
                     t_depth: self.targets.depth.views[cur],
                     t_prev_depth: self.targets.depth.views[prev],
                     t_flat_normal: self.targets.flat_normal.views[cur],
                     t_prev_flat_normal: self.targets.flat_normal.views[prev],
                     t_motion: self.targets.motion.views[0],
-                    output: self.targets.light_diffuse.views[temp],
+                    output: self.targets.light_diffuse.views[cur],
                 },
             );
             pc.dispatch(groups);
-            //Note: making `cur` contain the latest reprojection output
-            self.targets.light_diffuse.views.swap(cur, temp);
         }
 
         assert_eq!(cur, self.post_proc_input_index);
-        let mut ping_pong = [temp, if self.is_frozen { cur } else { prev }];
+        let mut ping_pong = [2, if self.is_frozen { cur } else { prev }];
         for _ in 0..denoiser_config.num_passes {
             let mut pass = command_encoder.compute("a-trous");
             let mut pc = pass.with(&self.blur.a_trous_pipeline);

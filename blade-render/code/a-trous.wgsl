@@ -24,8 +24,7 @@ var t_flat_normal: texture_2d<f32>;
 var t_prev_flat_normal: texture_2d<f32>;
 var t_motion: texture_2d<f32>;
 var input: texture_2d<f32>;
-var prev_input: texture_2d<f32>;
-var output: texture_storage_2d<rgba16float, write>;
+var output: texture_storage_2d<rgba16float, read_write>;
 
 const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 const MIN_WEIGHT: f32 = 0.01;
@@ -80,34 +79,37 @@ fn temporal_accum(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var sum_weight = 0.0;
     var sum_ilm = vec4<f32>(0.0);
-    //TODO: optimize depth load with a gather operation
-    for (var i = 0; i < 4; i += 1) {
-        let prev_pixel = prev_pixels[i];
-        if (all(prev_pixel >= vec2<i32>(0)) && all(prev_pixel < params.extent)) {
-            let prev_surface = read_prev_surface(prev_pixel);
-            if (compare_flat_normals(surface.flat_normal, prev_surface.flat_normal) < 0.5) {
-                continue;
+    if (params.temporal_weight != 1.0) {
+        //TODO: optimize depth load with a gather operation
+        for (var i = 0; i < 4; i += 1) {
+            let prev_pixel = prev_pixels[i];
+            if (all(prev_pixel >= vec2<i32>(0)) && all(prev_pixel < params.extent)) {
+                let prev_surface = read_prev_surface(prev_pixel);
+                if (compare_flat_normals(surface.flat_normal, prev_surface.flat_normal) < 0.5) {
+                    continue;
+                }
+                let projected_distance = length(pos_world - prev_camera.position);
+                if (compare_depths(prev_surface.depth, projected_distance) < 0.5) {
+                    continue;
+                }
+                let w = prev_weights[i];
+                sum_weight += w;
+                let illumination = w * textureLoad(input, prev_pixel, 0).xyz;
+                let luminocity = dot(illumination, LUMA);
+                sum_ilm += vec4<f32>(illumination, luminocity * luminocity);
             }
-            let projected_distance = length(pos_world - prev_camera.position);
-            if (compare_depths(prev_surface.depth, projected_distance) < 0.5) {
-                continue;
-            }
-            let w = prev_weights[i];
-            sum_weight += w;
-            let illumination = w * textureLoad(prev_input, prev_pixel, 0).xyz;
-            let luminocity = dot(illumination, LUMA);
-            sum_ilm += vec4<f32>(illumination, luminocity * luminocity);
         }
     }
 
-    let cur_illumination = textureLoad(input, pixel, 0).xyz;
+    let cur_illumination = textureLoad(output, pixel).xyz;
     let cur_luminocity = dot(cur_illumination, LUMA);
     var mixed_ilm = vec4<f32>(cur_illumination, cur_luminocity * cur_luminocity);
     if (sum_weight > MIN_WEIGHT) {
         let prev_ilm = sum_ilm / vec4(vec3<f32>(sum_weight), max(0.001, sum_weight*sum_weight));
         mixed_ilm = mix(mixed_ilm, prev_ilm, sum_weight * (1.0 - params.temporal_weight));
     }
-    textureStore(output, global_id.xy, mixed_ilm);
+    //Note: could also use HW blending for this
+    textureStore(output, pixel, mixed_ilm);
 }
 
 const GAUSSIAN_WEIGHTS = vec2<f32>(0.44198, 0.27901);
