@@ -68,13 +68,14 @@ struct LiveReservoir {
     selected_uv: vec2<f32>,
     selected_light_index: u32,
     selected_target_score: f32,
-    selected_radiance: vec3<f32>,
+    /// Material output without visibility.
+    selected_color: vec3<f32>,
     weight_sum: f32,
     history: f32,
 }
 
 fn compute_target_score(radiance: vec3<f32>) -> f32 {
-    return dot(radiance, vec3<f32>(0.3, 0.4, 0.3));
+    return dot(radiance, vec3<f32>(0.212, 0.7152, 0.0722));
 }
 
 fn get_reservoir_index(pixel: vec2<i32>, camera: CameraParams) -> i32 {
@@ -96,10 +97,10 @@ fn bump_reservoir(r: ptr<function, LiveReservoir>, history: f32) {
 }
 fn make_reservoir(ls: LightSample, light_index: u32, brdf: vec3<f32>) -> LiveReservoir {
     var r: LiveReservoir;
-    r.selected_radiance = ls.radiance * brdf;
+    r.selected_color = ls.radiance * brdf;
     r.selected_uv = ls.uv;
     r.selected_light_index = light_index;
-    r.selected_target_score = compute_target_score(r.selected_radiance);
+    r.selected_target_score = compute_target_score(r.selected_color);
     r.weight_sum = r.selected_target_score / ls.pdf;
     r.history = 1.0;
     return r;
@@ -111,7 +112,7 @@ fn merge_reservoir(r: ptr<function, LiveReservoir>, other: LiveReservoir, random
         (*r).selected_light_index = other.selected_light_index;
         (*r).selected_uv = other.selected_uv;
         (*r).selected_target_score = other.selected_target_score;
-        (*r).selected_radiance = other.selected_radiance;
+        (*r).selected_color = other.selected_color;
         return true;
     } else {
         return false;
@@ -129,7 +130,7 @@ fn unpack_reservoir(f: StoredReservoir, max_history: u32, radiance: vec3<f32>) -
     r.selected_light_index = f.light_index;
     r.selected_uv = f.light_uv;
     r.selected_target_score = f.target_score;
-    r.selected_radiance = radiance;
+    r.selected_color = radiance;
     let history = min(f.confidence, f32(max_history));
     r.weight_sum = f.contribution_weight * f.target_score * history;
     r.history = history;
@@ -182,11 +183,6 @@ fn map_equirect_uv_to_dir(uv: vec2<f32>) -> vec3<f32> {
     return vec3<f32>(cos(yaw) * sin(pitch), sin(yaw), cos(yaw) * cos(pitch));
 }
 
-fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
-    let uv = map_equirect_dir_to_uv(dir);
-    return textureSampleLevel(env_map, sampler_linear, uv, 0.0).xyz;
-}
-
 fn sample_light_from_sphere(rng: ptr<function, RandomState>) -> LightSample {
     let a = random_gen(rng);
     let h = 1.0 - 2.0 * random_gen(rng); // make sure to allow h==1
@@ -228,11 +224,30 @@ fn read_prev_surface(pixel: vec2<i32>) -> Surface {
     return surface;
 }
 
-fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> f32 {
+fn evaluate_material(surface: Surface, dir: vec3<f32>) -> f32 {
     let lambert_brdf = 1.0 / PI;
     let lambert_term = qrot(qinv(surface.basis), dir).z;
     //Note: albedo not modulated
     return lambert_brdf * max(0.0, lambert_term);
+}
+
+fn evaluate_environment(direction: vec3<f32>) -> vec3<f32> {
+    let uv = map_equirect_dir_to_uv(direction);
+    return textureSampleLevel(env_map, sampler_nearest, uv, 0.0).xyz;
+}
+
+fn evaluate_reflected_light(surface: Surface, light_index: u32, light_uv: vec2<f32>) -> vec3<f32> {
+    if (light_index != 0u) {
+        return vec3<f32>(0.0);
+    }
+    let direction = map_equirect_uv_to_dir(light_uv);
+    let brdf = evaluate_material(surface, direction);
+    if (brdf <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    // Note: returns radiance not modulated by albedo
+    let radiance = textureSampleLevel(env_map, sampler_nearest, light_uv, 0.0).xyz;
+    return radiance * brdf;
 }
 
 fn check_ray_occluded(acs: acceleration_structure, position: vec3<f32>, direction: vec3<f32>, debug_len: f32) -> bool {
@@ -250,20 +265,6 @@ fn check_ray_occluded(acs: acceleration_structure, position: vec3<f32>, directio
         debug_line(position, position + debug_len * direction, color);
     }
     return occluded;
-}
-
-fn evaluate_reflected_light(surface: Surface, light_index: u32, light_uv: vec2<f32>) -> vec3<f32> {
-    if (light_index != 0u) {
-        return vec3<f32>(0.0);
-    }
-    let direction = map_equirect_uv_to_dir(light_uv);
-    let brdf = evaluate_brdf(surface, direction);
-    if (brdf <= 0.0) {
-        return vec3<f32>(0.0);
-    }
-    // Note: returns radiance not modulated by albedo
-    let radiance = textureSampleLevel(env_map, sampler_nearest, light_uv, 0.0).xyz;
-    return radiance * brdf;
 }
 
 fn get_prev_pixel(pixel: vec2<i32>, pos_world: vec3<f32>) -> vec2<f32> {
@@ -294,7 +295,7 @@ fn estimate_target_score_with_occlusion(
     if (dot(direction, surface.flat_normal) <= 0.0) {
         return TargetScore();
     }
-    let brdf = evaluate_brdf(surface, direction);
+    let brdf = evaluate_material(surface, direction);
     if (brdf <= 0.0) {
         return TargetScore();
     }
@@ -314,7 +315,7 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debu
         return 0.0;
     }
 
-    let brdf = evaluate_brdf(surface, dir);
+    let brdf = evaluate_material(surface, dir);
     if (brdf <= 0.0) {
         return 0.0;
     }
@@ -351,7 +352,6 @@ fn produce_canonical(surface: Surface, position: vec3<f32>, rng: ptr<function, R
         }
     }
 
-    normalize_reservoir(&reservoir, 1.0);
     return reservoir;
 }
 
@@ -473,12 +473,6 @@ fn compute_restir(
     canonical: LiveReservoir, nh: Neighborhood, max_history: u32,
     rng: ptr<function, RandomState>, enable_debug: bool,
 ) -> RestirOutput {
-    if (surface.depth == 0.0) {
-        var ro = RestirOutput();
-        ro.radiance = evaluate_environment(ray_dir);
-        return ro;
-    }
-
     let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
     let position = camera.position + surface.depth * ray_dir;
     let debug_len = select(0.0, surface.depth * 0.2, enable_restir_debug);
@@ -518,7 +512,7 @@ fn compute_restir(
             other.selected_light_index = neighbor.light_index;
             other.selected_uv = neighbor.light_uv;
             other.selected_target_score = t_neighbor_at_canonical.score;
-            other.selected_radiance = t_neighbor_at_canonical.color;
+            other.selected_color = t_neighbor_at_canonical.color;
             other.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor;
         } else {
             let radiance = evaluate_reflected_light(surface, neighbor.light_index, neighbor.light_uv);
@@ -526,7 +520,7 @@ fn compute_restir(
         }
 
         if (DECOUPLED_SHADING) {
-            let color = neighbor.contribution_weight * other.selected_radiance;
+            let color = neighbor.contribution_weight * other.selected_color;
             color_and_weight += other.weight_sum * vec4<f32>(color, 1.0);
         }
         if (other.weight_sum <= 0.0) {
@@ -543,7 +537,7 @@ fn compute_restir(
     }
     if (DECOUPLED_SHADING) {
         let cw = canonical_mod.weight_sum / max(canonical_mod.selected_target_score, 0.1);
-        color_and_weight += canonical_mod.weight_sum * vec4<f32>(cw * canonical_mod.selected_radiance, 1.0);
+        color_and_weight += canonical_mod.weight_sum * vec4<f32>(cw * canonical_mod.selected_color, 1.0);
     }
     merge_reservoir(&reservoir, canonical_mod, random_gen(rng));
 
@@ -553,7 +547,7 @@ fn compute_restir(
     if (DECOUPLED_SHADING) {
         ro.radiance = color_and_weight.xyz / max(color_and_weight.w, 0.001);
     } else {
-        ro.radiance = ro.reservoir.contribution_weight * reservoir.selected_radiance;
+        ro.radiance = ro.reservoir.contribution_weight * reservoir.selected_color;
     }
     return ro;
 }
@@ -569,15 +563,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let surface = read_surface(vec2<i32>(global_id.xy));
     let pixel = vec2<i32>(global_id.xy);
+    let pixel_index = get_reservoir_index(pixel, camera);
+    let ray_dir = get_ray_direction(camera, pixel);
     let enable_debug = DEBUG_MODE && all(global_id.xy == debug.mouse_pos);
 
-    let ray_dir = get_ray_direction(camera, pixel);
+    if (surface.depth == 0.0) {
+        reservoirs[pixel_index] = StoredReservoir();
+        let radiance = evaluate_environment(ray_dir);
+        textureStore(out_diffuse, pixel, vec4<f32>(radiance, 1.0));
+        return;
+    }
+
     let position = camera.position + surface.depth * ray_dir;
     let neighborhood = gather_neighborhood_temporal(surface, position, pixel, &rng);
     let canonical = produce_canonical(surface, position, &rng, enable_debug);
     let ro = compute_restir(surface, ray_dir, canonical, neighborhood, parameters.temporal_history, &rng, enable_debug);
 
-    let pixel_index = get_reservoir_index(pixel, camera);
     reservoirs[pixel_index] = ro.reservoir;
     textureStore(out_diffuse, pixel, vec4<f32>(ro.radiance, 1.0));
 }
@@ -594,7 +595,7 @@ fn main_spatial(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let in_radiance = textureLoad(in_diffuse, pixel, 0).xyz;
 
     if (surface.depth == 0.0) {
-        reservoirs[pixel_index] = prev_reservoirs[pixel_index];
+        reservoirs[pixel_index] = StoredReservoir();
         textureStore(out_diffuse, pixel, vec4<f32>(in_radiance, 1.0));
         return;
     }
@@ -605,7 +606,8 @@ fn main_spatial(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let neighborhood = gather_neighborhood_spatial(surface, pixel, &rng);
     let old_reservoir = prev_reservoirs[pixel_index];
-    let canonical = unpack_reservoir(old_reservoir, ~0u, in_radiance / old_reservoir.contribution_weight);
+    let old_selected_color = in_radiance / max(old_reservoir.contribution_weight, 0.01);
+    let canonical = unpack_reservoir(old_reservoir, ~0u, old_selected_color);
     let ray_dir = get_ray_direction(camera, pixel);
     let ro = compute_restir(surface, ray_dir, canonical, neighborhood, parameters.spatial_tap_history, &rng, enable_debug);
     reservoirs[pixel_index] = ro.reservoir;
