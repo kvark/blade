@@ -13,18 +13,14 @@ impl ExposeHud for blade_render::RayConfig {
             &mut self.environment_importance_sampling,
             "Env importance sampling",
         );
-        ui.checkbox(&mut self.temporal_tap, "Temporal tap");
+        ui.add(egui::widgets::Slider::new(&mut self.tap_count, 0..=10).text("Tap count"));
+        ui.add(egui::widgets::Slider::new(&mut self.tap_radius, 1..=50).text("Tap radius (px)"));
         ui.add(
-            egui::widgets::Slider::new(&mut self.temporal_history, 0..=50).text("Temporal history"),
-        );
-        ui.add(egui::widgets::Slider::new(&mut self.spatial_taps, 0..=10).text("Spatial taps"));
-        ui.add(
-            egui::widgets::Slider::new(&mut self.spatial_tap_history, 0..=50)
-                .text("Spatial tap history"),
+            egui::widgets::Slider::new(&mut self.tap_confidence_near, 1..=50)
+                .text("Max confidence"),
         );
         ui.add(
-            egui::widgets::Slider::new(&mut self.spatial_radius, 1..=50)
-                .text("Spatial radius (px)"),
+            egui::widgets::Slider::new(&mut self.tap_confidence_far, 1..=50).text("Min confidence"),
         );
         ui.add(
             egui::widgets::Slider::new(&mut self.t_start, 0.001..=0.5)
