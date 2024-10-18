@@ -201,8 +201,11 @@ fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample
     // sample the incoming radiance
     ls.radiance = textureLoad(env_map, es.pixel, 0).xyz;
     // for determining direction - offset randomly within the texel
-    // Note: this only works if the texels are sufficiently small
-    ls.uv = (vec2<f32>(es.pixel) + vec2<f32>(random_gen(rng), random_gen(rng))) / vec2<f32>(dim);
+    // this offset has to be uniformly distributed across the surface of the texel
+    let u = (f32(es.pixel.x) + random_gen(rng)) / f32(dim.x);
+    let bounds = compute_latitude_area_bounds(es.pixel.y, dim.y);
+    let v = acos(mix(bounds.x, bounds.y, random_gen(rng))) / PI;
+    ls.uv = vec2<f32>(u, v);
     return ls;
 }
 

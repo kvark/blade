@@ -5,9 +5,16 @@ struct EnvImportantSample {
     pdf: f32,
 }
 
+// Returns the range of values proportional to the area, given the texel Y
+fn compute_latitude_area_bounds(texel_y: i32, dim: u32) -> vec2<f32> {
+    return cos(vec2<f32>(vec2<i32>(texel_y, texel_y + 1)) / f32(dim) * PI);
+}
+
 fn compute_texel_solid_angle(itc: vec2<i32>, dim: vec2<u32>) -> f32 {
+    //Note: this has to agree with `map_equirect_uv_to_dir`
     let meridian_solid_angle = 4.0 * PI / f32(dim.x);
-    let meridian_part = 0.5 * (cos(PI * f32(itc.y) / f32(dim.y)) - cos(PI * f32(itc.y + 1) / f32(dim.y)));
+    let bounds = compute_latitude_area_bounds(itc.y, dim.y);
+    let meridian_part = 0.5 * (bounds.x - bounds.y);
     return meridian_solid_angle * meridian_part;
 }
 

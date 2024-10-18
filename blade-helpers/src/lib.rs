@@ -10,7 +10,7 @@ pub use hud::{populate_debug_selection, ExposeHud};
 pub fn default_ray_config() -> blade_render::RayConfig {
     blade_render::RayConfig {
         num_environment_samples: 1,
-        environment_importance_sampling: false,
+        environment_importance_sampling: true,
         tap_count: 2,
         tap_radius: 20,
         tap_confidence_near: 15,
