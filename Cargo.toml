@@ -16,7 +16,7 @@ base64 = "0.21"
 bitflags = "2"
 bytemuck = { version = "1", features = ["derive"] }
 choir = "0.7"
-egui = "0.28"
+egui = "0.29"
 glam = { version = "0.27", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
@@ -29,7 +29,7 @@ profiling = "1"
 slab = "0.4"
 strum = { version = "0.25", features = ["derive"] }
 web-sys = "0.3.60"
-winit = "0.29"
+winit = "0.30"
 
 [lib]
 
@@ -91,7 +91,7 @@ del-geo = "=0.1.29"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # see https://github.com/emilk/egui/issues/4270
-egui-winit = "0.28"
+egui-winit = "0.29"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 console_error_panic_hook = "0.1.7"
