@@ -75,7 +75,7 @@ blade-macros = { version = "0.3", path = "blade-macros" }
 bytemuck = { workspace = true }
 choir = { workspace = true }
 egui = { workspace = true }
-transform-gizmo-egui = { git = "https://github.com/urholaukkarinen/transform-gizmo", rev = "5be085444468ff7059abcd4e4872ab4510f65a06" }
+transform-gizmo-egui = { git = "https://github.com/urholaukkarinen/transform-gizmo", rev = "7556fb38b37f3772c57dd0fae6a276976d314f9b" }
 env_logger = "0.11"
 glam = { workspace = true }
 log = { workspace = true }
