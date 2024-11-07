@@ -10,6 +10,8 @@ Changelog for Blade
   - Metal:
     - support for workgroup memory
     - concurrent compute dispatches
+  - Egl:
+    - destroy old surface on resize
 
 ## blade-graphics-0.5, blade-macros-0.3, blade-egui-0.4, blade-util-0.1 (27 Aug 2024)
 
