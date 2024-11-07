@@ -835,14 +835,13 @@ fn main() {
     env_logger::init();
 
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    let window = winit::window::WindowBuilder::new()
-        .with_title("blade-scene")
-        .build(&event_loop)
-        .unwrap();
+    let window_attributes = winit::window::Window::default_attributes().with_title("blade-scene");
+
+    let window = event_loop.create_window(window_attributes).unwrap();
 
     let egui_ctx = egui::Context::default();
     let viewport_id = egui_ctx.viewport_id();
-    let mut egui_winit = egui_winit::State::new(egui_ctx, viewport_id, &window, None, None);
+    let mut egui_winit = egui_winit::State::new(egui_ctx, viewport_id, &window, None, None, None);
 
     let mut args = std::env::args();
     let path_to_scene = args
