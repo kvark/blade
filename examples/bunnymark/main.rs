@@ -349,10 +349,10 @@ fn main() {
     env_logger::init();
 
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    let window = winit::window::WindowBuilder::new()
-        .with_title("blade-bunnymark")
-        .build(&event_loop)
-        .unwrap();
+    let window_attributes =
+        winit::window::Window::default_attributes().with_title("blade-bunnymark");
+
+    let window = event_loop.create_window(window_attributes).unwrap();
 
     #[cfg(target_arch = "wasm32")]
     {

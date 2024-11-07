@@ -87,10 +87,9 @@ impl Game {
     fn new(event_loop: &winit::event_loop::EventLoop<()>) -> Self {
         log::info!("Initializing");
 
-        let window = winit::window::WindowBuilder::new()
-            .with_title("RayCraft")
-            .build(event_loop)
-            .unwrap();
+        let window_attributes = winit::window::Window::default_attributes().with_title("RayCraft");
+
+        let window = event_loop.create_window(window_attributes).unwrap();
 
         let cam_config = config::Camera {
             distance: 5.0,
@@ -306,7 +305,7 @@ impl Game {
         let egui_context = egui::Context::default();
         let egui_viewport_id = egui_context.viewport_id();
         let egui_state =
-            egui_winit::State::new(egui_context, egui_viewport_id, &window, None, None);
+            egui_winit::State::new(egui_context, egui_viewport_id, &window, None, None, None);
 
         Self {
             engine,
