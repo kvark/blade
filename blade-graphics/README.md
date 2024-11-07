@@ -48,6 +48,11 @@ RUSTFLAGS="--cfg gles" CARGO_TARGET_DIR=./target-gl cargo run --example bunnymar
 This path can be activated on all platforms via Angle library.
 For example, on macOS it's sufficient to place `libEGL.dylib` and `libGLESv2.dylib` in the working directory.
 
+On Windows, the quotes aren't expected:
+```bash
+set RUSTFLAGS=--cfg gles
+```
+
 ### WebGL2
 
 Following command will start a web server offering the `bunnymark` example:
