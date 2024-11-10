@@ -1,5 +1,8 @@
 Changelog for Blade
 
+## blade-egui-0.5 (09 Nov 2024)
+- update egui to 0.29
+
 ## blade-graphics-0.5, blade-macros-0.3, blade-egui-0.4, blade-util-0.1 (27 Aug 2024)
 
 - crate: `blade-util` for helper utilities
