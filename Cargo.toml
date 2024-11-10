@@ -48,7 +48,7 @@ readme = "docs/README.md"
 
 [dependencies]
 blade-asset = { version = "0.2", path = "blade-asset" }
-blade-egui = { version = "0.4", path = "blade-egui" }
+blade-egui = { version = "0.5", path = "blade-egui" }
 blade-graphics = { version = "0.5", path = "blade-graphics" }
 blade-helpers = { version = "0.1", path = "blade-helpers" }
 blade-util = { version = "0.1", path = "blade-util" }
