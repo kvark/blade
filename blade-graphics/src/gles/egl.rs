@@ -405,6 +405,13 @@ impl super::Context {
         }
 
         let mut inner = self.platform.inner.lock().unwrap();
+        if let Some(s) = inner.swapchain.take() {
+            inner
+                .egl
+                .instance
+                .destroy_surface(inner.egl.display, s.surface)
+                .unwrap();
+        }
 
         let mut attributes = vec![
             egl::RENDER_BUFFER,
@@ -468,7 +475,7 @@ impl super::Context {
                     .unwrap()
             },
         };
-        let old_swapchain = inner.swapchain.replace(Swapchain {
+        inner.swapchain = Some(Swapchain {
             surface,
             extent: config.size,
             format,
@@ -477,13 +484,6 @@ impl super::Context {
                 crate::DisplaySync::Recent | crate::DisplaySync::Tear => 0,
             },
         });
-        if let Some(s) = old_swapchain {
-            inner
-                .egl
-                .instance
-                .destroy_surface(inner.egl.display, s.surface)
-                .unwrap();
-        }
 
         let format_desc = super::describe_texture_format(format);
         inner.egl.make_current();
