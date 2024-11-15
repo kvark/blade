@@ -140,6 +140,7 @@ struct Example {
     gui_painter: blade_egui::GuiPainter,
     asset_hub: blade_render::AssetHub,
     context: Arc<gpu::Context>,
+    surface: gpu::Surface,
     environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
     objects: Vec<blade_render::Object>,
     object_extras: Vec<ObjectExtra>,
@@ -183,20 +184,19 @@ impl Example {
         log::info!("Initializing");
 
         let context = Arc::new(unsafe {
-            gpu::Context::init_windowed(
-                window,
-                gpu::ContextDesc {
-                    validation: cfg!(debug_assertions),
-                    capture: true,
-                    ..Default::default()
-                },
-            )
+            gpu::Context::init(gpu::ContextDesc {
+                presentation: true,
+                validation: cfg!(debug_assertions),
+                capture: true,
+                ..Default::default()
+            })
             .unwrap()
         });
 
         let surface_config = Self::make_surface_config(window.inner_size());
         let surface_size = surface_config.size;
-        let surface_info = context.resize(surface_config);
+        let surface = context.create_surface(window, surface_config).unwrap();
+        let surface_info = surface.info();
 
         let num_workers = num_cpus::get_physical().max((num_cpus::get() * 3 + 2) / 4);
         log::info!("Initializing Choir with {} workers", num_workers);
@@ -237,6 +237,7 @@ impl Example {
             gui_painter,
             asset_hub,
             context,
+            surface,
             environment_map: None,
             objects: Vec::new(),
             object_extras: Vec::new(),
@@ -275,6 +276,7 @@ impl Example {
         self.gui_painter.destroy(&self.context);
         self.renderer.destroy(&self.context);
         self.asset_hub.destroy();
+        self.context.destroy_surface(&mut self.surface);
     }
 
     pub fn load_scene(&mut self, scene_path: &Path) {
@@ -402,7 +404,8 @@ impl Example {
         if new_render_size != self.renderer.get_surface_size() {
             log::info!("Resizing to {}", new_render_size);
             self.pacer.wait_for_previous_frame(&self.context);
-            self.context.resize(surface_config);
+            self.context
+                .reconfigure_surface(&mut self.surface, surface_config);
         }
 
         let (command_encoder, temp) = self.pacer.begin_frame();
@@ -467,7 +470,7 @@ impl Example {
             }
         }
 
-        let frame = self.context.acquire_frame();
+        let frame = self.context.acquire_frame(&mut self.surface);
         command_encoder.init_texture(frame.texture());
 
         if let mut pass = command_encoder.render(
