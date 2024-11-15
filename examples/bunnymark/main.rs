@@ -55,6 +55,7 @@ struct Example {
     window_size: winit::dpi::PhysicalSize<u32>,
     bunnies: Vec<Sprite>,
     rng: nanorand::WyRand,
+    surface: gpu::Surface,
     context: gpu::Context,
     vertex_buf: gpu::Buffer,
 }
@@ -62,31 +63,33 @@ struct Example {
 impl Example {
     fn new(window: &winit::window::Window) -> Self {
         let context = unsafe {
-            gpu::Context::init_windowed(
-                window,
-                gpu::ContextDesc {
-                    validation: cfg!(debug_assertions),
-                    timing: false,
-                    capture: false,
-                    overlay: true,
-                },
-            )
+            gpu::Context::init(gpu::ContextDesc {
+                presentation: true,
+                validation: cfg!(debug_assertions),
+                timing: false,
+                capture: false,
+                overlay: true,
+            })
             .unwrap()
         };
         println!("{:?}", context.device_information());
         let window_size = window.inner_size();
         log::info!("Initial size: {:?}", window_size);
 
-        let surface_info = context.resize(gpu::SurfaceConfig {
-            size: gpu::Extent {
-                width: window_size.width,
-                height: window_size.height,
-                depth: 1,
+        let mut surface = context.create_surface(window).unwrap();
+        let surface_info = context.configure_surface(
+            &mut surface,
+            gpu::SurfaceConfig {
+                size: gpu::Extent {
+                    width: window_size.width,
+                    height: window_size.height,
+                    depth: 1,
+                },
+                usage: gpu::TextureUsage::TARGET,
+                display_sync: gpu::DisplaySync::Recent,
+                ..Default::default()
             },
-            usage: gpu::TextureUsage::TARGET,
-            display_sync: gpu::DisplaySync::Recent,
-            ..Default::default()
-        });
+        );
 
         let global_layout = <Params as gpu::ShaderData>::layout();
         let local_layout = <SpriteData as gpu::ShaderData>::layout();
@@ -220,6 +223,7 @@ impl Example {
             window_size,
             bunnies,
             rng: nanorand::WyRand::new_seed(73),
+            surface,
             context,
             vertex_buf,
         }
@@ -278,7 +282,7 @@ impl Example {
         if self.window_size == Default::default() {
             return;
         }
-        let frame = self.context.acquire_frame();
+        let frame = self.context.acquire_frame(&mut self.surface);
 
         self.command_encoder.start();
         self.command_encoder.init_texture(frame.texture());
@@ -341,6 +345,7 @@ impl Example {
         self.context
             .destroy_command_encoder(&mut self.command_encoder);
         self.context.destroy_render_pipeline(&mut self.pipeline);
+        self.context.destroy_surface(&mut self.surface);
     }
 }
 
