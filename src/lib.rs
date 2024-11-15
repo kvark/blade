@@ -680,7 +680,7 @@ impl Engine {
             }
         }
 
-        let frame = self.gpu_context.acquire_frame(&mut self.gpu_surface);
+        let frame = self.gpu_surface.acquire_frame();
         command_encoder.init_texture(frame.texture());
 
         if let mut pass = command_encoder.render(
