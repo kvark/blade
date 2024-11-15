@@ -1,12 +1,22 @@
 use ash::vk;
 use std::mem;
 
+impl super::Surface {
+    pub fn info(&self) -> crate::SurfaceInfo {
+        crate::SurfaceInfo {
+            format: self.swapchain.format,
+            alpha: self.swapchain.alpha,
+        }
+    }
+}
+
 impl super::Context {
     pub fn create_surface<
         I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
     >(
         &self,
         window: &I,
+        config: crate::SurfaceConfig,
     ) -> Result<super::Surface, crate::NotSupportedError> {
         let raw = unsafe {
             ash_window::create_surface(
@@ -60,17 +70,21 @@ impl super::Context {
                 .create_semaphore(&semaphore_create_info, None)
                 .unwrap()
         };
-        Ok(super::Surface {
+
+        let mut this = super::Surface {
             raw,
             frames: Vec::new(),
             next_semaphore,
             swapchain: super::Swapchain {
                 raw: vk::SwapchainKHR::null(),
-                target_size: [0; 2],
                 format: crate::TextureFormat::Rgba8Unorm,
+                alpha: crate::AlphaMode::Ignored,
+                target_size: [0; 2],
             },
             _full_screen_exclusive: fullscreen_exclusive_ext.full_screen_exclusive_supported != 0,
-        })
+        };
+        self.reconfigure_surface(&mut this, config);
+        Ok(this)
     }
 
     pub fn destroy_surface(&self, surface: &mut super::Surface) {
@@ -96,11 +110,7 @@ impl super::Context {
         }
     }
 
-    pub fn configure_surface(
-        &self,
-        surface: &mut super::Surface,
-        config: crate::SurfaceConfig,
-    ) -> crate::SurfaceInfo {
+    pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
         let khr_swapchain = self.device.swapchain.as_ref().unwrap();
         let khr_surface = self.instance.surface.as_ref().unwrap();
 
@@ -333,10 +343,9 @@ impl super::Context {
         surface.swapchain = super::Swapchain {
             raw: raw_swapchain,
             format,
+            alpha,
             target_size,
         };
-
-        crate::SurfaceInfo { format, alpha }
     }
 
     pub fn acquire_frame(&self, surface: &mut super::Surface) -> super::Frame {

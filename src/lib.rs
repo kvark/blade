@@ -422,10 +422,10 @@ impl Engine {
             .unwrap()
         });
 
-        let mut gpu_surface = gpu_context.create_surface(window).unwrap();
         let surface_config = Self::make_surface_config(window.inner_size());
         let surface_size = surface_config.size;
-        let surface_info = gpu_context.configure_surface(&mut gpu_surface, surface_config);
+        let gpu_surface = gpu_context.create_surface(window, surface_config).unwrap();
+        let surface_info = gpu_surface.info();
 
         let num_workers = num_cpus::get_physical().max((num_cpus::get() * 3 + 2) / 4);
         log::info!("Initializing Choir with {} workers", num_workers);
@@ -547,7 +547,7 @@ impl Engine {
             log::info!("Resizing to {}", new_render_size);
             self.pacer.wait_for_previous_frame(&self.gpu_context);
             self.gpu_context
-                .configure_surface(&mut self.gpu_surface, surface_config);
+                .reconfigure_surface(&mut self.gpu_surface, surface_config);
         }
 
         let (command_encoder, temp) = self.pacer.begin_frame();

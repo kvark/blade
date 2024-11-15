@@ -52,12 +52,12 @@ struct Example {
     texture: gpu::Texture,
     view: gpu::TextureView,
     sampler: gpu::Sampler,
+    vertex_buf: gpu::Buffer,
     window_size: winit::dpi::PhysicalSize<u32>,
     bunnies: Vec<Sprite>,
     rng: nanorand::WyRand,
     surface: gpu::Surface,
     context: gpu::Context,
-    vertex_buf: gpu::Buffer,
 }
 
 impl Example {
@@ -76,20 +76,17 @@ impl Example {
         let window_size = window.inner_size();
         log::info!("Initial size: {:?}", window_size);
 
-        let mut surface = context.create_surface(window).unwrap();
-        let surface_info = context.configure_surface(
-            &mut surface,
-            gpu::SurfaceConfig {
-                size: gpu::Extent {
-                    width: window_size.width,
-                    height: window_size.height,
-                    depth: 1,
-                },
-                usage: gpu::TextureUsage::TARGET,
-                display_sync: gpu::DisplaySync::Recent,
-                ..Default::default()
+        let surface_config = gpu::SurfaceConfig {
+            size: gpu::Extent {
+                width: window_size.width,
+                height: window_size.height,
+                depth: 1,
             },
-        );
+            usage: gpu::TextureUsage::TARGET,
+            display_sync: gpu::DisplaySync::Recent,
+            ..Default::default()
+        };
+        let surface = context.create_surface(window, surface_config).unwrap();
 
         let global_layout = <Params as gpu::ShaderData>::layout();
         let local_layout = <SpriteData as gpu::ShaderData>::layout();
@@ -116,7 +113,7 @@ impl Example {
             depth_stencil: None,
             fragment: shader.at("fs_main"),
             color_targets: &[gpu::ColorTargetState {
-                format: surface_info.format,
+                format: surface.info().format,
                 blend: Some(gpu::BlendState::ALPHA_BLENDING),
                 write_mask: gpu::ColorWrites::default(),
             }],
@@ -220,12 +217,12 @@ impl Example {
             texture,
             view,
             sampler,
+            vertex_buf,
             window_size,
             bunnies,
             rng: nanorand::WyRand::new_seed(73),
             surface,
             context,
-            vertex_buf,
         }
     }
 
@@ -338,10 +335,10 @@ impl Example {
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);
         }
-        self.context.destroy_buffer(self.vertex_buf);
         self.context.destroy_texture_view(self.view);
         self.context.destroy_texture(self.texture);
         self.context.destroy_sampler(self.sampler);
+        self.context.destroy_buffer(self.vertex_buf);
         self.context
             .destroy_command_encoder(&mut self.command_encoder);
         self.context.destroy_render_pipeline(&mut self.pipeline);

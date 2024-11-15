@@ -8,6 +8,7 @@ struct Example {
     command_encoder: gpu::CommandEncoder,
     prev_sync_point: Option<gpu::SyncPoint>,
     context: gpu::Context,
+    surface: gpu::Surface,
     gui_painter: blade_egui::GuiPainter,
     particle_system: particle::System,
 }
@@ -16,19 +17,16 @@ impl Example {
     fn new(window: &winit::window::Window) -> Self {
         let window_size = window.inner_size();
         let context = unsafe {
-            gpu::Context::init_windowed(
-                window,
-                gpu::ContextDesc {
-                    validation: cfg!(debug_assertions),
-                    timing: true,
-                    capture: true,
-                    overlay: false,
-                },
-            )
+            gpu::Context::init(gpu::ContextDesc {
+                presentation: true,
+                validation: cfg!(debug_assertions),
+                timing: true,
+                capture: true,
+                overlay: false,
+            })
             .unwrap()
         };
-
-        let surface_info = context.resize(gpu::SurfaceConfig {
+        let surface_config = gpu::SurfaceConfig {
             size: gpu::Extent {
                 width: window_size.width,
                 height: window_size.height,
@@ -37,7 +35,10 @@ impl Example {
             usage: gpu::TextureUsage::TARGET,
             display_sync: gpu::DisplaySync::Block,
             ..Default::default()
-        });
+        };
+        let surface = context.create_surface(window, surface_config).unwrap();
+        let surface_info = surface.info();
+
         let gui_painter = blade_egui::GuiPainter::new(surface_info, &context);
         let particle_system = particle::System::new(
             &context,
@@ -60,6 +61,7 @@ impl Example {
             command_encoder,
             prev_sync_point: Some(sync_point),
             context,
+            surface,
             gui_painter,
             particle_system,
         }
@@ -73,6 +75,7 @@ impl Example {
             .destroy_command_encoder(&mut self.command_encoder);
         self.gui_painter.destroy(&self.context);
         self.particle_system.destroy(&self.context);
+        self.context.destroy_surface(&mut self.surface);
     }
 
     fn render(
@@ -81,7 +84,7 @@ impl Example {
         gui_textures: &egui::TexturesDelta,
         screen_desc: &blade_egui::ScreenDescriptor,
     ) {
-        let frame = self.context.acquire_frame();
+        let frame = self.context.acquire_frame(&mut self.surface);
         self.command_encoder.start();
         self.command_encoder.init_texture(frame.texture());
 

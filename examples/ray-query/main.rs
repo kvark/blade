@@ -41,19 +41,18 @@ struct Example {
     prev_sync_point: Option<gpu::SyncPoint>,
     screen_size: gpu::Extent,
     context: gpu::Context,
+    surface: gpu::Surface,
 }
 
 impl Example {
     fn new(window: &winit::window::Window) -> Self {
         let window_size = window.inner_size();
         let context = unsafe {
-            gpu::Context::init_windowed(
-                window,
-                gpu::ContextDesc {
-                    validation: cfg!(debug_assertions),
-                    ..Default::default()
-                },
-            )
+            gpu::Context::init(gpu::ContextDesc {
+                presentation: true,
+                validation: cfg!(debug_assertions),
+                ..Default::default()
+            })
             .unwrap()
         };
         let capabilities = context.capabilities();
@@ -66,6 +65,13 @@ impl Example {
             height: window_size.height,
             depth: 1,
         };
+        let surface_config = gpu::SurfaceConfig {
+            size: screen_size,
+            usage: gpu::TextureUsage::TARGET,
+            transparent: true,
+            ..Default::default()
+        };
+        let surface = context.create_surface(window, surface_config).unwrap();
 
         let target = context.create_texture(gpu::TextureDesc {
             name: "main",
@@ -86,13 +92,6 @@ impl Example {
             },
         );
 
-        let surface_info = context.resize(gpu::SurfaceConfig {
-            size: screen_size,
-            usage: gpu::TextureUsage::TARGET,
-            transparent: true,
-            ..Default::default()
-        });
-
         let source = std::fs::read_to_string("examples/ray-query/shader.wgsl").unwrap();
         let shader = context.create_shader(gpu::ShaderDesc { source: &source });
         let rt_layout = <ShaderData as gpu::ShaderData>::layout();
@@ -112,7 +111,7 @@ impl Example {
             vertex: shader.at("draw_vs"),
             vertex_fetches: &[],
             fragment: shader.at("draw_fs"),
-            color_targets: &[surface_info.format.into()],
+            color_targets: &[surface.info().format.into()],
             depth_stencil: None,
         });
 
@@ -241,6 +240,7 @@ impl Example {
             command_encoder,
             prev_sync_point: None,
             screen_size,
+            surface,
             context,
         }
     }
@@ -258,6 +258,7 @@ impl Example {
         self.context.destroy_compute_pipeline(&mut self.rt_pipeline);
         self.context
             .destroy_render_pipeline(&mut self.draw_pipeline);
+        self.context.destroy_surface(&mut self.surface);
     }
 
     fn render(&mut self) {
@@ -289,7 +290,7 @@ impl Example {
             }
         }
 
-        let frame = self.context.acquire_frame();
+        let frame = self.context.acquire_frame(&mut self.surface);
         self.command_encoder.init_texture(frame.texture());
 
         if let mut pass = self.command_encoder.render(

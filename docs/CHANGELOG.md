@@ -3,6 +3,8 @@ Changelog for Blade
 ## blade-graphics-0.6 (TBD)
 
 - graphics:
+  - API for surface creation
+    - allows multiple windows used by the same context
   - API for destruction of pipelines
   - every pass now takes a label
   - automatic GPU pass markers

@@ -78,6 +78,7 @@ struct InternalFrame {
 struct Swapchain {
     raw: vk::SwapchainKHR,
     format: crate::TextureFormat,
+    alpha: crate::AlphaMode,
     target_size: [u16; 2],
 }
 
