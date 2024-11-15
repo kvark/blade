@@ -84,7 +84,7 @@ impl Example {
         gui_textures: &egui::TexturesDelta,
         screen_desc: &blade_egui::ScreenDescriptor,
     ) {
-        let frame = self.context.acquire_frame(&mut self.surface);
+        let frame = self.surface.acquire_frame();
         self.command_encoder.start();
         self.command_encoder.init_texture(frame.texture());
 

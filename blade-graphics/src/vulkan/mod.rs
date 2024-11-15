@@ -83,6 +83,7 @@ struct Swapchain {
 }
 
 pub struct Surface {
+    device: khr::swapchain::Device,
     raw: vk::SurfaceKHR,
     frames: Vec<InternalFrame>,
     next_semaphore: vk::Semaphore,

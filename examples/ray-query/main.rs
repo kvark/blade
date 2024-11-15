@@ -290,7 +290,7 @@ impl Example {
             }
         }
 
-        let frame = self.context.acquire_frame(&mut self.surface);
+        let frame = self.surface.acquire_frame();
         self.command_encoder.init_texture(frame.texture());
 
         if let mut pass = self.command_encoder.render(

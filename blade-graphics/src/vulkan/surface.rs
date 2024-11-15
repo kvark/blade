@@ -8,6 +8,48 @@ impl super::Surface {
             alpha: self.swapchain.alpha,
         }
     }
+
+    unsafe fn deinit_swapchain(&mut self, raw_device: &ash::Device) {
+        self.device
+            .destroy_swapchain(mem::take(&mut self.swapchain.raw), None);
+        for frame in self.frames.drain(..) {
+            raw_device.destroy_image_view(frame.view, None);
+            raw_device.destroy_semaphore(frame.acquire_semaphore, None);
+        }
+    }
+
+    pub fn acquire_frame(&mut self) -> super::Frame {
+        let acquire_semaphore = self.next_semaphore;
+        match unsafe {
+            self.device.acquire_next_image(
+                self.swapchain.raw,
+                !0,
+                acquire_semaphore,
+                vk::Fence::null(),
+            )
+        } {
+            Ok((index, _suboptimal)) => {
+                self.next_semaphore = mem::replace(
+                    &mut self.frames[index as usize].acquire_semaphore,
+                    acquire_semaphore,
+                );
+                super::Frame {
+                    internal: self.frames[index as usize],
+                    swapchain: self.swapchain,
+                    image_index: index,
+                }
+            }
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                log::warn!("Acquire failed because the surface is out of date");
+                super::Frame {
+                    internal: super::InternalFrame::default(),
+                    swapchain: self.swapchain,
+                    image_index: 0,
+                }
+            }
+            Err(other) => panic!("Aquire image error {}", other),
+        }
+    }
 }
 
 impl super::Context {
@@ -18,6 +60,12 @@ impl super::Context {
         window: &I,
         config: crate::SurfaceConfig,
     ) -> Result<super::Surface, crate::NotSupportedError> {
+        let khr_swapchain = self
+            .device
+            .swapchain
+            .clone()
+            .ok_or(crate::NotSupportedError::NoSupportedDeviceFound)?;
+
         let raw = unsafe {
             ash_window::create_surface(
                 &self.entry,
@@ -72,6 +120,7 @@ impl super::Context {
         };
 
         let mut this = super::Surface {
+            device: khr_swapchain,
             raw,
             frames: Vec::new(),
             next_semaphore,
@@ -89,7 +138,7 @@ impl super::Context {
 
     pub fn destroy_surface(&self, surface: &mut super::Surface) {
         unsafe {
-            self.deinit_swapchain(surface);
+            surface.deinit_swapchain(&self.device.core);
             self.device
                 .core
                 .destroy_semaphore(surface.next_semaphore, None)
@@ -99,19 +148,7 @@ impl super::Context {
         }
     }
 
-    unsafe fn deinit_swapchain(&self, surface: &mut super::Surface) {
-        let khr_swapchain = self.device.swapchain.as_ref().unwrap();
-        khr_swapchain.destroy_swapchain(mem::take(&mut surface.swapchain.raw), None);
-        for frame in surface.frames.drain(..) {
-            self.device.core.destroy_image_view(frame.view, None);
-            self.device
-                .core
-                .destroy_semaphore(frame.acquire_semaphore, None);
-        }
-    }
-
     pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
-        let khr_swapchain = self.device.swapchain.as_ref().unwrap();
         let khr_surface = self.instance.surface.as_ref().unwrap();
 
         let capabilities = unsafe {
@@ -298,13 +335,13 @@ impl super::Context {
         } else if !config.allow_exclusive_full_screen {
             log::info!("Unable to forbid exclusive full screen");
         }
-        let raw_swapchain = unsafe { khr_swapchain.create_swapchain(&create_info, None).unwrap() };
+        let raw_swapchain = unsafe { surface.device.create_swapchain(&create_info, None).unwrap() };
 
         unsafe {
-            self.deinit_swapchain(surface);
+            surface.deinit_swapchain(&self.device.core);
         }
 
-        let images = unsafe { khr_swapchain.get_swapchain_images(raw_swapchain).unwrap() };
+        let images = unsafe { surface.device.get_swapchain_images(raw_swapchain).unwrap() };
         let target_size = [config.size.width as u16, config.size.height as u16];
         let subresource_range = vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -346,39 +383,5 @@ impl super::Context {
             alpha,
             target_size,
         };
-    }
-
-    pub fn acquire_frame(&self, surface: &mut super::Surface) -> super::Frame {
-        let khr_swapchain = self.device.swapchain.as_ref().unwrap();
-        let acquire_semaphore = surface.next_semaphore;
-        match unsafe {
-            khr_swapchain.acquire_next_image(
-                surface.swapchain.raw,
-                !0,
-                acquire_semaphore,
-                vk::Fence::null(),
-            )
-        } {
-            Ok((index, _suboptimal)) => {
-                surface.next_semaphore = mem::replace(
-                    &mut surface.frames[index as usize].acquire_semaphore,
-                    acquire_semaphore,
-                );
-                super::Frame {
-                    internal: surface.frames[index as usize],
-                    swapchain: surface.swapchain,
-                    image_index: index,
-                }
-            }
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                log::warn!("Acquire failed because the surface is out of date");
-                super::Frame {
-                    internal: super::InternalFrame::default(),
-                    swapchain: surface.swapchain,
-                    image_index: 0,
-                }
-            }
-            Err(other) => panic!("Aquire image error {}", other),
-        }
     }
 }
