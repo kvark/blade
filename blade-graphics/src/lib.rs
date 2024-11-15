@@ -90,6 +90,8 @@ use std::{fmt, num::NonZeroU32};
 
 #[derive(Clone, Debug, Default)]
 pub struct ContextDesc {
+    /// Ability to present contents to a window.
+    pub presentation: bool,
     /// Enable validation of the GAPI, shaders,
     /// and insert crash markers into command buffers.
     pub validation: bool,

@@ -1,6 +1,6 @@
 use ash::{amd, ext, khr, vk};
 use naga::back::spv;
-use std::{ffi, fs, mem, sync::Mutex};
+use std::{ffi, fs, sync::Mutex};
 
 use crate::NotSupportedError;
 
@@ -60,7 +60,7 @@ unsafe fn inspect_adapter(
     phd: vk::PhysicalDevice,
     instance: &super::Instance,
     driver_api_version: u32,
-    surface: Option<vk::SurfaceKHR>,
+    desc: &crate::ContextDesc,
 ) -> Option<AdapterCapabilities> {
     let mut inline_uniform_block_properties =
         vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
@@ -122,32 +122,10 @@ unsafe fn inspect_adapter(
         intel_fix_descriptor_pool_leak: cfg!(windows) && properties.vendor_id == db::intel::VENDOR,
     };
 
-    let mut full_screen_exclusive = false;
     let queue_family_index = 0; //TODO
-    if let Some(surface) = surface {
-        let khr = instance.surface.as_ref()?;
-        if khr.get_physical_device_surface_support(phd, queue_family_index, surface) != Ok(true) {
-            log::warn!("Rejected for not presenting to the window surface");
-            return None;
-        }
-
-        let surface_info = vk::PhysicalDeviceSurfaceInfo2KHR {
-            surface,
-            ..Default::default()
-        };
-        let mut fullscreen_exclusive_ext = vk::SurfaceCapabilitiesFullScreenExclusiveEXT::default();
-        let mut capabilities2_khr =
-            vk::SurfaceCapabilities2KHR::default().push_next(&mut fullscreen_exclusive_ext);
-        let _ = instance
-            .get_surface_capabilities2
-            .get_physical_device_surface_capabilities2(phd, &surface_info, &mut capabilities2_khr);
-        log::debug!("{:?}", capabilities2_khr.surface_capabilities);
-        full_screen_exclusive = fullscreen_exclusive_ext.full_screen_exclusive_supported != 0;
-
-        if bugs.intel_unable_to_present {
-            log::warn!("Rejecting Intel for not presenting when Nvidia is present (on Linux)");
-            return None;
-        }
+    if desc.presentation && bugs.intel_unable_to_present {
+        log::warn!("Rejecting Intel for not presenting when Nvidia is present (on Linux)");
+        return None;
     }
 
     let mut inline_uniform_block_features =
@@ -253,6 +231,7 @@ unsafe fn inspect_adapter(
 
     let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
+    let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
 
     let device_information = crate::DeviceInformation {
         is_software_emulated: properties.device_type == vk::PhysicalDeviceType::CPU,
@@ -283,13 +262,7 @@ unsafe fn inspect_adapter(
 }
 
 impl super::Context {
-    unsafe fn init_impl(
-        desc: crate::ContextDesc,
-        surface_handles: Option<(
-            raw_window_handle::WindowHandle,
-            raw_window_handle::DisplayHandle,
-        )>,
-    ) -> Result<Self, NotSupportedError> {
+    pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, NotSupportedError> {
         let entry = match ash::Entry::load() {
             Ok(entry) => entry,
             Err(err) => {
@@ -356,11 +329,20 @@ impl super::Context {
                 vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME,
                 vk::KHR_GET_SURFACE_CAPABILITIES2_NAME,
             ];
-            if let Some((_, dh)) = surface_handles {
-                match ash_window::enumerate_required_extensions(dh.as_raw()) {
-                    Ok(extensions) => instance_extensions
-                        .extend(extensions.iter().map(|&ptr| ffi::CStr::from_ptr(ptr))),
-                    Err(e) => return Err(NotSupportedError::VulkanError(e)),
+            if desc.presentation {
+                instance_extensions.push(vk::KHR_SURFACE_NAME);
+                let candidates = [
+                    vk::KHR_WAYLAND_SURFACE_NAME,
+                    vk::KHR_XCB_SURFACE_NAME,
+                    vk::KHR_XLIB_SURFACE_NAME,
+                    vk::KHR_WIN32_SURFACE_NAME,
+                    vk::KHR_ANDROID_SURFACE_NAME,
+                ];
+                for candidate in candidates.iter() {
+                    if supported_instance_extensions.contains(candidate) {
+                        log::info!("Presentation support: {:?}", candidate);
+                        instance_extensions.push(candidate);
+                    }
                 }
             }
 
@@ -395,19 +377,10 @@ impl super::Context {
                 .flags(create_flags)
                 .enabled_layer_names(layer_strings)
                 .enabled_extension_names(extension_strings);
-            match entry.create_instance(&create_info, None) {
+            match unsafe { entry.create_instance(&create_info, None) } {
                 Ok(instance) => instance,
                 Err(e) => return Err(NotSupportedError::VulkanError(e)),
             }
-        };
-
-        let vk_surface = if let Some((wh, dh)) = surface_handles {
-            Some(
-                ash_window::create_surface(&entry, &core_instance, dh.as_raw(), wh.as_raw(), None)
-                    .map_err(|e| NotSupportedError::VulkanError(e))?,
-            )
-        } else {
-            None
         };
 
         let instance =
@@ -419,7 +392,7 @@ impl super::Context {
                     &entry,
                     &core_instance,
                 ),
-                surface: if surface_handles.is_some() {
+                surface: if desc.presentation {
                     Some(khr::surface::Instance::new(&entry, &core_instance))
                 } else {
                     None
@@ -434,8 +407,7 @@ impl super::Context {
         let (physical_device, capabilities) = physical_devices
             .into_iter()
             .find_map(|phd| {
-                inspect_adapter(phd, &instance, driver_api_version, vk_surface)
-                    .map(|caps| (phd, caps))
+                inspect_adapter(phd, &instance, driver_api_version, &desc).map(|caps| (phd, caps))
             })
             .ok_or_else(|| NotSupportedError::NoSupportedDeviceFound)?;
 
@@ -448,7 +420,7 @@ impl super::Context {
             let family_infos = [family_info];
 
             let mut device_extensions = REQUIRED_DEVICE_EXTENSIONS.to_vec();
-            if surface_handles.is_some() {
+            if desc.presentation {
                 device_extensions.push(vk::KHR_SWAPCHAIN_NAME);
             }
             if capabilities.layered {
@@ -537,6 +509,11 @@ impl super::Context {
         };
 
         let device = super::Device {
+            swapchain: if desc.presentation {
+                Some(khr::swapchain::Device::new(&instance.core, &device_core))
+            } else {
+                None
+            },
             debug_utils: ext::debug_utils::Device::new(&instance.core, &device_core),
             timeline_semaphore: khr::timeline_semaphore::Device::new(&instance.core, &device_core),
             dynamic_rendering: khr::dynamic_rendering::Device::new(&instance.core, &device_core),
@@ -683,37 +660,15 @@ impl super::Context {
         };
         let timeline_semaphore_create_info =
             vk::SemaphoreCreateInfo::default().push_next(&mut timeline_info);
-        let timeline_semaphore = unsafe {
-            device
-                .core
-                .create_semaphore(&timeline_semaphore_create_info, None)
-                .unwrap()
-        };
+        let timeline_semaphore = device
+            .core
+            .create_semaphore(&timeline_semaphore_create_info, None)
+            .unwrap();
         let present_semaphore_create_info = vk::SemaphoreCreateInfo::default();
-        let present_semaphore = unsafe {
-            device
-                .core
-                .create_semaphore(&present_semaphore_create_info, None)
-                .unwrap()
-        };
-
-        let surface = vk_surface.map(|raw| {
-            let extension = khr::swapchain::Device::new(&instance.core, &device.core);
-            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-            let next_semaphore = unsafe {
-                device
-                    .core
-                    .create_semaphore(&semaphore_create_info, None)
-                    .unwrap()
-            };
-            Mutex::new(super::Surface {
-                raw,
-                frames: Vec::new(),
-                next_semaphore,
-                swapchain: vk::SwapchainKHR::null(),
-                extension,
-            })
-        });
+        let present_semaphore = device
+            .core
+            .create_semaphore(&present_semaphore_create_info, None)
+            .unwrap();
 
         let mut naga_flags = spv::WriterFlags::FORCE_POINT_SIZE;
         let shader_debug_path = if desc.validation || desc.capture {
@@ -736,30 +691,12 @@ impl super::Context {
                 present_semaphore,
                 last_progress,
             }),
-            surface,
             physical_device,
             naga_flags,
             shader_debug_path,
             instance,
-            _entry: entry,
+            entry,
         })
-    }
-
-    pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, NotSupportedError> {
-        Self::init_impl(desc, None)
-    }
-
-    pub unsafe fn init_windowed<
-        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
-    >(
-        window: &I,
-        desc: crate::ContextDesc,
-    ) -> Result<Self, NotSupportedError> {
-        let handles = (
-            window.window_handle().unwrap(),
-            window.display_handle().unwrap(),
-        );
-        Self::init_impl(desc, Some(handles))
     }
 
     pub(super) fn set_object_name<T: vk::Handle>(&self, object: T, name: &str) {
@@ -788,311 +725,12 @@ impl super::Context {
     }
 }
 
-impl super::Context {
-    pub fn resize(&self, config: crate::SurfaceConfig) -> crate::SurfaceInfo {
-        let surface_khr = self.instance.surface.as_ref().unwrap();
-        let mut surface = self.surface.as_ref().unwrap().lock().unwrap();
-
-        let capabilities = unsafe {
-            surface_khr
-                .get_physical_device_surface_capabilities(self.physical_device, surface.raw)
-                .unwrap()
-        };
-        if config.size.width < capabilities.min_image_extent.width
-            || config.size.width > capabilities.max_image_extent.width
-            || config.size.height < capabilities.min_image_extent.height
-            || config.size.height > capabilities.max_image_extent.height
-        {
-            log::warn!(
-                "Requested size {}x{} is outside of surface capabilities",
-                config.size.width,
-                config.size.height
-            );
-        }
-
-        let (alpha, composite_alpha) = if config.transparent {
-            if capabilities
-                .supported_composite_alpha
-                .contains(vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED)
-            {
-                (
-                    crate::AlphaMode::PostMultiplied,
-                    vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED,
-                )
-            } else if capabilities
-                .supported_composite_alpha
-                .contains(vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED)
-            {
-                (
-                    crate::AlphaMode::PreMultiplied,
-                    vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED,
-                )
-            } else {
-                log::error!(
-                    "No composite alpha flag for transparency: {:?}",
-                    capabilities.supported_composite_alpha
-                );
-                (
-                    crate::AlphaMode::Ignored,
-                    vk::CompositeAlphaFlagsKHR::OPAQUE,
-                )
-            }
-        } else {
-            (
-                crate::AlphaMode::Ignored,
-                vk::CompositeAlphaFlagsKHR::OPAQUE,
-            )
-        };
-
-        let (requested_frame_count, mode_preferences) = match config.display_sync {
-            crate::DisplaySync::Block => (3, [vk::PresentModeKHR::FIFO].as_slice()),
-            crate::DisplaySync::Recent => (
-                3,
-                [
-                    vk::PresentModeKHR::MAILBOX,
-                    vk::PresentModeKHR::FIFO_RELAXED,
-                    vk::PresentModeKHR::IMMEDIATE,
-                ]
-                .as_slice(),
-            ),
-            crate::DisplaySync::Tear => (2, [vk::PresentModeKHR::IMMEDIATE].as_slice()),
-        };
-        let effective_frame_count = requested_frame_count.max(capabilities.min_image_count);
-
-        let present_modes = unsafe {
-            surface_khr
-                .get_physical_device_surface_present_modes(self.physical_device, surface.raw)
-                .unwrap()
-        };
-        let present_mode = *mode_preferences
-            .iter()
-            .find(|mode| present_modes.contains(mode))
-            .unwrap();
-        log::info!("Using surface present mode {:?}", present_mode);
-
-        let queue_families = [self.queue_family_index];
-
-        let mut supported_formats = Vec::new();
-        let (format, surface_format) =
-            if let Some(&super::Frame { format, .. }) = surface.frames.first() {
-                log::info!("Retaining current format: {:?}", format);
-                let vk_color_space = match (format, config.color_space) {
-                    (crate::TextureFormat::Bgra8Unorm, crate::ColorSpace::Srgb) => {
-                        vk::ColorSpaceKHR::SRGB_NONLINEAR
-                    }
-                    (crate::TextureFormat::Bgra8Unorm, crate::ColorSpace::Linear) => {
-                        vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT
-                    }
-                    (crate::TextureFormat::Bgra8UnormSrgb, crate::ColorSpace::Linear) => {
-                        vk::ColorSpaceKHR::default()
-                    }
-                    _ => panic!(
-                        "Unexpected format {:?} under color space {:?}",
-                        format, config.color_space
-                    ),
-                };
-                (
-                    format,
-                    vk::SurfaceFormatKHR {
-                        format: super::map_texture_format(format),
-                        color_space: vk_color_space,
-                    },
-                )
-            } else {
-                supported_formats = unsafe {
-                    surface_khr
-                        .get_physical_device_surface_formats(self.physical_device, surface.raw)
-                        .unwrap()
-                };
-                match config.color_space {
-                    crate::ColorSpace::Linear => {
-                        let surface_format = vk::SurfaceFormatKHR {
-                            format: vk::Format::B8G8R8A8_UNORM,
-                            color_space: vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT,
-                        };
-                        if supported_formats.contains(&surface_format) {
-                            log::info!("Using linear SRGB color space");
-                            (crate::TextureFormat::Bgra8Unorm, surface_format)
-                        } else {
-                            (
-                                crate::TextureFormat::Bgra8UnormSrgb,
-                                vk::SurfaceFormatKHR {
-                                    format: vk::Format::B8G8R8A8_SRGB,
-                                    color_space: vk::ColorSpaceKHR::default(),
-                                },
-                            )
-                        }
-                    }
-                    crate::ColorSpace::Srgb => (
-                        crate::TextureFormat::Bgra8Unorm,
-                        vk::SurfaceFormatKHR {
-                            format: vk::Format::B8G8R8A8_UNORM,
-                            color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
-                        },
-                    ),
-                }
-            };
-        if !supported_formats.is_empty() && !supported_formats.contains(&surface_format) {
-            log::error!("Surface formats are incompatible: {:?}", supported_formats);
-        }
-
-        let vk_usage = super::resource::map_texture_usage(config.usage, crate::TexelAspects::COLOR);
-        if !capabilities.supported_usage_flags.contains(vk_usage) {
-            log::error!(
-                "Surface usages are incompatible: {:?}",
-                capabilities.supported_usage_flags
-            );
-        }
-
-        let mut full_screen_exclusive_info = vk::SurfaceFullScreenExclusiveInfoEXT {
-            full_screen_exclusive: if config.allow_exclusive_full_screen {
-                vk::FullScreenExclusiveEXT::ALLOWED
-            } else {
-                vk::FullScreenExclusiveEXT::DISALLOWED
-            },
-            ..Default::default()
-        };
-
-        let mut create_info = vk::SwapchainCreateInfoKHR {
-            surface: surface.raw,
-            min_image_count: effective_frame_count,
-            image_format: surface_format.format,
-            image_color_space: surface_format.color_space,
-            image_extent: vk::Extent2D {
-                width: config.size.width,
-                height: config.size.height,
-            },
-            image_array_layers: 1,
-            image_usage: vk_usage,
-            pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
-            composite_alpha,
-            present_mode,
-            old_swapchain: surface.swapchain,
-            ..Default::default()
-        }
-        .queue_family_indices(&queue_families);
-
-        if self.device.full_screen_exclusive.is_some() {
-            create_info = create_info.push_next(&mut full_screen_exclusive_info);
-        } else if !config.allow_exclusive_full_screen {
-            log::info!("Unable to forbid exclusive full screen");
-        }
-        let new_swapchain = unsafe {
-            surface
-                .extension
-                .create_swapchain(&create_info, None)
-                .unwrap()
-        };
-
-        unsafe {
-            surface.deinit_swapchain(&self.device.core);
-        }
-
-        let images = unsafe {
-            surface
-                .extension
-                .get_swapchain_images(new_swapchain)
-                .unwrap()
-        };
-        let target_size = [config.size.width as u16, config.size.height as u16];
-        let subresource_range = vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
-        for (index, image) in images.into_iter().enumerate() {
-            let view_create_info = vk::ImageViewCreateInfo {
-                image,
-                view_type: vk::ImageViewType::TYPE_2D,
-                format: surface_format.format,
-                subresource_range,
-                ..Default::default()
-            };
-            let view = unsafe {
-                self.device
-                    .core
-                    .create_image_view(&view_create_info, None)
-                    .unwrap()
-            };
-            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-            let acquire_semaphore = unsafe {
-                self.device
-                    .core
-                    .create_semaphore(&semaphore_create_info, None)
-                    .unwrap()
-            };
-            surface.frames.push(super::Frame {
-                image_index: index as u32,
-                image,
-                view,
-                format,
-                acquire_semaphore,
-                target_size,
-            });
-        }
-        surface.swapchain = new_swapchain;
-
-        crate::SurfaceInfo { format, alpha }
-    }
-
-    pub fn acquire_frame(&self) -> super::Frame {
-        let mut surface = self.surface.as_ref().unwrap().lock().unwrap();
-        let acquire_semaphore = surface.next_semaphore;
-        match unsafe {
-            surface.extension.acquire_next_image(
-                surface.swapchain,
-                !0,
-                acquire_semaphore,
-                vk::Fence::null(),
-            )
-        } {
-            Ok((index, _suboptimal)) => {
-                surface.next_semaphore = mem::replace(
-                    &mut surface.frames[index as usize].acquire_semaphore,
-                    acquire_semaphore,
-                );
-                surface.frames[index as usize]
-            }
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                log::warn!("Acquire failed because the surface is out of date");
-                super::Frame {
-                    acquire_semaphore: vk::Semaphore::null(),
-                    ..surface.frames[0]
-                }
-            }
-            Err(other) => panic!("Aquire image error {}", other),
-        }
-    }
-}
-
-impl super::Surface {
-    unsafe fn deinit_swapchain(&mut self, ash_device: &ash::Device) {
-        self.extension.destroy_swapchain(self.swapchain, None);
-        for frame in self.frames.drain(..) {
-            ash_device.destroy_image_view(frame.view, None);
-            ash_device.destroy_semaphore(frame.acquire_semaphore, None);
-        }
-    }
-}
-
 impl Drop for super::Context {
     fn drop(&mut self) {
         if std::thread::panicking() {
             return;
         }
         unsafe {
-            if let Some(surface_mutex) = self.surface.take() {
-                let mut surface = surface_mutex.into_inner().unwrap();
-                surface.deinit_swapchain(&self.device.core);
-                self.device
-                    .core
-                    .destroy_semaphore(surface.next_semaphore, None);
-                if let Some(surface_instance) = self.instance.surface.take() {
-                    surface_instance.destroy_surface(surface.raw, None);
-                }
-            }
             if let Ok(queue) = self.queue.lock() {
                 self.device
                     .core

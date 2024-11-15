@@ -369,6 +369,7 @@ pub struct Engine {
     load_tasks: Vec<choir::RunningTask>,
     gui_painter: blade_egui::GuiPainter,
     asset_hub: blade_render::AssetHub,
+    gpu_surface: gpu::Surface,
     gpu_context: Arc<gpu::Context>,
     environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
     objects: slab::Slab<Object>,
@@ -411,21 +412,20 @@ impl Engine {
         log::info!("Initializing the engine");
 
         let gpu_context = Arc::new(unsafe {
-            gpu::Context::init_windowed(
-                window,
-                gpu::ContextDesc {
-                    validation: cfg!(debug_assertions),
-                    timing: true,
-                    capture: false,
-                    overlay: false,
-                },
-            )
+            gpu::Context::init(gpu::ContextDesc {
+                presentation: true,
+                validation: cfg!(debug_assertions),
+                timing: true,
+                capture: false,
+                overlay: false,
+            })
             .unwrap()
         });
 
+        let mut gpu_surface = gpu_context.create_surface(window).unwrap();
         let surface_config = Self::make_surface_config(window.inner_size());
         let surface_size = surface_config.size;
-        let surface_info = gpu_context.resize(surface_config);
+        let surface_info = gpu_context.configure_surface(&mut gpu_surface, surface_config);
 
         let num_workers = num_cpus::get_physical().max((num_cpus::get() * 3 + 2) / 4);
         log::info!("Initializing Choir with {} workers", num_workers);
@@ -470,6 +470,7 @@ impl Engine {
             load_tasks: Vec::new(),
             gui_painter,
             asset_hub,
+            gpu_surface,
             gpu_context,
             environment_map: None,
             objects: slab::Slab::new(),
@@ -506,6 +507,7 @@ impl Engine {
         self.workers.clear();
         self.pacer.destroy(&self.gpu_context);
         self.gui_painter.destroy(&self.gpu_context);
+        self.gpu_context.destroy_surface(&mut self.gpu_surface);
         self.renderer.destroy(&self.gpu_context);
         self.asset_hub.destroy();
     }
@@ -544,7 +546,8 @@ impl Engine {
         if new_render_size != self.renderer.get_surface_size() {
             log::info!("Resizing to {}", new_render_size);
             self.pacer.wait_for_previous_frame(&self.gpu_context);
-            self.gpu_context.resize(surface_config);
+            self.gpu_context
+                .configure_surface(&mut self.gpu_surface, surface_config);
         }
 
         let (command_encoder, temp) = self.pacer.begin_frame();
@@ -677,7 +680,7 @@ impl Engine {
             }
         }
 
-        let frame = self.gpu_context.acquire_frame();
+        let frame = self.gpu_context.acquire_frame(&mut self.gpu_surface);
         command_encoder.init_texture(frame.texture());
 
         if let mut pass = command_encoder.render(

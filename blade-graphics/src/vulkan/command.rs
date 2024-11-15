@@ -515,21 +515,22 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     }
 
     fn present(&mut self, frame: super::Frame) {
-        if frame.acquire_semaphore == vk::Semaphore::null() {
+        if frame.internal.acquire_semaphore == vk::Semaphore::null() {
             return;
         }
 
         assert_eq!(self.present, None);
         let wa = &self.device.workarounds;
         self.present = Some(super::Presentation {
+            acquire_semaphore: frame.internal.acquire_semaphore,
+            swapchain: frame.swapchain.raw,
             image_index: frame.image_index,
-            acquire_semaphore: frame.acquire_semaphore,
         });
 
         let barrier = vk::ImageMemoryBarrier {
             old_layout: vk::ImageLayout::GENERAL,
             new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-            image: frame.image,
+            image: frame.internal.image,
             subresource_range: vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
