@@ -258,13 +258,13 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.commands.clear();
         self.plain_data.clear();
         self.string_data.clear();
-        self.has_present = false;
+        self.present_frames.clear();
     }
 
     fn init_texture(&mut self, _texture: super::Texture) {}
 
-    fn present(&mut self, _frame: super::Frame) {
-        self.has_present = true;
+    fn present(&mut self, frame: super::Frame) {
+        self.present_frames.push(frame.platform);
     }
 
     fn timings(&self) -> &crate::Timings {
@@ -327,7 +327,7 @@ impl<T> Drop for super::PassEncoder<'_, T> {
                 .push(super::Command::InvalidateAttachment(attachment));
         }
         match self.kind {
-            super::PassKind::Transfer | super::PassKind::AccelerationStructure => {}
+            super::PassKind::Transfer => {}
             super::PassKind::Compute => {
                 self.commands.push(super::Command::ResetAllSamplers);
             }
@@ -713,6 +713,7 @@ impl super::Command {
                 let row_texels =
                     bytes_per_row / block_info.size as u32 * block_info.dimensions.0 as u32;
                 gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+                gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, row_texels as i32);
                 gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(src.raw));
                 gl.bind_texture(dst.target, Some(dst.raw));
                 let unpack_data = glow::PixelUnpackData::BufferOffset(src.offset as u32);

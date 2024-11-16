@@ -39,6 +39,10 @@ pub struct Context {
     device_information: crate::DeviceInformation,
 }
 
+pub struct Surface {
+    platform: platform::PlatformSurface,
+}
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Buffer {
     raw: glow::Buffer,
@@ -137,6 +141,7 @@ pub struct RenderPipeline {
 
 #[derive(Debug)]
 pub struct Frame {
+    platform: platform::PlatformFrame,
     texture: Texture,
 }
 
@@ -368,7 +373,7 @@ pub struct CommandEncoder {
     plain_data: Vec<u8>,
     string_data: Vec<u8>,
     needs_scopes: bool,
-    has_present: bool,
+    present_frames: Vec<platform::PlatformFrame>,
     limits: Limits,
     timing_datas: Option<Box<[TimingData]>>,
     timings: crate::Timings,
@@ -376,7 +381,6 @@ pub struct CommandEncoder {
 
 enum PassKind {
     Transfer,
-    AccelerationStructure,
     Compute,
     Render,
 }
@@ -475,7 +479,7 @@ impl crate::traits::CommandDevice for Context {
             plain_data: Vec::new(),
             string_data: Vec::new(),
             needs_scopes: self.toggles.scoping,
-            has_present: false,
+            present_frames: Vec::new(),
             limits: self.limits.clone(),
             timing_datas,
             timings: Default::default(),
@@ -538,8 +542,8 @@ impl crate::traits::CommandDevice for Context {
                 gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0).unwrap()
             }
         };
-        if encoder.has_present {
-            self.present();
+        for frame in encoder.present_frames.drain(..) {
+            self.platform.present(frame);
         }
         SyncPoint { fence }
     }
