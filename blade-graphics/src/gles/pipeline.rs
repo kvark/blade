@@ -131,7 +131,7 @@ impl super::Context {
             let attribute_mappings =
                 crate::Shader::fill_vertex_locations(&mut module, ep_index, vertex_fetch_states);
 
-            for (index, mapping) in attribute_mappings.into_iter().enumerate() {
+            for mapping in attribute_mappings {
                 let vf = &vertex_fetch_states[mapping.buffer_index];
                 let (_, attrib) = vf.layout.attributes[mapping.attribute_index];
                 attributes.push(super::VertexAttributeInfo {
