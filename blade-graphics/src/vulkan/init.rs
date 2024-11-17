@@ -267,7 +267,7 @@ impl super::Context {
             Ok(entry) => entry,
             Err(err) => {
                 log::error!("Missing Vulkan entry points: {:?}", err);
-                return Err(NotSupportedError::VulkanLoadingError(err));
+                return Err(super::PlatformError::Loading(err).into());
             }
         };
         let driver_api_version = match entry.try_enumerate_instance_version() {
@@ -276,7 +276,7 @@ impl super::Context {
             Ok(None) => return Err(NotSupportedError::NoSupportedDeviceFound),
             Err(err) => {
                 log::error!("try_enumerate_instance_version: {:?}", err);
-                return Err(NotSupportedError::VulkanError(err));
+                return Err(super::PlatformError::Init(err).into());
             }
         };
 
@@ -284,7 +284,7 @@ impl super::Context {
             Ok(layers) => layers,
             Err(err) => {
                 log::error!("enumerate_instance_layer_properties: {:?}", err);
-                return Err(NotSupportedError::VulkanError(err));
+                return Err(super::PlatformError::Init(err).into());
             }
         };
         let supported_layer_names = supported_layers
@@ -313,7 +313,7 @@ impl super::Context {
                 Ok(extensions) => extensions,
                 Err(err) => {
                     log::error!("enumerate_instance_extension_properties: {:?}", err);
-                    return Err(NotSupportedError::VulkanError(err));
+                    return Err(super::PlatformError::Init(err).into());
                 }
             };
         let supported_instance_extensions = supported_instance_extension_properties
@@ -377,10 +377,8 @@ impl super::Context {
                 .flags(create_flags)
                 .enabled_layer_names(layer_strings)
                 .enabled_extension_names(extension_strings);
-            match unsafe { entry.create_instance(&create_info, None) } {
-                Ok(instance) => instance,
-                Err(e) => return Err(NotSupportedError::VulkanError(e)),
-            }
+            unsafe { entry.create_instance(&create_info, None) }
+                .map_err(super::PlatformError::Init)?
         };
 
         let instance =
@@ -403,7 +401,7 @@ impl super::Context {
         let physical_devices = instance
             .core
             .enumerate_physical_devices()
-            .map_err(|e| NotSupportedError::VulkanError(e))?;
+            .map_err(super::PlatformError::Init)?;
         let (physical_device, capabilities) = physical_devices
             .into_iter()
             .find_map(|phd| {
@@ -505,7 +503,7 @@ impl super::Context {
             instance
                 .core
                 .create_device(physical_device, &device_create_info, None)
-                .map_err(|e| NotSupportedError::VulkanError(e))?
+                .map_err(super::PlatformError::Init)?
         };
 
         let device = super::Device {

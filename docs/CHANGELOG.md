@@ -3,6 +3,7 @@ Changelog for Blade
 ## blade-graphics-0.6 (TBD)
 
 - graphics:
+  - return detailed initialization errors
   - API for surface creation
     - allows multiple windows used by the same context
   - API for destruction of pipelines

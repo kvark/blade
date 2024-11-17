@@ -108,36 +108,15 @@ pub struct ContextDesc {
 
 #[derive(Debug)]
 pub enum NotSupportedError {
-    #[cfg(all(
-        not(gles),
-        any(
-            vulkan,
-            windows,
-            target_os = "linux",
-            target_os = "android",
-            target_os = "freebsd"
-        )
-    ))]
-    VulkanLoadingError(ash::LoadingError),
-    #[cfg(all(
-        not(gles),
-        any(
-            vulkan,
-            windows,
-            target_os = "linux",
-            target_os = "android",
-            target_os = "freebsd"
-        )
-    ))]
-    VulkanError(ash::vk::Result),
-
-    #[cfg(all(gles, not(target_arch = "wasm32")))]
-    GLESLoadingError(egl::LoadError<libloading::Error>),
-    #[cfg(all(gles, not(target_arch = "wasm32")))]
-    GLESError(egl::Error),
-
+    Platform(PlatformError),
     NoSupportedDeviceFound,
     PlatformNotSupported,
+}
+
+impl From<PlatformError> for NotSupportedError {
+    fn from(error: PlatformError) -> Self {
+        Self::Platform(error)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
