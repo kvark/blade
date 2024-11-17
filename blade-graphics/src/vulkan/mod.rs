@@ -94,7 +94,7 @@ pub struct Surface {
     frames: Vec<InternalFrame>,
     next_semaphore: vk::Semaphore,
     swapchain: Swapchain,
-    _full_screen_exclusive: bool,
+    full_screen_exclusive: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
