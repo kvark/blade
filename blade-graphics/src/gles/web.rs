@@ -1,76 +1,85 @@
 use glow::HasContext as _;
-use std::cell::Cell;
 use wasm_bindgen::JsCast;
-
-//TODO: consider sharing this struct with EGL
-struct Swapchain {
-    renderbuf: glow::Renderbuffer,
-    framebuf: glow::Framebuffer,
-    format: crate::TextureFormat,
-    extent: Cell<crate::Extent>,
-}
 
 pub struct PlatformContext {
     #[allow(unused)]
     webgl2: web_sys::WebGl2RenderingContext,
     glow: glow::Context,
-    swapchain: Swapchain,
+}
+
+pub struct PlatformSurface {
+    info: crate::SurfaceInfo,
+    extent: crate::Extent,
+}
+#[derive(Debug)]
+pub struct PlatformFrame {
+    framebuf: glow::Framebuffer,
+    extent: crate::Extent,
+}
+
+impl super::Surface {
+    pub fn info(&self) -> crate::SurfaceInfo {
+        self.platform.info
+    }
+    pub fn acquire_frame(&self) -> super::Frame {
+        let size = self.platform.extent;
+        super::Frame {
+            platform: PlatformFrame {
+                framebuf: self.framebuf,
+                extent: self.platform.extent,
+            },
+            texture: super::Texture {
+                inner: super::TextureInner::Renderbuffer {
+                    raw: self.renderbuf,
+                },
+                target_size: [size.width as u16, size.height as u16],
+                format: self.platform.info.format,
+            },
+        }
+    }
+}
+
+impl PlatformContext {
+    pub(super) fn present(&self, frame: PlatformFrame) {
+        unsafe {
+            super::present_blit(&self.glow, frame.framebuf, frame.extent);
+        }
+    }
 }
 
 impl super::Context {
     pub unsafe fn init(_desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
-        Err(crate::NotSupportedError::PlatformNotSupported)
-    }
+        let canvas = web_sys::window()
+            .and_then(|win| win.document())
+            .expect("Cannot get document")
+            .get_element_by_id("blade")
+            .expect("Canvas is not found")
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .expect("Failed to downcast to canvas type");
 
-    pub unsafe fn init_windowed<
-        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
-    >(
-        window: I,
-        desc: crate::ContextDesc,
-    ) -> Result<Self, crate::NotSupportedError> {
-        let webgl2 = match window.window_handle().unwrap().as_raw() {
-            raw_window_handle::RawWindowHandle::Web(handle) => {
-                let canvas: web_sys::HtmlCanvasElement = web_sys::window()
-                    .and_then(|win| win.document())
-                    .expect("Cannot get document")
-                    .query_selector(&format!("canvas[data-raw-handle=\"{}\"]", handle.id))
-                    .expect("Cannot query for canvas")
-                    .expect("Canvas is not found")
-                    .dyn_into()
-                    .expect("Failed to downcast to canvas type");
+        let context_options = js_sys::Object::new();
+        js_sys::Reflect::set(
+            &context_options,
+            &"antialias".into(),
+            &wasm_bindgen::JsValue::FALSE,
+        )
+        .expect("Cannot create context options");
+        //Note: could also set: "alpha", "premultipliedAlpha"
 
-                let context_options = js_sys::Object::new();
-                js_sys::Reflect::set(
-                    &context_options,
-                    &"antialias".into(),
-                    &wasm_bindgen::JsValue::FALSE,
-                )
-                .expect("Cannot create context options");
-                //Note: could also set: "alpha", "premultipliedAlpha"
-
-                canvas
-                    .get_context_with_context_options("webgl2", &context_options)
-                    .expect("Cannot create WebGL2 context")
-                    .and_then(|context| context.dyn_into::<web_sys::WebGl2RenderingContext>().ok())
-                    .expect("Cannot convert into WebGL2 context")
-            }
-            _ => return Err(crate::NotSupportedError::PlatformNotSupported),
-        };
+        let webgl2 = canvas
+            .get_context_with_context_options("webgl2", &context_options)
+            .expect("Cannot create WebGL2 context")
+            .and_then(|context| context.dyn_into::<web_sys::WebGl2RenderingContext>().ok())
+            .expect("Cannot convert into WebGL2 context");
 
         let glow = glow::Context::from_webgl2_context(webgl2.clone());
+
         let capabilities = super::Capabilities::empty();
         let limits = super::Limits {
             uniform_buffer_alignment: unsafe {
                 glow.get_parameter_i32(glow::UNIFORM_BUFFER_OFFSET_ALIGNMENT) as u32
             },
         };
-        let swapchain = Swapchain {
-            renderbuf: unsafe { glow.create_renderbuffer().unwrap() },
-            framebuf: unsafe { glow.create_framebuffer().unwrap() },
-            format: crate::TextureFormat::Rgba8Unorm,
-            extent: Cell::default(),
-        };
-
         let device_information = crate::DeviceInformation {
             is_software_emulated: false,
             device_name: glow.get_parameter_string(glow::VENDOR),
@@ -78,12 +87,8 @@ impl super::Context {
             driver_info: glow.get_parameter_string(glow::VERSION),
         };
 
-        Ok(Self {
-            platform: PlatformContext {
-                webgl2,
-                glow,
-                swapchain,
-            },
+        Ok(super::Context {
+            platform: PlatformContext { webgl2, glow },
             capabilities,
             toggles: super::Toggles::default(),
             limits,
@@ -91,59 +96,59 @@ impl super::Context {
         })
     }
 
-    pub fn resize(&self, config: crate::SurfaceConfig) -> crate::SurfaceInfo {
+    pub fn create_surface<I>(
+        &self,
+        _window: &I,
+        config: crate::SurfaceConfig,
+    ) -> Result<super::Surface, crate::NotSupportedError> {
+        let platform = PlatformSurface {
+            info: crate::SurfaceInfo {
+                format: crate::TextureFormat::Rgba8Unorm,
+                alpha: crate::AlphaMode::PreMultiplied,
+            },
+            extent: crate::Extent::default(),
+        };
+        let mut surface = unsafe {
+            super::Surface {
+                platform,
+                renderbuf: self.platform.glow.create_renderbuffer().unwrap(),
+                framebuf: self.platform.glow.create_framebuffer().unwrap(),
+            }
+        };
+        self.reconfigure_surface(&mut surface, config);
+        Ok(surface)
+    }
+
+    pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
         //TODO: create WebGL context here
-        let sc = &self.platform.swapchain;
-        let format_desc = super::describe_texture_format(sc.format);
+        let format_desc = super::describe_texture_format(surface.platform.info.format);
         let gl = &self.platform.glow;
         //Note: this code can be shared with EGL
         unsafe {
-            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(sc.renderbuf));
+            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(surface.renderbuf));
             gl.renderbuffer_storage(
                 glow::RENDERBUFFER,
                 format_desc.internal,
                 config.size.width as _,
                 config.size.height as _,
             );
-            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(sc.framebuf));
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(surface.framebuf));
             gl.framebuffer_renderbuffer(
                 glow::READ_FRAMEBUFFER,
                 glow::COLOR_ATTACHMENT0,
                 glow::RENDERBUFFER,
-                Some(sc.renderbuf),
+                Some(surface.renderbuf),
             );
             gl.bind_renderbuffer(glow::RENDERBUFFER, None);
         }
-        sc.extent.set(config.size);
-
-        crate::SurfaceInfo {
-            format: sc.format,
-            alpha: crate::AlphaMode::PreMultiplied,
-        }
+        surface.platform.extent = config.size;
     }
 
-    pub fn acquire_frame(&self) -> super::Frame {
-        let sc = &self.platform.swapchain;
-        let size = sc.extent.get();
-        super::Frame {
-            texture: super::Texture {
-                inner: super::TextureInner::Renderbuffer { raw: sc.renderbuf },
-                target_size: [size.width as u16, size.height as u16],
-                format: sc.format,
-            },
-        }
-    }
+    pub fn destroy_surface(&self, _surface: &mut super::Surface) {}
 
     /// Obtain a lock to the EGL context and get handle to the [`glow::Context`] that can be used to
     /// do rendering.
     pub(super) fn lock(&self) -> &glow::Context {
         &self.platform.glow
-    }
-
-    pub(super) fn present(&self) {
-        let sc = &self.platform.swapchain;
-        unsafe {
-            super::present_blit(&self.platform.glow, sc.framebuf, sc.extent.get());
-        }
     }
 }
