@@ -58,7 +58,6 @@ impl super::Context {
     >(
         &self,
         window: &I,
-        config: crate::SurfaceConfig,
     ) -> Result<super::Surface, crate::NotSupportedError> {
         let khr_swapchain = self
             .device
@@ -119,7 +118,7 @@ impl super::Context {
                 .unwrap()
         };
 
-        let mut this = super::Surface {
+        Ok(super::Surface {
             device: khr_swapchain,
             raw,
             frames: Vec::new(),
@@ -131,9 +130,7 @@ impl super::Context {
                 target_size: [0; 2],
             },
             _full_screen_exclusive: fullscreen_exclusive_ext.full_screen_exclusive_supported != 0,
-        };
-        self.reconfigure_surface(&mut this, config);
-        Ok(this)
+        })
     }
 
     pub fn destroy_surface(&self, surface: &mut super::Surface) {
