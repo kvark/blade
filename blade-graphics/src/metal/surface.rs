@@ -82,14 +82,11 @@ impl super::Surface {
 }
 
 impl super::Context {
-    pub fn create_surface<
-        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
-    >(
+    pub fn create_surface<I: raw_window_handle::HasWindowHandle>(
         &self,
         window: &I,
-        config: crate::SurfaceConfig,
     ) -> Result<super::Surface, crate::NotSupportedError> {
-        let mut surface = match window.window_handle().unwrap().as_raw() {
+        Ok(match window.window_handle().unwrap().as_raw() {
             #[cfg(target_os = "ios")]
             raw_window_handle::RawWindowHandle::UiKit(handle) => unsafe {
                 super::Surface::from_view(handle.ui_view.as_ptr() as *mut _)
@@ -99,9 +96,14 @@ impl super::Context {
                 super::Surface::from_view(handle.ns_view.as_ptr() as *mut _)
             },
             _ => return Err(crate::NotSupportedError::PlatformNotSupported),
-        };
-        self.reconfigure_surface(&mut surface, config);
-        Ok(surface)
+        })
+    }
+
+    pub fn destroy_surface(&self, surface: &mut super::Surface) {
+        unsafe {
+            let () = msg_send![surface.view, release];
+        }
+        surface.view = ptr::null_mut();
     }
 
     pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
@@ -140,12 +142,5 @@ impl super::Context {
         unsafe {
             let () = msg_send![surface.render_layer, setDisplaySyncEnabled: vsync];
         }
-    }
-
-    pub fn destroy_surface(&self, surface: &mut super::Surface) {
-        unsafe {
-            let () = msg_send![surface.view, release];
-        }
-        surface.view = ptr::null_mut();
     }
 }

@@ -90,7 +90,7 @@ impl Example {
         let window_size = window.inner_size();
 
         let surface = context
-            .create_surface(window, Self::make_surface_config(window_size))
+            .create_surface_configured(window, Self::make_surface_config(window_size))
             .unwrap();
 
         let global_layout = <Params as gpu::ShaderData>::layout();

@@ -260,36 +260,64 @@ impl super::Context {
         })
     }
 
-    pub fn create_surface<
-        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
-    >(
+    pub fn create_surface<I: raw_window_handle::HasWindowHandle>(
         &self,
         window: I,
-        config: crate::SurfaceConfig,
     ) -> Result<super::Surface, crate::NotSupportedError> {
-        use raw_window_handle::RawDisplayHandle as Rdh;
+        use raw_window_handle::RawWindowHandle as Rwh;
 
-        let library = match window.display_handle().unwrap().as_raw() {
-            Rdh::Xlib(_) => Some(find_x_library().unwrap()),
-            Rdh::Xcb(_) => Some(find_x_library().unwrap()),
-            Rdh::Wayland(_) => Some(find_wayland_library().unwrap()),
+        let window_handle = window.window_handle().unwrap().as_raw();
+        let library = match window_handle {
+            Rwh::Xlib(_) => Some(find_x_library().unwrap()),
+            Rwh::Xcb(_) => Some(find_x_library().unwrap()),
+            Rwh::Wayland(_) => Some(find_wayland_library().unwrap()),
             _ => None,
         };
 
-        let mut surface = unsafe {
+        Ok(unsafe {
             let guard = self.lock();
             super::Surface {
                 platform: PlatformSurface {
                     library,
-                    window_handle: window.window_handle().unwrap().as_raw(),
+                    window_handle,
                     swapchain: Mutex::new(None),
                 },
                 renderbuf: guard.create_renderbuffer().unwrap(),
                 framebuf: guard.create_framebuffer().unwrap(),
             }
-        };
-        self.reconfigure_surface(&mut surface, config);
-        Ok(surface)
+        })
+    }
+
+    pub fn destroy_surface(&self, surface: &mut super::Surface) {
+        use raw_window_handle::RawWindowHandle as Rwh;
+
+        let inner = self.platform.inner.lock().unwrap();
+        let mut swapchain = surface.platform.swapchain.lock().unwrap();
+        if let Some(s) = swapchain.take() {
+            inner
+                .egl
+                .instance
+                .destroy_surface(inner.egl.display, s.surface)
+                .unwrap();
+        }
+        if let Rwh::Wayland(handle) = surface.platform.window_handle {
+            unsafe {
+                let wl_egl_window_destroy: libloading::Symbol<WlEglWindowDestroyFun> = surface
+                    .platform
+                    .library
+                    .as_ref()
+                    .unwrap()
+                    .get(b"wl_egl_window_destroy")
+                    .unwrap();
+                wl_egl_window_destroy(handle.surface.as_ptr());
+            }
+        }
+        inner.egl.make_current();
+        unsafe {
+            inner.glow.delete_renderbuffer(surface.renderbuf);
+            inner.glow.delete_framebuffer(surface.framebuf);
+        }
+        inner.egl.unmake_current();
     }
 
     pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
@@ -446,38 +474,6 @@ impl super::Context {
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
             gl.bind_renderbuffer(glow::RENDERBUFFER, None);
         };
-        inner.egl.unmake_current();
-    }
-
-    pub fn destroy_surface(&self, surface: &mut super::Surface) {
-        use raw_window_handle::RawWindowHandle as Rwh;
-
-        let inner = self.platform.inner.lock().unwrap();
-        let mut swapchain = surface.platform.swapchain.lock().unwrap();
-        if let Some(s) = swapchain.take() {
-            inner
-                .egl
-                .instance
-                .destroy_surface(inner.egl.display, s.surface)
-                .unwrap();
-        }
-        if let Rwh::Wayland(handle) = surface.platform.window_handle {
-            unsafe {
-                let wl_egl_window_destroy: libloading::Symbol<WlEglWindowDestroyFun> = surface
-                    .platform
-                    .library
-                    .as_ref()
-                    .unwrap()
-                    .get(b"wl_egl_window_destroy")
-                    .unwrap();
-                wl_egl_window_destroy(handle.surface.as_ptr());
-            }
-        }
-        inner.egl.make_current();
-        unsafe {
-            inner.glow.delete_renderbuffer(surface.renderbuf);
-            inner.glow.delete_framebuffer(surface.framebuf);
-        }
         inner.egl.unmake_current();
     }
 

@@ -101,7 +101,6 @@ impl super::Context {
     pub fn create_surface<I>(
         &self,
         _window: &I,
-        config: crate::SurfaceConfig,
     ) -> Result<super::Surface, crate::NotSupportedError> {
         let platform = PlatformSurface {
             info: crate::SurfaceInfo {
@@ -110,16 +109,16 @@ impl super::Context {
             },
             extent: crate::Extent::default(),
         };
-        let mut surface = unsafe {
+        Ok(unsafe {
             super::Surface {
                 platform,
                 renderbuf: self.platform.glow.create_renderbuffer().unwrap(),
                 framebuf: self.platform.glow.create_framebuffer().unwrap(),
             }
-        };
-        self.reconfigure_surface(&mut surface, config);
-        Ok(surface)
+        })
     }
+
+    pub fn destroy_surface(&self, _surface: &mut super::Surface) {}
 
     pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
         //TODO: create WebGL context here
@@ -145,8 +144,6 @@ impl super::Context {
         }
         surface.platform.extent = config.size;
     }
-
-    pub fn destroy_surface(&self, _surface: &mut super::Surface) {}
 
     /// Obtain a lock to the EGL context and get handle to the [`glow::Context`] that can be used to
     /// do rendering.

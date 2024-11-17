@@ -195,7 +195,9 @@ impl Example {
 
         let surface_config = Self::make_surface_config(window.inner_size());
         let surface_size = surface_config.size;
-        let surface = context.create_surface(window, surface_config).unwrap();
+        let surface = context
+            .create_surface_configured(window, surface_config)
+            .unwrap();
         let surface_info = surface.info();
 
         let num_workers = num_cpus::get_physical().max((num_cpus::get() * 3 + 2) / 4);

@@ -36,7 +36,9 @@ impl Example {
             display_sync: gpu::DisplaySync::Block,
             ..Default::default()
         };
-        let surface = context.create_surface(window, surface_config).unwrap();
+        let surface = context
+            .create_surface_configured(window, surface_config)
+            .unwrap();
         let surface_info = surface.info();
 
         let gui_painter = blade_egui::GuiPainter::new(surface_info, &context);

@@ -137,6 +137,20 @@ pub struct DeviceInformation {
     pub driver_info: String,
 }
 
+impl Context {
+    pub fn create_surface_configured<
+        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+    >(
+        &self,
+        window: &I,
+        config: SurfaceConfig,
+    ) -> Result<Surface, NotSupportedError> {
+        let mut surface = self.create_surface(window)?;
+        self.reconfigure_surface(&mut surface, config);
+        Ok(surface)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Memory {
     /// Device-local memory. Fast for GPU operations.

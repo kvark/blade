@@ -71,7 +71,9 @@ impl Example {
             transparent: true,
             ..Default::default()
         };
-        let surface = context.create_surface(window, surface_config).unwrap();
+        let surface = context
+            .create_surface_configured(window, surface_config)
+            .unwrap();
 
         let target = context.create_texture(gpu::TextureDesc {
             name: "main",
