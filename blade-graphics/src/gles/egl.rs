@@ -123,7 +123,7 @@ pub struct PlatformFrame {
 pub struct PlatformSurface {
     library: Option<libloading::Library>,
     window_handle: raw_window_handle::RawWindowHandle,
-    swapchain: Mutex<Option<Swapchain>>,
+    swapchain: Option<Swapchain>,
 }
 
 pub(super) struct ContextInner {
@@ -280,7 +280,7 @@ impl super::Context {
                 platform: PlatformSurface {
                     library,
                     window_handle,
-                    swapchain: Mutex::new(None),
+                    swapchain: None,
                 },
                 renderbuf: guard.create_renderbuffer().unwrap(),
                 framebuf: guard.create_framebuffer().unwrap(),
@@ -292,8 +292,7 @@ impl super::Context {
         use raw_window_handle::RawWindowHandle as Rwh;
 
         let inner = self.platform.inner.lock().unwrap();
-        let mut swapchain = surface.platform.swapchain.lock().unwrap();
-        if let Some(s) = swapchain.take() {
+        if let Some(s) = surface.platform.swapchain.take() {
             inner
                 .egl
                 .instance
@@ -373,8 +372,7 @@ impl super::Context {
         }
 
         let inner = self.platform.inner.lock().unwrap();
-        let mut swapchain = surface.platform.swapchain.lock().unwrap();
-        if let Some(s) = swapchain.take() {
+        if let Some(s) = surface.platform.swapchain.take() {
             inner
                 .egl
                 .instance
@@ -414,7 +412,7 @@ impl super::Context {
             crate::ColorSpace::Srgb => crate::TextureFormat::Rgba8Unorm,
         };
 
-        let _ = swapchain.insert(Swapchain {
+        surface.platform.swapchain = Some(Swapchain {
             // Careful, we can still be in 1.4 version even if `upcast` succeeds
             surface: match inner.egl.instance.upcast::<egl::EGL1_5>() {
                 Some(egl) => {
@@ -523,13 +521,11 @@ impl PlatformContext {
 
 impl super::Surface {
     pub fn info(&self) -> crate::SurfaceInfo {
-        let sc_maybe = self.platform.swapchain.lock().unwrap();
-        sc_maybe.as_ref().unwrap().info
+        self.platform.swapchain.as_ref().unwrap().info
     }
 
     pub fn acquire_frame(&mut self) -> super::Frame {
-        let sc_maybe = self.platform.swapchain.lock().unwrap();
-        let sc = sc_maybe.as_ref().unwrap();
+        let sc = self.platform.swapchain.as_ref().unwrap();
         super::Frame {
             platform: PlatformFrame {
                 swapchain: sc.clone(),
