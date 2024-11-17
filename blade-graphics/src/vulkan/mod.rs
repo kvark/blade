@@ -10,6 +10,12 @@ mod surface;
 
 const QUERY_POOL_SIZE: usize = crate::limits::PASS_COUNT + 1;
 
+#[derive(Debug)]
+pub enum PlatformError {
+    Loading(ash::LoadingError),
+    Init(vk::Result),
+}
+
 struct Instance {
     core: ash::Instance,
     _debug_utils: ash::ext::debug_utils::Instance,

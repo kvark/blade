@@ -64,6 +64,12 @@ type DebugProcKHR = Option<
 type EglDebugMessageControlFun =
     unsafe extern "system" fn(proc: DebugProcKHR, attrib_list: *const egl::Attrib) -> raw::c_int;
 
+#[derive(Debug)]
+pub enum PlatformError {
+    Loading(egl::LoadError<libloading::Error>),
+    Init(egl::Error),
+}
+
 #[derive(Clone, Copy, Debug)]
 enum SrgbFrameBufferKind {
     /// No support for SRGB surface
@@ -158,7 +164,7 @@ impl super::Context {
             } else {
                 egl::DynamicInstance::<egl::EGL1_4>::load_required()
             };
-            egl_result.map_err(|e| crate::NotSupportedError::GLESLoadingError(e))?
+            egl_result.map_err(PlatformError::Loading)?
         };
 
         let client_extensions = match egl.query_string(None, egl::EXTENSIONS) {
@@ -638,9 +644,7 @@ impl EglContext {
         egl: EglInstance,
         display: egl::Display,
     ) -> Result<Self, crate::NotSupportedError> {
-        let version = egl
-            .initialize(display)
-            .map_err(|e| crate::NotSupportedError::GLESError(e))?;
+        let version = egl.initialize(display).map_err(PlatformError::Init)?;
         let vendor = egl.query_string(Some(display), egl::VENDOR).unwrap();
         let display_extensions = egl
             .query_string(Some(display), egl::EXTENSIONS)
@@ -711,7 +715,7 @@ impl EglContext {
             Ok(context) => context,
             Err(e) => {
                 log::warn!("unable to create GLES 3.x context: {:?}", e);
-                return Err(crate::NotSupportedError::GLESError(e));
+                return Err(PlatformError::Init(e).into());
             }
         };
 
@@ -727,7 +731,7 @@ impl EglContext {
                     .map(Some)
                     .map_err(|e| {
                         log::warn!("Error in create_pbuffer_surface: {:?}", e);
-                        crate::NotSupportedError::GLESError(e)
+                        PlatformError::Init(e)
                     })?
             };
 

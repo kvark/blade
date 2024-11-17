@@ -74,7 +74,7 @@ impl super::Context {
                 window.window_handle().unwrap().as_raw(),
                 None,
             )
-            .map_err(|e| crate::NotSupportedError::VulkanError(e))?
+            .map_err(super::PlatformError::Init)?
         };
 
         let khr_surface = self

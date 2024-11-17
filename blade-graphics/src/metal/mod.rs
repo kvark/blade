@@ -14,6 +14,9 @@ mod surface;
 
 const MAX_TIMESTAMPS: u64 = crate::limits::PASS_COUNT as u64 * 2;
 
+//TODO: better errors
+pub type PlatformError = ();
+
 struct Surface {
     view: *mut objc::runtime::Object,
     render_layer: metal::MetalLayer,

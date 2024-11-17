@@ -12,6 +12,8 @@ const DEBUG_ID: u32 = 0;
 const MAX_TIMEOUT: u64 = 1_000_000_000; // MAX_CLIENT_WAIT_TIMEOUT_WEBGL;
 const MAX_QUERIES: usize = crate::limits::PASS_COUNT + 1;
 
+pub use platform::PlatformError;
+
 bitflags::bitflags! {
     struct Capabilities: u32 {
         const BUFFER_STORAGE = 1 << 0;
