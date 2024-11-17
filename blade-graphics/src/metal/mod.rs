@@ -14,12 +14,12 @@ mod surface;
 
 const MAX_TIMESTAMPS: u64 = crate::limits::PASS_COUNT as u64 * 2;
 
-//TODO: better errors
 pub type PlatformError = ();
 
-struct Surface {
+pub struct Surface {
     view: *mut objc::runtime::Object,
     render_layer: metal::MetalLayer,
+    info: crate::SurfaceInfo,
 }
 
 unsafe impl Send for Surface {}
@@ -56,7 +56,6 @@ struct PrivateInfo {
 pub struct Context {
     device: Mutex<metal::Device>,
     queue: Arc<Mutex<metal::CommandQueue>>,
-    surface: Option<Mutex<Surface>>,
     capture: Option<metal::CaptureManager>,
     info: PrivateInfo,
     device_information: crate::DeviceInformation,
@@ -464,7 +463,6 @@ impl Context {
         Ok(Context {
             device: Mutex::new(device),
             queue: Arc::new(Mutex::new(queue)),
-            surface: None,
             capture,
             info: PrivateInfo {
                 //TODO: determine based on OS version
@@ -475,30 +473,6 @@ impl Context {
             },
             device_information,
         })
-    }
-
-    pub unsafe fn init_windowed<
-        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
-    >(
-        window: &I,
-        desc: super::ContextDesc,
-    ) -> Result<Self, super::NotSupportedError> {
-        let mut context = Self::init(desc)?;
-
-        let surface = match window.window_handle().unwrap().as_raw() {
-            #[cfg(target_os = "ios")]
-            raw_window_handle::RawWindowHandle::UiKit(handle) => {
-                Surface::from_view(handle.ui_view.as_ptr() as *mut _)
-            }
-            #[cfg(target_os = "macos")]
-            raw_window_handle::RawWindowHandle::AppKit(handle) => {
-                Surface::from_view(handle.ns_view.as_ptr() as *mut _)
-            }
-            _ => return Err(crate::NotSupportedError::PlatformNotSupported),
-        };
-
-        context.surface = Some(Mutex::new(surface));
-        Ok(context)
     }
 
     pub fn capabilities(&self) -> crate::Capabilities {
@@ -518,14 +492,6 @@ impl Context {
 
     pub fn device_information(&self) -> &crate::DeviceInformation {
         &self.device_information
-    }
-
-    /// Get the CALayerMetal for this surface, if any.
-    /// This is platform specific API.
-    pub fn metal_layer(&self) -> Option<metal::MetalLayer> {
-        self.surface
-            .as_ref()
-            .map(|suf| suf.lock().unwrap().render_layer.clone())
     }
 
     /// Get an MTLDevice of this context.
