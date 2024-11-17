@@ -129,7 +129,7 @@ impl super::Context {
                 alpha: crate::AlphaMode::Ignored,
                 target_size: [0; 2],
             },
-            _full_screen_exclusive: fullscreen_exclusive_ext.full_screen_exclusive_supported != 0,
+            full_screen_exclusive: fullscreen_exclusive_ext.full_screen_exclusive_supported != 0,
         })
     }
 
@@ -327,10 +327,13 @@ impl super::Context {
         }
         .queue_family_indices(&queue_families);
 
-        if self.device.full_screen_exclusive.is_some() {
+        if surface.full_screen_exclusive {
+            assert!(self.device.full_screen_exclusive.is_some());
             create_info = create_info.push_next(&mut full_screen_exclusive_info);
-        } else if !config.allow_exclusive_full_screen {
-            log::info!("Unable to forbid exclusive full screen");
+            log::info!(
+                "Configuring exclusive full screen: {}",
+                config.allow_exclusive_full_screen
+            );
         }
         let raw_swapchain = unsafe { surface.device.create_swapchain(&create_info, None).unwrap() };
 
