@@ -86,6 +86,9 @@ pub mod limits {
 
 pub use hal::*;
 
+#[cfg(target_arch = "wasm32")]
+pub const CANVAS_ID: &str = "blade";
+
 use std::{fmt, num::NonZeroU32};
 
 #[derive(Clone, Debug, Default)]
@@ -128,9 +131,9 @@ pub enum NotSupportedError {
     ))]
     VulkanError(ash::vk::Result),
 
-    #[cfg(gles)]
+    #[cfg(all(gles, not(target_arch = "wasm32")))]
     GLESLoadingError(egl::LoadError<libloading::Error>),
-    #[cfg(gles)]
+    #[cfg(all(gles, not(target_arch = "wasm32")))]
     GLESError(egl::Error),
 
     NoSupportedDeviceFound,

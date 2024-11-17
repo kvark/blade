@@ -41,6 +41,8 @@ pub struct Context {
 
 pub struct Surface {
     platform: platform::PlatformSurface,
+    renderbuf: glow::Renderbuffer,
+    framebuf: glow::Framebuffer,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]

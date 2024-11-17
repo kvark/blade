@@ -61,6 +61,20 @@ struct Example {
 }
 
 impl Example {
+    fn make_surface_config(size: winit::dpi::PhysicalSize<u32>) -> gpu::SurfaceConfig {
+        log::info!("Window size: {:?}", size);
+        gpu::SurfaceConfig {
+            size: gpu::Extent {
+                width: size.width,
+                height: size.height,
+                depth: 1,
+            },
+            usage: gpu::TextureUsage::TARGET,
+            display_sync: gpu::DisplaySync::Recent,
+            ..Default::default()
+        }
+    }
+
     fn new(window: &winit::window::Window) -> Self {
         let context = unsafe {
             gpu::Context::init(gpu::ContextDesc {
@@ -74,19 +88,10 @@ impl Example {
         };
         println!("{:?}", context.device_information());
         let window_size = window.inner_size();
-        log::info!("Initial size: {:?}", window_size);
 
-        let surface_config = gpu::SurfaceConfig {
-            size: gpu::Extent {
-                width: window_size.width,
-                height: window_size.height,
-                depth: 1,
-            },
-            usage: gpu::TextureUsage::TARGET,
-            display_sync: gpu::DisplaySync::Recent,
-            ..Default::default()
-        };
-        let surface = context.create_surface(window, surface_config).unwrap();
+        let surface = context
+            .create_surface(window, Self::make_surface_config(window_size))
+            .unwrap();
 
         let global_layout = <Params as gpu::ShaderData>::layout();
         let local_layout = <SpriteData as gpu::ShaderData>::layout();
@@ -224,6 +229,12 @@ impl Example {
             surface,
             context,
         }
+    }
+
+    fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
+        self.window_size = size;
+        let config = Self::make_surface_config(size);
+        self.context.reconfigure_surface(&mut self.surface, config);
     }
 
     fn increase(&mut self) {
@@ -364,6 +375,7 @@ fn main() {
         console_log::init().expect("could not initialize logger");
         // On wasm, append the canvas to the document body
         let canvas = window.canvas().unwrap();
+        canvas.set_id(gpu::CANVAS_ID);
         web_sys::window()
             .and_then(|win| win.document())
             .and_then(|doc| doc.body())
@@ -389,6 +401,9 @@ fn main() {
                     window.request_redraw();
                 }
                 winit::event::Event::WindowEvent { event, .. } => match event {
+                    winit::event::WindowEvent::Resized(size) => {
+                        example.resize(size);
+                    }
                     #[cfg(not(target_arch = "wasm32"))]
                     winit::event::WindowEvent::KeyboardInput {
                         event:

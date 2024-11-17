@@ -117,8 +117,6 @@ pub struct PlatformFrame {
 pub struct PlatformSurface {
     library: Option<libloading::Library>,
     window_handle: raw_window_handle::RawWindowHandle,
-    renderbuf: glow::Renderbuffer,
-    framebuf: glow::Framebuffer,
     swapchain: Mutex<Option<Swapchain>>,
 }
 
@@ -272,17 +270,17 @@ impl super::Context {
             _ => None,
         };
 
-        let mut surface = super::Surface {
-            platform: unsafe {
-                let guard = self.lock();
-                PlatformSurface {
+        let mut surface = unsafe {
+            let guard = self.lock();
+            super::Surface {
+                platform: PlatformSurface {
                     library,
                     window_handle: window.window_handle().unwrap().as_raw(),
-                    renderbuf: guard.create_renderbuffer().unwrap(),
-                    framebuf: guard.create_framebuffer().unwrap(),
                     swapchain: Mutex::new(None),
-                }
-            },
+                },
+                renderbuf: guard.create_renderbuffer().unwrap(),
+                framebuf: guard.create_framebuffer().unwrap(),
+            }
         };
         self.reconfigure_surface(&mut surface, config);
         Ok(surface)
@@ -425,19 +423,19 @@ impl super::Context {
         inner.egl.make_current();
         unsafe {
             let gl = &inner.glow;
-            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(surface.platform.renderbuf));
+            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(surface.renderbuf));
             gl.renderbuffer_storage(
                 glow::RENDERBUFFER,
                 format_desc.internal,
                 config.size.width as _,
                 config.size.height as _,
             );
-            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(surface.platform.framebuf));
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(surface.framebuf));
             gl.framebuffer_renderbuffer(
                 glow::READ_FRAMEBUFFER,
                 glow::COLOR_ATTACHMENT0,
                 glow::RENDERBUFFER,
-                Some(surface.platform.renderbuf),
+                Some(surface.renderbuf),
             );
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
             gl.bind_renderbuffer(glow::RENDERBUFFER, None);
@@ -471,8 +469,8 @@ impl super::Context {
         }
         inner.egl.make_current();
         unsafe {
-            inner.glow.delete_renderbuffer(surface.platform.renderbuf);
-            inner.glow.delete_framebuffer(surface.platform.framebuf);
+            inner.glow.delete_renderbuffer(surface.renderbuf);
+            inner.glow.delete_framebuffer(surface.framebuf);
         }
         inner.egl.unmake_current();
     }
@@ -533,11 +531,11 @@ impl super::Surface {
         super::Frame {
             platform: PlatformFrame {
                 swapchain: sc.clone(),
-                framebuf: self.platform.framebuf,
+                framebuf: self.framebuf,
             },
             texture: super::Texture {
                 inner: super::TextureInner::Renderbuffer {
-                    raw: self.platform.renderbuf,
+                    raw: self.renderbuf,
                 },
                 target_size: [sc.extent.width as u16, sc.extent.height as u16],
                 format: sc.info.format,
