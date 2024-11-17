@@ -37,7 +37,7 @@ exr = { version = "1.6", optional = true }
 gltf = { workspace = true, features = ["names", "utils"], optional = true }
 glam = { workspace = true }
 log = { workspace = true }
-mikktspace = { package = "bevy_mikktspace", version = "0.12", optional = true }
+mikktspace = { package = "bevy_mikktspace", version = "0.15.0-rc.3", optional = true }
 mint = { workspace = true }
 profiling = { workspace = true }
 slab = { workspace = true, optional = true }
