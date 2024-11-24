@@ -22,11 +22,11 @@ raw-window-handle = "0.6"
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 block = "0.1"
 core-graphics-types = "0.1"
-#TODO: switch to crates once https://github.com/gfx-rs/metal-rs/pull/335 is published
-#TODO: switch to upstream once these are merged:
+#TODO: switch to crates once these are published:
+# - https://github.com/gfx-rs/metal-rs/pull/335
 # - https://github.com/gfx-rs/metal-rs/pull/336
 # - https://github.com/gfx-rs/metal-rs/pull/337
-metal = { git = "https://github.com/kvark/metal-rs", branch = "blade" }
+metal = { git = "https://github.com/gfx-rs/metal-rs", rev = "ef768ff9d742ae6a0f4e83ddc8031264e7d460c4" }
 objc = "0.2.5"
 naga = { workspace = true, features = ["msl-out"] }
 
