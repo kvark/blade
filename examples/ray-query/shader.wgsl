@@ -69,7 +69,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var ray_pos = qrot(rotator, parameters.cam_position);
     var ray_dir = qrot(rotator, world_dir);
     loop {
-        rayQueryInitialize(&rq, acc_struct, RayDesc(0u, 0xFFu, 0.1, parameters.depth, ray_pos, ray_dir));
+        rayQueryInitialize(&rq, acc_struct, RayDesc(RAY_FLAG_NONE, 0xFFu, 0.1, parameters.depth, ray_pos, ray_dir));
         rayQueryProceed(&rq);
         let intersection = rayQueryGetCommittedIntersection(&rq);
         if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
@@ -85,7 +85,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             break;
         }
     }
-    
+
     let color = get_miss_color(ray_dir);
     textureStore(output, global_id.xy, color);
 }

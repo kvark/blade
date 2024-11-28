@@ -7,9 +7,6 @@
 #include "surface.inc.wgsl"
 #include "gbuf.inc.wgsl"
 
-//TODO: use proper WGSL
-const RAY_FLAG_CULL_NO_OPAQUE: u32 = 0x80u;
-
 const PI: f32 = 3.1415926;
 const MAX_RESERVOIRS: u32 = 4u;
 // See "DECOUPLING SHADING AND REUSE" in

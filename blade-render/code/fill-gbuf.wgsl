@@ -4,9 +4,6 @@
 #include "debug-param.inc.wgsl"
 #include "gbuf.inc.wgsl"
 
-//TODO: use proper WGSL
-const RAY_FLAG_CULL_NO_OPAQUE: u32 = 0x80u;
-
 // Has to match the host!
 struct Vertex {
     pos: vec3<f32>,
