@@ -83,6 +83,7 @@ impl Example {
                 timing: false,
                 capture: false,
                 overlay: true,
+                device_id: 0,
             })
             .unwrap()
         };

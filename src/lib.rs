@@ -418,6 +418,7 @@ impl Engine {
                 timing: true,
                 capture: false,
                 overlay: false,
+                device_id: 0,
             })
             .unwrap()
         });

@@ -418,6 +418,9 @@ impl Context {
         if desc.overlay {
             std::env::set_var("MTL_HUD_ENABLED", "1");
         }
+        if desc.device_id != 0 {
+            log::warn!("Unable to filter devices by ID");
+        }
 
         let device = metal::Device::system_default()
             .ok_or(super::NotSupportedError::NoSupportedDeviceFound)?;
