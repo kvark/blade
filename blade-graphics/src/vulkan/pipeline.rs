@@ -491,10 +491,17 @@ impl crate::traits::ShaderDevice for super::Context {
             .rasterization_samples(vk::SampleCountFlags::TYPE_1)
             .sample_mask(&vk_sample_mask);
 
-        let mut ds_format = vk::Format::UNDEFINED;
+        let mut d_format = vk::Format::UNDEFINED;
+        let mut s_format = vk::Format::UNDEFINED;
         let mut vk_depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default();
         if let Some(ref ds) = desc.depth_stencil {
-            ds_format = super::map_texture_format(ds.format);
+            let ds_format = super::map_texture_format(ds.format);
+            if ds.format.aspects().contains(crate::TexelAspects::DEPTH) {
+                d_format = ds_format;
+            }
+            if ds.format.aspects().contains(crate::TexelAspects::STENCIL) {
+                s_format = ds_format;
+            }
 
             if ds.depth_write_enabled || ds.depth_compare != crate::CompareFunction::Always {
                 vk_depth_stencil = vk_depth_stencil
@@ -547,8 +554,8 @@ impl crate::traits::ShaderDevice for super::Context {
 
         let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_formats)
-            .depth_attachment_format(ds_format)
-            .stencil_attachment_format(ds_format);
+            .depth_attachment_format(d_format)
+            .stencil_attachment_format(s_format);
 
         let create_info = vk::GraphicsPipelineCreateInfo::default()
             .layout(layout.raw)
