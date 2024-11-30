@@ -89,6 +89,11 @@ unsafe fn inspect_adapter(
     let name = ffi::CStr::from_ptr(properties.device_name.as_ptr());
     log::info!("Adapter: {:?}", name);
 
+    if desc.device_id != 0 && desc.device_id != properties.device_id {
+        log::info!("Rejected device ID 0x{:X}", properties.device_id);
+        return None;
+    }
+
     let api_version = properties.api_version.min(driver_api_version);
     if api_version < vk::API_VERSION_1_1 {
         log::warn!("\tRejected for API version {}", api_version);

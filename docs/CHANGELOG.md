@@ -10,6 +10,7 @@ Changelog for Blade
   - every pass now takes a label
   - automatic GPU pass markers
   - ability to capture pass GPU timings
+  - ability to force the use of a specific GPU
   - Metal:
     - support for workgroup memory
     - concurrent compute dispatches

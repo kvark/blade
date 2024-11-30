@@ -22,7 +22,7 @@ impl Example {
                 validation: cfg!(debug_assertions),
                 timing: true,
                 capture: true,
-                overlay: false,
+                ..Default::default()
             })
             .unwrap()
         };
