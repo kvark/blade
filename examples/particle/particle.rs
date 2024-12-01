@@ -112,6 +112,7 @@ impl System {
                 write_mask: gpu::ColorWrites::default(),
             }],
             depth_stencil: None,
+            multisample_state: gpu::MultisampleState::default(),
         });
 
         let wg_width = reset_pipeline.get_workgroup_size()[0] as usize;

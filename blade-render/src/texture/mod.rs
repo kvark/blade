@@ -396,6 +396,7 @@ impl blade_asset::Baker for Baker {
                 mip_level_count: image.mips.len() as u32,
                 dimension: blade_graphics::TextureDimension::D2,
                 usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
+                sample_count: 1,
             });
         let view = self.gpu_context.create_texture_view(
             texture,

@@ -178,6 +178,7 @@ impl<const N: usize> RenderTarget<N> {
             array_layer_count: N as u32,
             mip_level_count: 1,
             usage: blade_graphics::TextureUsage::RESOURCE | blade_graphics::TextureUsage::STORAGE,
+            sample_count: 1,
         });
         encoder.init_texture(texture);
 
@@ -605,6 +606,7 @@ impl ShaderPipelines {
             fragment: shader.at("postfx_fs"),
             color_targets: &[info.format.into()],
             depth_stencil: None,
+            multisample_state: blade_graphics::MultisampleState::default(),
         })
     }
 

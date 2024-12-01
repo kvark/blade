@@ -402,6 +402,7 @@ pub struct TextureDesc<'a> {
     pub size: Extent,
     pub array_layer_count: u32,
     pub mip_level_count: u32,
+    pub sample_count: u32,
     pub dimension: TextureDimension,
     pub usage: TextureUsage,
 }
@@ -1018,12 +1019,31 @@ pub struct RenderPipelineDesc<'a> {
     pub depth_stencil: Option<DepthStencilState>,
     pub fragment: ShaderFunction<'a>,
     pub color_targets: &'a [ColorTargetState],
+    pub multisample_state: MultisampleState,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MultisampleState {
+    pub sample_count: u32,
+    pub sample_mask: u64,
+    pub alpha_to_coverage: bool,
+}
+
+impl Default for MultisampleState {
+    fn default() -> Self {
+        Self {
+            sample_count: 1,
+            sample_mask: !0,
+            alpha_to_coverage: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum InitOp {
     Load,
     Clear(TextureColor),
+    DontCare,
 }
 
 #[derive(Clone, Copy, Debug)]
