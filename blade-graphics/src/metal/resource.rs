@@ -181,7 +181,11 @@ impl crate::traits::ResourceDevice for super::Context {
                 if desc.array_layer_count > 1 {
                     metal::MTLTextureType::D2Array
                 } else {
-                    metal::MTLTextureType::D2
+                    if desc.sample_count <= 1 {
+                        metal::MTLTextureType::D2
+                    } else {
+                        metal::MTLTextureType::D2Multisample
+                    }
                 }
             }
             crate::TextureDimension::D3 => metal::MTLTextureType::D3,
@@ -198,6 +202,7 @@ impl crate::traits::ResourceDevice for super::Context {
             descriptor.set_array_length(desc.array_layer_count as u64);
             descriptor.set_mipmap_level_count(desc.mip_level_count as u64);
             descriptor.set_pixel_format(mtl_format);
+            descriptor.set_sample_count(desc.sample_count as _);
             descriptor.set_usage(mtl_usage);
             descriptor.set_storage_mode(metal::MTLStorageMode::Private);
 

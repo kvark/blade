@@ -129,7 +129,11 @@ impl GuiPainter {
     /// It supports renderpasses with only a color attachment,
     /// and this attachment format must be The `output_format`.
     #[profiling::function]
-    pub fn new(info: blade_graphics::SurfaceInfo, context: &blade_graphics::Context) -> Self {
+    pub fn new(
+        info: blade_graphics::SurfaceInfo,
+        context: &blade_graphics::Context,
+        sample_count: u32,
+    ) -> Self {
         let shader = context.create_shader(blade_graphics::ShaderDesc {
             source: SHADER_SOURCE,
         });
@@ -162,7 +166,10 @@ impl GuiPainter {
                 }),
                 write_mask: blade_graphics::ColorWrites::all(),
             }],
-            multisample_state: blade_graphics::MultisampleState::default(),
+            multisample_state: blade_graphics::MultisampleState {
+                sample_count,
+                ..Default::default()
+            },
         });
 
         let belt = BufferBelt::new(BufferBeltDescriptor {

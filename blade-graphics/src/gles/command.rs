@@ -185,6 +185,10 @@ impl super::CommandEncoder {
             if let crate::FinishOp::Discard = rt.finish_op {
                 invalidate_attachments.push(attachment);
             }
+            if let crate::FinishOp::ResolveTo(to) = rt.finish_op {
+                self.commands
+                    .push(super::Command::BlitFramebuffer { from: rt.view, to });
+            }
         }
         if let Some(ref rt) = targets.depth_stencil {
             let attachment = match rt.view.aspects {
@@ -806,6 +810,65 @@ impl super::Command {
                     None,
                 );
             }
+
+            Self::BlitFramebuffer { from, to } => {
+                /*
+                    TODO(ErikWDev): Validate
+                */
+
+                let target_from = match from.inner {
+                    super::TextureInner::Renderbuffer { raw } => raw,
+                    _ => panic!("Unsupported resolve between non-renderbuffers"),
+                };
+                let target_to = match to.inner {
+                    super::TextureInner::Renderbuffer { raw } => raw,
+                    _ => panic!("Unsupported resolve between non-renderbuffers"),
+                };
+
+                let framebuf_from = gl.create_framebuffer().unwrap();
+                let framebuf_to = gl.create_framebuffer().unwrap();
+
+                gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(framebuf_from));
+                gl.framebuffer_renderbuffer(
+                    glow::READ_FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0, // NOTE: Assuming color attachment
+                    glow::RENDERBUFFER,
+                    Some(target_from),
+                );
+
+                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(framebuf_to));
+                gl.framebuffer_renderbuffer(
+                    glow::DRAW_FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0, // NOTE: Assuming color attachment
+                    glow::RENDERBUFFER,
+                    Some(target_to),
+                );
+                assert_eq!(
+                    gl.check_framebuffer_status(glow::DRAW_FRAMEBUFFER),
+                    glow::FRAMEBUFFER_COMPLETE,
+                    "DRAW_FRAMEBUFFER is not complete"
+                );
+
+                gl.blit_framebuffer(
+                    0,
+                    0,
+                    from.target_size[0] as _,
+                    from.target_size[1] as _,
+                    0,
+                    0,
+                    to.target_size[0] as _,
+                    to.target_size[1] as _,
+                    glow::COLOR_BUFFER_BIT, // NOTE: Assuming color
+                    glow::NEAREST,
+                );
+
+                gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
+
+                gl.delete_framebuffer(framebuf_from);
+                gl.delete_framebuffer(framebuf_to);
+            }
+
             Self::BindAttachment {
                 attachment,
                 ref view,

@@ -4,6 +4,11 @@ use blade_graphics as gpu;
 
 mod particle;
 
+// const SAMPLE_COUNT: u32 = 1;
+// const SAMPLE_COUNT: u32 = 2;
+const SAMPLE_COUNT: u32 = 4;
+// const SAMPLE_COUNT: u32 = 8;
+
 struct Example {
     command_encoder: gpu::CommandEncoder,
     prev_sync_point: Option<gpu::SyncPoint>,
@@ -11,9 +16,71 @@ struct Example {
     surface: gpu::Surface,
     gui_painter: blade_egui::GuiPainter,
     particle_system: particle::System,
+
+    msaa_texture: gpu::Texture,
+    msaa_view: gpu::TextureView,
 }
 
 impl Example {
+    fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
+        let config = Self::make_surface_config(size);
+        self.context.reconfigure_surface(&mut self.surface, config);
+
+        let surface_info = self.surface.info();
+
+        if let Some(sp) = self.prev_sync_point.take() {
+            self.context.wait_for(&sp, !0);
+        }
+        self.context.destroy_texture_view(self.msaa_view);
+        self.context.destroy_texture(self.msaa_texture);
+
+        // self.gui_painter.destroy(&self.context);
+        // self.gui_painter = blade_egui::GuiPainter::new(surface_info, &self.context, SAMPLE_COUNT);
+
+        self.msaa_texture = self.context.create_texture(gpu::TextureDesc {
+            name: "msaa texture",
+            format: surface_info.format,
+            size: gpu::Extent {
+                width: size.width,
+                height: size.height,
+                depth: 1,
+            },
+            sample_count: SAMPLE_COUNT,
+            dimension: gpu::TextureDimension::D2,
+            usage: gpu::TextureUsage::TARGET,
+            array_layer_count: 1,
+            mip_level_count: 1,
+        });
+        self.msaa_view = self.context.create_texture_view(
+            self.msaa_texture,
+            gpu::TextureViewDesc {
+                name: "msaa texture view",
+                format: surface_info.format,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &gpu::TextureSubresources {
+                    base_mip_level: 0,
+                    mip_level_count: None,
+                    base_array_layer: 0,
+                    array_layer_count: None,
+                },
+            },
+        );
+    }
+
+    fn make_surface_config(size: winit::dpi::PhysicalSize<u32>) -> gpu::SurfaceConfig {
+        log::info!("Window size: {:?}", size);
+        gpu::SurfaceConfig {
+            size: gpu::Extent {
+                width: size.width,
+                height: size.height,
+                depth: 1,
+            },
+            usage: gpu::TextureUsage::TARGET,
+            display_sync: gpu::DisplaySync::Block,
+            ..Default::default()
+        }
+    }
+
     fn new(window: &winit::window::Window) -> Self {
         let window_size = window.inner_size();
         let context = unsafe {
@@ -21,27 +88,18 @@ impl Example {
                 presentation: true,
                 validation: cfg!(debug_assertions),
                 timing: true,
-                capture: true,
+                capture: false,
+
                 ..Default::default()
             })
             .unwrap()
         };
-        let surface_config = gpu::SurfaceConfig {
-            size: gpu::Extent {
-                width: window_size.width,
-                height: window_size.height,
-                depth: 1,
-            },
-            usage: gpu::TextureUsage::TARGET,
-            display_sync: gpu::DisplaySync::Block,
-            ..Default::default()
-        };
         let surface = context
-            .create_surface_configured(window, surface_config)
+            .create_surface_configured(window, Self::make_surface_config(window_size))
             .unwrap();
         let surface_info = surface.info();
 
-        let gui_painter = blade_egui::GuiPainter::new(surface_info, &context);
+        let gui_painter = blade_egui::GuiPainter::new(surface_info, &context, SAMPLE_COUNT);
         let particle_system = particle::System::new(
             &context,
             particle::SystemDesc {
@@ -49,6 +107,7 @@ impl Example {
                 capacity: 100_000,
                 draw_format: surface_info.format,
             },
+            SAMPLE_COUNT,
         );
 
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
@@ -59,6 +118,35 @@ impl Example {
         particle_system.reset(&mut command_encoder);
         let sync_point = context.submit(&mut command_encoder);
 
+        let msaa_texture = context.create_texture(gpu::TextureDesc {
+            name: "msaa texture",
+            format: surface_info.format,
+            size: gpu::Extent {
+                width: window_size.width,
+                height: window_size.height,
+                depth: 1,
+            },
+            sample_count: SAMPLE_COUNT,
+            dimension: gpu::TextureDimension::D2,
+            usage: gpu::TextureUsage::TARGET,
+            array_layer_count: 1,
+            mip_level_count: 1,
+        });
+        let msaa_view = context.create_texture_view(
+            msaa_texture,
+            gpu::TextureViewDesc {
+                name: "msaa texture view",
+                format: surface_info.format,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &gpu::TextureSubresources {
+                    base_mip_level: 0,
+                    mip_level_count: None,
+                    base_array_layer: 0,
+                    array_layer_count: None,
+                },
+            },
+        );
+
         Self {
             command_encoder,
             prev_sync_point: Some(sync_point),
@@ -66,6 +154,8 @@ impl Example {
             surface,
             gui_painter,
             particle_system,
+            msaa_texture,
+            msaa_view,
         }
     }
 
@@ -78,6 +168,9 @@ impl Example {
         self.gui_painter.destroy(&self.context);
         self.particle_system.destroy(&self.context);
         self.context.destroy_surface(&mut self.surface);
+
+        self.context.destroy_texture_view(self.msaa_view);
+        self.context.destroy_texture(self.msaa_texture);
     }
 
     fn render(
@@ -88,6 +181,7 @@ impl Example {
     ) {
         let frame = self.surface.acquire_frame();
         self.command_encoder.start();
+        self.command_encoder.init_texture(self.msaa_texture);
         self.command_encoder.init_texture(frame.texture());
 
         self.gui_painter
@@ -99,14 +193,15 @@ impl Example {
             "draw",
             gpu::RenderTargetSet {
                 colors: &[gpu::RenderTarget {
-                    view: frame.texture_view(),
+                    view: self.msaa_view,
                     init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
-                    finish_op: gpu::FinishOp::Store,
+                    finish_op: gpu::FinishOp::ResolveTo(frame.texture_view()),
                 }],
                 depth_stencil: None,
             },
         ) {
-            self.particle_system.draw(&mut pass);
+            self.particle_system
+                .draw(&mut pass, screen_desc.physical_size);
             self.gui_painter
                 .paint(&mut pass, gui_primitives, screen_desc, &self.context);
         }
@@ -156,6 +251,7 @@ fn main() {
                 winit::event::Event::AboutToWait => {
                     window.request_redraw();
                 }
+
                 winit::event::Event::WindowEvent { event, .. } => {
                     let response = egui_winit.on_window_event(&window, &event);
                     if response.consumed {
@@ -183,6 +279,11 @@ fn main() {
                         winit::event::WindowEvent::CloseRequested => {
                             target.exit();
                         }
+
+                        winit::event::WindowEvent::Resized(size) => {
+                            example.resize(size);
+                        }
+
                         winit::event::WindowEvent::RedrawRequested => {
                             let raw_input = egui_winit.take_egui_input(&window);
                             let egui_output = egui_winit.egui_ctx().run(raw_input, |egui_ctx| {

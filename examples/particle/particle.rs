@@ -71,7 +71,7 @@ struct DrawData {
 }
 
 impl System {
-    pub fn new(context: &gpu::Context, desc: SystemDesc) -> Self {
+    pub fn new(context: &gpu::Context, desc: SystemDesc, sample_count: u32) -> Self {
         let source = std::fs::read_to_string("examples/particle/particle.wgsl").unwrap();
         let shader = context.create_shader(gpu::ShaderDesc { source: &source });
         let particle_size = shader.get_struct_size("Particle");
@@ -112,7 +112,10 @@ impl System {
                 write_mask: gpu::ColorWrites::default(),
             }],
             depth_stencil: None,
-            multisample_state: gpu::MultisampleState::default(),
+            multisample_state: gpu::MultisampleState {
+                sample_count,
+                ..Default::default()
+            },
         });
 
         let wg_width = reset_pipeline.get_workgroup_size()[0] as usize;
@@ -199,7 +202,7 @@ impl System {
         }
     }
 
-    pub fn draw(&self, pass: &mut gpu::RenderCommandEncoder) {
+    pub fn draw(&self, pass: &mut gpu::RenderCommandEncoder, size: (u32, u32)) {
         let mut pc = pass.with(&self.draw_pipeline);
         pc.bind(
             0,
@@ -212,7 +215,11 @@ impl System {
                         scale: 1.0,
                     },
                     screen_center: [0.0; 2],
-                    screen_extent: [1000.0; 2],
+                    screen_extent: {
+                        let ratio = size.0 as f32 / size.1 as f32;
+
+                        [1000.0 * ratio, 1000.0]
+                    },
                 },
             },
         );
@@ -220,8 +227,8 @@ impl System {
     }
 
     pub fn add_gui(&mut self, ui: &mut egui::Ui) {
-        ui.add(egui::Slider::new(&mut self.params.life, 0.1..=10.0).text("life"));
+        ui.add(egui::Slider::new(&mut self.params.life, 0.1..=20.0).text("life"));
         ui.add(egui::Slider::new(&mut self.params.velocity, 1.0..=500.0).text("velocity"));
-        ui.add(egui::Slider::new(&mut self.params.scale, 0.1..=50.0).text("scale"));
+        ui.add(egui::Slider::new(&mut self.params.scale, 0.1..=70.0).text("scale"));
     }
 }
