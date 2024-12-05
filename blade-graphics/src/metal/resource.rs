@@ -179,7 +179,11 @@ impl crate::traits::ResourceDevice for super::Context {
             }
             crate::TextureDimension::D2 => {
                 if desc.array_layer_count > 1 {
-                    metal::MTLTextureType::D2Array
+                    if desc.sample_count <= 1 {
+                        metal::MTLTextureType::D2Array
+                    } else {
+                        metal::MTLTextureType::D2MultisampleArray
+                    }
                 } else {
                     if desc.sample_count <= 1 {
                         metal::MTLTextureType::D2

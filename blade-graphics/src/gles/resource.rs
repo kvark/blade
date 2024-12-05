@@ -160,8 +160,13 @@ impl crate::traits::ResourceDevice for super::Context {
             super::TextureInner::Renderbuffer { raw }
         } else {
             let raw = unsafe { gl.create_texture().unwrap() };
+
+            let mut ignoring_sample_count = false;
             let target = match desc.dimension {
                 crate::TextureDimension::D1 => {
+                    if desc.sample_count > 1 {
+                        log::warn!("Sample count is ignored: not supported for 1D textures",);
+                    }
                     if desc.array_layer_count > 1 {
                         glow::TEXTURE_1D_ARRAY
                     } else {
@@ -170,7 +175,11 @@ impl crate::traits::ResourceDevice for super::Context {
                 }
                 crate::TextureDimension::D2 => {
                     if desc.array_layer_count > 1 {
-                        glow::TEXTURE_2D_ARRAY
+                        if desc.sample_count <= 1 {
+                            glow::TEXTURE_2D_ARRAY
+                        } else {
+                            glow::TEXTURE_2D_ARRAY_MULTISAMPLE
+                        }
                     } else {
                         if desc.sample_count <= 1 {
                             glow::TEXTURE_2D
@@ -179,7 +188,12 @@ impl crate::traits::ResourceDevice for super::Context {
                         }
                     }
                 }
-                crate::TextureDimension::D3 => glow::TEXTURE_3D,
+                crate::TextureDimension::D3 => {
+                    if desc.sample_count > 1 {
+                        log::warn!("Sample count is ignored: not supported for 3D textures",);
+                    }
+                    glow::TEXTURE_3D
+                }
             };
 
             unsafe {
@@ -210,9 +224,7 @@ impl crate::traits::ResourceDevice for super::Context {
                                 desc.size.height as i32,
                             );
                         } else {
-                            /*
-                                TODO(ErikWDev): How to set mip count and sample count? Not possible in gles?
-                            */
+                            assert_eq!(desc.mip_level_count, 1);
                             gl.tex_storage_2d_multisample(
                                 target,
                                 desc.sample_count as i32,
