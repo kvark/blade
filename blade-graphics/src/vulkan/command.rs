@@ -833,22 +833,26 @@ impl super::PipelineEncoder<'_, '_> {
 impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_, '_> {
     fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         let dsl = &self.layout.descriptor_set_layouts[group as usize];
-        self.update_data.clear();
-        self.update_data.resize(dsl.template_size as usize, 0);
-        data.fill(super::PipelineContext {
-            update_data: self.update_data.as_mut_slice(),
-            template_offsets: &dsl.template_offsets,
-        });
+        if !dsl.is_empty() {
+            self.update_data.clear();
+            self.update_data.resize(dsl.template_size as usize, 0);
+            data.fill(super::PipelineContext {
+                update_data: self.update_data.as_mut_slice(),
+                template_offsets: &dsl.template_offsets,
+            });
+        }
 
         let vk_set = self
             .device
             .allocate_descriptor_set(&mut self.cmd_buf.descriptor_pool, dsl);
         unsafe {
-            self.device.core.update_descriptor_set_with_template(
-                vk_set,
-                dsl.update_template,
-                self.update_data.as_ptr() as *const _,
-            );
+            if !dsl.is_empty() {
+                self.device.core.update_descriptor_set_with_template(
+                    vk_set,
+                    dsl.update_template,
+                    self.update_data.as_ptr() as *const _,
+                );
+            }
             self.device.core.cmd_bind_descriptor_sets(
                 self.cmd_buf.raw,
                 self.bind_point,
