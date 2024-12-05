@@ -4,22 +4,24 @@ use blade_graphics as gpu;
 
 mod particle;
 
-// const SAMPLE_COUNT: u32 = 1;
-// const SAMPLE_COUNT: u32 = 2;
-const SAMPLE_COUNT: u32 = 4;
-// const SAMPLE_COUNT: u32 = 8;
-
 struct Example {
     command_encoder: gpu::CommandEncoder,
     prev_sync_point: Option<gpu::SyncPoint>,
     context: gpu::Context,
     surface: gpu::Surface,
     gui_painter: blade_egui::GuiPainter,
+
     particle_system: particle::System,
 
-    msaa_texture: gpu::Texture,
-    msaa_view: gpu::TextureView,
+    sample_count: u32,
+    msaa_texture: Option<gpu::Texture>,
+    msaa_view: Option<gpu::TextureView>,
 }
+
+// pub const INITIAL_SAMPLE_COUNT: u32 = 1;
+// pub const INITIAL_SAMPLE_COUNT: u32 = 2;
+pub const INITIAL_SAMPLE_COUNT: u32 = 4;
+// pub const INITIAL_SAMPLE_COUNT: u32 = 8;
 
 impl Example {
     fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
@@ -31,40 +33,49 @@ impl Example {
         if let Some(sp) = self.prev_sync_point.take() {
             self.context.wait_for(&sp, !0);
         }
-        self.context.destroy_texture_view(self.msaa_view);
-        self.context.destroy_texture(self.msaa_texture);
 
-        // self.gui_painter.destroy(&self.context);
-        // self.gui_painter = blade_egui::GuiPainter::new(surface_info, &self.context, SAMPLE_COUNT);
+        if let Some(msaa_view) = self.msaa_view.take() {
+            self.context.destroy_texture_view(msaa_view);
+        }
+        if let Some(msaa_texture) = self.msaa_texture.take() {
+            self.context.destroy_texture(msaa_texture);
+        }
+        self.recreate_msaa_texutres_if_needed((size.width, size.height), surface_info.format);
+    }
 
-        self.msaa_texture = self.context.create_texture(gpu::TextureDesc {
-            name: "msaa texture",
-            format: surface_info.format,
-            size: gpu::Extent {
-                width: size.width,
-                height: size.height,
-                depth: 1,
-            },
-            sample_count: SAMPLE_COUNT,
-            dimension: gpu::TextureDimension::D2,
-            usage: gpu::TextureUsage::TARGET,
-            array_layer_count: 1,
-            mip_level_count: 1,
-        });
-        self.msaa_view = self.context.create_texture_view(
-            self.msaa_texture,
-            gpu::TextureViewDesc {
-                name: "msaa texture view",
-                format: surface_info.format,
-                dimension: gpu::ViewDimension::D2,
-                subresources: &gpu::TextureSubresources {
-                    base_mip_level: 0,
-                    mip_level_count: None,
-                    base_array_layer: 0,
-                    array_layer_count: None,
+    fn recreate_msaa_texutres_if_needed(
+        &mut self,
+        (width, height): (u32, u32),
+        format: gpu::TextureFormat,
+    ) {
+        if self.sample_count > 1 && self.msaa_texture.is_none() {
+            let msaa_texture = self.context.create_texture(gpu::TextureDesc {
+                name: "msaa texture",
+                format,
+                size: gpu::Extent {
+                    width,
+                    height,
+                    depth: 1,
                 },
-            },
-        );
+                sample_count: self.sample_count,
+                dimension: gpu::TextureDimension::D2,
+                usage: gpu::TextureUsage::TARGET,
+                array_layer_count: 1,
+                mip_level_count: 1,
+            });
+            let msaa_view = self.context.create_texture_view(
+                msaa_texture,
+                gpu::TextureViewDesc {
+                    name: "msaa texture view",
+                    format,
+                    dimension: gpu::ViewDimension::D2,
+                    subresources: &Default::default(),
+                },
+            );
+
+            self.msaa_texture = Some(msaa_texture);
+            self.msaa_view = Some(msaa_view);
+        }
     }
 
     fn make_surface_config(size: winit::dpi::PhysicalSize<u32>) -> gpu::SurfaceConfig {
@@ -99,7 +110,7 @@ impl Example {
             .unwrap();
         let surface_info = surface.info();
 
-        let gui_painter = blade_egui::GuiPainter::new(surface_info, &context, SAMPLE_COUNT);
+        let gui_painter = blade_egui::GuiPainter::new(surface_info, &context);
         let particle_system = particle::System::new(
             &context,
             particle::SystemDesc {
@@ -107,7 +118,7 @@ impl Example {
                 capacity: 100_000,
                 draw_format: surface_info.format,
             },
-            SAMPLE_COUNT,
+            INITIAL_SAMPLE_COUNT,
         );
 
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
@@ -118,35 +129,6 @@ impl Example {
         particle_system.reset(&mut command_encoder);
         let sync_point = context.submit(&mut command_encoder);
 
-        let msaa_texture = context.create_texture(gpu::TextureDesc {
-            name: "msaa texture",
-            format: surface_info.format,
-            size: gpu::Extent {
-                width: window_size.width,
-                height: window_size.height,
-                depth: 1,
-            },
-            sample_count: SAMPLE_COUNT,
-            dimension: gpu::TextureDimension::D2,
-            usage: gpu::TextureUsage::TARGET,
-            array_layer_count: 1,
-            mip_level_count: 1,
-        });
-        let msaa_view = context.create_texture_view(
-            msaa_texture,
-            gpu::TextureViewDesc {
-                name: "msaa texture view",
-                format: surface_info.format,
-                dimension: gpu::ViewDimension::D2,
-                subresources: &gpu::TextureSubresources {
-                    base_mip_level: 0,
-                    mip_level_count: None,
-                    base_array_layer: 0,
-                    array_layer_count: None,
-                },
-            },
-        );
-
         Self {
             command_encoder,
             prev_sync_point: Some(sync_point),
@@ -154,8 +136,9 @@ impl Example {
             surface,
             gui_painter,
             particle_system,
-            msaa_texture,
-            msaa_view,
+            sample_count: INITIAL_SAMPLE_COUNT,
+            msaa_texture: None,
+            msaa_view: None,
         }
     }
 
@@ -169,8 +152,12 @@ impl Example {
         self.particle_system.destroy(&self.context);
         self.context.destroy_surface(&mut self.surface);
 
-        self.context.destroy_texture_view(self.msaa_view);
-        self.context.destroy_texture(self.msaa_texture);
+        if let Some(msaa_view) = self.msaa_view.take() {
+            self.context.destroy_texture_view(msaa_view);
+        }
+        if let Some(msaa_texture) = self.msaa_texture.take() {
+            self.context.destroy_texture(msaa_texture);
+        }
     }
 
     fn render(
@@ -179,32 +166,71 @@ impl Example {
         gui_textures: &egui::TexturesDelta,
         screen_desc: &blade_egui::ScreenDescriptor,
     ) {
+        self.recreate_msaa_texutres_if_needed(
+            screen_desc.physical_size,
+            self.surface.info().format,
+        );
+
         let frame = self.surface.acquire_frame();
+        let frame_view = frame.texture_view();
         self.command_encoder.start();
-        self.command_encoder.init_texture(self.msaa_texture);
+        if let Some(msaa_texture) = self.msaa_texture {
+            self.command_encoder.init_texture(msaa_texture);
+        }
         self.command_encoder.init_texture(frame.texture());
 
         self.gui_painter
             .update_textures(&mut self.command_encoder, gui_textures, &self.context);
-
         self.particle_system.update(&mut self.command_encoder);
 
-        if let mut pass = self.command_encoder.render(
-            "draw",
-            gpu::RenderTargetSet {
-                colors: &[gpu::RenderTarget {
-                    view: self.msaa_view,
-                    init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
-                    finish_op: gpu::FinishOp::ResolveTo(frame.texture_view()),
-                }],
-                depth_stencil: None,
-            },
-        ) {
-            self.particle_system
-                .draw(&mut pass, screen_desc.physical_size);
-            self.gui_painter
-                .paint(&mut pass, gui_primitives, screen_desc, &self.context);
+        if self.sample_count <= 1 {
+            if let mut pass = self.command_encoder.render(
+                "draw particles and ui",
+                gpu::RenderTargetSet {
+                    colors: &[gpu::RenderTarget {
+                        view: frame_view,
+                        init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
+                        finish_op: gpu::FinishOp::Store,
+                    }],
+                    depth_stencil: None,
+                },
+            ) {
+                self.particle_system
+                    .draw(&mut pass, screen_desc.physical_size);
+                self.gui_painter
+                    .paint(&mut pass, gui_primitives, screen_desc, &self.context);
+            }
+        } else {
+            if let mut pass = self.command_encoder.render(
+                "draw particles with msaa resolve",
+                gpu::RenderTargetSet {
+                    colors: &[gpu::RenderTarget {
+                        view: self.msaa_view.unwrap(),
+                        init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
+                        finish_op: gpu::FinishOp::ResolveTo(frame_view),
+                    }],
+                    depth_stencil: None,
+                },
+            ) {
+                self.particle_system
+                    .draw(&mut pass, screen_desc.physical_size);
+            }
+            if let mut pass = self.command_encoder.render(
+                "draw ui",
+                gpu::RenderTargetSet {
+                    colors: &[gpu::RenderTarget {
+                        view: frame_view,
+                        init_op: gpu::InitOp::Load,
+                        finish_op: gpu::FinishOp::Store,
+                    }],
+                    depth_stencil: None,
+                },
+            ) {
+                self.gui_painter
+                    .paint(&mut pass, gui_primitives, screen_desc, &self.context);
+            }
         }
+
         self.command_encoder.present(frame);
         let sync_point = self.context.submit(&mut self.command_encoder);
         self.gui_painter.after_submit(&sync_point);
@@ -216,8 +242,45 @@ impl Example {
     }
 
     fn add_gui(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(5.0);
         ui.heading("Particle System");
         self.particle_system.add_gui(ui);
+
+        ui.add_space(5.0);
+        ui.heading("Rendering Settings");
+        egui::ComboBox::new("msaa dropdown", "MSAA samples")
+            .selected_text(format!("x{}", self.sample_count))
+            .show_ui(ui, |ui| {
+                for i in [1, 2, 4, 8] {
+                    if ui
+                        .selectable_value(&mut self.sample_count, i, format!("x{i}"))
+                        .changed()
+                    {
+                        if let Some(sp) = self.prev_sync_point.take() {
+                            self.context.wait_for(&sp, !0);
+                        }
+
+                        self.particle_system.destroy(&self.context);
+                        self.particle_system = particle::System::new(
+                            &self.context,
+                            particle::SystemDesc {
+                                name: "particle system",
+                                capacity: 100_000,
+                                draw_format: gpu::TextureFormat::Bgra8Unorm, // TODO: get real surface format..
+                            },
+                            self.sample_count,
+                        );
+                        if let Some(msaa_view) = self.msaa_view.take() {
+                            self.context.destroy_texture_view(msaa_view);
+                        }
+                        if let Some(msaa_texture) = self.msaa_texture.take() {
+                            self.context.destroy_texture(msaa_texture);
+                        }
+                    }
+                }
+            });
+
+        ui.add_space(5.0);
         ui.heading("Timings");
         for (name, time) in self.command_encoder.timings() {
             let millis = time.as_secs_f32() * 1000.0;
