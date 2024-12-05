@@ -461,7 +461,7 @@ impl Engine {
 
         pacer.end_frame(&gpu_context);
 
-        let gui_painter = blade_egui::GuiPainter::new(surface_info, &gpu_context, 1);
+        let gui_painter = blade_egui::GuiPainter::new(surface_info, &gpu_context);
         let mut physics = Physics::default();
         physics.debug_pipeline.mode = rapier3d::pipeline::DebugRenderMode::empty();
         physics.integration_params.dt = config.time_step;
