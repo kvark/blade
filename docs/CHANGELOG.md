@@ -16,6 +16,8 @@ Changelog for Blade
     - concurrent compute dispatches
   - Egl:
     - destroy old surface on resize
+  - Vulkan:
+    - support unused bind groups
 
 ## blade-egui-0.5 (09 Nov 2024)
 

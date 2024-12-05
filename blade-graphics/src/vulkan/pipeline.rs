@@ -164,8 +164,18 @@ impl super::Context {
         info: &crate::ShaderDataInfo,
     ) -> super::DescriptorSetLayout {
         if info.visibility.is_empty() {
-            return super::DescriptorSetLayout::default();
+            // we need to have a valid `VkDescriptorSetLayout` regardless
+            return super::DescriptorSetLayout {
+                raw: unsafe {
+                    self.device
+                        .core
+                        .create_descriptor_set_layout(&Default::default(), None)
+                        .unwrap()
+                },
+                ..Default::default()
+            };
         }
+
         let stage_flags = map_shader_visibility(info.visibility);
         let mut vk_bindings = Vec::with_capacity(layout.bindings.len());
         let mut template_entries = Vec::with_capacity(layout.bindings.len());
@@ -230,6 +240,7 @@ impl super::Context {
                     vk::DescriptorBindingFlags::empty(),
                 ),
             };
+
             vk_bindings.push(vk::DescriptorSetLayoutBinding {
                 binding: binding_index as u32,
                 descriptor_type,
@@ -245,8 +256,8 @@ impl super::Context {
                 offset: update_offset,
                 stride: descriptor_size,
             });
-            template_offsets.push(update_offset as u32);
             binding_flags.push(flag);
+            template_offsets.push(update_offset as u32);
             update_offset += descriptor_size * descriptor_count as usize;
         }
 
@@ -310,16 +321,22 @@ impl super::Context {
 
     fn destroy_pipeline_layout(&self, layout: &mut super::PipelineLayout) {
         unsafe {
-            self.device.core.destroy_pipeline_layout(layout.raw, None);
+            self.device
+                .core
+                .destroy_pipeline_layout(mem::take(&mut layout.raw), None);
         }
         for dsl in layout.descriptor_set_layouts.drain(..) {
             unsafe {
                 self.device
                     .core
                     .destroy_descriptor_set_layout(dsl.raw, None);
-                self.device
-                    .core
-                    .destroy_descriptor_update_template(dsl.update_template, None);
+            }
+            if !dsl.is_empty() {
+                unsafe {
+                    self.device
+                        .core
+                        .destroy_descriptor_update_template(dsl.update_template, None);
+                }
             }
         }
     }

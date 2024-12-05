@@ -1,5 +1,5 @@
 use ash::{khr, vk};
-use std::{num::NonZeroU32, path::PathBuf, ptr, sync::Mutex};
+use std::{mem, num::NonZeroU32, path::PathBuf, ptr, sync::Mutex};
 
 mod command;
 mod descriptor;
@@ -220,6 +220,12 @@ struct DescriptorSetLayout {
     update_template: vk::DescriptorUpdateTemplate,
     template_size: u32,
     template_offsets: Box<[u32]>,
+}
+
+impl DescriptorSetLayout {
+    fn is_empty(&self) -> bool {
+        self.template_size == 0
+    }
 }
 
 #[derive(Debug)]
@@ -444,7 +450,7 @@ impl crate::traits::CommandDevice for Context {
         unsafe {
             self.device
                 .core
-                .destroy_command_pool(command_encoder.pool, None)
+                .destroy_command_pool(mem::take(&mut command_encoder.pool), None)
         };
         if let Some(crash_handler) = command_encoder.crash_handler.take() {
             self.destroy_buffer(crash_handler.marker_buf);
