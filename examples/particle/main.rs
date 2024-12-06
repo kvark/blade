@@ -251,7 +251,7 @@ impl Example {
         egui::ComboBox::new("msaa dropdown", "MSAA samples")
             .selected_text(format!("x{}", self.sample_count))
             .show_ui(ui, |ui| {
-                for i in [1, 2, 4, 8] {
+                for i in [1, 2, 4] {
                     if ui
                         .selectable_value(&mut self.sample_count, i, format!("x{i}"))
                         .changed()
@@ -266,7 +266,7 @@ impl Example {
                             particle::SystemDesc {
                                 name: "particle system",
                                 capacity: 100_000,
-                                draw_format: gpu::TextureFormat::Bgra8Unorm, // TODO: get real surface format..
+                                draw_format: self.surface.info().format,
                             },
                             self.sample_count,
                         );
