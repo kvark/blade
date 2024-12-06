@@ -161,7 +161,6 @@ impl crate::traits::ResourceDevice for super::Context {
         } else {
             let raw = unsafe { gl.create_texture().unwrap() };
 
-            let mut ignoring_sample_count = false;
             let target = match desc.dimension {
                 crate::TextureDimension::D1 => {
                     if desc.sample_count > 1 {
@@ -178,7 +177,7 @@ impl crate::traits::ResourceDevice for super::Context {
                         if desc.sample_count <= 1 {
                             glow::TEXTURE_2D_ARRAY
                         } else {
-                            glow::TEXTURE_2D_ARRAY_MULTISAMPLE
+                            glow::TEXTURE_2D_MULTISAMPLE_ARRAY
                         }
                     } else {
                         if desc.sample_count <= 1 {
