@@ -1050,6 +1050,8 @@ pub enum InitOp {
 pub enum FinishOp {
     Store,
     Discard,
+    /// The resolved texture will be stored but it is undefined what
+    /// happens to the original render target
     ResolveTo(TextureView),
     Ignore,
 }

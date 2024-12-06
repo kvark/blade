@@ -217,6 +217,7 @@ impl super::CommandEncoder {
                         at_descriptor.set_clear_color(clear_color);
                         metal::MTLLoadAction::Clear
                     }
+                    crate::InitOp::DontCare => metal::MTLLoadAction::DontCare,
                 };
                 at_descriptor.set_load_action(load_action);
 
@@ -247,6 +248,7 @@ impl super::CommandEncoder {
                         at_descriptor.set_clear_depth(clear_depth);
                         metal::MTLLoadAction::Clear
                     }
+                    crate::InitOp::DontCare => metal::MTLLoadAction::DontCare,
                 };
                 let store_action = match rt.finish_op {
                     crate::FinishOp::Store | crate::FinishOp::Ignore => {
