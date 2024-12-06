@@ -371,7 +371,9 @@ fn main() {
                             let control_flow = if let Some(repaint_after_instant) =
                                 std::time::Instant::now().checked_add(repaint_delay)
                             {
-                                winit::event_loop::ControlFlow::WaitUntil(repaint_after_instant)
+                                winit::event_loop::ControlFlow::WaitUntil(
+                                    repaint_after_instant.into(),
+                                )
                             } else {
                                 winit::event_loop::ControlFlow::Wait
                             };

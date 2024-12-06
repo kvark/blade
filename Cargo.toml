@@ -94,6 +94,8 @@ del-geo = "=0.1.29"
 egui-winit = "0.29"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# see https://github.com/emilk/egui/issues/4270
+egui-winit = { version="0.29", default-features=false, features=["links"] }
 console_error_panic_hook = "0.1.7"
 console_log = "1"
 web-sys = { workspace = true, features = ["Window"] }
