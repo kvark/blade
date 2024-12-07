@@ -26,7 +26,8 @@ use std::{
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct Uniforms {
     screen_size: [f32; 2],
-    padding: [f32; 2],
+    dithering: u32,
+    padding: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -108,13 +109,14 @@ impl GuiTexture {
                 egui::TextureFilter::Nearest => blade_graphics::FilterMode::Nearest,
                 egui::TextureFilter::Linear => blade_graphics::FilterMode::Linear,
             },
-            mipmap_filter: match options.mipmap_mode {
-                Some(it) => match it {
-                    egui::TextureFilter::Nearest => blade_graphics::FilterMode::Nearest,
-                    egui::TextureFilter::Linear => blade_graphics::FilterMode::Linear,
-                },
-                None => blade_graphics::FilterMode::Linear,
-            },
+            // mipmap_filter: match options.mipmap_mode {
+            //     Some(it) => match it {
+            //         egui::TextureFilter::Nearest => blade_graphics::FilterMode::Nearest,
+            //         egui::TextureFilter::Linear => blade_graphics::FilterMode::Linear,
+            //     },
+            //     None => blade_graphics::FilterMode::Linear,
+            // },
+            mipmap_filter: blade_graphics::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -132,6 +134,20 @@ impl GuiTexture {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct GuiPainterOptions {
+    /// Controls whether to apply dithering to minimize banding artifacts, same as egui-wgpu
+    ///
+    /// Defaults to true.
+    pub dithering: bool,
+}
+
+impl Default for GuiPainterOptions {
+    fn default() -> Self {
+        Self { dithering: true }
+    }
+}
+
 //TODO: scissor test
 
 /// GUI painter based on egui.
@@ -145,6 +161,7 @@ pub struct GuiPainter {
     //TODO: this could also look better
     textures_dropped: Vec<GuiTexture>,
     textures_to_delete: Vec<(GuiTexture, blade_graphics::SyncPoint)>,
+    options: GuiPainterOptions,
 }
 
 impl GuiPainter {
@@ -168,7 +185,11 @@ impl GuiPainter {
     /// It supports renderpasses with only a color attachment,
     /// and this attachment format must be The `output_format`.
     #[profiling::function]
-    pub fn new(info: blade_graphics::SurfaceInfo, context: &blade_graphics::Context) -> Self {
+    pub fn new(
+        info: blade_graphics::SurfaceInfo,
+        context: &blade_graphics::Context,
+        options: GuiPainterOptions,
+    ) -> Self {
         let shader = context.create_shader(blade_graphics::ShaderDesc {
             source: SHADER_SOURCE,
         });
@@ -184,7 +205,11 @@ impl GuiPainter {
                 ..Default::default()
             },
             depth_stencil: None, //TODO?
-            fragment: shader.at("fs_main"),
+            fragment: if info.format.is_srgb() {
+                shader.at("fs_main_linear_framebuffer")
+            } else {
+                shader.at("fs_main_gamma_framebuffer")
+            },
             color_targets: &[blade_graphics::ColorTargetState {
                 format: info.format,
                 blend: Some(blade_graphics::BlendState::ALPHA_BLENDING),
@@ -204,6 +229,7 @@ impl GuiPainter {
             textures: Default::default(),
             textures_dropped: Vec::new(),
             textures_to_delete: Vec::new(),
+            options,
         }
     }
 
@@ -328,7 +354,8 @@ impl GuiPainter {
             &Globals {
                 r_uniforms: Uniforms {
                     screen_size: [logical_size.0, logical_size.1],
-                    padding: [0.0; 2],
+                    dithering: if self.options.dithering { 1 } else { 0 },
+                    padding: 0,
                 },
             },
         );

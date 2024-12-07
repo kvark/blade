@@ -309,6 +309,42 @@ pub enum TextureFormat {
     Bc5Snorm,
 }
 
+impl TextureFormat {
+    /// Returns true if the format is srgb-aware
+    pub const fn is_srgb(self) -> bool {
+        match self {
+            TextureFormat::Rgba8UnormSrgb
+            | TextureFormat::Bgra8UnormSrgb
+            | TextureFormat::Bc1UnormSrgb
+            | TextureFormat::Bc2UnormSrgb
+            | TextureFormat::Bc3UnormSrgb => true,
+
+            TextureFormat::R8Unorm
+            | TextureFormat::Rg8Unorm
+            | TextureFormat::Rg8Snorm
+            | TextureFormat::Rgba8Unorm
+            | TextureFormat::Bgra8Unorm
+            | TextureFormat::Rgba8Snorm
+            | TextureFormat::R16Float
+            | TextureFormat::Rgba16Float
+            | TextureFormat::R32Float
+            | TextureFormat::Rg32Float
+            | TextureFormat::Rgba32Float
+            | TextureFormat::R32Uint
+            | TextureFormat::Rg32Uint
+            | TextureFormat::Rgba32Uint
+            | TextureFormat::Depth32Float
+            | TextureFormat::Bc1Unorm
+            | TextureFormat::Bc2Unorm
+            | TextureFormat::Bc3Unorm
+            | TextureFormat::Bc4Unorm
+            | TextureFormat::Bc4Snorm
+            | TextureFormat::Bc5Unorm
+            | TextureFormat::Bc5Snorm => false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct TexelBlockInfo {
     pub dimensions: (u8, u8),
