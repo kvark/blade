@@ -79,8 +79,6 @@ fn fs_main_gamma_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 
-
-
 // -----------------------------------------------
 // Adapted from
 // https://www.shadertoy.com/view/llVGzG

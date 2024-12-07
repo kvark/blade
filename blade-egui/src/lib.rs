@@ -109,14 +109,13 @@ impl GuiTexture {
                 egui::TextureFilter::Nearest => blade_graphics::FilterMode::Nearest,
                 egui::TextureFilter::Linear => blade_graphics::FilterMode::Linear,
             },
-            // mipmap_filter: match options.mipmap_mode {
-            //     Some(it) => match it {
-            //         egui::TextureFilter::Nearest => blade_graphics::FilterMode::Nearest,
-            //         egui::TextureFilter::Linear => blade_graphics::FilterMode::Linear,
-            //     },
-            //     None => blade_graphics::FilterMode::Linear,
-            // },
-            mipmap_filter: blade_graphics::FilterMode::Linear,
+            mipmap_filter: match options.mipmap_mode {
+                Some(it) => match it {
+                    egui::TextureFilter::Nearest => blade_graphics::FilterMode::Nearest,
+                    egui::TextureFilter::Linear => blade_graphics::FilterMode::Linear,
+                },
+                None => blade_graphics::FilterMode::Linear,
+            },
             ..Default::default()
         });
 

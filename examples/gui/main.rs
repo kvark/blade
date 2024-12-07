@@ -1,6 +1,7 @@
 #![allow(irrefutable_let_patterns)]
 
 use blade_graphics as gpu;
+use winit::platform::x11::WindowAttributesExtX11;
 
 struct Example {
     command_encoder: gpu::CommandEncoder,
@@ -29,7 +30,7 @@ impl Example {
             .unwrap();
         let surface_info = surface.info();
 
-        let gui_painter = blade_egui::GuiPainter::new(surface_info, &context);
+        let gui_painter = blade_egui::GuiPainter::new(surface_info, &context, Default::default());
 
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
@@ -67,6 +68,8 @@ impl Example {
             },
             usage: gpu::TextureUsage::TARGET,
             display_sync: gpu::DisplaySync::Block,
+            color_space: gpu::ColorSpace::Linear,
+            // color_space: gpu::ColorSpace::Srgb,
             ..Default::default()
         }
     }
@@ -128,21 +131,21 @@ impl Example {
 fn main() {
     env_logger::init();
 
-    let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    // let window_attributes = winit::window::Window::default_attributes()
-    //     .with_inner_size(winit::dpi::PhysicalSize::new(800, 600))
-    //     .with_title("blade-particle");
+    use winit::platform::x11::EventLoopBuilderExtX11;
 
-    // let window = event_loop.create_window(window_attributes).unwrap();
-    let window = winit::window::WindowBuilder::new()
-        .with_inner_size(winit::dpi::PhysicalSize::new(800, 600))
-        .with_title("blade-particle")
-        .build(&event_loop)
+    let event_loop = winit::event_loop::EventLoop::builder()
+        .with_x11()
+        .build()
         .unwrap();
+    let window_attributes = winit::window::Window::default_attributes()
+        .with_inner_size(winit::dpi::PhysicalSize::new(800, 600))
+        .with_title("blade-particle");
+
+    let window = event_loop.create_window(window_attributes).unwrap();
 
     let egui_ctx = egui::Context::default();
     let viewport_id = egui_ctx.viewport_id();
-    let mut egui_winit = egui_winit::State::new(egui_ctx, viewport_id, &window, None, None);
+    let mut egui_winit = egui_winit::State::new(egui_ctx, viewport_id, &window, None, None, None);
 
     let mut example = Example::new(&window);
 

@@ -41,7 +41,7 @@ impl Example {
             .unwrap();
         let surface_info = surface.info();
 
-        let gui_painter = blade_egui::GuiPainter::new(surface_info, &context);
+        let gui_painter = blade_egui::GuiPainter::new(surface_info, &context, Default::default());
         let particle_system = particle::System::new(
             &context,
             particle::SystemDesc {

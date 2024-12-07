@@ -228,7 +228,7 @@ impl Example {
             &render_config,
         );
         pacer.end_frame(&context);
-        let gui_painter = blade_egui::GuiPainter::new(surface_info, &context);
+        let gui_painter = blade_egui::GuiPainter::new(surface_info, &context, Default::default());
 
         Self {
             scene_path: PathBuf::new(),
