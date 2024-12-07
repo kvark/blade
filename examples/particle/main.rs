@@ -242,7 +242,6 @@ impl Example {
     }
 
     fn add_gui(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(5.0);
         ui.heading("Particle System");
         self.particle_system.add_gui(ui);
 
@@ -260,6 +259,7 @@ impl Example {
                             self.context.wait_for(&sp, !0);
                         }
 
+                        let old_params = self.particle_system.params;
                         self.particle_system.destroy(&self.context);
                         self.particle_system = particle::System::new(
                             &self.context,
@@ -270,6 +270,8 @@ impl Example {
                             },
                             self.sample_count,
                         );
+                        self.particle_system.params = old_params;
+
                         if let Some(msaa_view) = self.msaa_view.take() {
                             self.context.destroy_texture_view(msaa_view);
                         }
@@ -351,7 +353,10 @@ fn main() {
                             let raw_input = egui_winit.take_egui_input(&window);
                             let egui_output = egui_winit.egui_ctx().run(raw_input, |egui_ctx| {
                                 egui::SidePanel::left("info").show(egui_ctx, |ui| {
+                                    ui.add_space(5.0);
                                     example.add_gui(ui);
+
+                                    ui.add_space(5.0);
                                     if ui.button("Quit").clicked() {
                                         target.exit();
                                     }
