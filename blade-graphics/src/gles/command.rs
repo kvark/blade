@@ -813,37 +813,55 @@ impl super::Command {
 
             Self::BlitFramebuffer { from, to } => {
                 /*
-                    TODO(ErikWDev): Validate
+                    TODO: Framebuffers could be re-used instead of being created on the fly.
+                          Currently deleted down below
                 */
-
-                let target_from = match from.inner {
-                    super::TextureInner::Renderbuffer { raw } => raw,
-                    _ => panic!("Unsupported resolve between non-renderbuffers"),
-                };
-                let target_to = match to.inner {
-                    super::TextureInner::Renderbuffer { raw } => raw,
-                    _ => panic!("Unsupported resolve between non-renderbuffers"),
-                };
-
                 let framebuf_from = gl.create_framebuffer().unwrap();
                 let framebuf_to = gl.create_framebuffer().unwrap();
 
                 gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(framebuf_from));
-                gl.framebuffer_renderbuffer(
-                    glow::READ_FRAMEBUFFER,
-                    glow::COLOR_ATTACHMENT0, // NOTE: Assuming color attachment
-                    glow::RENDERBUFFER,
-                    Some(target_from),
-                );
+                match from.inner {
+                    super::TextureInner::Renderbuffer { raw } => {
+                        gl.framebuffer_renderbuffer(
+                            glow::READ_FRAMEBUFFER,
+                            glow::COLOR_ATTACHMENT0, // NOTE: Assuming color attachment
+                            glow::RENDERBUFFER,
+                            Some(raw),
+                        );
+                    }
+                    super::TextureInner::Texture { raw, target } => {
+                        gl.framebuffer_texture_2d(
+                            glow::READ_FRAMEBUFFER,
+                            glow::COLOR_ATTACHMENT0,
+                            target,
+                            Some(raw),
+                            0,
+                        );
+                    }
+                }
 
                 gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(framebuf_to));
-                gl.framebuffer_renderbuffer(
-                    glow::DRAW_FRAMEBUFFER,
-                    glow::COLOR_ATTACHMENT0, // NOTE: Assuming color attachment
-                    glow::RENDERBUFFER,
-                    Some(target_to),
-                );
-                assert_eq!(
+                match to.inner {
+                    super::TextureInner::Renderbuffer { raw } => {
+                        gl.framebuffer_renderbuffer(
+                            glow::DRAW_FRAMEBUFFER,
+                            glow::COLOR_ATTACHMENT0, // NOTE: Assuming color attachment
+                            glow::RENDERBUFFER,
+                            Some(raw),
+                        );
+                    }
+                    super::TextureInner::Texture { raw, target } => {
+                        gl.framebuffer_texture_2d(
+                            glow::DRAW_FRAMEBUFFER,
+                            glow::COLOR_ATTACHMENT0,
+                            target,
+                            Some(raw),
+                            0,
+                        );
+                    }
+                }
+
+                debug_assert_eq!(
                     gl.check_framebuffer_status(glow::DRAW_FRAMEBUFFER),
                     glow::FRAMEBUFFER_COMPLETE,
                     "DRAW_FRAMEBUFFER is not complete"
