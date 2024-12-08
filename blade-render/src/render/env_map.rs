@@ -112,6 +112,7 @@ impl EnvironmentMap {
             array_layer_count: 1,
             mip_level_count,
             usage: blade_graphics::TextureUsage::RESOURCE | blade_graphics::TextureUsage::STORAGE,
+            sample_count: 1,
         });
         self.weight_view = gpu.create_texture_view(
             self.weight_texture,

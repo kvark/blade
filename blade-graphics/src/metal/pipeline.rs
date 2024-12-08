@@ -420,6 +420,8 @@ impl crate::traits::ShaderDevice for super::Context {
                 },
             );
             descriptor.set_vertex_function(Some(&vs.function));
+            descriptor.set_raster_sample_count(desc.multisample_state.sample_count as _);
+            descriptor.set_alpha_to_coverage_enabled(desc.multisample_state.alpha_to_coverage);
 
             // Fragment shader
             let fs = self.load_shader(

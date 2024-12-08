@@ -29,6 +29,7 @@ impl EnvMapSampler {
             mip_level_count: 1,
             dimension: gpu::TextureDimension::D2,
             usage: gpu::TextureUsage::TARGET,
+            sample_count: 1,
         });
         let accum_view = context.create_texture_view(
             accum_texture,
@@ -57,6 +58,7 @@ impl EnvMapSampler {
                 blend: None,
                 write_mask: gpu::ColorWrites::ALL,
             }],
+            multisample_state: gpu::MultisampleState::default(),
         });
         let accum_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
             name: "env-accum",
@@ -74,6 +76,7 @@ impl EnvMapSampler {
                 blend: Some(gpu::BlendState::ADDITIVE),
                 write_mask: gpu::ColorWrites::RED,
             }],
+            multisample_state: gpu::MultisampleState::default(),
         });
 
         Self {

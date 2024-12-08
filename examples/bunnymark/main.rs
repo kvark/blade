@@ -123,6 +123,7 @@ impl Example {
                 blend: Some(gpu::BlendState::ALPHA_BLENDING),
                 write_mask: gpu::ColorWrites::default(),
             }],
+            multisample_state: gpu::MultisampleState::default(),
         });
 
         let extent = gpu::Extent {
@@ -138,6 +139,7 @@ impl Example {
             array_layer_count: 1,
             mip_level_count: 1,
             usage: gpu::TextureUsage::RESOURCE | gpu::TextureUsage::COPY,
+            sample_count: 1,
         });
         let view = context.create_texture_view(
             texture,

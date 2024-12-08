@@ -190,9 +190,33 @@ fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo<'s
                 },
             }
         };
+
         vk_info.load_op = vk::AttachmentLoadOp::CLEAR;
         vk_info.clear_value = cv;
     }
+
+    if let crate::FinishOp::ResolveTo(resolve_view) = rt.finish_op {
+        vk_info = vk_info
+            .resolve_image_view(resolve_view.raw)
+            .resolve_image_layout(vk::ImageLayout::GENERAL)
+            .resolve_mode(vk::ResolveModeFlags::AVERAGE);
+    }
+
+    vk_info.store_op = match rt.finish_op {
+        crate::FinishOp::Store => vk::AttachmentStoreOp::STORE,
+        crate::FinishOp::Discard => vk::AttachmentStoreOp::DONT_CARE,
+        crate::FinishOp::Ignore => vk::AttachmentStoreOp::DONT_CARE,
+        crate::FinishOp::ResolveTo(..) => {
+            /*
+                TODO: DONT_CARE is most optimal in many cases where the msaa texture itself is never read afterwards but only the resolved,
+                      but how can the user specify this in blade?
+                      https://docs.vulkan.org/samples/latest/samples/performance/msaa/README.html#_best_practice_summary
+            */
+
+            // vk::AttachmentStoreOp::STORE
+            vk::AttachmentStoreOp::DONT_CARE
+        }
+    };
 
     vk_info
 }

@@ -7,6 +7,9 @@
 /blade-asset/cooked
 /_failure.wgsl
 
+libEGL.dylib
+libGLESv2.dylib
+
 .DS_Store
 /.vs
 /.vscode

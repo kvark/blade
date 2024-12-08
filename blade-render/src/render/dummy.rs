@@ -29,6 +29,7 @@ impl DummyResources {
             mip_level_count: 1,
             dimension: blade_graphics::TextureDimension::D2,
             usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
+            sample_count: 1,
         });
         let white_view = gpu.create_texture_view(
             white_texture,
@@ -47,6 +48,7 @@ impl DummyResources {
             mip_level_count: 1,
             dimension: blade_graphics::TextureDimension::D2,
             usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
+            sample_count: 1,
         });
         let black_view = gpu.create_texture_view(
             black_texture,
@@ -65,6 +67,7 @@ impl DummyResources {
             mip_level_count: 1,
             dimension: blade_graphics::TextureDimension::D2,
             usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
+            sample_count: 1,
         });
         let red_view = gpu.create_texture_view(
             red_texture,
