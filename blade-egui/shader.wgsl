@@ -21,10 +21,10 @@ struct Vertex {
 }
 var<storage, read> r_vertex_data: array<Vertex>;
 
-fn linear_from_srgb(srgb: vec3<f32>) -> vec3<f32> {
-    let cutoff = srgb < vec3<f32>(10.31475);
-    let lower = srgb / vec3<f32>(3294.6);
-    let higher = pow((srgb + vec3<f32>(14.025)) / vec3<f32>(269.025), vec3<f32>(2.4));
+fn linear_from_gamma(srgb: vec3<f32>) -> vec3<f32> {
+    let cutoff = srgb < vec3<f32>(0.04045);
+    let lower = srgb / vec3<f32>(12.92);
+    let higher = pow((srgb + vec3<f32>(0.055)) / vec3<f32>(1.055), vec3<f32>(2.4));
     return select(higher, lower, cutoff);
 }
 
@@ -35,8 +35,7 @@ fn vs_main(
     let input = r_vertex_data[v_index];
     var out: VertexOutput;
     out.tex_coord = vec2<f32>(input.tex_coord_x, input.tex_coord_y);
-    let color = unpack4x8unorm(input.color);
-    out.color = vec4<f32>(pow(color.xyz, vec3<f32>(2.2)), color.a);
+    out.color = unpack4x8unorm(input.color);
     out.position = vec4<f32>(
         2.0 * input.pos_x / r_uniforms.screen_size.x - 1.0,
         1.0 - 2.0 * input.pos_y / r_uniforms.screen_size.y,
@@ -51,5 +50,9 @@ var r_sampler: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return in.color * textureSample(r_texture, r_sampler, in.tex_coord);
+    //Note: we always assume rendering to linear color space,
+    // but Egui wants to blend in gamma space, see
+    // https://github.com/emilk/egui/pull/2071
+    let blended = in.color * textureSample(r_texture, r_sampler, in.tex_coord);
+    return vec4f(linear_from_gamma(blended.xyz), blended.a);
 }

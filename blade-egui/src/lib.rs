@@ -62,7 +62,7 @@ struct GuiTexture {
 
 impl GuiTexture {
     fn create(context: &blade_graphics::Context, name: &str, size: blade_graphics::Extent) -> Self {
-        let format = blade_graphics::TextureFormat::Rgba8UnormSrgb;
+        let format = blade_graphics::TextureFormat::Rgba8Unorm;
         let allocation = context.create_texture(blade_graphics::TextureDesc {
             name,
             format,
@@ -147,7 +147,18 @@ impl GuiPainter {
             fragment: shader.at("fs_main"),
             color_targets: &[blade_graphics::ColorTargetState {
                 format: info.format,
-                blend: Some(blade_graphics::BlendState::ALPHA_BLENDING),
+                blend: Some(blade_graphics::BlendState {
+                    color: blade_graphics::BlendComponent {
+                        src_factor: blade_graphics::BlendFactor::One,
+                        dst_factor: blade_graphics::BlendFactor::OneMinusSrcAlpha,
+                        operation: blade_graphics::BlendOperation::Add,
+                    },
+                    alpha: blade_graphics::BlendComponent {
+                        src_factor: blade_graphics::BlendFactor::OneMinusDstAlpha,
+                        dst_factor: blade_graphics::BlendFactor::One,
+                        operation: blade_graphics::BlendOperation::Add,
+                    },
+                }),
                 write_mask: blade_graphics::ColorWrites::all(),
             }],
         });

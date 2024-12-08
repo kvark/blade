@@ -18,6 +18,8 @@ Changelog for Blade
     - destroy old surface on resize
   - Vulkan:
     - support unused bind groups
+- egui:
+  - fix blending color space
 
 ## blade-egui-0.5 (09 Nov 2024)
 
