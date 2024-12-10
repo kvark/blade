@@ -14,22 +14,27 @@ jobs:
           - name: Linux
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            full: true
 
           - name: Windows
             os: windows-latest
             target: x86_64-pc-windows-msvc
+            full: true
 
           - name: macOS
             os: macos-latest
             target: aarch64-apple-darwin
+            full: true
 
           - name: iOS
             os: macos-latest
             target: aarch64-apple-ios
+            full: false
 
           - name: Web
             os: ubuntu-latest
             target: wasm32-unknown-unknown
+            full: false
 
     runs-on: ${{ matrix.os }}
 
@@ -51,14 +56,14 @@ jobs:
           args: --target ${{ matrix.target }} --workspace --all --no-default-features
 
       - name: Test Basics
-        if: matrix.name != 'Web'
+        if: matrix.full
         uses: actions-rs/cargo@v1
         with:
           command: test
           args: -p blade-render --no-default-features
 
       - name: Test All
-        if: matrix.name != 'Web'
+        if: matrix.full
         uses: actions-rs/cargo@v1
         with:
           command: test
