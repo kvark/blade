@@ -503,9 +503,16 @@ impl crate::traits::ShaderDevice for super::Context {
             .scissor_count(1)
             .viewport_count(1);
 
-        let vk_sample_mask = [1u32, 0];
+        let vk_sample_mask = [
+            desc.multisample_state.sample_mask as u32,
+            (desc.multisample_state.sample_mask >> 32) as u32,
+        ];
+
         let vk_multisample = vk::PipelineMultisampleStateCreateInfo::default()
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1)
+            .rasterization_samples(vk::SampleCountFlags::from_raw(
+                desc.multisample_state.sample_count,
+            ))
+            .alpha_to_coverage_enable(desc.multisample_state.alpha_to_coverage)
             .sample_mask(&vk_sample_mask);
 
         let mut d_format = vk::Format::UNDEFINED;

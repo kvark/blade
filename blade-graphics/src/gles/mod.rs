@@ -274,6 +274,10 @@ enum Command {
         size: crate::Extent,
     },
     ResetFramebuffer,
+    BlitFramebuffer {
+        from: TextureView,
+        to: TextureView,
+    },
     BindAttachment {
         attachment: u32,
         view: TextureView,

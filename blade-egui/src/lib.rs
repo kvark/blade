@@ -85,6 +85,7 @@ impl GuiTexture {
             mip_level_count: 1,
             dimension: blade_graphics::TextureDimension::D2,
             usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
+            sample_count: 1,
         });
         let view = context.create_texture_view(
             allocation,
@@ -199,6 +200,7 @@ impl GuiPainter {
                 }),
                 write_mask: blade_graphics::ColorWrites::all(),
             }],
+            multisample_state: Default::default(),
         });
 
         let belt = BufferBelt::new(BufferBeltDescriptor {

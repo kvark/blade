@@ -128,12 +128,24 @@ impl crate::traits::ResourceDevice for super::Context {
             let raw = unsafe { gl.create_renderbuffer().unwrap() };
             unsafe {
                 gl.bind_renderbuffer(glow::RENDERBUFFER, Some(raw));
-                gl.renderbuffer_storage(
-                    glow::RENDERBUFFER,
-                    format_desc.internal,
-                    desc.size.width as i32,
-                    desc.size.height as i32,
-                );
+
+                if desc.sample_count <= 1 {
+                    gl.renderbuffer_storage(
+                        glow::RENDERBUFFER,
+                        format_desc.internal,
+                        desc.size.width as i32,
+                        desc.size.height as i32,
+                    );
+                } else {
+                    gl.renderbuffer_storage_multisample(
+                        glow::RENDERBUFFER,
+                        desc.sample_count as i32,
+                        format_desc.internal,
+                        desc.size.width as i32,
+                        desc.size.height as i32,
+                    );
+                }
+
                 gl.bind_renderbuffer(glow::RENDERBUFFER, None);
                 #[cfg(not(target_arch = "wasm32"))]
                 if !desc.name.is_empty() && gl.supports_debug() {
@@ -144,11 +156,16 @@ impl crate::traits::ResourceDevice for super::Context {
                     );
                 }
             }
+
             super::TextureInner::Renderbuffer { raw }
         } else {
             let raw = unsafe { gl.create_texture().unwrap() };
+
             let target = match desc.dimension {
                 crate::TextureDimension::D1 => {
+                    if desc.sample_count > 1 {
+                        log::warn!("Sample count is ignored: not supported for 1D textures",);
+                    }
                     if desc.array_layer_count > 1 {
                         glow::TEXTURE_1D_ARRAY
                     } else {
@@ -157,12 +174,25 @@ impl crate::traits::ResourceDevice for super::Context {
                 }
                 crate::TextureDimension::D2 => {
                     if desc.array_layer_count > 1 {
-                        glow::TEXTURE_2D_ARRAY
+                        if desc.sample_count <= 1 {
+                            glow::TEXTURE_2D_ARRAY
+                        } else {
+                            glow::TEXTURE_2D_MULTISAMPLE_ARRAY
+                        }
                     } else {
-                        glow::TEXTURE_2D
+                        if desc.sample_count <= 1 {
+                            glow::TEXTURE_2D
+                        } else {
+                            glow::TEXTURE_2D_MULTISAMPLE
+                        }
                     }
                 }
-                crate::TextureDimension::D3 => glow::TEXTURE_3D,
+                crate::TextureDimension::D3 => {
+                    if desc.sample_count > 1 {
+                        log::warn!("Sample count is ignored: not supported for 3D textures",);
+                    }
+                    glow::TEXTURE_3D
+                }
             };
 
             unsafe {
@@ -184,13 +214,25 @@ impl crate::traits::ResourceDevice for super::Context {
                         );
                     }
                     crate::TextureDimension::D2 => {
-                        gl.tex_storage_2d(
-                            target,
-                            desc.mip_level_count as i32,
-                            format_desc.internal,
-                            desc.size.width as i32,
-                            desc.size.height as i32,
-                        );
+                        if desc.sample_count <= 1 {
+                            gl.tex_storage_2d(
+                                target,
+                                desc.mip_level_count as i32,
+                                format_desc.internal,
+                                desc.size.width as i32,
+                                desc.size.height as i32,
+                            );
+                        } else {
+                            assert_eq!(desc.mip_level_count, 1);
+                            gl.tex_storage_2d_multisample(
+                                target,
+                                desc.sample_count as i32,
+                                format_desc.internal,
+                                desc.size.width as i32,
+                                desc.size.height as i32,
+                                true,
+                            );
+                        }
                     }
                     crate::TextureDimension::D1 => {
                         gl.tex_storage_1d(

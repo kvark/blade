@@ -252,7 +252,7 @@ impl crate::traits::ResourceDevice for super::Context {
         let mut create_flags = vk::ImageCreateFlags::empty();
         if desc.dimension == crate::TextureDimension::D2
             && desc.size.depth % 6 == 0
-            //&& desc.sample_count == 1
+            && desc.sample_count == 1
             && desc.size.width == desc.size.height
         {
             create_flags |= vk::ImageCreateFlags::CUBE_COMPATIBLE;
@@ -265,13 +265,17 @@ impl crate::traits::ResourceDevice for super::Context {
             extent: super::map_extent_3d(&desc.size),
             mip_levels: desc.mip_level_count,
             array_layers: desc.array_layer_count,
-            samples: vk::SampleCountFlags::from_raw(1), // desc.sample_count
+            samples: vk::SampleCountFlags::from_raw(desc.sample_count),
             tiling: vk::ImageTiling::OPTIMAL,
             usage: map_texture_usage(desc.usage, desc.format.aspects()),
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             ..Default::default()
         };
 
+        /*
+            TODO(ErikWDev): Support lazily allocated texture with transient allocation for efficient msaa?
+                            Measure bandwidth usage!
+        */
         let raw = unsafe { self.device.core.create_image(&vk_info, None).unwrap() };
         let requirements = unsafe { self.device.core.get_image_memory_requirements(raw) };
         let allocation = self.allocate_memory(requirements, crate::Memory::Device);

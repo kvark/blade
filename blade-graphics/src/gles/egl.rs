@@ -357,7 +357,8 @@ impl super::Context {
                 let window_ptr = unsafe {
                     use objc::{msg_send, runtime::Object, sel, sel_impl};
                     // ns_view always have a layer and don't need to verify that it exists.
-                    let layer: *mut Object = msg_send![handle.ns_view.as_ptr(), layer];
+                    let layer: *mut Object =
+                        msg_send![handle.ns_view.as_ptr() as *mut Object, layer];
                     layer as *mut ffi::c_void
                 };
                 window_ptr

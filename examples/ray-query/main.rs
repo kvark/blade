@@ -82,6 +82,7 @@ impl Example {
             dimension: gpu::TextureDimension::D2,
             array_layer_count: 1,
             mip_level_count: 1,
+            sample_count: 1,
             usage: gpu::TextureUsage::RESOURCE | gpu::TextureUsage::STORAGE,
         });
         let target_view = context.create_texture_view(
@@ -115,6 +116,7 @@ impl Example {
             fragment: shader.at("draw_fs"),
             color_targets: &[surface.info().format.into()],
             depth_stencil: None,
+            multisample_state: Default::default(),
         });
 
         let (indices, vertex_values) =

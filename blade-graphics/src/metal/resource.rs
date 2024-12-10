@@ -22,14 +22,26 @@ fn map_texture_usage(usage: crate::TextureUsage) -> metal::MTLTextureUsage {
     mtl_usage
 }
 
-fn map_view_dimension(dimension: crate::ViewDimension) -> metal::MTLTextureType {
+fn map_view_dimension(dimension: crate::ViewDimension, sample_count: u64) -> metal::MTLTextureType {
     use crate::ViewDimension as Vd;
     use metal::MTLTextureType::*;
     match dimension {
         Vd::D1 => D1,
         Vd::D1Array => D1Array,
-        Vd::D2 => D2,
-        Vd::D2Array => D2Array,
+        Vd::D2 => {
+            if sample_count <= 1 {
+                D2
+            } else {
+                D2Multisample
+            }
+        }
+        Vd::D2Array => {
+            if sample_count <= 1 {
+                D2Array
+            } else {
+                D2MultisampleArray
+            }
+        }
         Vd::D3 => D3,
         Vd::Cube => Cube,
         Vd::CubeArray => CubeArray,
@@ -179,9 +191,17 @@ impl crate::traits::ResourceDevice for super::Context {
             }
             crate::TextureDimension::D2 => {
                 if desc.array_layer_count > 1 {
-                    metal::MTLTextureType::D2Array
+                    if desc.sample_count <= 1 {
+                        metal::MTLTextureType::D2Array
+                    } else {
+                        metal::MTLTextureType::D2MultisampleArray
+                    }
                 } else {
-                    metal::MTLTextureType::D2
+                    if desc.sample_count <= 1 {
+                        metal::MTLTextureType::D2
+                    } else {
+                        metal::MTLTextureType::D2Multisample
+                    }
                 }
             }
             crate::TextureDimension::D3 => metal::MTLTextureType::D3,
@@ -198,6 +218,7 @@ impl crate::traits::ResourceDevice for super::Context {
             descriptor.set_array_length(desc.array_layer_count as u64);
             descriptor.set_mipmap_level_count(desc.mip_level_count as u64);
             descriptor.set_pixel_format(mtl_format);
+            descriptor.set_sample_count(desc.sample_count as _);
             descriptor.set_usage(mtl_usage);
             descriptor.set_storage_mode(metal::MTLStorageMode::Private);
 
@@ -225,7 +246,7 @@ impl crate::traits::ResourceDevice for super::Context {
     ) -> super::TextureView {
         let texture = texture.as_ref();
         let mtl_format = super::map_texture_format(desc.format);
-        let mtl_type = map_view_dimension(desc.dimension);
+        let mtl_type = map_view_dimension(desc.dimension, texture.sample_count());
         let mip_level_count = match desc.subresources.mip_level_count {
             Some(count) => count.get() as u64,
             None => texture.mipmap_level_count() - desc.subresources.base_mip_level as u64,
