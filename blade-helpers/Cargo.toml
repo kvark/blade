@@ -13,7 +13,7 @@ publish = false
 [features]
 
 [dependencies]
-blade-render = { version = "0.3", path = "../blade-render" }
+blade-render = { version = "0.4", path = "../blade-render" }
 egui = { workspace = true }
 glam = { workspace = true }
 mint = { workspace = true }

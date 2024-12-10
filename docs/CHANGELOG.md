@@ -1,16 +1,20 @@
-Changelog for Blade
+Changelog for *Blade* project
 
-## blade-graphics-0.6 (TBD)
+## blade-graphics-0.6, blade-util-0.2, blade-egui-0.6, blade-render-0.4, blade-0.3 (21 Dec 2024)
 
 - graphics:
-  - return detailed initialization errors
   - API for surface creation
     - allows multiple windows used by the same context
+  - multi-sampling support
   - API for destruction of pipelines
+  - return detailed initialization errors
   - every pass now takes a label
   - automatic GPU pass markers
   - ability to capture pass GPU timings
   - ability to force the use of a specific GPU
+  - ability to set viewport
+  - fragment shader is optional
+  - support more texture formats
   - Metal:
     - migrate to "objc2"
     - support for workgroup memory

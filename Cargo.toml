@@ -33,7 +33,7 @@ winit = { version = "0.30" }
 [package]
 name = "blade"
 description = "Sharp and simple graphics library"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.65"
 keywords = ["graphics"]
@@ -45,10 +45,10 @@ readme = "docs/README.md"
 
 [dependencies]
 blade-asset = { version = "0.2", path = "blade-asset" }
-blade-egui = { version = "0.5", path = "blade-egui" }
-blade-graphics = { version = "0.5", path = "blade-graphics" }
+blade-egui = { version = "0.6", path = "blade-egui" }
+blade-graphics = { version = "0.6", path = "blade-graphics" }
 blade-helpers = { version = "0.1", path = "blade-helpers" }
-blade-util = { version = "0.1", path = "blade-util" }
+blade-util = { version = "0.2", path = "blade-util" }
 base64 = { workspace = true }
 choir = { workspace = true }
 colorsys = "0.6"
@@ -65,13 +65,14 @@ slab = "0.4"
 winit = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-blade-render = { version = "0.3", path = "blade-render" }
+blade-render = { version = "0.4", path = "blade-render" }
 
 [dev-dependencies]
 blade-macros = { version = "0.3", path = "blade-macros" }
 bytemuck = { workspace = true }
 choir = { workspace = true }
 egui = { workspace = true }
+egui-winit = { version="0.29", default-features=false, features=["links"] }
 transform-gizmo-egui = { git = "https://github.com/urholaukkarinen/transform-gizmo", rev = "7556fb38b37f3772c57dd0fae6a276976d314f9b" }
 env_logger = "0.11"
 glam = { workspace = true }
@@ -83,20 +84,11 @@ profiling = { workspace = true }
 ron = "0.8"
 serde = { version = "1", features = ["serde_derive"] }
 strum = { workspace = true }
+# not following semver :(
 del-msh-core = "=0.1.33"
 del-geo = "=0.1.29"
 
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# see https://github.com/emilk/egui/issues/4270
-egui-winit = { version = "0.29", default-features = false, features = [
-    "links",
-] }
-
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-# see https://github.com/emilk/egui/issues/4270
-egui-winit = { version = "0.29", default-features = false, features = [
-    "links",
-] }
 console_error_panic_hook = "0.1.7"
 console_log = "1"
 web-sys = { workspace = true, features = ["Window"] }
@@ -122,4 +114,3 @@ allowed_external_types = [
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }
-# not following semver :(

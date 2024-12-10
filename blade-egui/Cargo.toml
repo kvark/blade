@@ -1,6 +1,6 @@
 [package]
 name = "blade-egui"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "egui integration for Blade"
 keywords = ["graphics"]
@@ -10,9 +10,9 @@ repository = "https://github.com/kvark/blade"
 [lib]
 
 [dependencies]
-blade-graphics = { version = "0.5", path = "../blade-graphics" }
+blade-graphics = { version = "0.6", path = "../blade-graphics" }
 blade-macros = { version = "0.3", path = "../blade-macros" }
-blade-util = { version = "0.1", path = "../blade-util" }
+blade-util = { version = "0.2", path = "../blade-util" }
 egui = { workspace = true, features = ["bytemuck"] }
 bytemuck = { workspace = true }
 profiling = { workspace = true }
