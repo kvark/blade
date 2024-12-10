@@ -1,6 +1,6 @@
 [package]
 name = "blade-render"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Renderer built on Blade"
 keywords = ["graphics", "engine"]
@@ -28,7 +28,7 @@ asset = [
 [dependencies]
 base64 = { workspace = true, optional = true }
 bitflags = { workspace = true }
-blade-graphics = { version = "0.5", path = "../blade-graphics" }
+blade-graphics = { version = "0.6", path = "../blade-graphics" }
 blade-asset = { version = "0.2", path = "../blade-asset" }
 blade-macros = { version = "0.3", path = "../blade-macros" }
 bytemuck = { workspace = true }
