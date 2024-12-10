@@ -6,14 +6,13 @@ description = "Helper classes for Blade apps"
 keywords = ["graphics", "engine"]
 license = "MIT"
 repository = "https://github.com/kvark/blade"
-publish = false
 
 [lib]
 
 [features]
 
 [dependencies]
-blade-render = { version = "0.3", path = "../blade-render" }
+blade-render = { version = "0.4", path = "../blade-render" }
 egui = { workspace = true }
 glam = { workspace = true }
 mint = { workspace = true }

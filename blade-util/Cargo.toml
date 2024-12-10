@@ -1,6 +1,6 @@
 [package]
 name = "blade-util"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Utility logic for Blade applications"
 keywords = ["graphics"]
@@ -10,7 +10,7 @@ repository = "https://github.com/kvark/blade"
 [lib]
 
 [dependencies]
-blade-graphics = { version = "0.5", path = "../blade-graphics" }
+blade-graphics = { version = "0.6", path = "../blade-graphics" }
 bytemuck = { workspace = true }
 log = { workspace = true }
 profiling = { workspace = true }
