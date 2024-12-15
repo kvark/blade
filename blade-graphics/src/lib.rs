@@ -287,6 +287,7 @@ pub enum TextureFormat {
     Bgra8UnormSrgb,
     Rgba8Snorm,
     R16Float,
+    Rg16Float,
     Rgba16Float,
     R32Float,
     Rg32Float,
@@ -307,6 +308,15 @@ pub enum TextureFormat {
     Bc4Snorm,
     Bc5Unorm,
     Bc5Snorm,
+    Bc6UFloat,
+    Bc6SFloat,
+    Bc7Unorm,
+    Bc7UnormSrgb,
+    // packed 32-bit
+    Rgb10a2Unorm,
+    Bgr10a2Unorm,
+    Rg11b10Float,
+    Rgb9e5Float,
 }
 
 #[derive(Clone, Copy, Debug)]
