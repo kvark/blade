@@ -315,6 +315,7 @@ fn map_texture_format(format: crate::TextureFormat) -> metal::MTLPixelFormat {
         Tf::Bgra8UnormSrgb => BGRA8Unorm_sRGB,
         Tf::Rgba8Snorm => RGBA8Snorm,
         Tf::R16Float => R16Float,
+        Tf::Rg16Float => RG16Float,
         Tf::Rgba16Float => RGBA16Float,
         Tf::R32Float => R32Float,
         Tf::Rg32Float => RG32Float,
@@ -333,6 +334,14 @@ fn map_texture_format(format: crate::TextureFormat) -> metal::MTLPixelFormat {
         Tf::Bc4Snorm => BC4_RSnorm,
         Tf::Bc5Unorm => BC5_RGUnorm,
         Tf::Bc5Snorm => BC5_RGSnorm,
+        Tf::Bc6hUfloat => BC6H_RGBUfloat,
+        Tf::Bc6hSfloat => BC6H_RGBFloat,
+        Tf::Bc7Unorm => BC7_RGBAUnorm,
+        Tf::Bc7UnormSrgb => BC7_RGBAUnorm_sRGB,
+        Tf::Rgb10a2Unorm => RGB10A2Unorm,
+        Tf::Bgr10a2Unorm => BGR10A2Unorm,
+        Tf::Rg11b10Float => RG11B10Float,
+        Tf::Rgb9e5Ufloat => RGB9E5Float,
     }
 }
 
