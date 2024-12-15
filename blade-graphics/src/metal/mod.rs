@@ -339,8 +339,7 @@ fn map_texture_format(format: crate::TextureFormat) -> metal::MTLPixelFormat {
         Tf::Bc7Unorm => BC7_RGBAUnorm,
         Tf::Bc7UnormSrgb => BC7_RGBAUnorm_sRGB,
         Tf::Rgb10a2Unorm => RGB10A2Unorm,
-        Tf::Bgr10a2Unorm => BGR10A2Unorm,
-        Tf::Rg11b10Float => RG11B10Float,
+        Tf::Rg11b10Ufloat => RG11B10Float,
         Tf::Rgb9e5Ufloat => RGB9E5Float,
     }
 }

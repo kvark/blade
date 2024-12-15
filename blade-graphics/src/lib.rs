@@ -314,8 +314,7 @@ pub enum TextureFormat {
     Bc7UnormSrgb,
     // packed 32-bit
     Rgb10a2Unorm,
-    Bgr10a2Unorm,
-    Rg11b10Float,
+    Rg11b10Ufloat,
     Rgb9e5Ufloat,
 }
 
