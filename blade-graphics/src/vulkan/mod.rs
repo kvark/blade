@@ -557,14 +557,14 @@ fn map_texture_format(format: crate::TextureFormat) -> vk::Format {
         Tf::Bc4Snorm => vk::Format::BC4_SNORM_BLOCK,
         Tf::Bc5Unorm => vk::Format::BC5_UNORM_BLOCK,
         Tf::Bc5Snorm => vk::Format::BC5_SNORM_BLOCK,
-        Tf::Bc6UFloat => vk::Format::BC6H_UFLOAT_BLOCK,
-        Tf::Bc6SFloat => vk::Format::BC6H_SFLOAT_BLOCK,
+        Tf::Bc6hUfloat => vk::Format::BC6H_UFLOAT_BLOCK,
+        Tf::Bc6hSfloat => vk::Format::BC6H_SFLOAT_BLOCK,
         Tf::Bc7Unorm => vk::Format::BC7_UNORM_BLOCK,
         Tf::Bc7UnormSrgb => vk::Format::BC7_SRGB_BLOCK,
         Tf::Rgb10a2Unorm => vk::Format::A2R10G10B10_UNORM_PACK32,
         Tf::Bgr10a2Unorm => vk::Format::A2B10G10R10_UNORM_PACK32,
         Tf::Rg11b10Float => vk::Format::B10G11R11_UFLOAT_PACK32,
-        Tf::Rgb9e5Float => vk::Format::E5B9G9R9_UFLOAT_PACK32,
+        Tf::Rgb9e5Ufloat => vk::Format::E5B9G9R9_UFLOAT_PACK32,
     }
 }
 
