@@ -85,7 +85,7 @@ impl super::TextureFormat {
             Self::Bc5Unorm => cx_bc(16),
             Self::Bc5Snorm => cx_bc(16),
             Self::Bc6hUfloat => cx_bc(16),
-            Self::Bc6hSfloat => cx_bc(16),
+            Self::Bc6hFloat => cx_bc(16),
             Self::Bc7Unorm => cx_bc(16),
             Self::Bc7UnormSrgb => cx_bc(16),
             Self::Rgb10a2Unorm => uncompressed(4),

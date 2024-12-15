@@ -624,7 +624,7 @@ fn describe_texture_format(format: crate::TextureFormat) -> FormatInfo {
         Tf::Bc5Unorm => (glow::COMPRESSED_RG_RGTC2, glow::RG, 0),
         Tf::Bc5Snorm => (glow::COMPRESSED_SIGNED_RG_RGTC2, glow::RG, 0),
         Tf::Bc6hUfloat => (glow::COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT, glow::RGB, 0),
-        Tf::Bc6hSfloat => (glow::COMPRESSED_RGB_BPTC_SIGNED_FLOAT, glow::RGB, 0),
+        Tf::Bc6hFloat => (glow::COMPRESSED_RGB_BPTC_SIGNED_FLOAT, glow::RGB, 0),
         Tf::Bc7Unorm => (glow::COMPRESSED_RGBA_BPTC_UNORM, glow::RGBA, 0),
         Tf::Bc7UnormSrgb => (glow::COMPRESSED_SRGB_ALPHA_BPTC_UNORM, glow::RGBA, 0),
         Tf::Rgb10a2Unorm => (

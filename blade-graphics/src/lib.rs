@@ -309,7 +309,7 @@ pub enum TextureFormat {
     Bc5Unorm,
     Bc5Snorm,
     Bc6hUfloat,
-    Bc6hSfloat,
+    Bc6hFloat,
     Bc7Unorm,
     Bc7UnormSrgb,
     // packed 32-bit
