@@ -271,6 +271,10 @@ impl Example {
                             self.sample_count,
                         );
                         self.particle_system.params = old_params;
+                        self.command_encoder.start();
+                        self.particle_system.reset(&mut self.command_encoder);
+                        let sp = self.context.submit(&mut self.command_encoder);
+                        self.context.wait_for(&sp, !0);
 
                         if let Some(msaa_view) = self.msaa_view.take() {
                             self.context.destroy_texture_view(msaa_view);
