@@ -603,8 +603,9 @@ fn describe_texture_format(format: crate::TextureFormat) -> FormatInfo {
         Tf::Bgra8Unorm => (glow::RGBA8, glow::BGRA, glow::UNSIGNED_BYTE),
         Tf::Bgra8UnormSrgb => (glow::SRGB8_ALPHA8, glow::BGRA, glow::UNSIGNED_BYTE),
         Tf::Rgba8Snorm => (glow::RGBA8, glow::RGBA, glow::BYTE),
-        Tf::R16Float => (glow::R16F, glow::RED, glow::FLOAT),
-        Tf::Rgba16Float => (glow::RGBA16F, glow::RGBA, glow::FLOAT),
+        Tf::R16Float => (glow::R16F, glow::RED, glow::HALF_FLOAT),
+        Tf::Rg16Float => (glow::RG16F, glow::RG, glow::HALF_FLOAT),
+        Tf::Rgba16Float => (glow::RGBA16F, glow::RGBA, glow::HALF_FLOAT),
         Tf::R32Float => (glow::R32F, glow::RED, glow::FLOAT),
         Tf::Rg32Float => (glow::RG32F, glow::RG, glow::FLOAT),
         Tf::Rgba32Float => (glow::RGBA32F, glow::RGBA, glow::FLOAT),
@@ -622,6 +623,21 @@ fn describe_texture_format(format: crate::TextureFormat) -> FormatInfo {
         Tf::Bc4Snorm => (glow::COMPRESSED_SIGNED_RED_RGTC1, glow::RED, 0),
         Tf::Bc5Unorm => (glow::COMPRESSED_RG_RGTC2, glow::RG, 0),
         Tf::Bc5Snorm => (glow::COMPRESSED_SIGNED_RG_RGTC2, glow::RG, 0),
+        Tf::Bc6hUfloat => (glow::COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT, glow::RGB, 0),
+        Tf::Bc6hFloat => (glow::COMPRESSED_RGB_BPTC_SIGNED_FLOAT, glow::RGB, 0),
+        Tf::Bc7Unorm => (glow::COMPRESSED_RGBA_BPTC_UNORM, glow::RGBA, 0),
+        Tf::Bc7UnormSrgb => (glow::COMPRESSED_SRGB_ALPHA_BPTC_UNORM, glow::RGBA, 0),
+        Tf::Rgb10a2Unorm => (
+            glow::RGB10_A2,
+            glow::RGBA,
+            glow::UNSIGNED_INT_2_10_10_10_REV,
+        ),
+        Tf::Rg11b10Ufloat => (
+            glow::R11F_G11F_B10F,
+            glow::RGB,
+            glow::UNSIGNED_INT_10F_11F_11F_REV,
+        ),
+        Tf::Rgb9e5Ufloat => (glow::RGB9_E5, glow::RGB, glow::UNSIGNED_INT_5_9_9_9_REV),
     };
     FormatInfo {
         internal,
