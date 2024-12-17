@@ -1,3 +1,5 @@
+use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2_metal::{self as metal, MTLDevice};
 use std::{
     marker::PhantomData,
     ptr,
@@ -5,42 +7,39 @@ use std::{
     thread, time,
 };
 
-use metal::foreign_types::{ForeignType as _, ForeignTypeRef as _};
-
 mod command;
 mod pipeline;
 mod resource;
 mod surface;
 
-const MAX_TIMESTAMPS: u64 = crate::limits::PASS_COUNT as u64 * 2;
+const MAX_TIMESTAMPS: usize = crate::limits::PASS_COUNT * 2;
 
 pub type PlatformError = ();
 
 pub struct Surface {
-    view: *mut objc::runtime::Object,
-    render_layer: metal::MetalLayer,
+    view: Option<objc2::rc::Retained<objc2::runtime::NSObject>>,
+    render_layer: Retained<objc2_quartz_core::CAMetalLayer>,
     info: crate::SurfaceInfo,
 }
 
-unsafe impl Send for Surface {}
-unsafe impl Sync for Surface {}
-
 #[derive(Debug)]
 pub struct Frame {
-    drawable: metal::MetalDrawable,
-    texture: metal::Texture,
+    drawable: Retained<ProtocolObject<dyn metal::MTLDrawable>>,
+    texture: Retained<ProtocolObject<dyn metal::MTLTexture>>,
 }
 
+unsafe impl Send for Frame {}
+unsafe impl Sync for Frame {}
 impl Frame {
     pub fn texture(&self) -> Texture {
         Texture {
-            raw: self.texture.as_ptr(),
+            raw: Retained::as_ptr(&self.texture) as *mut _,
         }
     }
 
     pub fn texture_view(&self) -> TextureView {
         TextureView {
-            raw: self.texture.as_ptr(),
+            raw: Retained::as_ptr(&self.texture) as *mut _,
         }
     }
 }
@@ -50,20 +49,24 @@ struct PrivateInfo {
     language_version: metal::MTLLanguageVersion,
     enable_debug_groups: bool,
     enable_dispatch_type: bool,
-    timestamp_counter_set: Option<metal::CounterSet>,
 }
 
 pub struct Context {
-    device: Mutex<metal::Device>,
-    queue: Arc<Mutex<metal::CommandQueue>>,
-    capture: Option<metal::CaptureManager>,
+    device: Mutex<Retained<ProtocolObject<dyn metal::MTLDevice>>>,
+    queue: Arc<Mutex<Retained<ProtocolObject<dyn metal::MTLCommandQueue>>>>,
+    capture: Option<Retained<metal::MTLCaptureManager>>,
+    timestamp_counter_set: Option<Retained<ProtocolObject<dyn metal::MTLCounterSet>>>,
     info: PrivateInfo,
     device_information: crate::DeviceInformation,
 }
 
+// needed for `capture` and `timestamp_counter_set`
+unsafe impl Send for Context {}
+unsafe impl Sync for Context {}
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Buffer {
-    raw: *mut metal::MTLBuffer,
+    raw: *mut ProtocolObject<dyn metal::MTLBuffer>,
 }
 
 unsafe impl Send for Buffer {}
@@ -78,18 +81,19 @@ impl Default for Buffer {
 }
 
 impl Buffer {
-    fn as_ref(&self) -> &metal::BufferRef {
-        unsafe { metal::BufferRef::from_ptr(self.raw) }
+    fn as_ref(&self) -> &ProtocolObject<dyn metal::MTLBuffer> {
+        unsafe { &*self.raw }
     }
 
     pub fn data(&self) -> *mut u8 {
-        self.as_ref().contents() as *mut u8
+        use metal::MTLBuffer as _;
+        self.as_ref().contents().as_ptr() as *mut u8
     }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Texture {
-    raw: *mut metal::MTLTexture,
+    raw: *mut ProtocolObject<dyn metal::MTLTexture>,
 }
 
 unsafe impl Send for Texture {}
@@ -104,14 +108,14 @@ impl Default for Texture {
 }
 
 impl Texture {
-    fn as_ref(&self) -> &metal::TextureRef {
-        unsafe { metal::TextureRef::from_ptr(self.raw) }
+    fn as_ref(&self) -> &ProtocolObject<dyn metal::MTLTexture> {
+        unsafe { &*self.raw }
     }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct TextureView {
-    raw: *mut metal::MTLTexture,
+    raw: *mut ProtocolObject<dyn metal::MTLTexture>,
 }
 
 unsafe impl Send for TextureView {}
@@ -126,20 +130,22 @@ impl Default for TextureView {
 }
 
 impl TextureView {
-    fn as_ref(&self) -> &metal::TextureRef {
-        unsafe { metal::TextureRef::from_ptr(self.raw) }
+    fn as_ref(&self) -> &ProtocolObject<dyn metal::MTLTexture> {
+        unsafe { &*self.raw }
     }
 
     /// Create a TextureView from a raw Metal Texture.
     /// Does not keep a reference, need not being destoryed.
-    pub fn from_metal_texture(raw: &metal::TextureRef) -> Self {
-        Self { raw: raw.as_ptr() }
+    pub fn from_metal_texture(raw: &Retained<ProtocolObject<dyn metal::MTLTexture>>) -> Self {
+        Self {
+            raw: Retained::into_raw(raw.clone()),
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Sampler {
-    raw: *mut metal::MTLSamplerState,
+    raw: *mut ProtocolObject<dyn metal::MTLSamplerState>,
 }
 
 unsafe impl Send for Sampler {}
@@ -154,14 +160,14 @@ impl Default for Sampler {
 }
 
 impl Sampler {
-    fn as_ref(&self) -> &metal::SamplerStateRef {
-        unsafe { metal::SamplerStateRef::from_ptr(self.raw) }
+    fn as_ref(&self) -> &ProtocolObject<dyn metal::MTLSamplerState> {
+        unsafe { &*self.raw }
     }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct AccelerationStructure {
-    raw: *mut metal::MTLAccelerationStructure,
+    raw: *mut ProtocolObject<dyn metal::MTLAccelerationStructure>,
 }
 
 unsafe impl Send for AccelerationStructure {}
@@ -176,28 +182,30 @@ impl Default for AccelerationStructure {
 }
 
 impl AccelerationStructure {
-    fn as_ref(&self) -> &metal::AccelerationStructureRef {
-        unsafe { metal::AccelerationStructureRef::from_ptr(self.raw) }
+    fn as_ref(&self) -> &ProtocolObject<dyn metal::MTLAccelerationStructure> {
+        unsafe { &*self.raw }
+    }
+    fn as_retained(&self) -> Retained<ProtocolObject<dyn metal::MTLAccelerationStructure>> {
+        unsafe { Retained::retain(self.raw).unwrap() }
     }
 }
 
 //TODO: make this copyable?
 #[derive(Clone, Debug)]
 pub struct SyncPoint {
-    cmd_buf: metal::CommandBuffer,
+    cmd_buf: Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>,
 }
 
-#[derive(Debug)]
 struct TimingData {
     pass_names: Vec<String>,
-    sample_buffer: metal::CounterSampleBuffer,
+    sample_buffer: Retained<ProtocolObject<dyn metal::MTLCounterSampleBuffer>>,
 }
 
-#[derive(Debug)]
+type RawCommandBuffer = Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>;
 pub struct CommandEncoder {
-    raw: Option<metal::CommandBuffer>,
+    raw: Option<RawCommandBuffer>,
     name: String,
-    queue: Arc<Mutex<metal::CommandQueue>>,
+    queue: Arc<Mutex<Retained<ProtocolObject<dyn metal::MTLCommandQueue>>>>,
     enable_debug_groups: bool,
     enable_dispatch_type: bool,
     has_open_debug_group: bool,
@@ -218,17 +226,18 @@ struct PipelineLayout {
     sizes_buffer_slot: Option<u32>,
 }
 
-#[derive(Debug)]
 pub struct ComputePipeline {
-    raw: metal::ComputePipelineState,
+    raw: Retained<ProtocolObject<dyn metal::MTLComputePipelineState>>,
     name: String,
     #[allow(dead_code)]
-    lib: metal::Library,
+    lib: Retained<ProtocolObject<dyn metal::MTLLibrary>>,
     layout: PipelineLayout,
     wg_size: metal::MTLSize,
     wg_memory_sizes: Box<[u32]>,
 }
 
+unsafe impl Send for ComputePipeline {}
+unsafe impl Sync for ComputePipeline {}
 impl ComputePipeline {
     pub fn get_workgroup_size(&self) -> [u32; 3] {
         [
@@ -239,123 +248,122 @@ impl ComputePipeline {
     }
 }
 
-#[derive(Debug)]
 pub struct RenderPipeline {
-    raw: metal::RenderPipelineState,
+    raw: Retained<ProtocolObject<dyn metal::MTLRenderPipelineState>>,
     name: String,
     #[allow(dead_code)]
-    vs_lib: metal::Library,
+    vs_lib: Retained<ProtocolObject<dyn metal::MTLLibrary>>,
     #[allow(dead_code)]
-    fs_lib: Option<metal::Library>,
+    fs_lib: Option<Retained<ProtocolObject<dyn metal::MTLLibrary>>>,
     layout: PipelineLayout,
     primitive_type: metal::MTLPrimitiveType,
     triangle_fill_mode: metal::MTLTriangleFillMode,
     front_winding: metal::MTLWinding,
     cull_mode: metal::MTLCullMode,
     depth_clip_mode: metal::MTLDepthClipMode,
-    depth_stencil: Option<(metal::DepthStencilState, super::DepthBiasState)>,
+    depth_stencil: Option<(
+        Retained<ProtocolObject<dyn metal::MTLDepthStencilState>>,
+        super::DepthBiasState,
+    )>,
 }
 
-#[derive(Debug)]
+unsafe impl Send for RenderPipeline {}
+unsafe impl Sync for RenderPipeline {}
+
 pub struct TransferCommandEncoder<'a> {
-    raw: metal::BlitCommandEncoder,
+    raw: Retained<ProtocolObject<dyn metal::MTLBlitCommandEncoder>>,
     phantom: PhantomData<&'a CommandEncoder>,
 }
 
-#[derive(Debug)]
 pub struct AccelerationStructureCommandEncoder<'a> {
-    raw: metal::AccelerationStructureCommandEncoder,
+    raw: Retained<ProtocolObject<dyn metal::MTLAccelerationStructureCommandEncoder>>,
     phantom: PhantomData<&'a CommandEncoder>,
 }
 
-#[derive(Debug)]
 pub struct ComputeCommandEncoder<'a> {
-    raw: metal::ComputeCommandEncoder,
+    raw: Retained<ProtocolObject<dyn metal::MTLComputeCommandEncoder>>,
     phantom: PhantomData<&'a CommandEncoder>,
 }
 
-#[derive(Debug)]
 pub struct RenderCommandEncoder<'a> {
-    raw: metal::RenderCommandEncoder,
+    raw: Retained<ProtocolObject<dyn metal::MTLRenderCommandEncoder>>,
     phantom: PhantomData<&'a CommandEncoder>,
 }
 
 pub struct PipelineContext<'a> {
     //raw: metal::ArgumentEncoderRef,
-    cs_encoder: Option<&'a metal::ComputeCommandEncoderRef>,
-    vs_encoder: Option<&'a metal::RenderCommandEncoderRef>,
-    fs_encoder: Option<&'a metal::RenderCommandEncoderRef>,
+    cs_encoder: Option<&'a ProtocolObject<dyn metal::MTLComputeCommandEncoder>>,
+    vs_encoder: Option<&'a ProtocolObject<dyn metal::MTLRenderCommandEncoder>>,
+    fs_encoder: Option<&'a ProtocolObject<dyn metal::MTLRenderCommandEncoder>>,
     targets: &'a [u32],
 }
 
-#[derive(Debug)]
 pub struct ComputePipelineContext<'a> {
-    encoder: &'a mut metal::ComputeCommandEncoder,
+    encoder: &'a ProtocolObject<dyn metal::MTLComputeCommandEncoder>,
     wg_size: metal::MTLSize,
     group_mappings: &'a [ShaderDataMapping],
 }
 
-#[derive(Debug)]
 pub struct RenderPipelineContext<'a> {
-    encoder: &'a mut metal::RenderCommandEncoder,
+    encoder: &'a ProtocolObject<dyn metal::MTLRenderCommandEncoder>,
     primitive_type: metal::MTLPrimitiveType,
     group_mappings: &'a [ShaderDataMapping],
 }
 
 fn map_texture_format(format: crate::TextureFormat) -> metal::MTLPixelFormat {
     use crate::TextureFormat as Tf;
-    use metal::MTLPixelFormat::*;
+    use metal::MTLPixelFormat as Mpf;
     match format {
-        Tf::R8Unorm => R8Unorm,
-        Tf::Rg8Unorm => RG8Unorm,
-        Tf::Rg8Snorm => RG8Snorm,
-        Tf::Rgba8Unorm => RGBA8Unorm,
-        Tf::Rgba8UnormSrgb => RGBA8Unorm_sRGB,
-        Tf::Bgra8Unorm => BGRA8Unorm,
-        Tf::Bgra8UnormSrgb => BGRA8Unorm_sRGB,
-        Tf::Rgba8Snorm => RGBA8Snorm,
-        Tf::R16Float => R16Float,
-        Tf::Rg16Float => RG16Float,
-        Tf::Rgba16Float => RGBA16Float,
-        Tf::R32Float => R32Float,
-        Tf::Rg32Float => RG32Float,
-        Tf::Rgba32Float => RGBA32Float,
-        Tf::R32Uint => R32Uint,
-        Tf::Rg32Uint => RG32Uint,
-        Tf::Rgba32Uint => RGBA32Uint,
-        Tf::Depth32Float => Depth32Float,
-        Tf::Bc1Unorm => BC1_RGBA,
-        Tf::Bc1UnormSrgb => BC1_RGBA_sRGB,
-        Tf::Bc2Unorm => BC2_RGBA,
-        Tf::Bc2UnormSrgb => BC2_RGBA_sRGB,
-        Tf::Bc3Unorm => BC3_RGBA,
-        Tf::Bc3UnormSrgb => BC3_RGBA_sRGB,
-        Tf::Bc4Unorm => BC4_RUnorm,
-        Tf::Bc4Snorm => BC4_RSnorm,
-        Tf::Bc5Unorm => BC5_RGUnorm,
-        Tf::Bc5Snorm => BC5_RGSnorm,
-        Tf::Bc6hUfloat => BC6H_RGBUfloat,
-        Tf::Bc6hFloat => BC6H_RGBFloat,
-        Tf::Bc7Unorm => BC7_RGBAUnorm,
-        Tf::Bc7UnormSrgb => BC7_RGBAUnorm_sRGB,
-        Tf::Rgb10a2Unorm => RGB10A2Unorm,
-        Tf::Rg11b10Ufloat => RG11B10Float,
-        Tf::Rgb9e5Ufloat => RGB9E5Float,
+        Tf::R8Unorm => Mpf::R8Unorm,
+        Tf::Rg8Unorm => Mpf::RG8Unorm,
+        Tf::Rg8Snorm => Mpf::RG8Snorm,
+        Tf::Rgba8Unorm => Mpf::RGBA8Unorm,
+        Tf::Rgba8UnormSrgb => Mpf::RGBA8Unorm_sRGB,
+        Tf::Bgra8Unorm => Mpf::BGRA8Unorm,
+        Tf::Bgra8UnormSrgb => Mpf::BGRA8Unorm_sRGB,
+        Tf::Rgba8Snorm => Mpf::RGBA8Snorm,
+        Tf::R16Float => Mpf::R16Float,
+        Tf::Rg16Float => Mpf::RG16Float,
+        Tf::Rgba16Float => Mpf::RGBA16Float,
+        Tf::R32Float => Mpf::R32Float,
+        Tf::Rg32Float => Mpf::RG32Float,
+        Tf::Rgba32Float => Mpf::RGBA32Float,
+        Tf::R32Uint => Mpf::R32Uint,
+        Tf::Rg32Uint => Mpf::RG32Uint,
+        Tf::Rgba32Uint => Mpf::RGBA32Uint,
+        Tf::Depth32Float => Mpf::Depth32Float,
+        Tf::Bc1Unorm => Mpf::BC1_RGBA,
+        Tf::Bc1UnormSrgb => Mpf::BC1_RGBA_sRGB,
+        Tf::Bc2Unorm => Mpf::BC2_RGBA,
+        Tf::Bc2UnormSrgb => Mpf::BC2_RGBA_sRGB,
+        Tf::Bc3Unorm => Mpf::BC3_RGBA,
+        Tf::Bc3UnormSrgb => Mpf::BC3_RGBA_sRGB,
+        Tf::Bc4Unorm => Mpf::BC4_RUnorm,
+        Tf::Bc4Snorm => Mpf::BC4_RSnorm,
+        Tf::Bc5Unorm => Mpf::BC5_RGUnorm,
+        Tf::Bc5Snorm => Mpf::BC5_RGSnorm,
+        Tf::Bc6hUfloat => Mpf::BC6H_RGBUfloat,
+        Tf::Bc6hFloat => Mpf::BC6H_RGBFloat,
+        Tf::Bc7Unorm => Mpf::BC7_RGBAUnorm,
+        Tf::Bc7UnormSrgb => Mpf::BC7_RGBAUnorm_sRGB,
+        Tf::Rgb10a2Unorm => Mpf::RGB10A2Unorm,
+        Tf::Rg11b10Ufloat => Mpf::RG11B10Float,
+        Tf::Rgb9e5Ufloat => Mpf::RGB9E5Float,
     }
 }
 
 fn map_compare_function(fun: crate::CompareFunction) -> metal::MTLCompareFunction {
     use crate::CompareFunction as Cf;
-    use metal::MTLCompareFunction::*;
+    use metal::MTLCompareFunction as Mcf;
     match fun {
-        Cf::Never => Never,
-        Cf::Less => Less,
-        Cf::LessEqual => LessEqual,
-        Cf::Equal => Equal,
-        Cf::GreaterEqual => GreaterEqual,
-        Cf::Greater => Greater,
-        Cf::NotEqual => NotEqual,
-        Cf::Always => Always,
+        Cf::Never => Mcf::Never,
+        Cf::Less => Mcf::Less,
+        Cf::LessEqual => Mcf::LessEqual,
+        Cf::Equal => Mcf::Equal,
+        Cf::GreaterEqual => Mcf::GreaterEqual,
+        Cf::Greater => Mcf::Greater,
+        Cf::NotEqual => Mcf::NotEqual,
+        Cf::Always => Mcf::Always,
     }
 }
 
@@ -430,18 +438,23 @@ impl Context {
             log::warn!("Unable to filter devices by ID");
         }
 
-        let device = metal::Device::system_default()
+        let device = Retained::from_raw(metal::MTLCreateSystemDefaultDevice())
             .ok_or(super::NotSupportedError::NoSupportedDeviceFound)?;
-        let queue = device.new_command_queue();
+        let queue = device.newCommandQueue().unwrap();
 
         let auto_capture_everything = false;
         let capture = if desc.capture && auto_capture_everything {
-            objc::rc::autoreleasepool(|| {
-                let capture_manager = metal::CaptureManager::shared();
-                let default_capture_scope = capture_manager.new_capture_scope_with_device(&device);
-                capture_manager.set_default_capture_scope(&default_capture_scope);
-                capture_manager.start_capture_with_scope(&default_capture_scope);
-                default_capture_scope.begin_scope();
+            use metal::MTLCaptureScope as _;
+            objc2::rc::autoreleasepool(|_| {
+                let capture_manager = metal::MTLCaptureManager::sharedCaptureManager();
+                let default_capture_scope = capture_manager.newCaptureScopeWithDevice(&device);
+                capture_manager.setDefaultCaptureScope(Some(&default_capture_scope));
+                let capture_desc = metal::MTLCaptureDescriptor::new();
+                capture_desc.set_capture_scope(&default_capture_scope);
+                capture_manager
+                    .startCaptureWithDescriptor_error(&capture_desc)
+                    .unwrap();
+                default_capture_scope.beginScope();
                 Some(capture_manager.to_owned())
             })
         } else {
@@ -456,15 +469,18 @@ impl Context {
 
         let mut timestamp_counter_set = None;
         if desc.timing {
-            for counter_set in device.counter_sets() {
-                if counter_set.name() == "timestamp" {
-                    timestamp_counter_set = Some(counter_set);
+            use metal::MTLCounterSet as _;
+            if let Some(counter_sets) = device.counterSets() {
+                for counter_set in counter_sets {
+                    if counter_set.name().as_ref() == objc2_foundation::ns_string!("timestamp") {
+                        timestamp_counter_set = Some(counter_set);
+                    }
                 }
             }
             if timestamp_counter_set.is_none() {
                 log::warn!("Timing counters are not supported by the device");
             } else if !device
-                .supports_counter_sampling(metal::MTLCounterSamplingPoint::AtStageBoundary)
+                .supportsCounterSampling(metal::MTLCounterSamplingPoint::AtStageBoundary)
             {
                 log::warn!("Timing counters do not support stage boundary");
                 timestamp_counter_set = None;
@@ -475,24 +491,25 @@ impl Context {
             device: Mutex::new(device),
             queue: Arc::new(Mutex::new(queue)),
             capture,
+            timestamp_counter_set,
             info: PrivateInfo {
                 //TODO: determine based on OS version
-                language_version: metal::MTLLanguageVersion::V2_4,
+                language_version: metal::MTLLanguageVersion::MTLLanguageVersion2_4,
                 enable_debug_groups: desc.capture,
                 enable_dispatch_type: true,
-                timestamp_counter_set,
             },
             device_information,
         })
     }
 
     pub fn capabilities(&self) -> crate::Capabilities {
+        use metal::MTLDevice as _;
         let device = self.device.lock().unwrap();
         crate::Capabilities {
-            ray_query: if device.supports_family(metal::MTLGPUFamily::Apple6) {
+            ray_query: if device.supportsFamily(metal::MTLGPUFamily::Apple6) {
                 crate::ShaderVisibility::all()
-            } else if device.supports_family(metal::MTLGPUFamily::Mac2)
-                || device.supports_family(metal::MTLGPUFamily::Metal3)
+            } else if device.supportsFamily(metal::MTLGPUFamily::Mac2)
+                || device.supportsFamily(metal::MTLGPUFamily::Metal3)
             {
                 crate::ShaderVisibility::COMPUTE
             } else {
@@ -507,7 +524,7 @@ impl Context {
 
     /// Get an MTLDevice of this context.
     /// This is platform specific API.
-    pub fn metal_device(&self) -> metal::Device {
+    pub fn metal_device(&self) -> Retained<ProtocolObject<dyn metal::MTLDevice>> {
         self.device.lock().unwrap().clone()
     }
 }
@@ -518,20 +535,27 @@ impl crate::traits::CommandDevice for Context {
     type SyncPoint = SyncPoint;
 
     fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
-        let timing_datas = if let Some(ref counter_set) = self.info.timestamp_counter_set {
+        use metal::MTLDevice as _;
+
+        let timing_datas = if let Some(ref counter_set) = self.timestamp_counter_set {
             let mut array = Vec::with_capacity(desc.buffer_count as usize);
-            let csb_desc = metal::CounterSampleBufferDescriptor::new();
-            csb_desc.set_counter_set(counter_set);
-            csb_desc.set_storage_mode(metal::MTLStorageMode::Shared);
-            csb_desc.set_sample_count(MAX_TIMESTAMPS);
+            let csb_desc = unsafe {
+                let desc = metal::MTLCounterSampleBufferDescriptor::new();
+                desc.setCounterSet(Some(counter_set));
+                desc.setStorageMode(metal::MTLStorageMode::Shared);
+                desc.setSampleCount(MAX_TIMESTAMPS);
+                desc
+            };
             for i in 0..desc.buffer_count {
-                csb_desc.set_label(&format!("{}/counter{}", desc.name, i));
-                let sample_buffer = self
-                    .device
-                    .lock()
-                    .unwrap()
-                    .new_counter_sample_buffer_with_descriptor(&csb_desc)
-                    .unwrap();
+                let label = format!("{}/counter{}", desc.name, i);
+                let sample_buffer = unsafe {
+                    csb_desc.setLabel(&objc2_foundation::NSString::from_str(&label));
+                    self.device
+                        .lock()
+                        .unwrap()
+                        .newCounterSampleBufferWithDescriptor_error(&csb_desc)
+                        .unwrap()
+                };
                 array.push(TimingData {
                     sample_buffer,
                     pass_names: Vec::new(),
@@ -541,6 +565,7 @@ impl crate::traits::CommandDevice for Context {
         } else {
             None
         };
+
         CommandEncoder {
             raw: None,
             name: desc.name.to_string(),
@@ -556,12 +581,14 @@ impl crate::traits::CommandDevice for Context {
     fn destroy_command_encoder(&self, _command_encoder: &mut CommandEncoder) {}
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+        use metal::MTLCommandBuffer as _;
         let cmd_buf = encoder.finish();
         cmd_buf.commit();
         SyncPoint { cmd_buf }
     }
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
+        use metal::MTLCommandBuffer as _;
         let start = time::Instant::now();
         loop {
             if let metal::MTLCommandBufferStatus::Completed = sp.cmd_buf.status() {
@@ -577,68 +604,50 @@ impl crate::traits::CommandDevice for Context {
 
 impl Drop for Context {
     fn drop(&mut self) {
+        use metal::MTLCaptureScope as _;
         if let Some(capture_manager) = self.capture.take() {
-            if let Some(scope) = capture_manager.default_capture_scope() {
-                scope.end_scope();
+            if let Some(scope) = capture_manager.defaultCaptureScope() {
+                scope.endScope();
             }
-            capture_manager.stop_capture();
+            capture_manager.stopCapture();
         }
     }
 }
 
 fn make_bottom_level_acceleration_structure_desc(
     meshes: &[crate::AccelerationStructureMesh],
-) -> metal::PrimitiveAccelerationStructureDescriptor {
+) -> Retained<metal::MTLPrimitiveAccelerationStructureDescriptor> {
     let mut geometry_descriptors = Vec::with_capacity(meshes.len());
     for mesh in meshes {
-        let descriptor = metal::AccelerationStructureTriangleGeometryDescriptor::descriptor();
-        descriptor.set_opaque(mesh.is_opaque);
-        descriptor.set_vertex_buffer(Some(mesh.vertex_data.buffer.as_ref()));
-        descriptor.set_vertex_buffer_offset(mesh.vertex_data.offset);
-        descriptor.set_vertex_stride(mesh.vertex_stride as _);
-        descriptor.set_triangle_count(mesh.triangle_count as _);
-        if let Some(index_type) = mesh.index_type {
-            descriptor.set_index_buffer(Some(mesh.index_data.buffer.as_ref()));
-            descriptor.set_index_buffer_offset(mesh.index_data.offset);
-            descriptor.set_index_type(map_index_type(index_type));
-        }
-        //TODO: requires macOS-13 ?
-        if false {
-            let (_, attribute_format) = map_vertex_format(mesh.vertex_format);
-            descriptor.set_vertex_format(attribute_format);
-            if !mesh.transform_data.buffer.raw.is_null() {
-                descriptor
-                    .set_transformation_matrix_buffer(Some(mesh.transform_data.buffer.as_ref()));
-                descriptor.set_transformation_matrix_buffer_offset(mesh.transform_data.offset);
+        geometry_descriptors.push(unsafe {
+            let descriptor = metal::MTLAccelerationStructureTriangleGeometryDescriptor::new();
+            descriptor.setOpaque(mesh.is_opaque);
+            descriptor.setVertexBuffer(Some(mesh.vertex_data.buffer.as_ref()));
+            descriptor.setVertexBufferOffset(mesh.vertex_data.offset as usize);
+            descriptor.setVertexStride(mesh.vertex_stride as _);
+            descriptor.setTriangleCount(mesh.triangle_count as _);
+            if let Some(index_type) = mesh.index_type {
+                descriptor.setIndexBuffer(Some(mesh.index_data.buffer.as_ref()));
+                descriptor.setIndexBufferOffset(mesh.index_data.offset as usize);
+                descriptor.setIndexType(map_index_type(index_type));
             }
-        }
-        geometry_descriptors.push(metal::AccelerationStructureGeometryDescriptor::from(
-            descriptor,
-        ));
+            //TODO: requires macOS-13 ?
+            if false {
+                let (_, attribute_format) = map_vertex_format(mesh.vertex_format);
+                descriptor.setVertexFormat(attribute_format);
+                if !mesh.transform_data.buffer.raw.is_null() {
+                    descriptor
+                        .setTransformationMatrixBuffer(Some(mesh.transform_data.buffer.as_ref()));
+                    descriptor
+                        .setTransformationMatrixBufferOffset(mesh.transform_data.offset as usize);
+                }
+            }
+            Retained::cast(descriptor)
+        });
     }
 
-    let geometry_descriptor_array = metal::Array::from_owned_slice(&geometry_descriptors);
-    let accel_descriptor = metal::PrimitiveAccelerationStructureDescriptor::descriptor();
-    accel_descriptor.set_geometry_descriptors(geometry_descriptor_array);
+    let geometry_descriptor_array = objc2_foundation::NSArray::from_vec(geometry_descriptors);
+    let accel_descriptor = metal::MTLPrimitiveAccelerationStructureDescriptor::descriptor();
+    accel_descriptor.setGeometryDescriptors(Some(&geometry_descriptor_array));
     accel_descriptor
-}
-
-fn _print_class_methods(class: &objc::runtime::Class) {
-    let mut count = 0;
-    let methods = unsafe { objc::runtime::class_copyMethodList(class, &mut count) };
-    println!("Class {} methods:", class.name());
-    for i in 0..count {
-        let method = unsafe { &**methods.add(i as usize) };
-        println!("\t{}", method.name().name());
-    }
-}
-
-fn _print_class_methods_by_name(class_name: &str) {
-    let class = objc::runtime::Class::get(class_name).unwrap();
-    _print_class_methods(class);
-}
-
-fn _print_class_methods_by_object(foreign_object: &impl metal::foreign_types::ForeignType) {
-    let object = foreign_object.as_ptr() as *mut objc::runtime::Object;
-    _print_class_methods(unsafe { &*object }.class());
 }

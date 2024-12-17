@@ -1,5 +1,8 @@
-use objc::{msg_send, sel, sel_impl};
-use std::mem;
+use metal::{MTLDevice as _, MTLResource as _};
+use objc2::rc::Retained;
+use objc2_foundation::{NSRange, NSString};
+use objc2_metal::{self as metal, MTLTexture};
+use std::{mem, ptr};
 
 fn map_texture_usage(usage: crate::TextureUsage) -> metal::MTLTextureUsage {
     use crate::TextureUsage as Tu;
@@ -22,58 +25,61 @@ fn map_texture_usage(usage: crate::TextureUsage) -> metal::MTLTextureUsage {
     mtl_usage
 }
 
-fn map_view_dimension(dimension: crate::ViewDimension, sample_count: u64) -> metal::MTLTextureType {
+fn map_view_dimension(
+    dimension: crate::ViewDimension,
+    sample_count: usize,
+) -> metal::MTLTextureType {
     use crate::ViewDimension as Vd;
-    use metal::MTLTextureType::*;
+    use metal::MTLTextureType as Mtt;
     match dimension {
-        Vd::D1 => D1,
-        Vd::D1Array => D1Array,
+        Vd::D1 => Mtt::MTLTextureType1D,
+        Vd::D1Array => Mtt::MTLTextureType1DArray,
         Vd::D2 => {
             if sample_count <= 1 {
-                D2
+                Mtt::MTLTextureType2D
             } else {
-                D2Multisample
+                Mtt::MTLTextureType2DMultisample
             }
         }
         Vd::D2Array => {
             if sample_count <= 1 {
-                D2Array
+                Mtt::MTLTextureType2DArray
             } else {
-                D2MultisampleArray
+                Mtt::MTLTextureType2DMultisampleArray
             }
         }
-        Vd::D3 => D3,
-        Vd::Cube => Cube,
-        Vd::CubeArray => CubeArray,
+        Vd::D3 => Mtt::MTLTextureType3D,
+        Vd::Cube => Mtt::Cube,
+        Vd::CubeArray => Mtt::CubeArray,
     }
 }
 
 fn map_filter_mode(filter: crate::FilterMode) -> metal::MTLSamplerMinMagFilter {
-    use metal::MTLSamplerMinMagFilter::*;
+    use metal::MTLSamplerMinMagFilter as Msf;
     match filter {
-        crate::FilterMode::Nearest => Nearest,
-        crate::FilterMode::Linear => Linear,
+        crate::FilterMode::Nearest => Msf::Nearest,
+        crate::FilterMode::Linear => Msf::Linear,
     }
 }
 
 fn map_address_mode(address: crate::AddressMode) -> metal::MTLSamplerAddressMode {
     use crate::AddressMode as Am;
-    use metal::MTLSamplerAddressMode::*;
+    use metal::MTLSamplerAddressMode as Msam;
     match address {
-        Am::Repeat => Repeat,
-        Am::MirrorRepeat => MirrorRepeat,
-        Am::ClampToEdge => ClampToEdge,
-        Am::ClampToBorder => ClampToBorderColor,
+        Am::Repeat => Msam::Repeat,
+        Am::MirrorRepeat => Msam::MirrorRepeat,
+        Am::ClampToEdge => Msam::ClampToEdge,
+        Am::ClampToBorder => Msam::ClampToBorderColor,
     }
 }
 
 fn map_border_color(color: crate::TextureColor) -> metal::MTLSamplerBorderColor {
     use crate::TextureColor as Tc;
-    use metal::MTLSamplerBorderColor::*;
+    use metal::MTLSamplerBorderColor as Msbc;
     match color {
-        Tc::TransparentBlack => TransparentBlack,
-        Tc::OpaqueBlack => OpaqueBlack,
-        Tc::White => OpaqueWhite,
+        Tc::TransparentBlack => Msbc::TransparentBlack,
+        Tc::OpaqueBlack => Msbc::OpaqueBlack,
+        Tc::White => Msbc::OpaqueWhite,
     }
 }
 
@@ -87,11 +93,11 @@ impl super::Context {
             .device
             .lock()
             .unwrap()
-            .acceleration_structure_sizes_with_descriptor(&descriptor);
+            .accelerationStructureSizesWithDescriptor(&descriptor);
 
         crate::AccelerationStructureSizes {
-            data: accel_sizes.acceleration_structure_size,
-            scratch: accel_sizes.build_scratch_buffer_size,
+            data: accel_sizes.accelerationStructureSize as u64,
+            scratch: accel_sizes.buildScratchBufferSize as u64,
         }
     }
 
@@ -99,18 +105,18 @@ impl super::Context {
         &self,
         instance_count: u32,
     ) -> crate::AccelerationStructureSizes {
-        let descriptor = metal::InstanceAccelerationStructureDescriptor::descriptor();
-        descriptor.set_instance_count(instance_count as _);
+        let descriptor = metal::MTLInstanceAccelerationStructureDescriptor::descriptor();
+        descriptor.setInstanceCount(instance_count as _);
 
         let accel_sizes = self
             .device
             .lock()
             .unwrap()
-            .acceleration_structure_sizes_with_descriptor(&descriptor);
+            .accelerationStructureSizesWithDescriptor(&descriptor);
 
         crate::AccelerationStructureSizes {
-            data: accel_sizes.acceleration_structure_size,
-            scratch: accel_sizes.build_scratch_buffer_size,
+            data: accel_sizes.accelerationStructureSize as u64,
+            scratch: accel_sizes.buildScratchBufferSize as u64,
         }
     }
 
@@ -119,26 +125,46 @@ impl super::Context {
         instances: &[crate::AccelerationStructureInstance],
         _bottom_level: &[super::AccelerationStructure],
     ) -> super::Buffer {
+        fn packed_vec(v: mint::Vector3<f32>) -> metal::MTLPackedFloat3 {
+            metal::MTLPackedFloat3 {
+                x: v.x,
+                y: v.y,
+                z: v.z,
+            }
+        }
         let mut instance_descriptors = Vec::with_capacity(instances.len());
         for instance in instances {
             let transposed = mint::ColumnMatrix3x4::from(instance.transform);
             instance_descriptors.push(metal::MTLAccelerationStructureUserIDInstanceDescriptor {
-                acceleration_structure_index: instance.acceleration_structure_index,
+                transformationMatrix: metal::MTLPackedFloat4x3 {
+                    columns: [
+                        packed_vec(transposed.x),
+                        packed_vec(transposed.y),
+                        packed_vec(transposed.z),
+                        packed_vec(transposed.w),
+                    ],
+                },
+                options: metal::MTLAccelerationStructureInstanceOptions::MTLAccelerationStructureInstanceOptionNone,
                 mask: instance.mask,
-                transformation_matrix: transposed.into(),
-                options: metal::MTLAccelerationStructureInstanceOptions::None,
-                intersection_function_table_offset: 0,
-                user_id: instance.custom_index,
+                intersectionFunctionTableOffset: 0,
+                accelerationStructureIndex: instance.acceleration_structure_index,
+                userID: instance.custom_index,
             });
         }
-        let buffer = self.device.lock().unwrap().new_buffer_with_data(
-            instance_descriptors.as_ptr() as *const _,
-            (mem::size_of::<metal::MTLAccelerationStructureUserIDInstanceDescriptor>()
-                * instances.len()) as _,
-            metal::MTLResourceOptions::StorageModeShared,
-        );
+        let object = objc2::rc::autoreleasepool(|_| unsafe {
+            self.device
+                .lock()
+                .unwrap()
+                .newBufferWithBytes_length_options(
+                    ptr::NonNull::new(instance_descriptors.as_ptr() as *mut _).unwrap(),
+                    mem::size_of::<metal::MTLAccelerationStructureUserIDInstanceDescriptor>()
+                        * instances.len(),
+                    metal::MTLResourceOptions::MTLResourceStorageModeShared,
+                )
+                .unwrap()
+        });
         super::Buffer {
-            raw: unsafe { msg_send![buffer.as_ref(), retain] },
+            raw: Retained::into_raw(object),
         }
     }
 }
@@ -153,29 +179,32 @@ impl crate::traits::ResourceDevice for super::Context {
 
     fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         let options = match desc.memory {
-            crate::Memory::Device => metal::MTLResourceOptions::StorageModePrivate,
-            crate::Memory::Shared => metal::MTLResourceOptions::StorageModeShared,
+            crate::Memory::Device => metal::MTLResourceOptions::MTLResourceStorageModePrivate,
+            crate::Memory::Shared => metal::MTLResourceOptions::MTLResourceStorageModeShared,
             crate::Memory::Upload => {
-                metal::MTLResourceOptions::StorageModeShared
-                    | metal::MTLResourceOptions::CPUCacheModeWriteCombined
+                metal::MTLResourceOptions::MTLResourceStorageModeShared
+                    | metal::MTLResourceOptions::MTLResourceCPUCacheModeWriteCombined
             }
         };
-        let raw = objc::rc::autoreleasepool(|| {
-            let raw = self.device.lock().unwrap().new_buffer(desc.size, options);
-            if !desc.name.is_empty() {
-                raw.set_label(&desc.name);
-            }
-            unsafe { msg_send![raw.as_ref(), retain] }
+        let object = objc2::rc::autoreleasepool(|_| {
+            self.device
+                .lock()
+                .unwrap()
+                .newBufferWithLength_options(desc.size as usize, options)
+                .unwrap()
         });
-        super::Buffer { raw }
+        if !desc.name.is_empty() {
+            object.setLabel(Some(&NSString::from_str(desc.name)));
+        }
+        super::Buffer {
+            raw: Retained::into_raw(object),
+        }
     }
 
     fn sync_buffer(&self, _buffer: super::Buffer) {}
 
     fn destroy_buffer(&self, buffer: super::Buffer) {
-        unsafe {
-            let () = msg_send![buffer.raw, release];
-        }
+        let _ = unsafe { Retained::from_raw(buffer.raw) };
     }
 
     fn create_texture(&self, desc: crate::TextureDesc) -> super::Texture {
@@ -184,59 +213,59 @@ impl crate::traits::ResourceDevice for super::Context {
         let mtl_type = match desc.dimension {
             crate::TextureDimension::D1 => {
                 if desc.array_layer_count > 1 {
-                    metal::MTLTextureType::D1Array
+                    metal::MTLTextureType::MTLTextureType1DArray
                 } else {
-                    metal::MTLTextureType::D1
+                    metal::MTLTextureType::MTLTextureType1D
                 }
             }
             crate::TextureDimension::D2 => {
                 if desc.array_layer_count > 1 {
                     if desc.sample_count <= 1 {
-                        metal::MTLTextureType::D2Array
+                        metal::MTLTextureType::MTLTextureType2DArray
                     } else {
-                        metal::MTLTextureType::D2MultisampleArray
+                        metal::MTLTextureType::MTLTextureType2DMultisampleArray
                     }
                 } else {
                     if desc.sample_count <= 1 {
-                        metal::MTLTextureType::D2
+                        metal::MTLTextureType::MTLTextureType2D
                     } else {
-                        metal::MTLTextureType::D2Multisample
+                        metal::MTLTextureType::MTLTextureType2DMultisample
                     }
                 }
             }
-            crate::TextureDimension::D3 => metal::MTLTextureType::D3,
+            crate::TextureDimension::D3 => metal::MTLTextureType::MTLTextureType3D,
         };
         let mtl_usage = map_texture_usage(desc.usage);
 
-        let raw = objc::rc::autoreleasepool(|| {
-            let descriptor = metal::TextureDescriptor::new();
+        let object = objc2::rc::autoreleasepool(|_| unsafe {
+            let descriptor = metal::MTLTextureDescriptor::new();
+            descriptor.setTextureType(mtl_type);
+            descriptor.setWidth(desc.size.width as usize);
+            descriptor.setHeight(desc.size.height as usize);
+            descriptor.setDepth(desc.size.depth as usize);
+            descriptor.setArrayLength(desc.array_layer_count as usize);
+            descriptor.setMipmapLevelCount(desc.mip_level_count as usize);
+            descriptor.setPixelFormat(mtl_format);
+            descriptor.setSampleCount(desc.sample_count as _);
+            descriptor.setUsage(mtl_usage);
+            descriptor.setStorageMode(metal::MTLStorageMode::Private);
 
-            descriptor.set_texture_type(mtl_type);
-            descriptor.set_width(desc.size.width as u64);
-            descriptor.set_height(desc.size.height as u64);
-            descriptor.set_depth(desc.size.depth as u64);
-            descriptor.set_array_length(desc.array_layer_count as u64);
-            descriptor.set_mipmap_level_count(desc.mip_level_count as u64);
-            descriptor.set_pixel_format(mtl_format);
-            descriptor.set_sample_count(desc.sample_count as _);
-            descriptor.set_usage(mtl_usage);
-            descriptor.set_storage_mode(metal::MTLStorageMode::Private);
-
-            let raw = self.device.lock().unwrap().new_texture(&descriptor);
-            if !desc.name.is_empty() {
-                raw.set_label(desc.name);
-            }
-
-            unsafe { msg_send![raw.as_ref(), retain] }
+            self.device
+                .lock()
+                .unwrap()
+                .newTextureWithDescriptor(&descriptor)
+                .unwrap()
         });
-
-        super::Texture { raw }
+        if !desc.name.is_empty() {
+            object.setLabel(Some(&NSString::from_str(desc.name)));
+        }
+        super::Texture {
+            raw: Retained::into_raw(object),
+        }
     }
 
     fn destroy_texture(&self, texture: super::Texture) {
-        unsafe {
-            let () = msg_send![texture.raw, release];
-        }
+        let _ = unsafe { Retained::from_raw(texture.raw) };
     }
 
     fn create_texture_view(
@@ -246,115 +275,120 @@ impl crate::traits::ResourceDevice for super::Context {
     ) -> super::TextureView {
         let texture = texture.as_ref();
         let mtl_format = super::map_texture_format(desc.format);
-        let mtl_type = map_view_dimension(desc.dimension, texture.sample_count());
+        let mtl_type = map_view_dimension(desc.dimension, texture.sampleCount());
         let mip_level_count = match desc.subresources.mip_level_count {
-            Some(count) => count.get() as u64,
-            None => texture.mipmap_level_count() - desc.subresources.base_mip_level as u64,
+            Some(count) => count.get() as usize,
+            None => texture.mipmapLevelCount() - desc.subresources.base_mip_level as usize,
         };
         let array_layer_count = match desc.subresources.array_layer_count {
-            Some(count) => count.get() as u64,
-            None => texture.array_length() - desc.subresources.base_array_layer as u64,
+            Some(count) => count.get() as usize,
+            None => texture.arrayLength() - desc.subresources.base_array_layer as usize,
         };
 
-        let raw = objc::rc::autoreleasepool(|| {
-            let raw = texture.new_texture_view_from_slice(
-                mtl_format,
-                mtl_type,
-                metal::NSRange {
-                    location: desc.subresources.base_mip_level as _,
-                    length: mip_level_count,
-                },
-                metal::NSRange {
-                    location: desc.subresources.base_array_layer as _,
-                    length: array_layer_count,
-                },
-            );
-            if !desc.name.is_empty() {
-                raw.set_label(desc.name);
-            }
-            unsafe { msg_send![raw.as_ref(), retain] }
+        let object = objc2::rc::autoreleasepool(|_| unsafe {
+            texture
+                .newTextureViewWithPixelFormat_textureType_levels_slices(
+                    mtl_format,
+                    mtl_type,
+                    NSRange {
+                        location: desc.subresources.base_mip_level as _,
+                        length: mip_level_count,
+                    },
+                    NSRange {
+                        location: desc.subresources.base_array_layer as _,
+                        length: array_layer_count,
+                    },
+                )
+                .unwrap()
         });
-        super::TextureView { raw }
-    }
-
-    fn destroy_texture_view(&self, view: super::TextureView) {
-        unsafe {
-            let () = msg_send![view.raw, release];
+        if !desc.name.is_empty() {
+            object.setLabel(Some(&NSString::from_str(desc.name)));
+        }
+        super::TextureView {
+            raw: Retained::into_raw(object),
         }
     }
 
-    fn create_sampler(&self, desc: crate::SamplerDesc) -> super::Sampler {
-        let raw = objc::rc::autoreleasepool(|| {
-            let descriptor = metal::SamplerDescriptor::new();
+    fn destroy_texture_view(&self, view: super::TextureView) {
+        let _ = unsafe { Retained::from_raw(view.raw) };
+    }
 
-            descriptor.set_min_filter(map_filter_mode(desc.min_filter));
-            descriptor.set_mag_filter(map_filter_mode(desc.mag_filter));
-            descriptor.set_mip_filter(match desc.mipmap_filter {
+    fn create_sampler(&self, desc: crate::SamplerDesc) -> super::Sampler {
+        let object = objc2::rc::autoreleasepool(|_| {
+            let descriptor = metal::MTLSamplerDescriptor::new();
+
+            descriptor.setMinFilter(map_filter_mode(desc.min_filter));
+            descriptor.setMagFilter(map_filter_mode(desc.mag_filter));
+            descriptor.setMipFilter(match desc.mipmap_filter {
                 crate::FilterMode::Nearest => metal::MTLSamplerMipFilter::Nearest,
                 crate::FilterMode::Linear => metal::MTLSamplerMipFilter::Linear,
             });
 
-            descriptor.set_address_mode_s(map_address_mode(desc.address_modes[0]));
-            descriptor.set_address_mode_t(map_address_mode(desc.address_modes[1]));
-            descriptor.set_address_mode_r(map_address_mode(desc.address_modes[2]));
+            descriptor.setSAddressMode(map_address_mode(desc.address_modes[0]));
+            descriptor.setTAddressMode(map_address_mode(desc.address_modes[1]));
+            descriptor.setRAddressMode(map_address_mode(desc.address_modes[2]));
 
             if desc.anisotropy_clamp > 1 {
-                descriptor.set_max_anisotropy(desc.anisotropy_clamp as u64);
+                descriptor.setMaxAnisotropy(desc.anisotropy_clamp as usize);
             }
 
-            descriptor.set_lod_min_clamp(desc.lod_min_clamp);
+            descriptor.setLodMinClamp(desc.lod_min_clamp);
             if let Some(lod) = desc.lod_max_clamp {
-                descriptor.set_lod_max_clamp(lod);
+                descriptor.setLodMaxClamp(lod);
             }
 
             // optimization
-            descriptor.set_lod_average(true);
+            descriptor.setLodAverage(true);
 
             if let Some(fun) = desc.compare {
-                descriptor.set_compare_function(super::map_compare_function(fun));
+                descriptor.setCompareFunction(super::map_compare_function(fun));
             }
 
             if let Some(border_color) = desc.border_color {
-                descriptor.set_border_color(map_border_color(border_color));
+                descriptor.setBorderColor(map_border_color(border_color));
             }
 
             if !desc.name.is_empty() {
-                descriptor.set_label(desc.name);
+                descriptor.setLabel(Some(&NSString::from_str(desc.name)));
             }
-            let raw = self.device.lock().unwrap().new_sampler(&descriptor);
-            unsafe { msg_send![raw.as_ref(), retain] }
+            self.device
+                .lock()
+                .unwrap()
+                .newSamplerStateWithDescriptor(&descriptor)
+                .unwrap()
         });
 
-        super::Sampler { raw }
+        super::Sampler {
+            raw: Retained::into_raw(object),
+        }
     }
 
     fn destroy_sampler(&self, sampler: super::Sampler) {
-        unsafe {
-            let () = msg_send![sampler.raw, release];
-        }
+        let _ = unsafe { Retained::from_raw(sampler.raw) };
     }
 
     fn create_acceleration_structure(
         &self,
         desc: crate::AccelerationStructureDesc,
     ) -> super::AccelerationStructure {
-        let raw = self
-            .device
-            .lock()
-            .unwrap()
-            .new_acceleration_structure_with_size(desc.size);
+        let object = objc2::rc::autoreleasepool(|_| {
+            //TODO: use `newAccelerationStructureWithDescriptor`
+            self.device
+                .lock()
+                .unwrap()
+                .newAccelerationStructureWithSize(desc.size as usize)
+                .unwrap()
+        });
         if !desc.name.is_empty() {
-            raw.set_label(desc.name);
+            object.setLabel(Some(&NSString::from_str(desc.name)));
         }
 
         super::AccelerationStructure {
-            raw: unsafe { msg_send![raw.as_ref(), retain] },
+            raw: Retained::into_raw(object),
         }
     }
 
     fn destroy_acceleration_structure(&self, acceleration_structure: super::AccelerationStructure) {
-        unsafe {
-            let () = msg_send![acceleration_structure.raw, release];
-        }
+        let _ = unsafe { Retained::from_raw(acceleration_structure.raw) };
     }
 }

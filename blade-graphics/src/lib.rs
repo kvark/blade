@@ -15,7 +15,6 @@
     clippy::missing_safety_doc,
 )]
 #![warn(
-    trivial_casts,
     trivial_numeric_casts,
     unused_extern_crates,
     //TODO: re-enable. Currently doesn't like "mem::size_of" on newer Rust

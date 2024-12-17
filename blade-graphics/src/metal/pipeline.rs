@@ -1,36 +1,39 @@
 use naga::back::msl;
+use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2_foundation::NSString;
+use objc2_metal::{self as metal, MTLDevice, MTLLibrary};
 
 fn map_blend_factor(factor: crate::BlendFactor) -> metal::MTLBlendFactor {
     use crate::BlendFactor as Bf;
-    use metal::MTLBlendFactor::*;
+    use metal::MTLBlendFactor as Mbf;
 
     match factor {
-        Bf::Zero => Zero,
-        Bf::One => One,
-        Bf::Src => SourceColor,
-        Bf::OneMinusSrc => OneMinusSourceColor,
-        Bf::Dst => DestinationColor,
-        Bf::OneMinusDst => OneMinusDestinationColor,
-        Bf::SrcAlpha => SourceAlpha,
-        Bf::OneMinusSrcAlpha => OneMinusSourceAlpha,
-        Bf::DstAlpha => DestinationAlpha,
-        Bf::OneMinusDstAlpha => OneMinusDestinationAlpha,
-        Bf::Constant => BlendColor,
-        Bf::OneMinusConstant => OneMinusBlendColor,
-        Bf::SrcAlphaSaturated => SourceAlphaSaturated,
+        Bf::Zero => Mbf::Zero,
+        Bf::One => Mbf::One,
+        Bf::Src => Mbf::SourceColor,
+        Bf::OneMinusSrc => Mbf::OneMinusSourceColor,
+        Bf::Dst => Mbf::DestinationColor,
+        Bf::OneMinusDst => Mbf::OneMinusDestinationColor,
+        Bf::SrcAlpha => Mbf::SourceAlpha,
+        Bf::OneMinusSrcAlpha => Mbf::OneMinusSourceAlpha,
+        Bf::DstAlpha => Mbf::DestinationAlpha,
+        Bf::OneMinusDstAlpha => Mbf::OneMinusDestinationAlpha,
+        Bf::Constant => Mbf::BlendColor,
+        Bf::OneMinusConstant => Mbf::OneMinusBlendColor,
+        Bf::SrcAlphaSaturated => Mbf::SourceAlphaSaturated,
     }
 }
 
 fn map_blend_op(operation: crate::BlendOperation) -> metal::MTLBlendOperation {
     use crate::BlendOperation as Bo;
-    use metal::MTLBlendOperation::*;
+    use metal::MTLBlendOperation as Mbo;
 
     match operation {
-        Bo::Add => Add,
-        Bo::Subtract => Subtract,
-        Bo::ReverseSubtract => ReverseSubtract,
-        Bo::Min => Min,
-        Bo::Max => Max,
+        Bo::Add => Mbo::Add,
+        Bo::Subtract => Mbo::Subtract,
+        Bo::ReverseSubtract => Mbo::ReverseSubtract,
+        Bo::Min => Mbo::Min,
+        Bo::Max => Mbo::Max,
     }
 }
 
@@ -50,17 +53,17 @@ fn map_blend_component(
 
 fn map_stencil_op(op: crate::StencilOperation) -> metal::MTLStencilOperation {
     use crate::StencilOperation as So;
-    use metal::MTLStencilOperation::*;
+    use metal::MTLStencilOperation as Mso;
 
     match op {
-        So::Keep => Keep,
-        So::Zero => Zero,
-        So::Replace => Replace,
-        So::IncrementClamp => IncrementClamp,
-        So::IncrementWrap => IncrementWrap,
-        So::DecrementClamp => DecrementClamp,
-        So::DecrementWrap => DecrementWrap,
-        So::Invert => Invert,
+        So::Keep => Mso::Keep,
+        So::Zero => Mso::Zero,
+        So::Replace => Mso::Replace,
+        So::IncrementClamp => Mso::IncrementClamp,
+        So::IncrementWrap => Mso::IncrementWrap,
+        So::DecrementClamp => Mso::DecrementClamp,
+        So::DecrementWrap => Mso::DecrementWrap,
+        So::Invert => Mso::Invert,
     }
 }
 
@@ -68,38 +71,40 @@ fn create_stencil_desc(
     face: &crate::StencilFaceState,
     read_mask: u32,
     write_mask: u32,
-) -> metal::StencilDescriptor {
-    let desc = metal::StencilDescriptor::new();
-    desc.set_stencil_compare_function(super::map_compare_function(face.compare));
-    desc.set_read_mask(read_mask);
-    desc.set_write_mask(write_mask);
-    desc.set_stencil_failure_operation(map_stencil_op(face.fail_op));
-    desc.set_depth_failure_operation(map_stencil_op(face.depth_fail_op));
-    desc.set_depth_stencil_pass_operation(map_stencil_op(face.pass_op));
+) -> Retained<metal::MTLStencilDescriptor> {
+    let desc = unsafe { metal::MTLStencilDescriptor::new() };
+    desc.setStencilCompareFunction(super::map_compare_function(face.compare));
+    desc.setReadMask(read_mask);
+    desc.setWriteMask(write_mask);
+    desc.setStencilFailureOperation(map_stencil_op(face.fail_op));
+    desc.setDepthFailureOperation(map_stencil_op(face.depth_fail_op));
+    desc.setDepthStencilPassOperation(map_stencil_op(face.pass_op));
     desc
 }
 
-fn create_depth_stencil_desc(state: &crate::DepthStencilState) -> metal::DepthStencilDescriptor {
-    let desc = metal::DepthStencilDescriptor::new();
-    desc.set_depth_compare_function(super::map_compare_function(state.depth_compare));
-    desc.set_depth_write_enabled(state.depth_write_enabled);
+fn create_depth_stencil_desc(
+    state: &crate::DepthStencilState,
+) -> Retained<metal::MTLDepthStencilDescriptor> {
+    let desc = unsafe { metal::MTLDepthStencilDescriptor::new() };
+    desc.setDepthCompareFunction(super::map_compare_function(state.depth_compare));
+    desc.setDepthWriteEnabled(state.depth_write_enabled);
 
     let s = &state.stencil;
     if s.front != crate::StencilFaceState::IGNORE {
         let face_desc = create_stencil_desc(&s.front, s.read_mask, s.write_mask);
-        desc.set_front_face_stencil(Some(&face_desc));
+        desc.setFrontFaceStencil(Some(&face_desc));
     }
     if s.back != crate::StencilFaceState::IGNORE {
         let face_desc = create_stencil_desc(&s.back, s.read_mask, s.write_mask);
-        desc.set_back_face_stencil(Some(&face_desc));
+        desc.setBackFaceStencil(Some(&face_desc));
     }
 
     desc
 }
 
 struct CompiledShader {
-    library: metal::Library,
-    function: metal::Function,
+    library: Retained<ProtocolObject<dyn metal::MTLLibrary>>,
+    function: Retained<ProtocolObject<dyn metal::MTLFunction>>,
     attribute_mappings: Vec<crate::VertexAttributeMapping>,
     wg_size: metal::MTLSize,
     wg_memory_sizes: Vec<u32>,
@@ -267,8 +272,8 @@ impl super::Context {
 
         let naga_options = msl::Options {
             lang_version: (
-                (self.info.language_version as u32 >> 16) as u8,
-                self.info.language_version as u8,
+                (self.info.language_version.0 as u32 >> 16) as u8,
+                self.info.language_version.0 as u8,
             ),
             inline_samplers: Default::default(),
             spirv_cross_compatibility: false,
@@ -295,18 +300,18 @@ impl super::Context {
             &source
         );
 
-        let options = metal::CompileOptions::new();
-        options.set_language_version(self.info.language_version);
-        options.set_preserve_invariance(true);
+        let source_string = NSString::from_str(&source);
+        let options = metal::MTLCompileOptions::new();
+        options.setLanguageVersion(self.info.language_version);
+        options.setPreserveInvariance(true);
 
         let library = self
             .device
             .lock()
             .unwrap()
-            .new_library_with_source(source.as_ref(), &options)
+            .newLibraryWithSource_options_error(&source_string, Some(&options))
             .unwrap_or_else(|err| {
-                let string = err.replace("\\n", "\n");
-                panic!("MSL compilation error:\n{}", string);
+                panic!("MSL compilation error:\n{}", err.localizedDescription());
             });
 
         let ep = &module.entry_points[ep_index];
@@ -317,7 +322,8 @@ impl super::Context {
             depth: ep.workgroup_size[2] as _,
         };
 
-        let function = library.get_function(name, None).unwrap();
+        let name_string = NSString::from_str(name);
+        let function = library.newFunctionWithName(&name_string).unwrap();
 
         CompiledShader {
             library,
@@ -335,11 +341,10 @@ impl crate::traits::ShaderDevice for super::Context {
     type RenderPipeline = super::RenderPipeline;
 
     fn create_compute_pipeline(&self, desc: crate::ComputePipelineDesc) -> super::ComputePipeline {
+        use metal::MTLDevice as _;
         let mut layout = make_pipeline_layout(desc.data_layouts, 0);
 
-        objc::rc::autoreleasepool(|| {
-            let descriptor = metal::ComputePipelineDescriptor::new();
-
+        objc2::rc::autoreleasepool(|_| {
             let cs = self.load_shader(
                 desc.compute,
                 desc.data_layouts,
@@ -347,17 +352,14 @@ impl crate::traits::ShaderDevice for super::Context {
                 &mut layout,
                 ShaderFlags::empty(),
             );
-            descriptor.set_compute_function(Some(&cs.function));
 
-            if !desc.name.is_empty() {
-                descriptor.set_label(desc.name);
-            }
-
+            //TODO: use `newComputePipelineStateWithDescriptor_options_reflection`
+            // https://github.com/madsmtm/objc2/issues/683
             let raw = self
                 .device
                 .lock()
                 .unwrap()
-                .new_compute_pipeline_state(&descriptor)
+                .newComputePipelineStateWithFunction_error(&cs.function)
                 .unwrap();
 
             super::ComputePipeline {
@@ -406,8 +408,8 @@ impl crate::traits::ShaderDevice for super::Context {
             ),
         };
 
-        objc::rc::autoreleasepool(|| {
-            let descriptor = metal::RenderPipelineDescriptor::new();
+        objc2::rc::autoreleasepool(|_| {
+            let descriptor = metal::MTLRenderPipelineDescriptor::new();
 
             let vs = self.load_shader(
                 desc.vertex,
@@ -419,46 +421,54 @@ impl crate::traits::ShaderDevice for super::Context {
                     _ => ShaderFlags::empty(),
                 },
             );
-            descriptor.set_vertex_function(Some(&vs.function));
-            descriptor.set_raster_sample_count(desc.multisample_state.sample_count as _);
-            descriptor.set_alpha_to_coverage_enabled(desc.multisample_state.alpha_to_coverage);
+            descriptor.setVertexFunction(Some(&vs.function));
+            descriptor.setRasterSampleCount(desc.multisample_state.sample_count as _);
+            descriptor.setAlphaToCoverageEnabled(desc.multisample_state.alpha_to_coverage);
 
             // Fragment shader
-            let fs = desc.fragment.map(|desc_fragment| {
-                self.load_shader(
-                    desc_fragment,
+            let fs_lib = if let Some(desc_fs) = desc.fragment {
+                let fs = self.load_shader(
+                    desc_fs,
                     desc.data_layouts,
                     &[],
                     &mut layout,
                     ShaderFlags::empty(),
-                )
-            });
-            descriptor.set_fragment_function(fs.as_ref().map(|fs| fs.function.as_ref()));
+                );
+                descriptor.setFragmentFunction(Some(&fs.function));
+                Some(fs.library)
+            } else {
+                None
+            };
 
-            let vertex_descriptor = metal::VertexDescriptor::new();
+            let vertex_descriptor = unsafe { metal::MTLVertexDescriptor::new() };
             for (i, vf) in desc.vertex_fetches.iter().enumerate() {
-                let buffer_desc = vertex_descriptor.layouts().object_at(i as u64).unwrap();
-                buffer_desc.set_stride(vf.layout.stride as u64);
-                buffer_desc.set_step_function(if vf.instanced {
-                    metal::MTLVertexStepFunction::PerInstance
-                } else {
-                    metal::MTLVertexStepFunction::PerVertex
-                });
+                unsafe {
+                    let buffer_desc = vertex_descriptor.layouts().objectAtIndexedSubscript(i);
+                    buffer_desc.setStride(vf.layout.stride as usize);
+                    buffer_desc.setStepFunction(if vf.instanced {
+                        metal::MTLVertexStepFunction::PerInstance
+                    } else {
+                        metal::MTLVertexStepFunction::PerVertex
+                    })
+                };
             }
             for (i, mapping) in vs.attribute_mappings.into_iter().enumerate() {
-                let attribute_desc = vertex_descriptor.attributes().object_at(i as u64).unwrap();
                 let vf = &desc.vertex_fetches[mapping.buffer_index];
                 let (_, attrib) = vf.layout.attributes[mapping.attribute_index];
                 let (vertex_format, _) = super::map_vertex_format(attrib.format);
-                attribute_desc.set_format(vertex_format);
-                attribute_desc.set_buffer_index(mapping.buffer_index as u64);
-                attribute_desc.set_offset(attrib.offset as u64);
+                unsafe {
+                    let attribute_desc = vertex_descriptor.attributes().objectAtIndexedSubscript(i);
+                    attribute_desc.setFormat(vertex_format);
+                    attribute_desc.setBufferIndex(mapping.buffer_index);
+                    attribute_desc.setOffset(attrib.offset as usize);
+                }
             }
-            descriptor.set_vertex_descriptor(Some(vertex_descriptor));
+            descriptor.setVertexDescriptor(Some(&vertex_descriptor));
 
             for (i, ct) in desc.color_targets.iter().enumerate() {
-                let at_descriptor = descriptor.color_attachments().object_at(i as u64).unwrap();
-                at_descriptor.set_pixel_format(super::map_texture_format(ct.format));
+                let at_descriptor =
+                    unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(i) };
+                at_descriptor.setPixelFormat(super::map_texture_format(ct.format));
 
                 let mut write_mask = metal::MTLColorWriteMask::empty();
                 if ct.write_mask.contains(crate::ColorWrites::RED) {
@@ -473,27 +483,27 @@ impl crate::traits::ShaderDevice for super::Context {
                 if ct.write_mask.contains(crate::ColorWrites::ALPHA) {
                     write_mask |= metal::MTLColorWriteMask::Alpha;
                 }
-                at_descriptor.set_write_mask(write_mask);
+                at_descriptor.setWriteMask(write_mask);
 
                 if let Some(ref blend) = ct.blend {
-                    at_descriptor.set_blending_enabled(true);
+                    at_descriptor.setBlendingEnabled(true);
                     let (color_op, color_src, color_dst) = map_blend_component(&blend.color);
                     let (alpha_op, alpha_src, alpha_dst) = map_blend_component(&blend.alpha);
 
-                    at_descriptor.set_rgb_blend_operation(color_op);
-                    at_descriptor.set_source_rgb_blend_factor(color_src);
-                    at_descriptor.set_destination_rgb_blend_factor(color_dst);
+                    at_descriptor.setRgbBlendOperation(color_op);
+                    at_descriptor.setSourceRGBBlendFactor(color_src);
+                    at_descriptor.setDestinationRGBBlendFactor(color_dst);
 
-                    at_descriptor.set_alpha_blend_operation(alpha_op);
-                    at_descriptor.set_source_alpha_blend_factor(alpha_src);
-                    at_descriptor.set_destination_alpha_blend_factor(alpha_dst);
+                    at_descriptor.setAlphaBlendOperation(alpha_op);
+                    at_descriptor.setSourceAlphaBlendFactor(alpha_src);
+                    at_descriptor.setDestinationAlphaBlendFactor(alpha_dst);
                 }
             }
 
             let depth_stencil = match desc.depth_stencil {
                 Some(ref ds) => {
                     let raw_format = super::map_texture_format(ds.format);
-                    descriptor.set_depth_attachment_pixel_format(raw_format);
+                    descriptor.setDepthAttachmentPixelFormat(raw_format);
                     //TODO: descriptor.set_stencil_attachment_pixel_format(raw_format);
 
                     let ds_descriptor = create_depth_stencil_desc(ds);
@@ -501,28 +511,29 @@ impl crate::traits::ShaderDevice for super::Context {
                         .device
                         .lock()
                         .unwrap()
-                        .new_depth_stencil_state(&ds_descriptor);
+                        .newDepthStencilStateWithDescriptor(&ds_descriptor)
+                        .unwrap();
                     Some((raw, ds.bias))
                 }
                 None => None,
             };
 
             if !desc.name.is_empty() {
-                descriptor.set_label(desc.name);
+                descriptor.setLabel(Some(&NSString::from_str(desc.name)));
             }
 
             let raw = self
                 .device
                 .lock()
                 .unwrap()
-                .new_render_pipeline_state(&descriptor)
+                .newRenderPipelineStateWithDescriptor_error(&descriptor)
                 .unwrap();
 
             super::RenderPipeline {
                 raw,
                 name: desc.name.to_string(),
                 vs_lib: vs.library,
-                fs_lib: fs.map(|fs| fs.library),
+                fs_lib,
                 layout,
                 primitive_type,
                 triangle_fill_mode,
