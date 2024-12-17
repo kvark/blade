@@ -1,70 +1,16 @@
-use core_graphics_types::{
-    base::CGFloat,
-    geometry::{CGRect, CGSize},
-};
-use objc::{
-    class, msg_send,
-    runtime::{Object, BOOL, YES},
-    sel, sel_impl,
-};
+use objc2::rc::Retained;
+use objc2_foundation::CGSize;
+use objc2_quartz_core::CAMetalLayer;
 
-use std::{mem, ptr};
-
-#[cfg(target_os = "macos")]
-#[link(name = "QuartzCore", kind = "framework")]
-extern "C" {
-    #[allow(non_upper_case_globals)]
-    static kCAGravityTopLeft: *mut Object;
-}
+const SURFACE_INFO: crate::SurfaceInfo = crate::SurfaceInfo {
+    format: crate::TextureFormat::Rgba8Unorm,
+    alpha: crate::AlphaMode::Ignored,
+};
 
 impl super::Surface {
-    pub unsafe fn from_view(view: *mut Object) -> Self {
-        let main_layer: *mut Object = msg_send![view, layer];
-        let class = class!(CAMetalLayer);
-        let is_valid_layer: BOOL = msg_send![main_layer, isKindOfClass: class];
-        let raw_layer = if is_valid_layer == YES {
-            main_layer
-        } else {
-            // If the main layer is not a CAMetalLayer, we create a CAMetalLayer and use it.
-            let new_layer: *mut Object = msg_send![class, new];
-            let frame: CGRect = msg_send![main_layer, bounds];
-            let () = msg_send![new_layer, setFrame: frame];
-            #[cfg(target_os = "ios")]
-            {
-                // Unlike NSView, UIView does not allow to replace main layer.
-                let () = msg_send![main_layer, addSublayer: new_layer];
-                let () = msg_send![main_layer, setAutoresizingMask: 0x1Fu64];
-                let screen: *mut Object = msg_send![class!(UIScreen), mainScreen];
-                let scale_factor: CGFloat = msg_send![screen, nativeScale];
-                let () = msg_send![view, setContentScaleFactor: scale_factor];
-            };
-            #[cfg(target_os = "macos")]
-            {
-                let () = msg_send![view, setLayer: new_layer];
-                let () = msg_send![view, setWantsLayer: YES];
-                let () = msg_send![new_layer, setContentsGravity: kCAGravityTopLeft];
-                let window: *mut Object = msg_send![view, window];
-                if !window.is_null() {
-                    let scale_factor: CGFloat = msg_send![window, backingScaleFactor];
-                    let () = msg_send![new_layer, setContentsScale: scale_factor];
-                }
-            }
-            new_layer
-        };
-
-        Self {
-            view: msg_send![view, retain],
-            render_layer: mem::transmute::<_, &metal::MetalLayerRef>(raw_layer).to_owned(),
-            info: crate::SurfaceInfo {
-                format: crate::TextureFormat::Rgba8Unorm,
-                alpha: crate::AlphaMode::Ignored,
-            },
-        }
-    }
-
     /// Get the CALayerMetal for this surface, if any.
     /// This is platform specific API.
-    pub fn metal_layer(&self) -> metal::MetalLayer {
+    pub fn metal_layer(&self) -> Retained<CAMetalLayer> {
         self.render_layer.clone()
     }
 
@@ -73,9 +19,11 @@ impl super::Surface {
     }
 
     pub fn acquire_frame(&self) -> super::Frame {
-        let (drawable, texture) = objc::rc::autoreleasepool(|| {
-            let drawable = self.render_layer.next_drawable().unwrap();
-            (drawable.to_owned(), drawable.texture().to_owned())
+        use objc2_quartz_core::CAMetalDrawable as _;
+        let (drawable, texture) = objc2::rc::autoreleasepool(|_| unsafe {
+            let drawable = self.render_layer.nextDrawable().unwrap();
+            let texture = drawable.texture();
+            (Retained::cast(drawable), texture)
         });
         super::Frame { drawable, texture }
     }
@@ -86,24 +34,71 @@ impl super::Context {
         &self,
         window: &I,
     ) -> Result<super::Surface, crate::NotSupportedError> {
+        use objc2_foundation::NSObjectProtocol as _;
+
         Ok(match window.window_handle().unwrap().as_raw() {
             #[cfg(target_os = "ios")]
             raw_window_handle::RawWindowHandle::UiKit(handle) => unsafe {
-                super::Surface::from_view(handle.ui_view.as_ptr() as *mut _)
+                let view =
+                    Retained::retain(handle.ui_view.as_ptr() as *mut objc2_ui_kit::UIView).unwrap();
+                let main_layer = view.layer();
+                let render_layer = if main_layer.is_kind_of::<CAMetalLayer>() {
+                    Retained::cast(main_layer)
+                } else {
+                    use objc2_ui_kit::UIViewAutoresizing as Var;
+                    let new_layer = CAMetalLayer::new();
+                    new_layer.setFrame(main_layer.frame());
+                    // Unlike NSView, UIView does not allow to replace main layer.
+                    main_layer.addSublayer(&new_layer);
+                    view.setAutoresizingMask(
+                        Var::FlexibleLeftMargin
+                            | Var::FlexibleWidth
+                            | Var::FlexibleRightMargin
+                            | Var::FlexibleTopMargin
+                            | Var::FlexibleHeight
+                            | Var::FlexibleBottomMargin,
+                    );
+                    if let Some(scene) = view.window().and_then(|w| w.windowScene()) {
+                        new_layer.setContentsScale(scene.screen().nativeScale());
+                    }
+                    new_layer
+                };
+                super::Surface {
+                    view: Some(Retained::cast(view)),
+                    render_layer,
+                    info: SURFACE_INFO,
+                }
             },
             #[cfg(target_os = "macos")]
             raw_window_handle::RawWindowHandle::AppKit(handle) => unsafe {
-                super::Surface::from_view(handle.ns_view.as_ptr() as *mut _)
+                let view = Retained::retain(handle.ns_view.as_ptr() as *mut objc2_app_kit::NSView)
+                    .unwrap();
+                let main_layer = view.layer().unwrap();
+                let render_layer = if main_layer.is_kind_of::<CAMetalLayer>() {
+                    Retained::cast(main_layer)
+                } else {
+                    let new_layer = CAMetalLayer::new();
+                    new_layer.setFrame(main_layer.frame());
+                    view.setLayer(Some(&new_layer));
+                    view.setWantsLayer(true);
+                    new_layer.setContentsGravity(objc2_quartz_core::kCAGravityTopLeft);
+                    if let Some(window) = view.window() {
+                        new_layer.setContentsScale(window.backingScaleFactor());
+                    }
+                    new_layer
+                };
+                super::Surface {
+                    view: Some(Retained::cast(view)),
+                    render_layer,
+                    info: SURFACE_INFO,
+                }
             },
             _ => return Err(crate::NotSupportedError::PlatformNotSupported),
         })
     }
 
     pub fn destroy_surface(&self, surface: &mut super::Surface) {
-        unsafe {
-            let () = msg_send![surface.view, release];
-        }
-        surface.view = ptr::null_mut();
+        surface.view = None;
     }
 
     pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
@@ -126,21 +121,21 @@ impl super::Context {
             crate::DisplaySync::Recent | crate::DisplaySync::Tear => false,
         };
 
-        surface.render_layer.set_opaque(!config.transparent);
-        surface.render_layer.set_device(&*device);
-        surface
-            .render_layer
-            .set_pixel_format(super::map_texture_format(surface.info.format));
-        surface
-            .render_layer
-            .set_framebuffer_only(config.usage == crate::TextureUsage::TARGET);
-        surface.render_layer.set_maximum_drawable_count(3);
-        surface.render_layer.set_drawable_size(CGSize::new(
-            config.size.width as f64,
-            config.size.height as f64,
-        ));
         unsafe {
-            let () = msg_send![surface.render_layer, setDisplaySyncEnabled: vsync];
+            surface.render_layer.setOpaque(!config.transparent);
+            surface.render_layer.setDevice(Some(device.as_ref()));
+            surface
+                .render_layer
+                .setPixelFormat(super::map_texture_format(surface.info.format));
+            surface
+                .render_layer
+                .setFramebufferOnly(config.usage == crate::TextureUsage::TARGET);
+            surface.render_layer.setMaximumDrawableCount(3);
+            surface.render_layer.setDrawableSize(CGSize {
+                width: config.size.width as f64,
+                height: config.size.height as f64,
+            });
+            surface.render_layer.setDisplaySyncEnabled(vsync);
         }
     }
 }

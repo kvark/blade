@@ -21,14 +21,66 @@ raw-window-handle = "0.6"
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 block = "0.1"
-core-graphics-types = "0.1"
-#TODO: switch to crates once these are published:
-# - https://github.com/gfx-rs/metal-rs/pull/335
-# - https://github.com/gfx-rs/metal-rs/pull/336
-# - https://github.com/gfx-rs/metal-rs/pull/337
-metal = { git = "https://github.com/gfx-rs/metal-rs", rev = "ef768ff9d742ae6a0f4e83ddc8031264e7d460c4" }
-objc = "0.2.5"
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSArray"] }
+objc2-metal = { version = "0.2", features = [
+    "MTLTypes",
+    "MTLPixelFormat",
+    "MTLResource",
+    "MTLBuffer",
+    "MTLTexture",
+    "MTLSampler",
+    "MTLDrawable",
+    "MTLAccelerationStructure",
+    "MTLAccelerationStructureTypes",
+    "MTLCounters",
+    "MTLLibrary",
+    "MTLStageInputOutputDescriptor",
+    "MTLComputePipeline",
+    "MTLVertexDescriptor",
+    "MTLDepthStencil",
+    "MTLComputePipeline",
+    "MTLRenderPipeline",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLAccelerationStructureCommandEncoder",
+    "MTLBlitCommandEncoder",
+    "MTLComputeCommandEncoder",
+    "MTLRenderCommandEncoder",
+    "MTLBlitPass",
+    "MTLComputePass",
+    "MTLRenderPass",
+    "MTLCommandQueue",
+    "MTLDevice",
+    "MTLCaptureManager",
+    "MTLCaptureScope",
+    "block2",
+] }
+objc2-quartz-core = { version = "0.2", features = [
+    "objc2-metal",
+    "CALayer",
+    "CAMetalLayer",
+] }
 naga = { workspace = true, features = ["msl-out"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.2", features = [
+    "objc2-quartz-core",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { version = "0.2", features = [
+    "objc2-quartz-core",
+    "UIResponder",
+    "UIView",
+    "UIWindow",
+    "UIScene",
+    "UIWindowScene",
+    "UIScreen",
+] }
 
 [target.'cfg(any(vulkan, windows, target_os = "linux", target_os = "android", target_os = "freebsd"))'.dependencies]
 ash = "0.38"

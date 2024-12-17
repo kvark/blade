@@ -1,18 +1,26 @@
-use std::{marker::PhantomData, mem, ops::Range, time::Duration};
+use objc2_foundation::{NSArray, NSRange, NSString};
+use objc2_metal::{
+    self as metal, MTLAccelerationStructureCommandEncoder as _, MTLBlitCommandEncoder,
+    MTLCommandBuffer as _, MTLCommandEncoder, MTLComputeCommandEncoder as _,
+    MTLCounterSampleBuffer, MTLRenderCommandEncoder,
+};
+use std::{marker::PhantomData, mem, ops::Range, ptr::NonNull, slice, time::Duration};
 
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let slot = ctx.targets[index as usize] as _;
-        let ptr: *const T = self;
-        let size = mem::size_of::<T>() as u64;
-        if let Some(encoder) = ctx.vs_encoder {
-            encoder.set_vertex_bytes(slot, size, ptr as *const _);
-        }
-        if let Some(encoder) = ctx.fs_encoder {
-            encoder.set_fragment_bytes(slot, size, ptr as *const _);
-        }
-        if let Some(encoder) = ctx.cs_encoder {
-            encoder.set_bytes(slot, size, ptr as *const _);
+        let size = mem::size_of::<T>();
+        unsafe {
+            let ptr = NonNull::new_unchecked(self as *const _ as *mut _);
+            if let Some(encoder) = ctx.vs_encoder {
+                encoder.setVertexBytes_length_atIndex(ptr, size, slot);
+            }
+            if let Some(encoder) = ctx.fs_encoder {
+                encoder.setFragmentBytes_length_atIndex(ptr, size, slot);
+            }
+            if let Some(encoder) = ctx.cs_encoder {
+                encoder.setBytes_length_atIndex(ptr, size, slot);
+            }
         }
     }
 }
@@ -20,14 +28,16 @@ impl crate::ShaderBindable for super::TextureView {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let slot = ctx.targets[index as usize] as _;
         let value = Some(self.as_ref());
-        if let Some(encoder) = ctx.vs_encoder {
-            encoder.set_vertex_texture(slot, value);
-        }
-        if let Some(encoder) = ctx.fs_encoder {
-            encoder.set_fragment_texture(slot, value);
-        }
-        if let Some(encoder) = ctx.cs_encoder {
-            encoder.set_texture(slot, value);
+        unsafe {
+            if let Some(encoder) = ctx.vs_encoder {
+                encoder.setVertexTexture_atIndex(value, slot);
+            }
+            if let Some(encoder) = ctx.fs_encoder {
+                encoder.setFragmentTexture_atIndex(value, slot);
+            }
+            if let Some(encoder) = ctx.cs_encoder {
+                encoder.setTexture_atIndex(value, slot);
+            }
         }
     }
 }
@@ -38,17 +48,18 @@ impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::Tex
 }
 impl crate::ShaderBindable for super::Sampler {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
-        //self.raw.set_sampler_state(index as _, sampler.as_ref());
         let slot = ctx.targets[index as usize] as _;
         let value = Some(self.as_ref());
-        if let Some(encoder) = ctx.vs_encoder {
-            encoder.set_vertex_sampler_state(slot, value);
-        }
-        if let Some(encoder) = ctx.fs_encoder {
-            encoder.set_fragment_sampler_state(slot, value);
-        }
-        if let Some(encoder) = ctx.cs_encoder {
-            encoder.set_sampler_state(slot, value);
+        unsafe {
+            if let Some(encoder) = ctx.vs_encoder {
+                encoder.setVertexSamplerState_atIndex(value, slot);
+            }
+            if let Some(encoder) = ctx.fs_encoder {
+                encoder.setFragmentSamplerState_atIndex(value, slot);
+            }
+            if let Some(encoder) = ctx.cs_encoder {
+                encoder.setSamplerState_atIndex(value, slot);
+            }
         }
     }
 }
@@ -56,14 +67,16 @@ impl crate::ShaderBindable for crate::BufferPiece {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let slot = ctx.targets[index as usize] as _;
         let value = Some(self.buffer.as_ref());
-        if let Some(encoder) = ctx.vs_encoder {
-            encoder.set_vertex_buffer(slot, value, self.offset);
-        }
-        if let Some(encoder) = ctx.fs_encoder {
-            encoder.set_fragment_buffer(slot, value, self.offset);
-        }
-        if let Some(encoder) = ctx.cs_encoder {
-            encoder.set_buffer(slot, value, self.offset);
+        unsafe {
+            if let Some(encoder) = ctx.vs_encoder {
+                encoder.setVertexBuffer_offset_atIndex(value, self.offset as usize, slot);
+            }
+            if let Some(encoder) = ctx.fs_encoder {
+                encoder.setFragmentBuffer_offset_atIndex(value, self.offset as usize, slot);
+            }
+            if let Some(encoder) = ctx.cs_encoder {
+                encoder.setBuffer_offset_atIndex(value, self.offset as usize, slot);
+            }
         }
     }
 }
@@ -76,21 +89,23 @@ impl crate::ShaderBindable for crate::AccelerationStructure {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let slot = ctx.targets[index as usize] as _;
         let value = Some(self.as_ref());
-        if let Some(encoder) = ctx.vs_encoder {
-            encoder.set_vertex_acceleration_structure(slot, value);
-        }
-        if let Some(encoder) = ctx.fs_encoder {
-            encoder.set_fragment_acceleration_structure(slot, value);
-        }
-        if let Some(encoder) = ctx.cs_encoder {
-            encoder.set_acceleration_structure(slot, value);
+        unsafe {
+            if let Some(encoder) = ctx.vs_encoder {
+                encoder.setVertexAccelerationStructure_atBufferIndex(value, slot);
+            }
+            if let Some(encoder) = ctx.fs_encoder {
+                encoder.setFragmentAccelerationStructure_atBufferIndex(value, slot);
+            }
+            if let Some(encoder) = ctx.cs_encoder {
+                encoder.setAccelerationStructure_atBufferIndex(value, slot);
+            }
         }
     }
 }
 
 impl super::TimingData {
-    fn add(&mut self, label: &str) -> u64 {
-        let counter_index = self.pass_names.len() as u64 * 2;
+    fn add(&mut self, label: &str) -> usize {
+        let counter_index = self.pass_names.len() * 2;
         self.pass_names.push(label.to_string());
         counter_index
     }
@@ -101,40 +116,42 @@ impl super::CommandEncoder {
         if self.enable_debug_groups {
             //HACK: close the previous group
             if self.has_open_debug_group {
-                self.raw.as_mut().unwrap().pop_debug_group();
+                self.raw.as_mut().unwrap().popDebugGroup();
             } else {
                 self.has_open_debug_group = true;
             }
-            self.raw.as_mut().unwrap().push_debug_group(label);
+            let string = NSString::from_str(label);
+            self.raw.as_mut().unwrap().pushDebugGroup(&string);
         }
     }
 
-    pub(super) fn finish(&mut self) -> metal::CommandBuffer {
+    pub(super) fn finish(&mut self) -> super::RawCommandBuffer {
         if self.has_open_debug_group {
-            self.raw.as_mut().unwrap().pop_debug_group();
+            self.raw.as_mut().unwrap().popDebugGroup();
         }
         self.raw.take().unwrap()
     }
 
     pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder {
         self.begin_pass(label);
-        let raw = objc::rc::autoreleasepool(|| {
-            let descriptor = metal::BlitPassDescriptor::new();
-
+        let raw = objc2::rc::autoreleasepool(|_| unsafe {
+            let descriptor = metal::MTLBlitPassDescriptor::new();
             if let Some(ref mut td_array) = self.timing_datas {
                 let td = td_array.first_mut().unwrap();
                 let counter_index = td.add(label);
-                let sba = descriptor.sample_buffer_attachments().object_at(0).unwrap();
-                sba.set_sample_buffer(&td.sample_buffer);
-                sba.set_start_of_encoder_sample_index(counter_index);
-                sba.set_end_of_encoder_sample_index(counter_index + 1);
+                let sba = descriptor
+                    .sampleBufferAttachments()
+                    .objectAtIndexedSubscript(0);
+                sba.setSampleBuffer(Some(&td.sample_buffer));
+                sba.setStartOfEncoderSampleIndex(counter_index);
+                sba.setEndOfEncoderSampleIndex(counter_index + 1);
             }
 
             self.raw
                 .as_mut()
                 .unwrap()
-                .blit_command_encoder_with_descriptor(&descriptor)
-                .to_owned()
+                .blitCommandEncoderWithDescriptor(&descriptor)
+                .unwrap()
         });
         super::TransferCommandEncoder {
             raw,
@@ -146,23 +163,24 @@ impl super::CommandEncoder {
         &mut self,
         label: &str,
     ) -> super::AccelerationStructureCommandEncoder {
-        let raw = objc::rc::autoreleasepool(|| {
-            let descriptor = metal::AccelerationStructurePassDescriptor::new();
+        let raw = objc2::rc::autoreleasepool(|_| unsafe {
+            let descriptor = metal::MTLAccelerationStructurePassDescriptor::new();
 
             if let Some(ref mut td_array) = self.timing_datas {
                 let td = td_array.first_mut().unwrap();
                 let counter_index = td.add(label);
-                let sba = descriptor.sample_buffer_attachments().object_at(0).unwrap();
-                sba.set_sample_buffer(&td.sample_buffer);
-                sba.set_start_of_encoder_sample_index(counter_index);
-                sba.set_end_of_encoder_sample_index(counter_index + 1);
+                let sba = descriptor
+                    .sampleBufferAttachments()
+                    .objectAtIndexedSubscript(0);
+                sba.setSampleBuffer(Some(&td.sample_buffer));
+                sba.setStartOfEncoderSampleIndex(counter_index);
+                sba.setEndOfEncoderSampleIndex(counter_index + 1);
             }
 
             self.raw
                 .as_mut()
                 .unwrap()
-                .new_acceleration_structure_command_encoder()
-                .to_owned()
+                .accelerationStructureCommandEncoderWithDescriptor(&descriptor)
         });
         super::AccelerationStructureCommandEncoder {
             raw,
@@ -171,26 +189,28 @@ impl super::CommandEncoder {
     }
 
     pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder {
-        let raw = objc::rc::autoreleasepool(|| {
-            let descriptor = metal::ComputePassDescriptor::new();
+        let raw = objc2::rc::autoreleasepool(|_| unsafe {
+            let descriptor = metal::MTLComputePassDescriptor::new();
             if self.enable_dispatch_type {
-                descriptor.set_dispatch_type(metal::MTLDispatchType::Concurrent);
+                descriptor.setDispatchType(metal::MTLDispatchType::Concurrent);
             }
 
             if let Some(ref mut td_array) = self.timing_datas {
                 let td = td_array.first_mut().unwrap();
                 let counter_index = td.add(label);
-                let sba = descriptor.sample_buffer_attachments().object_at(0).unwrap();
-                sba.set_sample_buffer(&td.sample_buffer);
-                sba.set_start_of_encoder_sample_index(counter_index);
-                sba.set_end_of_encoder_sample_index(counter_index + 1);
+                let sba = descriptor
+                    .sampleBufferAttachments()
+                    .objectAtIndexedSubscript(0);
+                sba.setSampleBuffer(Some(&td.sample_buffer));
+                sba.setStartOfEncoderSampleIndex(counter_index);
+                sba.setEndOfEncoderSampleIndex(counter_index + 1);
             }
 
             self.raw
                 .as_mut()
                 .unwrap()
-                .compute_command_encoder_with_descriptor(&descriptor)
-                .to_owned()
+                .computeCommandEncoderWithDescriptor(&descriptor)
+                .unwrap()
         });
         super::ComputeCommandEncoder {
             raw,
@@ -203,23 +223,24 @@ impl super::CommandEncoder {
         label: &str,
         targets: crate::RenderTargetSet,
     ) -> super::RenderCommandEncoder {
-        let raw = objc::rc::autoreleasepool(|| {
-            let descriptor = metal::RenderPassDescriptor::new();
+        let raw = objc2::rc::autoreleasepool(|_| {
+            let descriptor = unsafe { metal::MTLRenderPassDescriptor::new() };
 
             for (i, rt) in targets.colors.iter().enumerate() {
-                let at_descriptor = descriptor.color_attachments().object_at(i as u64).unwrap();
-                at_descriptor.set_texture(Some(rt.view.as_ref()));
+                let at_descriptor =
+                    unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(i) };
+                at_descriptor.setTexture(Some(rt.view.as_ref()));
 
                 let load_action = match rt.init_op {
                     crate::InitOp::Load => metal::MTLLoadAction::Load,
                     crate::InitOp::Clear(color) => {
                         let clear_color = map_clear_color(color);
-                        at_descriptor.set_clear_color(clear_color);
+                        at_descriptor.setClearColor(clear_color);
                         metal::MTLLoadAction::Clear
                     }
                     crate::InitOp::DontCare => metal::MTLLoadAction::DontCare,
                 };
-                at_descriptor.set_load_action(load_action);
+                at_descriptor.setLoadAction(load_action);
 
                 let store_action = match rt.finish_op {
                     crate::FinishOp::Store | crate::FinishOp::Ignore => {
@@ -227,16 +248,16 @@ impl super::CommandEncoder {
                     }
                     crate::FinishOp::Discard => metal::MTLStoreAction::DontCare,
                     crate::FinishOp::ResolveTo(ref view) => {
-                        at_descriptor.set_resolve_texture(Some(view.as_ref()));
+                        at_descriptor.setResolveTexture(Some(view.as_ref()));
                         metal::MTLStoreAction::MultisampleResolve
                     }
                 };
-                at_descriptor.set_store_action(store_action);
+                at_descriptor.setStoreAction(store_action);
             }
 
             if let Some(ref rt) = targets.depth_stencil {
-                let at_descriptor = descriptor.depth_attachment().unwrap();
-                at_descriptor.set_texture(Some(rt.view.as_ref()));
+                let at_descriptor = descriptor.depthAttachment();
+                at_descriptor.setTexture(Some(rt.view.as_ref()));
                 let load_action = match rt.init_op {
                     crate::InitOp::Load => metal::MTLLoadAction::Load,
                     crate::InitOp::Clear(color) => {
@@ -245,7 +266,7 @@ impl super::CommandEncoder {
                             | crate::TextureColor::OpaqueBlack => 0.0,
                             crate::TextureColor::White => 1.0,
                         };
-                        at_descriptor.set_clear_depth(clear_depth);
+                        at_descriptor.setClearDepth(clear_depth);
                         metal::MTLLoadAction::Clear
                     }
                     crate::InitOp::DontCare => metal::MTLLoadAction::DontCare,
@@ -257,24 +278,28 @@ impl super::CommandEncoder {
                     crate::FinishOp::Discard => metal::MTLStoreAction::DontCare,
                     crate::FinishOp::ResolveTo(_) => panic!("Can't resolve depth texture"),
                 };
-                at_descriptor.set_load_action(load_action);
-                at_descriptor.set_store_action(store_action);
+                at_descriptor.setLoadAction(load_action);
+                at_descriptor.setStoreAction(store_action);
             }
 
             if let Some(ref mut td_array) = self.timing_datas {
                 let td = td_array.first_mut().unwrap();
                 let counter_index = td.add(label);
-                let sba = descriptor.sample_buffer_attachments().object_at(0).unwrap();
-                sba.set_sample_buffer(&td.sample_buffer);
-                sba.set_start_of_vertex_sample_index(counter_index);
-                sba.set_end_of_fragment_sample_index(counter_index + 1);
+                unsafe {
+                    let sba = descriptor
+                        .sampleBufferAttachments()
+                        .objectAtIndexedSubscript(0);
+                    sba.setSampleBuffer(Some(&td.sample_buffer));
+                    sba.setStartOfVertexSampleIndex(counter_index);
+                    sba.setEndOfFragmentSampleIndex(counter_index + 1);
+                }
             }
 
             self.raw
                 .as_mut()
                 .unwrap()
-                .new_render_command_encoder(descriptor)
-                .to_owned()
+                .renderCommandEncoderWithDescriptor(&descriptor)
+                .unwrap()
         });
 
         super::RenderCommandEncoder {
@@ -295,9 +320,17 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
             td_array.rotate_left(1);
             let td = td_array.first_mut().unwrap();
             if !td.pass_names.is_empty() {
-                let counters = td
-                    .sample_buffer
-                    .resolve_counter_range(metal::NSRange::new(0, td.pass_names.len() as u64 * 2));
+                let ns_data = unsafe {
+                    td.sample_buffer
+                        .resolveCounterRange(NSRange::new(0, td.pass_names.len() * 2))
+                        .unwrap()
+                };
+                let counters = unsafe {
+                    slice::from_raw_parts(
+                        ns_data.bytes().as_ptr() as *const u64,
+                        ns_data.len() / mem::size_of::<u64>(),
+                    )
+                };
                 for (name, chunk) in td.pass_names.drain(..).zip(counters.chunks(2)) {
                     let duration = Duration::from_nanos(chunk[1] - chunk[0]);
                     *self.timings.entry(name).or_default() += duration;
@@ -306,12 +339,13 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         }
 
         let queue = self.queue.lock().unwrap();
-        self.raw = Some(objc::rc::autoreleasepool(|| {
-            let cmd_buf = queue.new_command_buffer_with_unretained_references();
+        self.raw = Some(objc2::rc::autoreleasepool(|_| unsafe {
+            use metal::MTLCommandQueue as _;
+            let cmd_buf = queue.commandBufferWithUnretainedReferences().unwrap();
             if !self.name.is_empty() {
-                cmd_buf.set_label(&self.name);
+                cmd_buf.setLabel(Some(&NSString::from_str(&self.name)));
             }
-            cmd_buf.to_owned()
+            cmd_buf
         }));
         self.has_open_debug_group = false;
     }
@@ -319,7 +353,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     fn init_texture(&mut self, _texture: super::Texture) {}
 
     fn present(&mut self, frame: super::Frame) {
-        self.raw.as_mut().unwrap().present_drawable(&frame.drawable);
+        self.raw.as_mut().unwrap().presentDrawable(&frame.drawable);
     }
 
     fn timings(&self) -> &crate::Timings {
@@ -333,11 +367,12 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
     type TexturePiece = crate::TexturePiece;
 
     fn fill_buffer(&mut self, dst: crate::BufferPiece, size: u64, value: u8) {
-        let range = metal::NSRange {
-            location: dst.offset,
-            length: size,
+        let range = NSRange {
+            location: dst.offset as usize,
+            length: size as usize,
         };
-        self.raw.fill_buffer(dst.buffer.as_ref(), range, value);
+        self.raw
+            .fillBuffer_range_value(dst.buffer.as_ref(), range, value);
     }
 
     fn copy_buffer_to_buffer(
@@ -346,13 +381,16 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
         dst: crate::BufferPiece,
         size: u64,
     ) {
-        self.raw.copy_from_buffer(
-            src.buffer.as_ref(),
-            src.offset,
-            dst.buffer.as_ref(),
-            dst.offset,
-            size,
-        );
+        unsafe {
+            self.raw
+                .copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                    src.buffer.as_ref(),
+                    src.offset as usize,
+                    dst.buffer.as_ref(),
+                    dst.offset as usize,
+                    size as usize,
+                )
+        };
     }
     fn copy_texture_to_texture(
         &mut self,
@@ -360,17 +398,19 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
         dst: crate::TexturePiece,
         size: crate::Extent,
     ) {
-        self.raw.copy_from_texture(
-            src.texture.as_ref(),
-            src.array_layer as u64,
-            src.mip_level as u64,
-            map_origin(&src.origin),
-            map_extent(&size),
-            dst.texture.as_ref(),
-            dst.array_layer as u64,
-            dst.mip_level as u64,
-            map_origin(&dst.origin),
-        );
+        unsafe {
+            self.raw.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
+                src.texture.as_ref(),
+                src.array_layer as usize,
+                src.mip_level as usize,
+                map_origin(&src.origin),
+                map_extent(&size),
+                dst.texture.as_ref(),
+                dst.array_layer as usize,
+                dst.mip_level as usize,
+                map_origin(&dst.origin),
+            )
+        };
     }
 
     fn copy_buffer_to_texture(
@@ -380,18 +420,20 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
         dst: crate::TexturePiece,
         size: crate::Extent,
     ) {
-        self.raw.copy_from_buffer_to_texture(
-            src.buffer.as_ref(),
-            src.offset,
-            bytes_per_row as u64,
-            0,
-            map_extent(&size),
-            dst.texture.as_ref(),
-            dst.array_layer as u64,
-            dst.mip_level as u64,
-            map_origin(&dst.origin),
-            metal::MTLBlitOption::empty(),
-        );
+        unsafe {
+            self.raw.copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin_options(
+                src.buffer.as_ref(),
+                src.offset as usize,
+                bytes_per_row as usize,
+                0,
+                map_extent(&size),
+                dst.texture.as_ref(),
+                dst.array_layer as usize,
+                dst.mip_level as usize,
+                map_origin(&dst.origin),
+                metal::MTLBlitOption::empty(),
+            )
+        };
     }
 
     fn copy_texture_to_buffer(
@@ -401,24 +443,26 @@ impl crate::traits::TransferEncoder for super::TransferCommandEncoder<'_> {
         bytes_per_row: u32,
         size: crate::Extent,
     ) {
-        self.raw.copy_from_texture_to_buffer(
-            src.texture.as_ref(),
-            src.array_layer as u64,
-            src.mip_level as u64,
-            map_origin(&src.origin),
-            map_extent(&size),
-            dst.buffer.as_ref(),
-            dst.offset,
-            bytes_per_row as u64,
-            0,
-            metal::MTLBlitOption::empty(),
-        );
+        unsafe {
+            self.raw.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
+                src.texture.as_ref(),
+                src.array_layer as usize,
+                src.mip_level as usize,
+                map_origin(&src.origin),
+                map_extent(&size),
+                dst.buffer.as_ref(),
+                dst.offset as usize,
+                bytes_per_row as usize,
+                0,
+                metal::MTLBlitOption::empty(),
+            )
+        };
     }
 }
 
 impl Drop for super::TransferCommandEncoder<'_> {
     fn drop(&mut self) {
-        self.raw.end_encoding();
+        self.raw.endEncoding();
     }
 }
 
@@ -437,12 +481,13 @@ impl crate::traits::AccelerationStructureEncoder
         scratch_data: crate::BufferPiece,
     ) {
         let descriptor = super::make_bottom_level_acceleration_structure_desc(meshes);
-        self.raw.build_acceleration_structure(
-            acceleration_structure.as_ref(),
-            &descriptor,
-            scratch_data.buffer.as_ref(),
-            scratch_data.offset,
-        );
+        self.raw
+            .buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
+                acceleration_structure.as_ref(),
+                &descriptor,
+                scratch_data.buffer.as_ref(),
+                scratch_data.offset as usize,
+            );
     }
 
     fn build_top_level(
@@ -455,31 +500,34 @@ impl crate::traits::AccelerationStructureEncoder
     ) {
         let mut primitive_acceleration_structures = Vec::with_capacity(bottom_level.len());
         for blas in bottom_level {
-            primitive_acceleration_structures.push(blas.as_ref());
+            primitive_acceleration_structures.push(blas.as_retained());
         }
-        let descriptor = metal::InstanceAccelerationStructureDescriptor::descriptor();
-        descriptor.set_instanced_acceleration_structures(&metal::Array::from_slice(
-            &primitive_acceleration_structures,
-        ));
-        descriptor.set_instance_count(instance_count as _);
-        descriptor.set_instance_descriptor_type(
-            metal::MTLAccelerationStructureInstanceDescriptorType::UserID,
-        );
-        descriptor.set_instance_descriptor_buffer(instance_data.buffer.as_ref());
-        descriptor.set_instance_descriptor_buffer_offset(instance_data.offset);
+        let descriptor = metal::MTLInstanceAccelerationStructureDescriptor::descriptor();
+        descriptor.setInstancedAccelerationStructures(Some(&NSArray::from_vec(
+            primitive_acceleration_structures,
+        )));
+        descriptor.setInstanceCount(instance_count as usize);
+        unsafe {
+            descriptor.setInstanceDescriptorType(
+                metal::MTLAccelerationStructureInstanceDescriptorType::UserID,
+            );
+            descriptor.setInstanceDescriptorBuffer(Some(instance_data.buffer.as_ref()));
+            descriptor.setInstanceDescriptorBufferOffset(instance_data.offset as usize);
+        }
 
-        self.raw.build_acceleration_structure(
-            acceleration_structure.as_ref(),
-            &descriptor,
-            scratch_data.buffer.as_ref(),
-            scratch_data.offset,
-        );
+        self.raw
+            .buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
+                acceleration_structure.as_ref(),
+                &descriptor,
+                scratch_data.buffer.as_ref(),
+                scratch_data.offset as usize,
+            );
     }
 }
 
 impl Drop for super::AccelerationStructureCommandEncoder<'_> {
     fn drop(&mut self) {
-        self.raw.end_encoding();
+        self.raw.endEncoding();
     }
 }
 
@@ -488,24 +536,28 @@ impl super::ComputeCommandEncoder<'_> {
         &'p mut self,
         pipeline: &'p super::ComputePipeline,
     ) -> super::ComputePipelineContext<'p> {
-        self.raw.push_debug_group(&pipeline.name);
-        self.raw.set_compute_pipeline_state(&pipeline.raw);
+        self.raw.pushDebugGroup(&NSString::from_str(&pipeline.name));
+        self.raw.setComputePipelineState(&pipeline.raw);
         if let Some(index) = pipeline.layout.sizes_buffer_slot {
             //TODO: get real sizes? shouldn't matter without bounds checks
             let runtime_sizes = [0u8; 8];
-            self.raw.set_bytes(
-                index as _,
-                runtime_sizes.len() as _,
-                runtime_sizes.as_ptr() as *const _,
-            );
+            unsafe {
+                self.raw.setBytes_length_atIndex(
+                    NonNull::new(runtime_sizes.as_ptr() as *const _ as *mut _).unwrap(),
+                    runtime_sizes.len(),
+                    index as _,
+                );
+            }
         }
         for (index, &size) in pipeline.wg_memory_sizes.iter().enumerate() {
-            self.raw
-                .set_threadgroup_memory_length(index as _, size as _);
+            unsafe {
+                self.raw
+                    .setThreadgroupMemoryLength_atIndex(size as _, index);
+            }
         }
 
         super::ComputePipelineContext {
-            encoder: &mut self.raw,
+            encoder: self.raw.as_ref(),
             wg_size: pipeline.wg_size,
             group_mappings: &pipeline.layout.group_mappings,
         }
@@ -514,7 +566,7 @@ impl super::ComputeCommandEncoder<'_> {
 
 impl Drop for super::ComputeCommandEncoder<'_> {
     fn drop(&mut self) {
-        self.raw.end_encoding();
+        self.raw.endEncoding();
     }
 }
 
@@ -526,7 +578,7 @@ impl super::RenderCommandEncoder<'_> {
             width: rect.w as _,
             height: rect.h as _,
         };
-        self.raw.set_scissor_rect(scissor);
+        self.raw.setScissorRect(scissor);
     }
 
     pub fn set_viewport(&mut self, viewport: &crate::Viewport, depth_range: Range<f32>) {
@@ -538,42 +590,47 @@ impl super::RenderCommandEncoder<'_> {
             znear: depth_range.start as _,
             zfar: depth_range.end as _, // TODO: aparently broken on some Intel GPU:s? see wgpu-hal
         };
-        self.raw.set_viewport(viewport);
+        self.raw.setViewport(viewport);
     }
 
     pub fn with<'p>(
         &'p mut self,
         pipeline: &'p super::RenderPipeline,
     ) -> super::RenderPipelineContext<'p> {
-        self.raw.push_debug_group(&pipeline.name);
-        self.raw.set_render_pipeline_state(&pipeline.raw);
+        self.raw.pushDebugGroup(&NSString::from_str(&pipeline.name));
+        self.raw.setRenderPipelineState(&pipeline.raw);
         if let Some(index) = pipeline.layout.sizes_buffer_slot {
             //TODO: get real sizes
             let runtime_sizes = [0u8; 8];
-            self.raw.set_vertex_bytes(
-                index as _,
-                runtime_sizes.len() as _,
-                runtime_sizes.as_ptr() as *const _,
-            );
-            self.raw.set_fragment_bytes(
-                index as _,
-                runtime_sizes.len() as _,
-                runtime_sizes.as_ptr() as *const _,
-            );
+            unsafe {
+                self.raw.setVertexBytes_length_atIndex(
+                    NonNull::new(runtime_sizes.as_ptr() as *const _ as *mut _).unwrap(),
+                    runtime_sizes.len(),
+                    index as _,
+                );
+                self.raw.setFragmentBytes_length_atIndex(
+                    NonNull::new(runtime_sizes.as_ptr() as *const _ as *mut _).unwrap(),
+                    runtime_sizes.len(),
+                    index as _,
+                );
+            }
         }
 
-        self.raw.set_front_facing_winding(pipeline.front_winding);
-        self.raw.set_cull_mode(pipeline.cull_mode);
-        self.raw.set_triangle_fill_mode(pipeline.triangle_fill_mode);
-        self.raw.set_depth_clip_mode(pipeline.depth_clip_mode);
+        self.raw.setFrontFacingWinding(pipeline.front_winding);
+        self.raw.setCullMode(pipeline.cull_mode);
+        self.raw.setTriangleFillMode(pipeline.triangle_fill_mode);
+        self.raw.setDepthClipMode(pipeline.depth_clip_mode);
         if let Some((ref state, bias)) = pipeline.depth_stencil {
-            self.raw.set_depth_stencil_state(state);
-            self.raw
-                .set_depth_bias(bias.constant as f32, bias.slope_scale, bias.clamp);
+            self.raw.setDepthStencilState(Some(state));
+            self.raw.setDepthBias_slopeScale_clamp(
+                bias.constant as f32,
+                bias.slope_scale,
+                bias.clamp,
+            );
         }
 
         super::RenderPipelineContext {
-            encoder: &mut self.raw,
+            encoder: self.raw.as_ref(),
             primitive_type: pipeline.primitive_type,
             group_mappings: &pipeline.layout.group_mappings,
         }
@@ -582,7 +639,7 @@ impl super::RenderCommandEncoder<'_> {
 
 impl Drop for super::RenderCommandEncoder<'_> {
     fn drop(&mut self) {
-        self.raw.end_encoding();
+        self.raw.endEncoding();
     }
 }
 
@@ -608,17 +665,18 @@ impl crate::traits::PipelineEncoder for super::ComputePipelineContext<'_> {
 impl crate::traits::ComputePipelineEncoder for super::ComputePipelineContext<'_> {
     fn dispatch(&mut self, groups: [u32; 3]) {
         let raw_count = metal::MTLSize {
-            width: groups[0] as u64,
-            height: groups[1] as u64,
-            depth: groups[2] as u64,
+            width: groups[0] as usize,
+            height: groups[1] as usize,
+            depth: groups[2] as usize,
         };
-        self.encoder.dispatch_thread_groups(raw_count, self.wg_size);
+        self.encoder
+            .dispatchThreadgroups_threadsPerThreadgroup(raw_count, self.wg_size);
     }
 }
 
 impl Drop for super::ComputePipelineContext<'_> {
     fn drop(&mut self) {
-        self.encoder.pop_debug_group();
+        self.encoder.popDebugGroup();
     }
 }
 
@@ -655,7 +713,7 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
             width: rect.w as _,
             height: rect.h as _,
         };
-        self.encoder.set_scissor_rect(scissor);
+        self.encoder.setScissorRect(scissor);
     }
 
     fn set_viewport(&mut self, viewport: &crate::Viewport, depth_range: Range<f32>) {
@@ -667,15 +725,17 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
             znear: depth_range.start as _,
             zfar: depth_range.end as _, // TODO: aparently broken on some Intel GPU:s? see wgpu-hal
         };
-        self.encoder.set_viewport(viewport);
+        self.encoder.setViewport(viewport);
     }
 
     fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
-        self.encoder.set_vertex_buffer(
-            index as u64,
-            Some(vertex_buf.buffer.as_ref()),
-            vertex_buf.offset,
-        );
+        unsafe {
+            self.encoder.setVertexBuffer_offset_atIndex(
+                Some(vertex_buf.buffer.as_ref()),
+                vertex_buf.offset as usize,
+                index as usize,
+            );
+        }
     }
 
     fn draw(
@@ -685,24 +745,31 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
         first_instance: u32,
         instance_count: u32,
     ) {
-        if first_instance != 0 {
-            self.encoder.draw_primitives_instanced_base_instance(
-                self.primitive_type,
-                first_vertex as _,
-                vertex_count as _,
-                instance_count as _,
-                first_instance as _,
-            );
-        } else if instance_count != 1 {
-            self.encoder.draw_primitives_instanced(
-                self.primitive_type,
-                first_vertex as _,
-                vertex_count as _,
-                instance_count as _,
-            );
-        } else {
-            self.encoder
-                .draw_primitives(self.primitive_type, first_vertex as _, vertex_count as _);
+        unsafe {
+            if first_instance != 0 {
+                self.encoder
+                    .drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
+                        self.primitive_type,
+                        first_vertex as _,
+                        vertex_count as _,
+                        instance_count as _,
+                        first_instance as _,
+                    );
+            } else if instance_count != 1 {
+                self.encoder
+                    .drawPrimitives_vertexStart_vertexCount_instanceCount(
+                        self.primitive_type,
+                        first_vertex as _,
+                        vertex_count as _,
+                        instance_count as _,
+                    );
+            } else {
+                self.encoder.drawPrimitives_vertexStart_vertexCount(
+                    self.primitive_type,
+                    first_vertex as _,
+                    vertex_count as _,
+                );
+            }
         }
     }
 
@@ -716,44 +783,50 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
         instance_count: u32,
     ) {
         let raw_index_type = super::map_index_type(index_type);
-        if base_vertex != 0 || start_instance != 0 {
-            self.encoder
-                .draw_indexed_primitives_instanced_base_instance(
+        unsafe {
+            if base_vertex != 0 || start_instance != 0 {
+                self.encoder
+                .drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(
                     self.primitive_type,
                     index_count as _,
                     raw_index_type,
                     index_buf.buffer.as_ref(),
-                    index_buf.offset,
+                    index_buf.offset as usize,
                     instance_count as _,
                     base_vertex as _,
                     start_instance as _,
                 );
-        } else if instance_count != 1 {
-            self.encoder.draw_indexed_primitives_instanced(
+            } else if instance_count != 1 {
+                self.encoder.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount(
                 self.primitive_type,
                 index_count as _,
                 raw_index_type,
                 index_buf.buffer.as_ref(),
-                index_buf.offset,
+                index_buf.offset as usize,
                 instance_count as _,
             );
-        } else {
-            self.encoder.draw_indexed_primitives(
-                self.primitive_type,
-                index_count as _,
-                raw_index_type,
-                index_buf.buffer.as_ref(),
-                index_buf.offset,
-            );
+            } else {
+                self.encoder
+                    .drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
+                        self.primitive_type,
+                        index_count as _,
+                        raw_index_type,
+                        index_buf.buffer.as_ref(),
+                        index_buf.offset as usize,
+                    );
+            }
         }
     }
 
     fn draw_indirect(&mut self, indirect_buf: crate::BufferPiece) {
-        self.encoder.draw_primitives_indirect(
-            self.primitive_type,
-            indirect_buf.buffer.as_ref(),
-            indirect_buf.offset,
-        );
+        unsafe {
+            self.encoder
+                .drawPrimitives_indirectBuffer_indirectBufferOffset(
+                    self.primitive_type,
+                    indirect_buf.buffer.as_ref(),
+                    indirect_buf.offset as usize,
+                );
+        }
     }
 
     fn draw_indexed_indirect(
@@ -763,36 +836,38 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
         indirect_buf: crate::BufferPiece,
     ) {
         let raw_index_type = super::map_index_type(index_type);
-        self.encoder.draw_indexed_primitives_indirect(
+        unsafe {
+            self.encoder.drawIndexedPrimitives_indexType_indexBuffer_indexBufferOffset_indirectBuffer_indirectBufferOffset(
             self.primitive_type,
             raw_index_type,
             index_buf.buffer.as_ref(),
-            index_buf.offset,
+            index_buf.offset as usize,
             indirect_buf.buffer.as_ref(),
-            indirect_buf.offset,
+            indirect_buf.offset as usize,
         );
+        }
     }
 }
 
 impl Drop for super::RenderPipelineContext<'_> {
     fn drop(&mut self) {
-        self.encoder.pop_debug_group();
+        self.encoder.popDebugGroup();
     }
 }
 
 fn map_origin(origin: &[u32; 3]) -> metal::MTLOrigin {
     metal::MTLOrigin {
-        x: origin[0] as u64,
-        y: origin[1] as u64,
-        z: origin[2] as u64,
+        x: origin[0] as usize,
+        y: origin[1] as usize,
+        z: origin[2] as usize,
     }
 }
 
 fn map_extent(extent: &crate::Extent) -> metal::MTLSize {
     metal::MTLSize {
-        width: extent.width as u64,
-        height: extent.height as u64,
-        depth: extent.depth as u64,
+        width: extent.width as usize,
+        height: extent.height as usize,
+        depth: extent.depth as usize,
     }
 }
 
