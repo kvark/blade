@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, mem, time::Duration};
+use std::{marker::PhantomData, mem, ops::Range, time::Duration};
 
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
