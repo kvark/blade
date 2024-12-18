@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, mem, time::Duration};
+use std::{marker::PhantomData, mem, ops::Range, time::Duration};
 
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
@@ -529,6 +529,18 @@ impl super::RenderCommandEncoder<'_> {
         self.raw.set_scissor_rect(scissor);
     }
 
+    pub fn set_viewport(&mut self, viewport: &crate::Viewport, depth_range: Range<f32>) {
+        let viewport = metal::MTLViewport {
+            originX: viewport.x as _,
+            originY: viewport.y as _,
+            width: viewport.w as _,
+            height: viewport.h as _,
+            znear: depth_range.start as _,
+            zfar: depth_range.end as _, // TODO: aparently broken on some Intel GPU:s? see wgpu-hal
+        };
+        self.raw.set_viewport(viewport);
+    }
+
     pub fn with<'p>(
         &'p mut self,
         pipeline: &'p super::RenderPipeline,
@@ -644,6 +656,18 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
             height: rect.h as _,
         };
         self.encoder.set_scissor_rect(scissor);
+    }
+
+    fn set_viewport(&mut self, viewport: &crate::Viewport, depth_range: Range<f32>) {
+        let viewport = metal::MTLViewport {
+            originX: viewport.x as _,
+            originY: viewport.y as _,
+            width: viewport.w as _,
+            height: viewport.h as _,
+            znear: depth_range.start as _,
+            zfar: depth_range.end as _, // TODO: aparently broken on some Intel GPU:s? see wgpu-hal
+        };
+        self.encoder.set_viewport(viewport);
     }
 
     fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
