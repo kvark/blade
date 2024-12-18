@@ -297,8 +297,8 @@ enum Command {
     },
     Barrier,
     SetViewport {
-        size: [u16; 2],
-        depth: Range<f32>,
+        viewport: crate::Viewport,
+        depth_range: Range<f32>,
     },
     SetScissor(crate::ScissorRect),
     SetStencilFunc {
