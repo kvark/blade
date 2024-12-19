@@ -335,9 +335,15 @@ impl crate::traits::ShaderDevice for super::Context {
         } else {
             glsl::WriterFlags::empty()
         };
+
+        let shaders = match desc.fragment {
+            Some(fs) => vec![desc.vertex, fs],
+            None => vec![desc.vertex],
+        };
+
         let mut inner = unsafe {
             self.create_pipeline(
-                &[desc.vertex, desc.fragment],
+                &shaders,
                 desc.data_layouts,
                 desc.vertex_fetches,
                 desc.name,
