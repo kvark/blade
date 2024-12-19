@@ -603,7 +603,7 @@ impl ShaderPipelines {
             },
             vertex: shader.at("postfx_vs"),
             vertex_fetches: &[],
-            fragment: shader.at("postfx_fs"),
+            fragment: Some(shader.at("postfx_fs")),
             color_targets: &[info.format.into()],
             depth_stencil: None,
             multisample_state: blade_graphics::MultisampleState::default(),

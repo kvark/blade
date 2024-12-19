@@ -105,7 +105,7 @@ impl System {
             },
             vertex: shader.at("draw_vs"),
             vertex_fetches: &[],
-            fragment: shader.at("draw_fs"),
+            fragment: Some(shader.at("draw_fs")),
             color_targets: &[gpu::ColorTargetState {
                 format: desc.draw_format,
                 blend: Some(gpu::BlendState::ALPHA_BLENDING),

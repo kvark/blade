@@ -183,7 +183,7 @@ impl GuiPainter {
                 ..Default::default()
             },
             depth_stencil: None, //TODO?
-            fragment: shader.at("fs_main"),
+            fragment: Some(shader.at("fs_main")),
             color_targets: &[blade_graphics::ColorTargetState {
                 format: info.format,
                 blend: Some(blade_graphics::BlendState {
