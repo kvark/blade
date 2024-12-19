@@ -435,19 +435,12 @@ impl crate::traits::ShaderDevice for super::Context {
             )
         });
 
-        let mut stages = [vk::PipelineShaderStageCreateInfo::default(); 2];
-        let stage_count;
-        match fs {
-            Some(ref fs) => {
-                stages[0] = vs.create_info;
-                stages[1] = fs.create_info;
-                stage_count = 2;
-            }
-            None => {
-                stages[0] = vs.create_info;
-                stage_count = 1;
-            }
-        };
+        let mut stages = [vs.create_info, vk::PipelineShaderStageCreateInfo::default()];
+        let mut stage_count = 1;
+        if let Some(ref fs) = fs {
+            stages[1] = fs.create_info;
+            stage_count += 1;
+        }
         let stages = &stages[..stage_count]; // 'dynamic' stack allocated array
 
         let layout = self.create_pipeline_layout(desc.data_layouts, &group_infos);
