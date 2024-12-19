@@ -425,15 +425,31 @@ impl crate::traits::ShaderDevice for super::Context {
             &mut group_infos,
             desc.vertex_fetches,
         );
-        let fs = self.load_shader(
-            desc.fragment,
-            &options,
-            desc.data_layouts,
-            &mut group_infos,
-            &[],
-        );
+        let fs = desc.fragment.map(|desc_fragment| {
+            self.load_shader(
+                desc_fragment,
+                &options,
+                desc.data_layouts,
+                &mut group_infos,
+                &[],
+            )
+        });
 
-        let stages = [vs.create_info, fs.create_info];
+        let mut stages = [vk::PipelineShaderStageCreateInfo::default(); 2];
+        let stage_count;
+        match fs {
+            Some(ref fs) => {
+                stages[0] = vs.create_info;
+                stages[1] = fs.create_info;
+                stage_count = 2;
+            }
+            None => {
+                stages[0] = vs.create_info;
+                stage_count = 1;
+            }
+        };
+        let stages = &stages[..stage_count]; // 'dynamic' stack allocated array
+
         let layout = self.create_pipeline_layout(desc.data_layouts, &group_infos);
 
         let vertex_buffers = desc
@@ -603,7 +619,9 @@ impl crate::traits::ShaderDevice for super::Context {
         let raw = raw_vec.pop().unwrap();
 
         unsafe { self.device.core.destroy_shader_module(vs.vk_module, None) };
-        unsafe { self.device.core.destroy_shader_module(fs.vk_module, None) };
+        if let Some(fs) = fs {
+            unsafe { self.device.core.destroy_shader_module(fs.vk_module, None) };
+        }
 
         if !desc.name.is_empty() {
             self.set_object_name(raw, desc.name);
