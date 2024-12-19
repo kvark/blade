@@ -424,14 +424,16 @@ impl crate::traits::ShaderDevice for super::Context {
             descriptor.set_alpha_to_coverage_enabled(desc.multisample_state.alpha_to_coverage);
 
             // Fragment shader
-            let fs = self.load_shader(
-                desc.fragment,
-                desc.data_layouts,
-                &[],
-                &mut layout,
-                ShaderFlags::empty(),
-            );
-            descriptor.set_fragment_function(Some(&fs.function));
+            let fs = desc.fragment.map(|desc_fragment| {
+                self.load_shader(
+                    desc_fragment,
+                    desc.data_layouts,
+                    &[],
+                    &mut layout,
+                    ShaderFlags::empty(),
+                )
+            });
+            descriptor.set_fragment_function(fs.as_ref().map(|fs| fs.function.as_ref()));
 
             let vertex_descriptor = metal::VertexDescriptor::new();
             for (i, vf) in desc.vertex_fetches.iter().enumerate() {
@@ -520,7 +522,7 @@ impl crate::traits::ShaderDevice for super::Context {
                 raw,
                 name: desc.name.to_string(),
                 vs_lib: vs.library,
-                fs_lib: fs.library,
+                fs_lib: fs.map(|fs| fs.library),
                 layout,
                 primitive_type,
                 triangle_fill_mode,

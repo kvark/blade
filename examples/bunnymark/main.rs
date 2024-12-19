@@ -117,7 +117,7 @@ impl Example {
                 ..Default::default()
             },
             depth_stencil: None,
-            fragment: shader.at("fs_main"),
+            fragment: Some(shader.at("fs_main")),
             color_targets: &[gpu::ColorTargetState {
                 format: surface.info().format,
                 blend: Some(gpu::BlendState::ALPHA_BLENDING),

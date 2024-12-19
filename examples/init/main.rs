@@ -47,7 +47,7 @@ impl EnvMapSampler {
             data_layouts: &[&layout],
             vertex: shader.at("vs_init"),
             vertex_fetches: &[],
-            fragment: shader.at("fs_init"),
+            fragment: Some(shader.at("fs_init")),
             primitive: gpu::PrimitiveState {
                 topology: gpu::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
@@ -65,7 +65,7 @@ impl EnvMapSampler {
             data_layouts: &[&layout],
             vertex: shader.at("vs_accum"),
             vertex_fetches: &[],
-            fragment: shader.at("fs_accum"),
+            fragment: Some(shader.at("fs_accum")),
             primitive: gpu::PrimitiveState {
                 topology: gpu::PrimitiveTopology::PointList,
                 ..Default::default()

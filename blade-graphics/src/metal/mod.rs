@@ -246,7 +246,7 @@ pub struct RenderPipeline {
     #[allow(dead_code)]
     vs_lib: metal::Library,
     #[allow(dead_code)]
-    fs_lib: metal::Library,
+    fs_lib: Option<metal::Library>,
     layout: PipelineLayout,
     primitive_type: metal::MTLPrimitiveType,
     triangle_fill_mode: metal::MTLTriangleFillMode,

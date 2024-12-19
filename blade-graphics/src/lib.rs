@@ -1026,7 +1026,7 @@ pub struct RenderPipelineDesc<'a> {
     pub vertex_fetches: &'a [VertexFetchState<'a>],
     pub primitive: PrimitiveState,
     pub depth_stencil: Option<DepthStencilState>,
-    pub fragment: ShaderFunction<'a>,
+    pub fragment: Option<ShaderFunction<'a>>,
     pub color_targets: &'a [ColorTargetState],
     pub multisample_state: MultisampleState,
 }

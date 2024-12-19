@@ -113,7 +113,7 @@ impl Example {
             },
             vertex: shader.at("draw_vs"),
             vertex_fetches: &[],
-            fragment: shader.at("draw_fs"),
+            fragment: Some(shader.at("draw_fs")),
             color_targets: &[surface.info().format.into()],
             depth_stencil: None,
             multisample_state: Default::default(),
