@@ -1,5 +1,5 @@
 use ash::vk;
-use std::{str, time::Duration};
+use std::{ops::Range, str, time::Duration};
 
 impl super::CrashHandler {
     fn add_marker(&mut self, marker: &str) -> u32 {
@@ -816,6 +816,22 @@ impl<'a> super::RenderCommandEncoder<'a> {
         };
     }
 
+    pub fn set_viewport(&mut self, viewport: &crate::Viewport, depth_range: Range<f32>) {
+        let vk_viewports = [vk::Viewport {
+            x: viewport.x,
+            y: viewport.y,
+            width: viewport.w,
+            height: -viewport.h, // flip Y
+            min_depth: depth_range.start,
+            max_depth: depth_range.end,
+        }];
+        unsafe {
+            self.device
+                .core
+                .cmd_set_viewport(self.cmd_buf.raw, 0, &vk_viewports)
+        };
+    }
+
     pub fn with<'b, 'p>(
         &'b mut self,
         pipeline: &'p super::RenderPipeline,
@@ -919,6 +935,22 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
             self.device
                 .core
                 .cmd_set_scissor(self.cmd_buf.raw, 0, &[vk_scissor])
+        };
+    }
+
+    fn set_viewport(&mut self, viewport: &crate::Viewport, depth_range: Range<f32>) {
+        let vk_viewports = [vk::Viewport {
+            x: viewport.x,
+            y: viewport.y,
+            width: viewport.w,
+            height: -viewport.h, // flip Y
+            min_depth: depth_range.start,
+            max_depth: depth_range.end,
+        }];
+        unsafe {
+            self.device
+                .core
+                .cmd_set_viewport(self.cmd_buf.raw, 0, &vk_viewports)
         };
     }
 

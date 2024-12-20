@@ -1142,4 +1142,12 @@ pub struct ScissorRect {
     pub h: u32,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Viewport {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
 pub type Timings = std::collections::HashMap<String, std::time::Duration>;

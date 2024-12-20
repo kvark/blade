@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash};
+use std::{fmt::Debug, hash::Hash, ops::Range};
 
 pub trait ResourceDevice {
     type Buffer: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
@@ -121,6 +121,7 @@ pub trait RenderPipelineEncoder: PipelineEncoder {
 
     //TODO: reconsider exposing this here
     fn set_scissor_rect(&mut self, rect: &super::ScissorRect);
+    fn set_viewport(&mut self, viewport: &super::Viewport, depth_range: Range<f32>);
     fn bind_vertex(&mut self, index: u32, vertex_buf: Self::BufferPiece);
     fn draw(
         &mut self,
