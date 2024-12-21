@@ -20,7 +20,6 @@ naga = { workspace = true }
 raw-window-handle = "0.6"
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-block = "0.1"
 objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSArray"] }
 objc2-metal = { version = "0.2", features = [
