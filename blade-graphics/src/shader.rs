@@ -264,7 +264,7 @@ impl super::Shader {
                         };
                         if let Some(ref binding) = member.binding {
                             log::warn!(
-                                "Member '{}' alread has binding: {:?}",
+                                "Member '{}' already has binding: {:?}",
                                 member_name,
                                 binding
                             );

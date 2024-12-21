@@ -1,3 +1,4 @@
+use ash::vk::Handle as _;
 use ash::{amd, ext, khr, vk};
 use naga::back::spv;
 use std::{ffi, fs, sync::Mutex};
@@ -316,6 +317,23 @@ impl super::Context {
             }
         };
 
+        if let Some(ref xr) = desc.xr {
+            let reqs = xr
+                .instance
+                .graphics_requirements::<openxr::Vulkan>(xr.system_id)
+                .unwrap();
+            let driver_api_version_xr = openxr::Version::new(
+                vk::api_version_major(driver_api_version) as u16,
+                vk::api_version_minor(driver_api_version) as u16,
+                vk::api_version_patch(driver_api_version),
+            );
+            if driver_api_version_xr < reqs.min_api_version_supported
+                || driver_api_version_xr.major() > reqs.max_api_version_supported.major()
+            {
+                return Err(NotSupportedError::NoSupportedDeviceFound);
+            }
+        }
+
         let supported_layers = match entry.enumerate_instance_layer_properties() {
             Ok(layers) => layers,
             Err(err) => {
@@ -419,8 +437,28 @@ impl super::Context {
                 .flags(create_flags)
                 .enabled_layer_names(layer_strings)
                 .enabled_extension_names(extension_strings);
-            unsafe { entry.create_instance(&create_info, None) }
-                .map_err(super::PlatformError::Init)?
+            if let Some(ref xr_desc) = desc.xr {
+                let raw_instance = unsafe {
+                    xr_desc
+                        .instance
+                        .create_vulkan_instance(
+                            xr_desc.system_id,
+                            std::mem::transmute(entry.static_fn().get_instance_proc_addr),
+                            &create_info as *const _ as *const _,
+                        )
+                        .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?
+                        .map_err(|raw| super::PlatformError::Init(vk::Result::from_raw(raw)))?
+                };
+                unsafe {
+                    ash::Instance::load(
+                        entry.static_fn(),
+                        vk::Instance::from_raw(raw_instance as _),
+                    )
+                }
+            } else {
+                unsafe { entry.create_instance(&create_info, None) }
+                    .map_err(super::PlatformError::Init)?
+            }
         };
 
         let instance =
@@ -444,16 +482,30 @@ impl super::Context {
                 core: core_instance,
             };
 
-        let physical_devices = instance
-            .core
-            .enumerate_physical_devices()
-            .map_err(super::PlatformError::Init)?;
-        let (physical_device, capabilities) = physical_devices
-            .into_iter()
-            .find_map(|phd| {
-                inspect_adapter(phd, &instance, driver_api_version, &desc).map(|caps| (phd, caps))
-            })
-            .ok_or_else(|| NotSupportedError::NoSupportedDeviceFound)?;
+        let (physical_device, capabilities) = if let Some(ref xr_desc) = desc.xr {
+            let xr_physical_device = unsafe {
+                xr_desc
+                    .instance
+                    .vulkan_graphics_device(xr_desc.system_id, instance.core.handle().as_raw() as _)
+                    .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?
+            };
+            let physical_device = vk::PhysicalDevice::from_raw(xr_physical_device as _);
+            let capabilities =
+                unsafe { inspect_adapter(physical_device, &instance, driver_api_version, &desc) }
+                    .ok_or(NotSupportedError::NoSupportedDeviceFound)?;
+            (physical_device, capabilities)
+        } else {
+            instance
+                .core
+                .enumerate_physical_devices()
+                .map_err(super::PlatformError::Init)?
+                .into_iter()
+                .find_map(|phd| {
+                    inspect_adapter(phd, &instance, driver_api_version, &desc)
+                        .map(|caps| (phd, caps))
+                })
+                .ok_or(NotSupportedError::NoSupportedDeviceFound)?
+        };
 
         log::debug!("Adapter {:#?}", capabilities);
         let mut min_buffer_alignment = 1;
@@ -568,10 +620,31 @@ impl super::Context {
 
             device_create_info = device_create_info.push_next(&mut device_features2);
 
-            instance
-                .core
-                .create_device(physical_device, &device_create_info, None)
-                .map_err(super::PlatformError::Init)?
+            if let Some(ref xr_desc) = desc.xr {
+                let raw_device = unsafe {
+                    xr_desc
+                        .instance
+                        .create_vulkan_device(
+                            xr_desc.system_id,
+                            std::mem::transmute(entry.static_fn().get_instance_proc_addr),
+                            physical_device.as_raw() as _,
+                            &device_create_info as *const _ as *const _,
+                        )
+                        .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?
+                        .map_err(|raw| super::PlatformError::Init(vk::Result::from_raw(raw)))?
+                };
+                unsafe {
+                    ash::Device::load(
+                        instance.core.fp_v1_0(),
+                        vk::Device::from_raw(raw_device as _),
+                    )
+                }
+            } else {
+                instance
+                    .core
+                    .create_device(physical_device, &device_create_info, None)
+                    .map_err(super::PlatformError::Init)?
+            }
         };
 
         let device = super::Device {
@@ -753,6 +826,57 @@ impl super::Context {
             None
         };
 
+        let xr = if let Some(ref xr_desc) = desc.xr {
+            let session_info = openxr::vulkan::SessionCreateInfo {
+                instance: instance.core.handle().as_raw() as _,
+                physical_device: physical_device.as_raw() as _,
+                device: device.core.handle().as_raw() as _,
+                queue_family_index: capabilities.queue_family_index,
+                queue_index: 0,
+            };
+            match xr_desc
+                .instance
+                .create_session::<openxr::Vulkan>(xr_desc.system_id, &session_info)
+            {
+                Ok((session, frame_wait, frame_stream)) => {
+                    let view_type = openxr::ViewConfigurationType::PRIMARY_STEREO;
+                    let environment_blend_mode = xr_desc
+                        .instance
+                        .enumerate_environment_blend_modes(xr_desc.system_id, view_type)
+                        .ok()
+                        .and_then(|modes| modes.first().copied())
+                        .unwrap_or(openxr::EnvironmentBlendMode::OPAQUE);
+                    let space = match session.create_reference_space(
+                        openxr::ReferenceSpaceType::LOCAL,
+                        openxr::Posef::IDENTITY,
+                    ) {
+                        Ok(space) => space,
+                        Err(e) => {
+                            log::error!("Failed to create OpenXR local space: {e}");
+                            return Err(NotSupportedError::NoSupportedDeviceFound);
+                        }
+                    };
+                    Some(Mutex::new(super::XrSessionState {
+                        instance: xr_desc.instance.clone(),
+                        system_id: xr_desc.system_id,
+                        session,
+                        frame_wait,
+                        frame_stream,
+                        view_type,
+                        environment_blend_mode,
+                        space: Some(space),
+                        predicted_display_time: None,
+                    }))
+                }
+                Err(e) => {
+                    log::error!("Failed to create OpenXR session: {e}");
+                    return Err(NotSupportedError::NoSupportedDeviceFound);
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(super::Context {
             memory: Mutex::new(memory_manager),
             device,
@@ -777,6 +901,7 @@ impl super::Context {
             dual_source_blending: capabilities.dual_source_blending,
             instance,
             entry,
+            xr,
         })
     }
 
@@ -814,6 +939,7 @@ impl Drop for super::Context {
             return;
         }
         unsafe {
+            self.xr = None;
             if let Ok(queue) = self.queue.lock() {
                 let _ = self.device.core.queue_wait_idle(queue.raw);
                 self.device

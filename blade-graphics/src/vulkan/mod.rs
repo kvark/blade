@@ -2,6 +2,7 @@ use ash::{
     khr,
     vk::{self},
 };
+use openxr as xr;
 use std::{mem, num::NonZeroU32, path::PathBuf, ptr, sync::Mutex};
 
 mod command;
@@ -12,6 +13,7 @@ mod resource;
 mod surface;
 
 const QUERY_POOL_SIZE: usize = crate::limits::PASS_COUNT + 1;
+const MAX_XR_EYES: usize = 2;
 
 #[derive(Debug)]
 pub enum PlatformError {
@@ -86,6 +88,7 @@ struct InternalFrame {
     present_semaphore: vk::Semaphore,
     image: vk::Image,
     view: vk::ImageView,
+    xr_views: [vk::ImageView; MAX_XR_EYES],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -105,19 +108,69 @@ pub struct Surface {
     full_screen_exclusive: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Presentation {
-    swapchain: vk::SwapchainKHR,
-    image_index: u32,
-    acquire_semaphore: vk::Semaphore,
-    present_semaphore: vk::Semaphore,
+pub struct XrSurface {
+    raw: openxr::Swapchain<openxr::Vulkan>,
+    frames: Vec<InternalFrame>,
+    swapchain: Swapchain,
+    view_count: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct XrSessionState {
+    pub instance: xr::Instance,
+    pub system_id: xr::SystemId,
+    pub session: xr::Session<xr::Vulkan>,
+    pub frame_wait: xr::FrameWaiter,
+    pub frame_stream: xr::FrameStream<xr::Vulkan>,
+    pub view_type: xr::ViewConfigurationType,
+    pub environment_blend_mode: xr::EnvironmentBlendMode,
+    pub space: Option<xr::Space>,
+    pub predicted_display_time: Option<xr::Time>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Presentation {
+    Window {
+        swapchain: vk::SwapchainKHR,
+        image_index: u32,
+        acquire_semaphore: vk::Semaphore,
+        present_semaphore: vk::Semaphore,
+    },
+    Xr {
+        swapchain: usize,
+        view_count: u32,
+        target_size: [u16; 2],
+        views: [XrView; MAX_XR_EYES],
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct XrPose {
+    pub orientation: [f32; 4],
+    pub position: [f32; 3],
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct XrFov {
+    pub angle_left: f32,
+    pub angle_right: f32,
+    pub angle_up: f32,
+    pub angle_down: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct XrView {
+    pub pose: XrPose,
+    pub fov: XrFov,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct Frame {
     swapchain: Swapchain,
     image_index: Option<u32>,
     internal: InternalFrame,
+    xr_swapchain: usize,
+    xr_view_count: u32,
+    xr_views: [XrView; MAX_XR_EYES],
 }
 
 impl Frame {
@@ -137,6 +190,45 @@ impl Frame {
             target_size: self.swapchain.target_size,
             aspects: crate::TexelAspects::COLOR,
         }
+    }
+
+    pub fn xr_texture_view(&self, eye: u32) -> TextureView {
+        let eye = eye as usize;
+        assert!(eye < MAX_XR_EYES, "XR eye {} is out of range", eye);
+        let raw = self.internal.xr_views[eye];
+        assert_ne!(
+            raw,
+            vk::ImageView::null(),
+            "XR eye {} view is not initialized",
+            eye
+        );
+        TextureView {
+            raw,
+            target_size: self.swapchain.target_size,
+            aspects: crate::TexelAspects::COLOR,
+        }
+    }
+
+    pub fn xr_view_count(&self) -> u32 {
+        self.xr_view_count
+    }
+
+    pub fn xr_view(&self, eye: u32) -> XrView {
+        let eye = eye as usize;
+        assert!(
+            eye < self.xr_view_count as usize,
+            "XR eye {} is out of range",
+            eye
+        );
+        self.xr_views[eye]
+    }
+}
+
+impl Context {
+    pub fn xr_session(&self) -> Option<xr::Session<xr::Vulkan>> {
+        self.xr
+            .as_ref()
+            .map(|xr| xr.lock().unwrap().session.clone())
     }
 }
 
@@ -161,6 +253,7 @@ pub struct Context {
     dual_source_blending: bool,
     instance: Instance,
     entry: ash::Entry,
+    xr: Option<Mutex<XrSessionState>>,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
@@ -491,12 +584,16 @@ impl crate::traits::CommandDevice for Context {
         let mut signal_semaphores_all = [queue.timeline_semaphore, vk::Semaphore::null()];
         let signal_values_all = [progress, 0];
         let (num_wait_semaphores, num_signal_sepahores) = match encoder.present {
-            Some(ref presentation) => {
-                wait_semaphores_all[0] = presentation.acquire_semaphore;
-                signal_semaphores_all[1] = presentation.present_semaphore;
+            Some(Presentation::Window {
+                acquire_semaphore,
+                present_semaphore,
+                ..
+            }) => {
+                wait_semaphores_all[0] = acquire_semaphore;
+                signal_semaphores_all[1] = present_semaphore;
                 (1, 2)
             }
-            None => (0, 1),
+            Some(Presentation::Xr { .. }) | None => (0, 1),
         };
         let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
             .wait_semaphore_values(&wait_values_all[..num_wait_semaphores])
@@ -515,16 +612,104 @@ impl crate::traits::CommandDevice for Context {
         encoder.check_gpu_crash(ret);
 
         if let Some(presentation) = encoder.present.take() {
-            let khr_swapchain = self.device.swapchain.as_ref().unwrap();
-            let swapchains = [presentation.swapchain];
-            let image_indices = [presentation.image_index];
-            let wait_semaphores = [presentation.present_semaphore];
-            let present_info = vk::PresentInfoKHR::default()
-                .swapchains(&swapchains)
-                .image_indices(&image_indices)
-                .wait_semaphores(&wait_semaphores);
-            let ret = unsafe { khr_swapchain.queue_present(queue.raw, &present_info) };
-            let _ = encoder.check_gpu_crash(ret);
+            match presentation {
+                Presentation::Window {
+                    swapchain,
+                    image_index,
+                    present_semaphore,
+                    ..
+                } => {
+                    let khr_swapchain = self.device.swapchain.as_ref().unwrap();
+                    let swapchains = [swapchain];
+                    let image_indices = [image_index];
+                    let wait_semaphores = [present_semaphore];
+                    let present_info = vk::PresentInfoKHR::default()
+                        .swapchains(&swapchains)
+                        .image_indices(&image_indices)
+                        .wait_semaphores(&wait_semaphores);
+                    let ret = unsafe { khr_swapchain.queue_present(queue.raw, &present_info) };
+                    let _ = encoder.check_gpu_crash(ret);
+                }
+                Presentation::Xr {
+                    swapchain,
+                    view_count,
+                    target_size,
+                    views,
+                } => {
+                    let semaphores = [queue.timeline_semaphore];
+                    let semaphore_values = [progress];
+                    let wait_info = vk::SemaphoreWaitInfoKHR::default()
+                        .semaphores(&semaphores)
+                        .values(&semaphore_values);
+                    unsafe {
+                        self.device
+                            .timeline_semaphore
+                            .wait_semaphores(&wait_info, !0)
+                            .unwrap();
+                    }
+                    let swapchain = unsafe { &mut *(swapchain as *mut xr::Swapchain<xr::Vulkan>) };
+                    swapchain.release_image().unwrap();
+
+                    let xr_state = self.xr.as_ref().expect("XR is not enabled in this context");
+                    let mut xr_state = xr_state.lock().unwrap();
+                    let environment_blend_mode = xr_state.environment_blend_mode;
+                    let space = xr_state.space.take().expect("XR space is not initialized");
+                    let predicted_display_time = xr_state
+                        .predicted_display_time
+                        .take()
+                        .expect("XR frame timing is not initialized");
+                    let rect = xr::Rect2Di {
+                        offset: xr::Offset2Di { x: 0, y: 0 },
+                        extent: xr::Extent2Di {
+                            width: target_size[0] as _,
+                            height: target_size[1] as _,
+                        },
+                    };
+                    let projection_views = views[..view_count as usize]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, view)| {
+                            xr::CompositionLayerProjectionView::new()
+                                .pose(xr::Posef {
+                                    orientation: xr::Quaternionf {
+                                        x: view.pose.orientation[0],
+                                        y: view.pose.orientation[1],
+                                        z: view.pose.orientation[2],
+                                        w: view.pose.orientation[3],
+                                    },
+                                    position: xr::Vector3f {
+                                        x: view.pose.position[0],
+                                        y: view.pose.position[1],
+                                        z: view.pose.position[2],
+                                    },
+                                })
+                                .fov(xr::Fovf {
+                                    angle_left: view.fov.angle_left,
+                                    angle_right: view.fov.angle_right,
+                                    angle_up: view.fov.angle_up,
+                                    angle_down: view.fov.angle_down,
+                                })
+                                .sub_image(
+                                    xr::SwapchainSubImage::new()
+                                        .swapchain(swapchain)
+                                        .image_array_index(i as u32)
+                                        .image_rect(rect),
+                                )
+                        })
+                        .collect::<Vec<_>>();
+                    xr_state
+                        .frame_stream
+                        .end(
+                            predicted_display_time,
+                            environment_blend_mode,
+                            &[&xr::CompositionLayerProjection::new()
+                                .space(&space)
+                                .views(&projection_views)],
+                        )
+                        .unwrap();
+                    xr_state.space = Some(space);
+                }
+            }
         }
 
         SyncPoint { progress }

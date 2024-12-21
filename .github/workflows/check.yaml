@@ -36,6 +36,11 @@ jobs:
             target: wasm32-unknown-unknown
             full: false
 
+          - name: Android
+            os: ubuntu-latest
+            target: aarch64-linux-android
+            full: false
+
     runs-on: ${{ matrix.os }}
 
     steps:
