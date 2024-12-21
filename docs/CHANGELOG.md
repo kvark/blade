@@ -12,6 +12,7 @@ Changelog for Blade
   - ability to capture pass GPU timings
   - ability to force the use of a specific GPU
   - Metal:
+    - migrate to "objc2"
     - support for workgroup memory
     - concurrent compute dispatches
   - Egl:

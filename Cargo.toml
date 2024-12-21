@@ -21,9 +21,7 @@ glam = { version = "0.28", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
-naga = { git = "https://github.com/gfx-rs/wgpu", rev = "1a643291c2e8854ba7e4f5445a4388202731bfa1", features = [
-    "wgsl-in",
-] }
+naga = { version = "23.1.0", features = ["wgsl-in"] }
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.25", features = ["derive"] }
@@ -90,11 +88,15 @@ del-geo = "=0.1.29"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # see https://github.com/emilk/egui/issues/4270
-egui-winit = { version="0.29", default-features=false, features=["links"] }
+egui-winit = { version = "0.29", default-features = false, features = [
+    "links",
+] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 # see https://github.com/emilk/egui/issues/4270
-egui-winit = { version="0.29", default-features=false, features=["links"] }
+egui-winit = { version = "0.29", default-features = false, features = [
+    "links",
+] }
 console_error_panic_hook = "0.1.7"
 console_log = "1"
 web-sys = { workspace = true, features = ["Window"] }
