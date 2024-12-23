@@ -1147,6 +1147,7 @@ pub struct Viewport {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+    pub depth: std::ops::Range<f32>,
 }
 
 pub type Timings = std::collections::HashMap<String, std::time::Duration>;

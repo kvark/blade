@@ -1,5 +1,5 @@
 use ash::vk;
-use std::{ops::Range, str, time::Duration};
+use std::{str, time::Duration};
 
 impl super::CrashHandler {
     fn add_marker(&mut self, marker: &str) -> u32 {
@@ -780,14 +780,19 @@ impl<'a> super::ComputeCommandEncoder<'a> {
         &'b mut self,
         pipeline: &'p super::ComputePipeline,
     ) -> super::PipelineEncoder<'b, 'p> {
+        let bind_point = vk::PipelineBindPoint::COMPUTE;
+        unsafe {
+            self.device
+                .core
+                .cmd_bind_pipeline(self.cmd_buf.raw, bind_point, pipeline.raw)
+        };
         super::PipelineEncoder {
             cmd_buf: self.cmd_buf,
             layout: &pipeline.layout,
-            bind_point: vk::PipelineBindPoint::COMPUTE,
+            bind_point,
             device: self.device,
             update_data: self.update_data,
         }
-        .init(pipeline.raw)
     }
 }
 
@@ -798,52 +803,23 @@ impl Drop for super::ComputeCommandEncoder<'_> {
 }
 
 impl<'a> super::RenderCommandEncoder<'a> {
-    pub fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
-        let vk_scissor = vk::Rect2D {
-            offset: vk::Offset2D {
-                x: rect.x,
-                y: rect.y,
-            },
-            extent: vk::Extent2D {
-                width: rect.w,
-                height: rect.h,
-            },
-        };
-        unsafe {
-            self.device
-                .core
-                .cmd_set_scissor(self.cmd_buf.raw, 0, &[vk_scissor])
-        };
-    }
-
-    pub fn set_viewport(&mut self, viewport: &crate::Viewport, depth_range: Range<f32>) {
-        let vk_viewports = [vk::Viewport {
-            x: viewport.x,
-            y: viewport.y,
-            width: viewport.w,
-            height: -viewport.h, // flip Y
-            min_depth: depth_range.start,
-            max_depth: depth_range.end,
-        }];
-        unsafe {
-            self.device
-                .core
-                .cmd_set_viewport(self.cmd_buf.raw, 0, &vk_viewports)
-        };
-    }
-
     pub fn with<'b, 'p>(
         &'b mut self,
         pipeline: &'p super::RenderPipeline,
     ) -> super::PipelineEncoder<'b, 'p> {
+        let bind_point = vk::PipelineBindPoint::GRAPHICS;
+        unsafe {
+            self.device
+                .core
+                .cmd_bind_pipeline(self.cmd_buf.raw, bind_point, pipeline.raw)
+        };
         super::PipelineEncoder {
             cmd_buf: self.cmd_buf,
             layout: &pipeline.layout,
-            bind_point: vk::PipelineBindPoint::GRAPHICS,
+            bind_point,
             device: self.device,
             update_data: self.update_data,
         }
-        .init(pipeline.raw)
     }
 }
 
@@ -858,14 +834,52 @@ impl Drop for super::RenderCommandEncoder<'_> {
     }
 }
 
-impl super::PipelineEncoder<'_, '_> {
-    fn init(self, raw_pipeline: vk::Pipeline) -> Self {
+impl crate::ScissorRect {
+    const fn to_vk(&self) -> vk::Rect2D {
+        vk::Rect2D {
+            offset: vk::Offset2D {
+                x: self.x,
+                y: self.y,
+            },
+            extent: vk::Extent2D {
+                width: self.w,
+                height: self.h,
+            },
+        }
+    }
+}
+
+impl crate::Viewport {
+    const fn to_vk(&self) -> vk::Viewport {
+        vk::Viewport {
+            x: self.x,
+            y: self.y,
+            width: self.w,
+            height: -self.h, // flip Y
+            min_depth: self.depth.start,
+            max_depth: self.depth.end,
+        }
+    }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::RenderEncoder for super::RenderCommandEncoder<'_> {
+    fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
+        let vk_scissor = rect.to_vk();
         unsafe {
             self.device
                 .core
-                .cmd_bind_pipeline(self.cmd_buf.raw, self.bind_point, raw_pipeline)
+                .cmd_set_scissor(self.cmd_buf.raw, 0, &[vk_scissor])
         };
-        self
+    }
+
+    fn set_viewport(&mut self, viewport: &crate::Viewport) {
+        let vk_viewport = viewport.to_vk();
+        unsafe {
+            self.device
+                .core
+                .cmd_set_viewport(self.cmd_buf.raw, 0, &[vk_viewport])
+        };
     }
 }
 
@@ -917,20 +931,9 @@ impl crate::traits::ComputePipelineEncoder for super::PipelineEncoder<'_, '_> {
 }
 
 #[hidden_trait::expose]
-impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
-    type BufferPiece = crate::BufferPiece;
-
+impl crate::traits::RenderEncoder for super::PipelineEncoder<'_, '_> {
     fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
-        let vk_scissor = vk::Rect2D {
-            offset: vk::Offset2D {
-                x: rect.x,
-                y: rect.y,
-            },
-            extent: vk::Extent2D {
-                width: rect.w,
-                height: rect.h,
-            },
-        };
+        let vk_scissor = rect.to_vk();
         unsafe {
             self.device
                 .core
@@ -938,21 +941,19 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
         };
     }
 
-    fn set_viewport(&mut self, viewport: &crate::Viewport, depth_range: Range<f32>) {
-        let vk_viewports = [vk::Viewport {
-            x: viewport.x,
-            y: viewport.y,
-            width: viewport.w,
-            height: -viewport.h, // flip Y
-            min_depth: depth_range.start,
-            max_depth: depth_range.end,
-        }];
+    fn set_viewport(&mut self, viewport: &crate::Viewport) {
+        let vk_viewport = viewport.to_vk();
         unsafe {
             self.device
                 .core
-                .cmd_set_viewport(self.cmd_buf.raw, 0, &vk_viewports)
+                .cmd_set_viewport(self.cmd_buf.raw, 0, &[vk_viewport])
         };
     }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
+    type BufferPiece = crate::BufferPiece;
 
     fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
         unsafe {

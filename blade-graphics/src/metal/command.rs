@@ -4,7 +4,7 @@ use objc2_metal::{
     MTLCommandBuffer as _, MTLCommandEncoder, MTLComputeCommandEncoder as _,
     MTLCounterSampleBuffer, MTLRenderCommandEncoder,
 };
-use std::{marker::PhantomData, mem, ops::Range, ptr::NonNull, slice, time::Duration};
+use std::{marker::PhantomData, mem, ptr::NonNull, slice, time::Duration};
 
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
@@ -570,29 +570,43 @@ impl Drop for super::ComputeCommandEncoder<'_> {
     }
 }
 
+impl crate::ScissorRect {
+    const fn to_metal(&self) -> metal::MTLScissorRect {
+        metal::MTLScissorRect {
+            x: self.x as _,
+            y: self.y as _,
+            width: self.w as _,
+            height: self.h as _,
+        }
+    }
+}
+impl crate::Viewport {
+    const fn to_metal(&self) -> metal::MTLViewport {
+        metal::MTLViewport {
+            originX: self.x as _,
+            originY: self.y as _,
+            width: self.w as _,
+            height: self.h as _,
+            znear: self.depth.start as _,
+            // TODO: broken on some Intel GPUs
+            // https://github.com/gfx-rs/wgpu/blob/ee3ae0e549fe01c4b699cf68f9b67ae8ea807564/wgpu-hal/src/metal/mod.rs#L298
+            zfar: self.depth.end as _,
+        }
+    }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::RenderEncoder for super::RenderCommandEncoder<'_> {
+    fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
+        self.raw.setScissorRect(rect.to_metal());
+    }
+
+    fn set_viewport(&mut self, viewport: &crate::Viewport) {
+        self.raw.setViewport(viewport.to_metal());
+    }
+}
+
 impl super::RenderCommandEncoder<'_> {
-    pub fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
-        let scissor = metal::MTLScissorRect {
-            x: rect.x as _,
-            y: rect.y as _,
-            width: rect.w as _,
-            height: rect.h as _,
-        };
-        self.raw.setScissorRect(scissor);
-    }
-
-    pub fn set_viewport(&mut self, viewport: &crate::Viewport, depth_range: Range<f32>) {
-        let viewport = metal::MTLViewport {
-            originX: viewport.x as _,
-            originY: viewport.y as _,
-            width: viewport.w as _,
-            height: viewport.h as _,
-            znear: depth_range.start as _,
-            zfar: depth_range.end as _, // TODO: aparently broken on some Intel GPU:s? see wgpu-hal
-        };
-        self.raw.setViewport(viewport);
-    }
-
     pub fn with<'p>(
         &'p mut self,
         pipeline: &'p super::RenderPipeline,
@@ -703,30 +717,18 @@ impl crate::traits::PipelineEncoder for super::RenderPipelineContext<'_> {
 }
 
 #[hidden_trait::expose]
+impl crate::traits::RenderEncoder for super::RenderPipelineContext<'_> {
+    fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
+        self.encoder.setScissorRect(rect.to_metal());
+    }
+    fn set_viewport(&mut self, viewport: &crate::Viewport) {
+        self.encoder.setViewport(viewport.to_metal());
+    }
+}
+
+#[hidden_trait::expose]
 impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
     type BufferPiece = crate::BufferPiece;
-
-    fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
-        let scissor = metal::MTLScissorRect {
-            x: rect.x as _,
-            y: rect.y as _,
-            width: rect.w as _,
-            height: rect.h as _,
-        };
-        self.encoder.setScissorRect(scissor);
-    }
-
-    fn set_viewport(&mut self, viewport: &crate::Viewport, depth_range: Range<f32>) {
-        let viewport = metal::MTLViewport {
-            originX: viewport.x as _,
-            originY: viewport.y as _,
-            width: viewport.w as _,
-            height: viewport.h as _,
-            znear: depth_range.start as _,
-            zfar: depth_range.end as _, // TODO: aparently broken on some Intel GPU:s? see wgpu-hal
-        };
-        self.encoder.setViewport(viewport);
-    }
 
     fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
         unsafe {
