@@ -1,4 +1,4 @@
-use std::{ops::Range, str, time::Duration};
+use std::{str, time::Duration};
 
 const COLOR_ATTACHMENTS: &[u32] = &[
     glow::COLOR_ATTACHMENT0,
@@ -209,15 +209,14 @@ impl super::CommandEncoder {
         self.commands.push(super::Command::SetDrawColorBuffers(
             targets.colors.len() as _
         ));
-        self.commands.push(super::Command::SetViewport {
-            viewport: crate::Viewport {
+        self.commands
+            .push(super::Command::SetViewport(crate::Viewport {
                 x: 0.0,
                 y: 0.0,
                 w: target_size[0] as _,
                 h: target_size[1] as _,
-            },
-            depth_range: 0.0..1.0,
-        });
+                depth: 0.0..1.0,
+            }));
         self.commands
             .push(super::Command::SetScissor(crate::ScissorRect {
                 x: 0,
@@ -296,6 +295,18 @@ impl super::PassEncoder<'_, super::ComputePipeline> {
             limits: self.limits,
             vertex_attributes: &[],
         }
+    }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::RenderEncoder for super::PassEncoder<'_, super::RenderPipeline> {
+    fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
+        self.commands.push(super::Command::SetScissor(rect.clone()));
+    }
+
+    fn set_viewport(&mut self, viewport: &crate::Viewport) {
+        self.commands
+            .push(super::Command::SetViewport(viewport.clone()));
     }
 }
 
@@ -440,19 +451,20 @@ impl crate::traits::ComputePipelineEncoder for super::PipelineEncoder<'_> {
 }
 
 #[hidden_trait::expose]
-impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
-    type BufferPiece = crate::BufferPiece;
-
+impl crate::traits::RenderEncoder for super::PipelineEncoder<'_> {
     fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
         self.commands.push(super::Command::SetScissor(rect.clone()));
     }
 
-    fn set_viewport(&mut self, viewport: &crate::Viewport, depth_range: Range<f32>) {
-        self.commands.push(super::Command::SetViewport {
-            viewport: viewport.clone(),
-            depth_range,
-        });
+    fn set_viewport(&mut self, viewport: &crate::Viewport) {
+        self.commands
+            .push(super::Command::SetViewport(viewport.clone()));
     }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
+    type BufferPiece = crate::BufferPiece;
 
     fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
         assert_eq!(index, 0);
@@ -1020,17 +1032,9 @@ impl super::Command {
                 (None, None) => (),
             },
             Self::Barrier => unimplemented!(),
-            Self::SetViewport {
-                ref viewport,
-                ref depth_range,
-            } => {
-                gl.viewport(
-                    viewport.x as i32,
-                    viewport.y as i32,
-                    viewport.w as i32,
-                    viewport.h as i32,
-                );
-                gl.depth_range_f32(depth_range.start, depth_range.end);
+            Self::SetViewport(ref vp) => {
+                gl.viewport(vp.x as i32, vp.y as i32, vp.w as i32, vp.h as i32);
+                gl.depth_range_f32(vp.depth.start, vp.depth.end);
             }
             Self::SetScissor(ref rect) => {
                 gl.scissor(rect.x, rect.y, rect.w as i32, rect.h as i32);

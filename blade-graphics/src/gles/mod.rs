@@ -296,10 +296,7 @@ enum Command {
         stencil: Option<u32>,
     },
     Barrier,
-    SetViewport {
-        viewport: crate::Viewport,
-        depth_range: Range<f32>,
-    },
+    SetViewport(crate::Viewport),
     SetScissor(crate::ScissorRect),
     SetStencilFunc {
         face: u32,

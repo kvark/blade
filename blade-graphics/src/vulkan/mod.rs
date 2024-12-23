@@ -252,6 +252,7 @@ impl ComputePipeline {
     }
 }
 
+#[derive(Debug)]
 pub struct RenderPipeline {
     raw: vk::Pipeline,
     layout: PipelineLayout,
@@ -295,11 +296,15 @@ pub struct ComputeCommandEncoder<'a> {
     device: &'a Device,
     update_data: &'a mut Vec<u8>,
 }
+//Note: we aren't merging this with `ComputeCommandEncoder`
+// because the destructors are different, and they can't be specialized
+// https://github.com/rust-lang/rust/issues/46893
 pub struct RenderCommandEncoder<'a> {
     cmd_buf: &'a mut CommandBuffer,
     device: &'a Device,
     update_data: &'a mut Vec<u8>,
 }
+
 pub struct PipelineEncoder<'a, 'p> {
     cmd_buf: &'a mut CommandBuffer,
     layout: &'p PipelineLayout,

@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash, ops::Range};
+use std::{fmt::Debug, hash::Hash};
 
 pub trait ResourceDevice {
     type Buffer: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
@@ -108,6 +108,11 @@ pub trait AccelerationStructureEncoder {
     );
 }
 
+pub trait RenderEncoder {
+    fn set_scissor_rect(&mut self, rect: &super::ScissorRect);
+    fn set_viewport(&mut self, viewport: &super::Viewport);
+}
+
 pub trait PipelineEncoder {
     fn bind<D: super::ShaderData>(&mut self, group: u32, data: &D);
 }
@@ -116,12 +121,10 @@ pub trait ComputePipelineEncoder: PipelineEncoder {
     fn dispatch(&mut self, groups: [u32; 3]);
 }
 
-pub trait RenderPipelineEncoder: PipelineEncoder {
+pub trait RenderPipelineEncoder: PipelineEncoder + RenderEncoder {
     type BufferPiece: Send + Sync + Clone + Copy + Debug;
 
-    //TODO: reconsider exposing this here
-    fn set_scissor_rect(&mut self, rect: &super::ScissorRect);
-    fn set_viewport(&mut self, viewport: &super::Viewport, depth_range: Range<f32>);
+    //Note: does this need to be available outside of the pipeline?
     fn bind_vertex(&mut self, index: u32, vertex_buf: Self::BufferPiece);
     fn draw(
         &mut self,
