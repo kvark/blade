@@ -497,7 +497,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
                 {
                     let diff = (ts - prev) as f32 * timing.period;
                     prev = ts;
-                    *self.timings.entry(name).or_default() += Duration::from_nanos(diff as _);
+                    self.timings.push((name, Duration::from_nanos(diff as _)));
                 }
             }
             unsafe {

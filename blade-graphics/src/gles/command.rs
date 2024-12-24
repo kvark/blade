@@ -145,7 +145,7 @@ impl super::CommandEncoder {
                         );
                     }
                     let time = Duration::from_nanos(result - prev);
-                    *self.timings.entry(pass_name).or_default() += time;
+                    self.timings.push((pass_name, time));
                     prev = result
                 }
             }
