@@ -333,7 +333,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
                 };
                 for (name, chunk) in td.pass_names.drain(..).zip(counters.chunks(2)) {
                     let duration = Duration::from_nanos(chunk[1] - chunk[0]);
-                    *self.timings.entry(name).or_default() += duration;
+                    self.timings.push((name, duration));
                 }
             }
         }

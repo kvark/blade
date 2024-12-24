@@ -1150,4 +1150,4 @@ pub struct Viewport {
     pub depth: std::ops::Range<f32>,
 }
 
-pub type Timings = std::collections::HashMap<String, std::time::Duration>;
+pub type Timings = Vec<(String, std::time::Duration)>;
