@@ -73,12 +73,17 @@ impl super::Context {
             raw_window_handle::RawWindowHandle::AppKit(handle) => unsafe {
                 let view = Retained::retain(handle.ns_view.as_ptr() as *mut objc2_app_kit::NSView)
                     .unwrap();
-                let main_layer = view.layer().unwrap();
-                let render_layer = if main_layer.is_kind_of::<CAMetalLayer>() {
-                    Retained::cast(main_layer)
+                let main_layer = view.layer();
+                let render_layer = if main_layer
+                    .as_ref()
+                    .map_or(false, |layer| layer.is_kind_of::<CAMetalLayer>())
+                {
+                    Retained::cast(main_layer.unwrap())
                 } else {
                     let new_layer = CAMetalLayer::new();
-                    new_layer.setFrame(main_layer.frame());
+                    if let Some(layer) = main_layer {
+                        new_layer.setFrame(layer.frame());
+                    }
                     view.setLayer(Some(&new_layer));
                     view.setWantsLayer(true);
                     new_layer.setContentsGravity(objc2_quartz_core::kCAGravityTopLeft);
