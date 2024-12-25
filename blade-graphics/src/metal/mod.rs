@@ -195,6 +195,9 @@ impl AccelerationStructure {
 pub struct SyncPoint {
     cmd_buf: Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>,
 }
+// Safe because all mutability is externalized
+unsafe impl Send for SyncPoint {}
+unsafe impl Sync for SyncPoint {}
 
 struct TimingData {
     pass_names: Vec<String>,
