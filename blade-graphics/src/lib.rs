@@ -68,7 +68,7 @@ pub mod derive;
 #[cfg_attr(any(gles, target_arch = "wasm32"), path = "gles/mod.rs")]
 mod hal;
 mod shader;
-mod traits;
+pub mod traits;
 pub mod util;
 pub mod limits {
     /// Max number of passes inside a command encoder.
