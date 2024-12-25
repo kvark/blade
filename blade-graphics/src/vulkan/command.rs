@@ -539,10 +539,6 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     }
 
     fn present(&mut self, frame: super::Frame) {
-        if frame.internal.acquire_semaphore == vk::Semaphore::null() {
-            return;
-        }
-
         assert_eq!(self.present, None);
         let wa = &self.device.workarounds;
         self.present = Some(super::Presentation {

@@ -20,7 +20,7 @@ impl super::Surface {
 
     pub fn acquire_frame(&mut self) -> super::Frame {
         let acquire_semaphore = self.next_semaphore;
-        match unsafe {
+        let index = match unsafe {
             self.device.acquire_next_image(
                 self.swapchain.raw,
                 !0,
@@ -28,26 +28,22 @@ impl super::Surface {
                 vk::Fence::null(),
             )
         } {
-            Ok((index, _suboptimal)) => {
-                self.next_semaphore = mem::replace(
-                    &mut self.frames[index as usize].acquire_semaphore,
-                    acquire_semaphore,
-                );
-                super::Frame {
-                    internal: self.frames[index as usize],
-                    swapchain: self.swapchain,
-                    image_index: index,
-                }
-            }
+            Ok((index, _suboptimal)) => index,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 log::warn!("Acquire failed because the surface is out of date");
-                super::Frame {
-                    internal: super::InternalFrame::default(),
-                    swapchain: self.swapchain,
-                    image_index: 0,
-                }
+                0
             }
             Err(other) => panic!("Aquire image error {}", other),
+        };
+
+        self.next_semaphore = mem::replace(
+            &mut self.frames[index as usize].acquire_semaphore,
+            acquire_semaphore,
+        );
+        super::Frame {
+            internal: self.frames[index as usize],
+            swapchain: self.swapchain,
+            image_index: index,
         }
     }
 }
