@@ -846,7 +846,7 @@ impl crate::ScissorRect {
 }
 
 impl crate::Viewport {
-    const fn to_vk(&self) -> vk::Viewport {
+    fn to_vk(&self) -> vk::Viewport {
         vk::Viewport {
             x: self.x,
             y: self.y,
