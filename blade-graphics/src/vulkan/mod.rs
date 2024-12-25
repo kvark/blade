@@ -107,7 +107,7 @@ struct Presentation {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
     swapchain: Swapchain,
-    image_index: u32,
+    image_index: Option<u32>,
     internal: InternalFrame,
 }
 
