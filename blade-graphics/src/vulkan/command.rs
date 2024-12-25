@@ -539,12 +539,20 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     }
 
     fn present(&mut self, frame: super::Frame) {
+        let image_index = match frame.image_index {
+            Some(index) => index,
+            None => {
+                //Note: image was out of date, we can't present it
+                return;
+            }
+        };
+
         assert_eq!(self.present, None);
         let wa = &self.device.workarounds;
         self.present = Some(super::Presentation {
             acquire_semaphore: frame.internal.acquire_semaphore,
             swapchain: frame.swapchain.raw,
-            image_index: frame.image_index,
+            image_index,
         });
 
         let barrier = vk::ImageMemoryBarrier {
