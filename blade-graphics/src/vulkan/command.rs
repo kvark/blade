@@ -857,7 +857,7 @@ impl crate::Viewport {
     fn to_vk(&self) -> vk::Viewport {
         vk::Viewport {
             x: self.x,
-            y: self.y,
+            y: self.y + self.h, // shift since always flipped y and vulkan >= 1.1
             width: self.w,
             height: -self.h, // flip Y
             min_depth: self.depth.start,
