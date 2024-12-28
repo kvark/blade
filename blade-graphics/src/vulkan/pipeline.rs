@@ -491,6 +491,10 @@ impl crate::traits::ShaderDevice for super::Context {
             })
             .front_face(map_front_face(desc.primitive.front_face))
             .line_width(1.0);
+        if let Some(face) = desc.primitive.cull_mode {
+            vk_rasterization = vk_rasterization.cull_mode(map_cull_face(face));
+        }
+
         let mut vk_depth_clip_state =
             vk::PipelineRasterizationDepthClipStateCreateInfoEXT::default()
                 .depth_clip_enable(false);
@@ -663,6 +667,13 @@ fn map_front_face(front_face: crate::FrontFace) -> vk::FrontFace {
     match front_face {
         crate::FrontFace::Cw => vk::FrontFace::CLOCKWISE,
         crate::FrontFace::Ccw => vk::FrontFace::COUNTER_CLOCKWISE,
+    }
+}
+
+fn map_cull_face(face: crate::Face) -> vk::CullModeFlags {
+    match face {
+        crate::Face::Front => vk::CullModeFlags::FRONT,
+        crate::Face::Back => vk::CullModeFlags::BACK,
     }
 }
 
