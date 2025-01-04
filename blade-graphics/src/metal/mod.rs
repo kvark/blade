@@ -334,6 +334,7 @@ fn map_texture_format(format: crate::TextureFormat) -> metal::MTLPixelFormat {
         Tf::R32Uint => Mpf::R32Uint,
         Tf::Rg32Uint => Mpf::RG32Uint,
         Tf::Rgba32Uint => Mpf::RGBA32Uint,
+        Tf::Depth32FloatStencil8Uint => Mpf::Depth32Float_Stencil8,
         Tf::Depth32Float => Mpf::Depth32Float,
         Tf::Bc1Unorm => Mpf::BC1_RGBA,
         Tf::Bc1UnormSrgb => Mpf::BC1_RGBA_sRGB,

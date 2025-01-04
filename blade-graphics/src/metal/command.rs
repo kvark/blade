@@ -256,30 +256,63 @@ impl super::CommandEncoder {
             }
 
             if let Some(ref rt) = targets.depth_stencil {
-                let at_descriptor = descriptor.depthAttachment();
-                at_descriptor.setTexture(Some(rt.view.as_ref()));
-                let load_action = match rt.init_op {
-                    crate::InitOp::Load => metal::MTLLoadAction::Load,
-                    crate::InitOp::Clear(color) => {
-                        let clear_depth = match color {
-                            crate::TextureColor::TransparentBlack
-                            | crate::TextureColor::OpaqueBlack => 0.0,
-                            crate::TextureColor::White => 1.0,
-                        };
-                        at_descriptor.setClearDepth(clear_depth);
-                        metal::MTLLoadAction::Clear
-                    }
-                    crate::InitOp::DontCare => metal::MTLLoadAction::DontCare,
-                };
-                let store_action = match rt.finish_op {
-                    crate::FinishOp::Store | crate::FinishOp::Ignore => {
-                        metal::MTLStoreAction::Store
-                    }
-                    crate::FinishOp::Discard => metal::MTLStoreAction::DontCare,
-                    crate::FinishOp::ResolveTo(_) => panic!("Can't resolve depth texture"),
-                };
-                at_descriptor.setLoadAction(load_action);
-                at_descriptor.setStoreAction(store_action);
+                if true {
+                    // depth
+                    let at_descriptor = descriptor.depthAttachment();
+                    at_descriptor.setTexture(Some(rt.view.as_ref()));
+                    let load_action = match rt.init_op {
+                        crate::InitOp::Load => metal::MTLLoadAction::Load,
+                        crate::InitOp::Clear(color) => {
+                            let clear_depth = match color {
+                                crate::TextureColor::TransparentBlack
+                                | crate::TextureColor::OpaqueBlack => 0.0,
+                                crate::TextureColor::White => 1.0,
+                            };
+                            at_descriptor.setClearDepth(clear_depth);
+                            metal::MTLLoadAction::Clear
+                        }
+                        crate::InitOp::DontCare => metal::MTLLoadAction::DontCare,
+                    };
+                    let store_action = match rt.finish_op {
+                        crate::FinishOp::Store | crate::FinishOp::Ignore => {
+                            metal::MTLStoreAction::Store
+                        }
+                        crate::FinishOp::Discard => metal::MTLStoreAction::DontCare,
+                        crate::FinishOp::ResolveTo(_) => panic!("Can't resolve depth texture"),
+                    };
+                    at_descriptor.setLoadAction(load_action);
+                    at_descriptor.setStoreAction(store_action);
+                }
+
+                if false {
+                    // stencil
+                    let at_descriptor = descriptor.stencilAttachment();
+                    at_descriptor.setTexture(Some(rt.view.as_ref()));
+
+                    let load_action = match rt.init_op {
+                        crate::InitOp::Load => metal::MTLLoadAction::Load,
+                        crate::InitOp::Clear(color) => {
+                            let clear_stencil = match color {
+                                crate::TextureColor::TransparentBlack
+                                | crate::TextureColor::OpaqueBlack => 0,
+                                crate::TextureColor::White => !0,
+                            };
+                            at_descriptor.setClearStencil(clear_stencil);
+                            metal::MTLLoadAction::Clear
+                        }
+                        crate::InitOp::DontCare => metal::MTLLoadAction::DontCare,
+                    };
+                    let store_action = match rt.finish_op {
+                        crate::FinishOp::Store | crate::FinishOp::Ignore => {
+                            metal::MTLStoreAction::Store
+                        }
+                        crate::FinishOp::Discard => metal::MTLStoreAction::DontCare,
+                        crate::FinishOp::ResolveTo(_) => panic!("Can't resolve stencil texture"),
+                    };
+
+                    at_descriptor.setLoadAction(load_action);
+                    at_descriptor.setStoreAction(store_action);
+                }
             }
 
             if let Some(ref mut td_array) = self.timing_datas {
