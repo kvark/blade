@@ -40,6 +40,7 @@ impl Frame {
     pub fn texture_view(&self) -> TextureView {
         TextureView {
             raw: Retained::as_ptr(&self.texture) as *mut _,
+            aspects: crate::TexelAspects::COLOR,
         }
     }
 }
@@ -116,6 +117,7 @@ impl Texture {
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct TextureView {
     raw: *mut ProtocolObject<dyn metal::MTLTexture>,
+    aspects: crate::TexelAspects,
 }
 
 unsafe impl Send for TextureView {}
@@ -125,6 +127,7 @@ impl Default for TextureView {
     fn default() -> Self {
         Self {
             raw: ptr::null_mut(),
+            aspects: crate::TexelAspects::COLOR,
         }
     }
 }
@@ -139,6 +142,7 @@ impl TextureView {
     pub fn from_metal_texture(raw: &Retained<ProtocolObject<dyn metal::MTLTexture>>) -> Self {
         Self {
             raw: Retained::into_raw(raw.clone()),
+            aspects: crate::TexelAspects::COLOR,
         }
     }
 }
