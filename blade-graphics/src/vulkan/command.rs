@@ -161,38 +161,43 @@ fn make_buffer_image_copy(
 fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo<'static> {
     let mut vk_info = vk::RenderingAttachmentInfo::default()
         .image_view(rt.view.raw)
-        .image_layout(vk::ImageLayout::GENERAL)
-        .load_op(vk::AttachmentLoadOp::LOAD);
+        .image_layout(vk::ImageLayout::GENERAL);
 
-    if let crate::InitOp::Clear(color) = rt.init_op {
-        let cv = if rt.view.aspects.contains(crate::TexelAspects::COLOR) {
-            vk::ClearValue {
-                color: match color {
-                    crate::TextureColor::TransparentBlack => vk::ClearColorValue::default(),
-                    crate::TextureColor::OpaqueBlack => vk::ClearColorValue {
-                        float32: [0.0, 0.0, 0.0, 1.0],
-                    },
-                    crate::TextureColor::White => vk::ClearColorValue { float32: [1.0; 4] },
-                },
-            }
-        } else {
-            vk::ClearValue {
-                depth_stencil: match color {
-                    crate::TextureColor::TransparentBlack => vk::ClearDepthStencilValue::default(),
-                    crate::TextureColor::OpaqueBlack => vk::ClearDepthStencilValue {
-                        depth: 1.0,
-                        stencil: 0,
-                    },
-                    crate::TextureColor::White => vk::ClearDepthStencilValue {
-                        depth: 1.0,
-                        stencil: !0,
-                    },
-                },
-            }
-        };
+    match rt.init_op {
+        crate::InitOp::Load => vk_info = vk_info.load_op(vk::AttachmentLoadOp::LOAD),
+        crate::InitOp::DontCare => vk_info = vk_info.load_op(vk::AttachmentLoadOp::DONT_CARE),
 
-        vk_info.load_op = vk::AttachmentLoadOp::CLEAR;
-        vk_info.clear_value = cv;
+        crate::InitOp::Clear(color) => {
+            let cv = if rt.view.aspects.contains(crate::TexelAspects::COLOR) {
+                vk::ClearValue {
+                    color: match color {
+                        crate::TextureColor::TransparentBlack => vk::ClearColorValue::default(),
+                        crate::TextureColor::OpaqueBlack => vk::ClearColorValue {
+                            float32: [0.0, 0.0, 0.0, 1.0],
+                        },
+                        crate::TextureColor::White => vk::ClearColorValue { float32: [1.0; 4] },
+                    },
+                }
+            } else {
+                vk::ClearValue {
+                    depth_stencil: match color {
+                        crate::TextureColor::TransparentBlack => {
+                            vk::ClearDepthStencilValue::default()
+                        }
+                        crate::TextureColor::OpaqueBlack => vk::ClearDepthStencilValue {
+                            depth: 1.0,
+                            stencil: 0,
+                        },
+                        crate::TextureColor::White => vk::ClearDepthStencilValue {
+                            depth: 1.0,
+                            stencil: !0,
+                        },
+                    },
+                }
+            };
+
+            vk_info = vk_info.load_op(vk::AttachmentLoadOp::CLEAR).clear_value(cv);
+        }
     }
 
     if let crate::FinishOp::ResolveTo(resolve_view) = rt.finish_op {
