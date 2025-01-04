@@ -75,6 +75,7 @@ impl super::TextureFormat {
             Self::Rgba32Uint => uncompressed(16),
             Self::Depth32Float => uncompressed(4),
             Self::Depth32FloatStencil8Uint => uncompressed(5),
+            Self::Stencil8Uint => uncompressed(1),
             Self::Bc1Unorm => cx_bc(8),
             Self::Bc1UnormSrgb => cx_bc(8),
             Self::Bc2Unorm => cx_bc(16),
@@ -102,6 +103,8 @@ impl super::TextureFormat {
             Self::Depth32FloatStencil8Uint => {
                 super::TexelAspects::DEPTH | super::TexelAspects::STENCIL
             }
+
+            Self::Stencil8Uint => super::TexelAspects::STENCIL,
 
             _ => super::TexelAspects::COLOR,
         }
