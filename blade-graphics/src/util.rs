@@ -74,6 +74,7 @@ impl super::TextureFormat {
             Self::Rg32Uint => uncompressed(8),
             Self::Rgba32Uint => uncompressed(16),
             Self::Depth32Float => uncompressed(4),
+            Self::Depth32FloatStencil8Uint => uncompressed(5),
             Self::Bc1Unorm => cx_bc(8),
             Self::Bc1UnormSrgb => cx_bc(8),
             Self::Bc2Unorm => cx_bc(16),
@@ -97,6 +98,11 @@ impl super::TextureFormat {
     pub fn aspects(&self) -> super::TexelAspects {
         match *self {
             Self::Depth32Float => super::TexelAspects::DEPTH,
+
+            Self::Depth32FloatStencil8Uint => {
+                super::TexelAspects::DEPTH | super::TexelAspects::STENCIL
+            }
+
             _ => super::TexelAspects::COLOR,
         }
     }
