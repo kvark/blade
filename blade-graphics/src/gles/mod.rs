@@ -615,6 +615,11 @@ fn describe_texture_format(format: crate::TextureFormat) -> FormatInfo {
             glow::DEPTH_STENCIL,
             glow::FLOAT_32_UNSIGNED_INT_24_8_REV,
         ),
+        Tf::Stencil8Uint => (
+            glow::STENCIL_INDEX8,
+            glow::STENCIL_INDEX,
+            glow::UNSIGNED_BYTE,
+        ),
         Tf::Bc1Unorm => (glow::COMPRESSED_RGBA_S3TC_DXT1_EXT, glow::RGBA, 0),
         Tf::Bc1UnormSrgb => (glow::COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT, glow::RGBA, 0),
         Tf::Bc2Unorm => (glow::COMPRESSED_RGBA_S3TC_DXT3_EXT, glow::RGBA, 0),
