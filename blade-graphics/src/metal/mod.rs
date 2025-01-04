@@ -139,10 +139,13 @@ impl TextureView {
 
     /// Create a TextureView from a raw Metal Texture.
     /// Does not keep a reference, need not being destoryed.
-    pub fn from_metal_texture(raw: &Retained<ProtocolObject<dyn metal::MTLTexture>>) -> Self {
+    pub fn from_metal_texture(
+        raw: &Retained<ProtocolObject<dyn metal::MTLTexture>>,
+        aspects: crate::TexelAspects,
+    ) -> Self {
         Self {
             raw: Retained::into_raw(raw.clone()),
-            aspects: crate::TexelAspects::COLOR,
+            aspects,
         }
     }
 }
