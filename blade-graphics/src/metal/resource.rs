@@ -306,6 +306,7 @@ impl crate::traits::ResourceDevice for super::Context {
         }
         super::TextureView {
             raw: Retained::into_raw(object),
+            aspects: desc.format.aspects(),
         }
     }
 

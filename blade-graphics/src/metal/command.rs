@@ -256,8 +256,7 @@ impl super::CommandEncoder {
             }
 
             if let Some(ref rt) = targets.depth_stencil {
-                if true {
-                    // depth
+                if rt.view.aspects.contains(crate::TexelAspects::DEPTH) {
                     let at_descriptor = descriptor.depthAttachment();
                     at_descriptor.setTexture(Some(rt.view.as_ref()));
                     let load_action = match rt.init_op {
@@ -284,8 +283,7 @@ impl super::CommandEncoder {
                     at_descriptor.setStoreAction(store_action);
                 }
 
-                if false {
-                    // stencil
+                if rt.view.aspects.contains(crate::TexelAspects::STENCIL) {
                     let at_descriptor = descriptor.stencilAttachment();
                     at_descriptor.setTexture(Some(rt.view.as_ref()));
 
