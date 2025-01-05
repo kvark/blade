@@ -885,6 +885,15 @@ impl crate::traits::RenderEncoder for super::RenderCommandEncoder<'_> {
                 .cmd_set_viewport(self.cmd_buf.raw, 0, &[vk_viewport])
         };
     }
+
+    fn set_stencil_reference(&mut self, face: crate::Face, reference: u32) {
+        let face = super::map_stencil_face(face);
+        unsafe {
+            self.device
+                .core
+                .cmd_set_stencil_reference(self.cmd_buf.raw, face, reference)
+        };
+    }
 }
 
 #[hidden_trait::expose]
@@ -951,6 +960,15 @@ impl crate::traits::RenderEncoder for super::PipelineEncoder<'_, '_> {
             self.device
                 .core
                 .cmd_set_viewport(self.cmd_buf.raw, 0, &[vk_viewport])
+        };
+    }
+
+    fn set_stencil_reference(&mut self, face: crate::Face, reference: u32) {
+        let face = super::map_stencil_face(face);
+        unsafe {
+            self.device
+                .core
+                .cmd_set_stencil_reference(self.cmd_buf.raw, face, reference)
         };
     }
 }
