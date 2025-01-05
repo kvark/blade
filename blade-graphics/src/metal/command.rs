@@ -635,6 +635,10 @@ impl crate::traits::RenderEncoder for super::RenderCommandEncoder<'_> {
     fn set_viewport(&mut self, viewport: &crate::Viewport) {
         self.raw.setViewport(viewport.to_metal());
     }
+
+    fn set_stencil_reference(&mut self, stencil_reference: u32) {
+        self.raw.setStencilReferenceValue(stencil_reference);
+    }
 }
 
 impl super::RenderCommandEncoder<'_> {
@@ -754,6 +758,9 @@ impl crate::traits::RenderEncoder for super::RenderPipelineContext<'_> {
     }
     fn set_viewport(&mut self, viewport: &crate::Viewport) {
         self.encoder.setViewport(viewport.to_metal());
+    }
+    fn set_stencil_reference(&mut self, stencil_reference: u32) {
+        self.encoder.setStencilReferenceValue(stencil_reference);
     }
 }
 
