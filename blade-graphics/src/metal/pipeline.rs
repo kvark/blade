@@ -545,7 +545,6 @@ impl crate::traits::ShaderDevice for super::Context {
                     None => metal::MTLCullMode::None,
                     Some(crate::Face::Front) => metal::MTLCullMode::Front,
                     Some(crate::Face::Back) => metal::MTLCullMode::Back,
-                    Some(crate::Face::Both) => panic!("metal cannot cull both front and back face"),
                 },
                 depth_clip_mode: if desc.primitive.unclipped_depth {
                     metal::MTLDepthClipMode::Clamp

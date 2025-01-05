@@ -674,7 +674,6 @@ fn map_cull_face(face: crate::Face) -> vk::CullModeFlags {
     match face {
         crate::Face::Front => vk::CullModeFlags::FRONT,
         crate::Face::Back => vk::CullModeFlags::BACK,
-        crate::Face::Both => vk::CullModeFlags::FRONT_AND_BACK,
     }
 }
 
