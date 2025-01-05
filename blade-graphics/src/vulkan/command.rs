@@ -891,12 +891,13 @@ impl crate::traits::RenderEncoder for super::RenderCommandEncoder<'_> {
         };
     }
 
-    fn set_stencil_reference(&mut self, face: crate::Face, reference: u32) {
-        let face = super::map_stencil_face(face);
+    fn set_stencil_reference(&mut self, reference: u32) {
         unsafe {
-            self.device
-                .core
-                .cmd_set_stencil_reference(self.cmd_buf.raw, face, reference)
+            self.device.core.cmd_set_stencil_reference(
+                self.cmd_buf.raw,
+                vk::StencilFaceFlags::FRONT_AND_BACK,
+                reference,
+            )
         };
     }
 }
@@ -968,12 +969,13 @@ impl crate::traits::RenderEncoder for super::PipelineEncoder<'_, '_> {
         };
     }
 
-    fn set_stencil_reference(&mut self, face: crate::Face, reference: u32) {
-        let face = super::map_stencil_face(face);
+    fn set_stencil_reference(&mut self, reference: u32) {
         unsafe {
-            self.device
-                .core
-                .cmd_set_stencil_reference(self.cmd_buf.raw, face, reference)
+            self.device.core.cmd_set_stencil_reference(
+                self.cmd_buf.raw,
+                vk::StencilFaceFlags::FRONT_AND_BACK,
+                reference,
+            )
         };
     }
 }

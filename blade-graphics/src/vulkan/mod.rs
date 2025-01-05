@@ -559,14 +559,6 @@ impl crate::traits::CommandDevice for Context {
     }
 }
 
-fn map_stencil_face(face: crate::Face) -> vk::StencilFaceFlags {
-    match face {
-        crate::Face::Front => vk::StencilFaceFlags::FRONT,
-        crate::Face::Back => vk::StencilFaceFlags::BACK,
-        crate::Face::Both => vk::StencilFaceFlags::FRONT_AND_BACK,
-    }
-}
-
 fn map_texture_format(format: crate::TextureFormat) -> vk::Format {
     use crate::TextureFormat as Tf;
     match format {

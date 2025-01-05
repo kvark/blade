@@ -736,8 +736,6 @@ pub enum Face {
     Front,
     /// Back face
     Back,
-    /// Both Front and Back
-    Both,
 }
 
 #[derive(Clone, Debug, Default)]

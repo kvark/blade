@@ -308,6 +308,10 @@ impl crate::traits::RenderEncoder for super::PassEncoder<'_, super::RenderPipeli
         self.commands
             .push(super::Command::SetViewport(viewport.clone()));
     }
+
+    fn set_stencil_reference(&mut self, reference: u32) {
+        unimplemented!()
+    }
 }
 
 impl super::PassEncoder<'_, super::RenderPipeline> {
@@ -459,6 +463,10 @@ impl crate::traits::RenderEncoder for super::PipelineEncoder<'_> {
     fn set_viewport(&mut self, viewport: &crate::Viewport) {
         self.commands
             .push(super::Command::SetViewport(viewport.clone()));
+    }
+
+    fn set_stencil_reference(&mut self, reference: u32) {
+        unimplemented!()
     }
 }
 
