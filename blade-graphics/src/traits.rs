@@ -111,6 +111,7 @@ pub trait AccelerationStructureEncoder {
 pub trait RenderEncoder {
     fn set_scissor_rect(&mut self, rect: &super::ScissorRect);
     fn set_viewport(&mut self, viewport: &super::Viewport);
+    fn set_stencil_reference(&mut self, face: super::Face, reference: u32);
 }
 
 pub trait PipelineEncoder {
