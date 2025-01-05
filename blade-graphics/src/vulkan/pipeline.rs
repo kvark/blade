@@ -548,8 +548,8 @@ impl crate::traits::ShaderDevice for super::Context {
             }
             if ds.stencil != crate::StencilState::default() {
                 let s = &ds.stencil;
-                let front = map_stencil_face(&s.front, s.read_mask, s.write_mask);
-                let back = map_stencil_face(&s.back, s.read_mask, s.write_mask);
+                let front = map_stencil_face_state(&s.front, s.read_mask, s.write_mask);
+                let back = map_stencil_face_state(&s.back, s.read_mask, s.write_mask);
                 vk_depth_stencil = vk_depth_stencil
                     .stencil_test_enable(true)
                     .front(front)
@@ -674,6 +674,7 @@ fn map_cull_face(face: crate::Face) -> vk::CullModeFlags {
     match face {
         crate::Face::Front => vk::CullModeFlags::FRONT,
         crate::Face::Back => vk::CullModeFlags::BACK,
+        crate::Face::Both => vk::CullModeFlags::FRONT_AND_BACK,
     }
 }
 
@@ -705,7 +706,7 @@ fn map_stencil_op(op: crate::StencilOperation) -> vk::StencilOp {
     }
 }
 
-fn map_stencil_face(
+fn map_stencil_face_state(
     face: &crate::StencilFaceState,
     compare_mask: u32,
     write_mask: u32,
