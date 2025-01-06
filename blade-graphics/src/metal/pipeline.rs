@@ -504,7 +504,9 @@ impl crate::traits::ShaderDevice for super::Context {
                 Some(ref ds) => {
                     let raw_format = super::map_texture_format(ds.format);
                     descriptor.setDepthAttachmentPixelFormat(raw_format);
-                    //TODO: descriptor.set_stencil_attachment_pixel_format(raw_format);
+                    if ds.format.aspects().contains(crate::TexelAspects::STENCIL) {
+                        descriptor.setStencilAttachmentPixelFormat(raw_format);
+                    }
 
                     let ds_descriptor = create_depth_stencil_desc(ds);
                     let raw = self
