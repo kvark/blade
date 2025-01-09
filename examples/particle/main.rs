@@ -18,11 +18,6 @@ struct Example {
     msaa_view: Option<gpu::TextureView>,
 }
 
-// pub const INITIAL_SAMPLE_COUNT: u32 = 1;
-// pub const INITIAL_SAMPLE_COUNT: u32 = 2;
-pub const INITIAL_SAMPLE_COUNT: u32 = 4;
-// pub const INITIAL_SAMPLE_COUNT: u32 = 8;
-
 impl Example {
     fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
         let config = Self::make_surface_config(size);
@@ -110,6 +105,11 @@ impl Example {
             .unwrap();
         let surface_info = surface.info();
 
+        let sample_count = [4, 2, 1]
+            .into_iter()
+            .find(|&n| context.supports_texture_sample_count(n))
+            .unwrap_or(1);
+
         let gui_painter = blade_egui::GuiPainter::new(surface_info, &context);
         let particle_system = particle::System::new(
             &context,
@@ -118,7 +118,7 @@ impl Example {
                 capacity: 100_000,
                 draw_format: surface_info.format,
             },
-            INITIAL_SAMPLE_COUNT,
+            sample_count,
         );
 
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
@@ -136,7 +136,7 @@ impl Example {
             surface,
             gui_painter,
             particle_system,
-            sample_count: INITIAL_SAMPLE_COUNT,
+            sample_count,
             msaa_texture: None,
             msaa_view: None,
         }
