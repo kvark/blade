@@ -119,7 +119,10 @@ pub trait PipelineEncoder {
 }
 
 pub trait ComputePipelineEncoder: PipelineEncoder {
+    type BufferPiece: Send + Sync + Clone + Copy + Debug;
+
     fn dispatch(&mut self, groups: [u32; 3]);
+    fn dispatch_indirect(&mut self, indirect_buf: Self::BufferPiece);
 }
 
 pub trait RenderPipelineEncoder: PipelineEncoder + RenderEncoder {
