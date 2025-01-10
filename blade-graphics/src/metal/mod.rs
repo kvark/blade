@@ -530,6 +530,12 @@ impl Context {
     pub fn metal_device(&self) -> Retained<ProtocolObject<dyn metal::MTLDevice>> {
         self.device.lock().unwrap().clone()
     }
+
+    /// Check if the device supports a specific texture sample count.
+    pub fn supports_texture_sample_count(&self, sample_count: u32) -> bool {
+        self.metal_device()
+            .supportsTextureSampleCount(sample_count as _)
+    }
 }
 
 #[hidden_trait::expose]

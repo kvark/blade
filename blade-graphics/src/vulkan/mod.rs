@@ -1,4 +1,7 @@
-use ash::{khr, vk};
+use ash::{
+    khr,
+    vk::{self},
+};
 use std::{mem, num::NonZeroU32, path::PathBuf, ptr, sync::Mutex};
 
 mod command;
@@ -148,6 +151,31 @@ pub struct Context {
     shader_debug_path: Option<PathBuf>,
     instance: Instance,
     entry: ash::Entry,
+}
+
+impl Context {
+    /// Check if the device supports a specific texture sample count.
+    pub fn supports_texture_sample_count(&self, sample_count: u32) -> bool {
+        let properties = unsafe {
+            self.instance
+                .core
+                .get_physical_device_properties(self.physical_device)
+        };
+
+        let max_count = properties.limits.framebuffer_color_sample_counts
+            & properties.limits.framebuffer_depth_sample_counts;
+
+        match sample_count {
+            1 => true,
+            2 => max_count.contains(vk::SampleCountFlags::TYPE_2),
+            4 => max_count.contains(vk::SampleCountFlags::TYPE_4),
+            8 => max_count.contains(vk::SampleCountFlags::TYPE_8),
+            16 => max_count.contains(vk::SampleCountFlags::TYPE_16),
+            32 => max_count.contains(vk::SampleCountFlags::TYPE_32),
+            64 => max_count.contains(vk::SampleCountFlags::TYPE_64),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
