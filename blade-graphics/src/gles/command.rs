@@ -449,8 +449,16 @@ impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::ComputePipelineEncoder for super::PipelineEncoder<'_> {
+    type BufferPiece = crate::BufferPiece;
+
     fn dispatch(&mut self, groups: [u32; 3]) {
         self.commands.push(super::Command::Dispatch(groups));
+    }
+
+    fn dispatch_indirect(&mut self, indirect_buf: crate::BufferPiece) {
+        self.commands.push(super::Command::DispatchIndirect {
+            indirect_buf: indirect_buf.into(),
+        });
     }
 }
 
