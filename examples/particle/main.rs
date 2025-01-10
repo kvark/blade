@@ -245,12 +245,17 @@ impl Example {
         ui.heading("Particle System");
         self.particle_system.add_gui(ui);
 
+        let supported_samples = [1, 2, 4]
+            .into_iter()
+            .filter(|&n| self.context.supports_texture_sample_count(n))
+            .collect::<Vec<_>>();
+
         ui.add_space(5.0);
         ui.heading("Rendering Settings");
         egui::ComboBox::new("msaa dropdown", "MSAA samples")
             .selected_text(format!("x{}", self.sample_count))
             .show_ui(ui, |ui| {
-                for i in [1, 2, 4] {
+                for i in supported_samples {
                     if ui
                         .selectable_value(&mut self.sample_count, i, format!("x{i}"))
                         .changed()
