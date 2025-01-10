@@ -940,11 +940,22 @@ impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_, '_> {
 
 #[hidden_trait::expose]
 impl crate::traits::ComputePipelineEncoder for super::PipelineEncoder<'_, '_> {
+    type BufferPiece = crate::BufferPiece;
+
     fn dispatch(&mut self, groups: [u32; 3]) {
         unsafe {
             self.device
                 .core
                 .cmd_dispatch(self.cmd_buf.raw, groups[0], groups[1], groups[2])
+        };
+    }
+    fn dispatch_indirect(&mut self, indirect_buf: crate::BufferPiece) {
+        unsafe {
+            self.device.core.cmd_dispatch_indirect(
+                self.cmd_buf.raw,
+                indirect_buf.buffer.raw,
+                indirect_buf.offset,
+            )
         };
     }
 }
