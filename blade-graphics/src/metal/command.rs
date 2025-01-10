@@ -712,6 +712,8 @@ impl crate::traits::PipelineEncoder for super::ComputePipelineContext<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::ComputePipelineEncoder for super::ComputePipelineContext<'_> {
+    type BufferPiece = crate::BufferPiece;
+
     fn dispatch(&mut self, groups: [u32; 3]) {
         let raw_count = metal::MTLSize {
             width: groups[0] as usize,
@@ -720,6 +722,17 @@ impl crate::traits::ComputePipelineEncoder for super::ComputePipelineContext<'_>
         };
         self.encoder
             .dispatchThreadgroups_threadsPerThreadgroup(raw_count, self.wg_size);
+    }
+
+    fn dispatch_indirect(&mut self, indirect_buf: crate::BufferPiece) {
+        unsafe {
+            self.encoder
+                .dispatchThreadgroupsWithIndirectBuffer_indirectBufferOffset_threadsPerThreadgroup(
+                    indirect_buf.buffer.as_ref(),
+                    indirect_buf.offset as usize,
+                    self.wg_size,
+                );
+        }
     }
 }
 
