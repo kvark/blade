@@ -72,7 +72,7 @@ impl AssetHub {
         &'a self,
         base_path: &'a Path,
         name: N,
-    ) -> LoadContext {
+    ) -> LoadContext<'a> {
         LoadContext {
             asset_hub: self,
             base_path,

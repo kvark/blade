@@ -564,7 +564,18 @@ pub struct AccelerationStructureInstance {
     pub custom_index: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+impl Default for AccelerationStructureInstance {
+    fn default() -> Self {
+        Self {
+            acceleration_structure_index: 0,
+            transform: IDENTITY_TRANSFORM,
+            mask: 0xFF,
+            custom_index: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AccelerationStructureSizes {
     /// Size of the permanent GPU data
     pub data: u64,
