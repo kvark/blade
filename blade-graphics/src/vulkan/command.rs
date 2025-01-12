@@ -171,7 +171,9 @@ fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo<'s
             let cv = if rt.view.aspects.contains(crate::TexelAspects::COLOR) {
                 vk::ClearValue {
                     color: match color {
-                        crate::TextureColor::TransparentBlack => vk::ClearColorValue::default(),
+                        crate::TextureColor::TransparentBlack => {
+                            vk::ClearColorValue { float32: [0.0; 4] }
+                        }
                         crate::TextureColor::OpaqueBlack => vk::ClearColorValue {
                             float32: [0.0, 0.0, 0.0, 1.0],
                         },
@@ -180,18 +182,9 @@ fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo<'s
                 }
             } else {
                 vk::ClearValue {
-                    depth_stencil: match color {
-                        crate::TextureColor::TransparentBlack => {
-                            vk::ClearDepthStencilValue::default()
-                        }
-                        crate::TextureColor::OpaqueBlack => vk::ClearDepthStencilValue {
-                            depth: 1.0,
-                            stencil: 0,
-                        },
-                        crate::TextureColor::White => vk::ClearDepthStencilValue {
-                            depth: 1.0,
-                            stencil: !0,
-                        },
+                    depth_stencil: vk::ClearDepthStencilValue {
+                        depth: color.depth_clear_value(),
+                        stencil: color.stencil_clear_value(),
                     },
                 }
             };

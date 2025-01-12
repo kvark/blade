@@ -262,12 +262,8 @@ impl super::CommandEncoder {
                     let load_action = match rt.init_op {
                         crate::InitOp::Load => metal::MTLLoadAction::Load,
                         crate::InitOp::Clear(color) => {
-                            let clear_depth = match color {
-                                crate::TextureColor::TransparentBlack
-                                | crate::TextureColor::OpaqueBlack => 0.0,
-                                crate::TextureColor::White => 1.0,
-                            };
-                            at_descriptor.setClearDepth(clear_depth);
+                            let clear_depth = color.depth_clear_value();
+                            at_descriptor.setClearDepth(clear_depth as f64);
                             metal::MTLLoadAction::Clear
                         }
                         crate::InitOp::DontCare => metal::MTLLoadAction::DontCare,
@@ -290,11 +286,7 @@ impl super::CommandEncoder {
                     let load_action = match rt.init_op {
                         crate::InitOp::Load => metal::MTLLoadAction::Load,
                         crate::InitOp::Clear(color) => {
-                            let clear_stencil = match color {
-                                crate::TextureColor::TransparentBlack
-                                | crate::TextureColor::OpaqueBlack => 0,
-                                crate::TextureColor::White => !0,
-                            };
+                            let clear_stencil = color.stencil_clear_value();
                             at_descriptor.setClearStencil(clear_stencil);
                             metal::MTLLoadAction::Clear
                         }

@@ -239,14 +239,15 @@ impl super::CommandEncoder {
             if let crate::InitOp::Clear(color) = rt.init_op {
                 self.commands.push(super::Command::ClearDepthStencil {
                     depth: if rt.view.aspects.contains(crate::TexelAspects::DEPTH) {
-                        Some(match color {
-                            crate::TextureColor::White => 1.0,
-                            _ => 0.0,
-                        })
+                        Some(color.depth_clear_value())
                     } else {
                         None
                     },
-                    stencil: None, //TODO
+                    stencil: if rt.view.aspects.contains(crate::TexelAspects::STENCIL) {
+                        Some(color.stencil_clear_value())
+                    } else {
+                        None
+                    },
                 });
             }
         }
