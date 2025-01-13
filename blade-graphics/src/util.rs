@@ -111,6 +111,24 @@ impl super::TextureFormat {
     }
 }
 
+impl super::TextureColor {
+    pub fn stencil_clear_value(&self) -> u32 {
+        match self {
+            crate::TextureColor::TransparentBlack => 0,
+            crate::TextureColor::OpaqueBlack => !0,
+            crate::TextureColor::White => !0,
+        }
+    }
+
+    pub fn depth_clear_value(&self) -> f32 {
+        match self {
+            crate::TextureColor::TransparentBlack => 0.0,
+            crate::TextureColor::OpaqueBlack => 0.0,
+            crate::TextureColor::White => 1.0,
+        }
+    }
+}
+
 impl super::ComputePipeline {
     /// Return the dispatch group counts sufficient to cover the given extent.
     pub fn get_dispatch_for(&self, extent: super::Extent) -> [u32; 3] {

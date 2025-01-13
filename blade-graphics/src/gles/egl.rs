@@ -355,7 +355,7 @@ impl super::Context {
                 let window_ptr = handle.ns_view.as_ptr();
                 #[cfg(target_os = "macos")]
                 let window_ptr = unsafe {
-                    use objc::{msg_send, runtime::Object, sel, sel_impl};
+                    use objc2::{msg_send, runtime::Object};
                     // ns_view always have a layer and don't need to verify that it exists.
                     let layer: *mut Object =
                         msg_send![handle.ns_view.as_ptr() as *mut Object, layer];
