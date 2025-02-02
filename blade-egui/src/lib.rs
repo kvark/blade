@@ -206,7 +206,7 @@ impl GuiPainter {
         let belt = BufferBelt::new(BufferBeltDescriptor {
             memory: blade_graphics::Memory::Shared,
             min_chunk_size: 0x1000,
-            alignment: 4,
+            alignment: blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
         });
 
         Self {

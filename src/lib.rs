@@ -319,7 +319,7 @@ impl ops::Index<JointHandle> for Physics {
 impl ops::IndexMut<JointHandle> for Physics {
     fn index_mut(&mut self, handle: JointHandle) -> &mut Self::Output {
         match handle {
-            JointHandle::Soft(h) => &mut self.impulse_joints.get_mut(h).unwrap().data,
+            JointHandle::Soft(h) => &mut self.impulse_joints.get_mut(h, true).unwrap().data,
             JointHandle::Hard(h) => {
                 let (multibody, link_index) = self.multibody_joints.get_mut(h).unwrap();
                 &mut multibody.link_mut(link_index).unwrap().joint.data
@@ -1007,6 +1007,7 @@ impl Engine {
                             trimesh.triangles,
                             flags,
                         )
+                        .unwrap()
                     }
                 }
             };

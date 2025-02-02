@@ -662,7 +662,8 @@ impl blade_asset::Baker for Baker {
             .iter()
             .map(|geo| geo.indices.len())
             .sum::<usize>();
-        let total_index_size = total_indices as u64 * 4;
+        let total_index_size = total_indices as u64 * 4
+            + model.geometries.len() as u64 * blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT;
         let index_buffer = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
             name: "index",
             size: total_index_size,
@@ -694,6 +695,10 @@ impl blade_asset::Baker for Baker {
         let mut transform_offset = 0;
         let mut geometries = Vec::with_capacity(model.geometries.len());
         for geometry in model.geometries.iter() {
+            index_offset = crate::util::align_to(
+                index_offset,
+                blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
+            );
             let material = &model.materials[geometry.material_index as usize];
             unsafe {
                 ptr::copy_nonoverlapping(
@@ -747,7 +752,7 @@ impl blade_asset::Baker for Baker {
             transform_offset += mem::size_of::<blade_graphics::Transform>() as u64;
         }
         assert_eq!(start_vertex as usize, total_vertices);
-        assert_eq!(index_offset, total_index_size);
+        assert!(index_offset <= total_index_size);
         assert_eq!(transform_offset, total_transform_size);
 
         let sizes = self

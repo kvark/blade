@@ -78,7 +78,7 @@ pub mod limits {
     /// Max number of resources in a bind group.
     pub const RESOURCES_IN_GROUP: u32 = 8;
     /// Min storage buffer alignment.
-    pub const STORAGE_BUFFER_ALIGNMENT: u64 = 256;
+    pub const STORAGE_BUFFER_ALIGNMENT: u64 = 16;
     /// Min acceleration structure scratch buffer alignment.
     pub const ACCELERATION_STRUCTURE_SCRATCH_ALIGNMENT: u64 = 256;
 }
