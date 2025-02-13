@@ -283,6 +283,7 @@ impl super::Context {
                 .collect(),
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
             zero_initialize_workgroup_memory: false,
+            force_loop_bounding: false,
         };
 
         let pipeline_options = msl::PipelineOptions {

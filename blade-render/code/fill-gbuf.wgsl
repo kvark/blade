@@ -84,7 +84,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let enable_debug = all(global_id.xy == debug.mouse_pos);
 
     if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
-        let entry = hit_entries[intersection.instance_custom_index + intersection.geometry_index];
+        let entry = hit_entries[intersection.instance_custom_data + intersection.geometry_index];
         depth = intersection.t;
 
         var indices = intersection.primitive_index * 3u + vec3<u32>(0u, 1u, 2u);
@@ -132,7 +132,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let hit_position = camera.position + intersection.t * ray_dir;
         if (enable_debug) {
-            debug_buf.entry.custom_index = intersection.instance_custom_index;
+            debug_buf.entry.custom_index = intersection.instance_custom_data;
             debug_buf.entry.depth = intersection.t;
             debug_buf.entry.tex_coords = tex_coords;
             debug_buf.entry.base_color_texture = entry.base_color_texture;
