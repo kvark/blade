@@ -1,4 +1,9 @@
 use ash::vk;
+use ash::vk::{
+    ExternalMemoryBufferCreateInfo, ExternalMemoryHandleTypeFlags, ImportMemoryFdInfoKHR,
+    ImportMemoryWin32HandleInfoKHR, MemoryAllocateInfo,
+};
+use gpu_alloc::{MemoryPropertyFlags, MemoryType};
 use gpu_alloc_ash::AshMemoryDevice;
 use std::{mem, ptr};
 
@@ -22,7 +27,7 @@ impl super::Context {
             gpu_alloc::UsageFlags::empty()
         };
         let alloc_usage = match memory {
-            crate::Memory::Device => {
+            crate::Memory::Device | crate::Memory::External { import_fd: _ } => {
                 gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS | device_address_usage
             }
             crate::Memory::Shared => {
@@ -38,21 +43,69 @@ impl super::Context {
         };
         let memory_types = requirements.memory_type_bits & manager.valid_ash_memory_types;
         let mut block = unsafe {
-            manager
-                .allocator
-                .alloc(
-                    AshMemoryDevice::wrap(&self.device.core),
-                    gpu_alloc::Request {
-                        size: requirements.size,
-                        align_mask: requirements.alignment - 1,
-                        usage: alloc_usage,
-                        memory_types,
-                    },
-                )
-                .unwrap()
+            match memory {
+                crate::Memory::External { import_fd } => {
+                    let memory_type: MemoryType = todo!("Find correct memory type");
+                    let mut external_info = match import_fd {
+                        #[cfg(target_os = "windows")]
+                        Some(handle) => ImportMemoryWin32HandleInfoKHR {
+                            handle_type: ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT,
+                            handle,
+                            ..ImportMemoryWin32HandleInfoKHR::default()
+                        },
+                        #[cfg(not(target_os = "windows"))]
+                        Some(fd) => ImportMemoryFdInfoKHR {
+                            handle_type: ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+                            fd,
+                            ..ImportMemoryFdInfoKHR::default()
+                        },
+
+                        None => todo!(),
+                    };
+
+                    let allocation_info = MemoryAllocateInfo {
+                        allocation_size: requirements.size,
+                        memory_type_index: memory_type.heap,
+                        ..MemoryAllocateInfo::default()
+                    }
+                    .push_next(&mut external_info);
+
+                    let memory = self
+                        .device
+                        .core
+                        .allocate_memory(&allocation_info, None)
+                        .unwrap();
+
+                    manager.allocator.import_memory(
+                        memory,
+                        memory_type.heap,
+                        memory_type.props,
+                        0,
+                        requirements.size,
+                    )
+                }
+                _ => manager
+                    .allocator
+                    .alloc(
+                        AshMemoryDevice::wrap(&self.device.core),
+                        gpu_alloc::Request {
+                            size: requirements.size,
+                            align_mask: requirements.alignment - 1,
+                            usage: alloc_usage,
+                            memory_types,
+                        },
+                    )
+                    .unwrap(),
+            }
         };
 
         let data = match memory {
+            crate::Memory::External {
+                import_fd: Some(fd),
+            } => unsafe { mem::transmute(fd) },
+            crate::Memory::External { import_fd: None } => {
+                todo!("Fetch fd/handle using getMemoryWin32HandleKHR or eqv")
+            }
             crate::Memory::Device => ptr::null_mut(),
             crate::Memory::Shared | crate::Memory::Upload => unsafe {
                 block
@@ -278,7 +331,7 @@ impl crate::traits::ResourceDevice for super::Context {
         */
         let raw = unsafe { self.device.core.create_image(&vk_info, None).unwrap() };
         let requirements = unsafe { self.device.core.get_image_memory_requirements(raw) };
-        let allocation = self.allocate_memory(requirements, crate::Memory::Device);
+        let allocation = self.allocate_memory(requirements, desc.memory);
 
         log::info!(
             "Creating texture {:?} of size {} and format {:?}, name '{}', handle {:?}",

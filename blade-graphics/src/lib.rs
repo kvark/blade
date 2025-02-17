@@ -160,12 +160,14 @@ pub enum Memory {
     Shared,
     /// Upload memory. Can only be transferred on GPU.
     Upload,
+    /// External memory, None if it exports, Some(fd) if it's an import.
+    External { import_fd: Option<isize> },
 }
 
 impl Memory {
     pub fn is_host_visible(&self) -> bool {
         match *self {
-            Self::Device => false,
+            Self::Device | Self::External { import_fd: _ } => false,
             Self::Shared | Self::Upload => true,
         }
     }
@@ -415,6 +417,7 @@ pub struct TextureDesc<'a> {
     pub sample_count: u32,
     pub dimension: TextureDimension,
     pub usage: TextureUsage,
+    pub memory: Memory,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
