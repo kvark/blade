@@ -1,6 +1,6 @@
-use std::num::NonZeroU32;
-
 use crate::DummyResources;
+use blade_graphics::Memory;
+use std::num::NonZeroU32;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -113,6 +113,7 @@ impl EnvironmentMap {
             mip_level_count,
             usage: blade_graphics::TextureUsage::RESOURCE | blade_graphics::TextureUsage::STORAGE,
             sample_count: 1,
+            memory: Memory::Device,
         });
         self.weight_view = gpu.create_texture_view(
             self.weight_texture,

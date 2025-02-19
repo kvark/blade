@@ -8,6 +8,7 @@ pub use debug::{DebugBlit, DebugLine, DebugPoint};
 pub use dummy::DummyResources;
 pub use env_map::EnvironmentMap;
 
+use blade_graphics::Memory;
 use std::{collections::HashMap, mem, num::NonZeroU32, path::Path, ptr};
 
 const MAX_RESOURCES: u32 = 8192;
@@ -179,6 +180,7 @@ impl<const N: usize> RenderTarget<N> {
             mip_level_count: 1,
             usage: blade_graphics::TextureUsage::RESOURCE | blade_graphics::TextureUsage::STORAGE,
             sample_count: 1,
+            memory: Memory::Device,
         });
         encoder.init_texture(texture);
 
