@@ -1,6 +1,7 @@
 #![allow(irrefutable_let_patterns)]
 
 use blade_graphics as gpu;
+use blade_graphics::Memory;
 use bytemuck::{Pod, Zeroable};
 use std::{mem, ptr};
 
@@ -140,6 +141,7 @@ impl Example {
             mip_level_count: 1,
             usage: gpu::TextureUsage::RESOURCE | gpu::TextureUsage::COPY,
             sample_count: 1,
+            memory: Memory::Device,
         });
         let view = context.create_texture_view(
             texture,

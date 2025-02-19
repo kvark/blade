@@ -58,6 +58,10 @@ struct Device {
     buffer_marker: Option<ash::amd::buffer_marker::Device>,
     shader_info: Option<ash::amd::shader_info::Device>,
     full_screen_exclusive: Option<ash::ext::full_screen_exclusive::Device>,
+    #[cfg(target_os = "windows")]
+    external_memory: Option<ash::khr::external_memory_win32::Device>,
+    #[cfg(not(target_os = "windows"))]
+    external_memory: Option<ash::khr::external_memory_fd::Device>,
     command_scope: Option<CommandScopeDevice>,
     timing: Option<TimingDevice>,
     workarounds: Workarounds,

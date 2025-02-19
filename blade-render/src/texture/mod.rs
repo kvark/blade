@@ -1,3 +1,4 @@
+use blade_graphics::Memory;
 use std::{
     fmt, io, mem, ptr, slice, str,
     sync::{Arc, Mutex},
@@ -397,6 +398,7 @@ impl blade_asset::Baker for Baker {
                 dimension: blade_graphics::TextureDimension::D2,
                 usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
                 sample_count: 1,
+                memory: Memory::Device,
             });
         let view = self.gpu_context.create_texture_view(
             texture,

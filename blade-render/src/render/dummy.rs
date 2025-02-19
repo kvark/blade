@@ -1,3 +1,4 @@
+use blade_graphics::Memory;
 use std::ptr;
 
 pub struct DummyResources {
@@ -30,6 +31,7 @@ impl DummyResources {
             dimension: blade_graphics::TextureDimension::D2,
             usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
             sample_count: 1,
+            memory: Memory::Device,
         });
         let white_view = gpu.create_texture_view(
             white_texture,
@@ -49,6 +51,7 @@ impl DummyResources {
             dimension: blade_graphics::TextureDimension::D2,
             usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
             sample_count: 1,
+            memory: Memory::Device,
         });
         let black_view = gpu.create_texture_view(
             black_texture,
@@ -68,6 +71,7 @@ impl DummyResources {
             dimension: blade_graphics::TextureDimension::D2,
             usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
             sample_count: 1,
+            memory: Memory::Device,
         });
         let red_view = gpu.create_texture_view(
             red_texture,
