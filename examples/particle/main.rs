@@ -16,6 +16,8 @@ struct Example {
     sample_count: u32,
     msaa_texture: Option<gpu::Texture>,
     msaa_view: Option<gpu::TextureView>,
+
+    export_image: bool
 }
 
 impl Example {
@@ -43,7 +45,7 @@ impl Example {
         (width, height): (u32, u32),
         format: gpu::TextureFormat,
     ) {
-        if self.sample_count > 1 && self.msaa_texture.is_none() {
+        if (self.sample_count > 1 || self.export_image) && self.msaa_texture.is_none() {
             let msaa_texture = self.context.create_texture(gpu::TextureDesc {
                 name: "msaa texture",
                 format,
@@ -57,7 +59,11 @@ impl Example {
                 usage: gpu::TextureUsage::TARGET,
                 array_layer_count: 1,
                 mip_level_count: 1,
+                memory: gpu::Memory::External { import_fd: None },
             });
+            println!("msaa_texture: {:?}", msaa_texture);
+            println!("msaa_texture_fd: {:?}", self.context.get_texture_fd(msaa_texture));
+
             let msaa_view = self.context.create_texture_view(
                 msaa_texture,
                 gpu::TextureViewDesc {
@@ -139,6 +145,7 @@ impl Example {
             sample_count,
             msaa_texture: None,
             msaa_view: None,
+            export_image: false,
         }
     }
 
@@ -183,7 +190,7 @@ impl Example {
             .update_textures(&mut self.command_encoder, gui_textures, &self.context);
         self.particle_system.update(&mut self.command_encoder);
 
-        if self.sample_count <= 1 {
+        if self.sample_count <= 1 && !self.export_image {
             if let mut pass = self.command_encoder.render(
                 "draw particles and ui",
                 gpu::RenderTargetSet {
