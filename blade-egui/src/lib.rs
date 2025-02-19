@@ -15,7 +15,6 @@
 
 const SHADER_SOURCE: &'static str = include_str!("../shader.wgsl");
 
-use blade_graphics::Memory;
 use blade_util::{BufferBelt, BufferBeltDescriptor};
 use std::{
     collections::hash_map::{Entry, HashMap},
@@ -87,7 +86,7 @@ impl GuiTexture {
             dimension: blade_graphics::TextureDimension::D2,
             usage: blade_graphics::TextureUsage::COPY | blade_graphics::TextureUsage::RESOURCE,
             sample_count: 1,
-            memory: Memory::Device,
+            memory: blade_graphics::Memory::Device,
         });
         let view = context.create_texture_view(
             allocation,

@@ -1,9 +1,9 @@
 use crate::Memory;
 use ash::vk;
-use ash::vk::ExternalMemoryHandleTypeFlags;
 use gpu_alloc_ash::AshMemoryDevice;
 use std::marker::PhantomData;
 use std::{mem, ptr};
+use crate::hal::Device;
 
 struct Allocation {
     memory: vk::DeviceMemory,
@@ -51,9 +51,9 @@ impl super::Context {
                     let memory_type_index = memory_types.ilog2();
                     let memory_type: vk::MemoryType =
                         memory_properties.memory_types[memory_type_index as usize];
-                    let mut external_info = match import_fd {
+                    let external_info: &mut dyn vk::ExtendsMemoryAllocateInfo = match import_fd {
                         #[cfg(target_os = "windows")]
-                        Some(handle) => vk::ImportMemoryWin32HandleInfoKHR {
+                        Some(handle) => &mut vk::ImportMemoryWin32HandleInfoKHR {
                             handle_type: vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT,
                             handle,
                             ..vk::ImportMemoryWin32HandleInfoKHR::default()
@@ -64,7 +64,10 @@ impl super::Context {
                             fd,
                             ..ImportMemoryFdInfoKHR::default()
                         },
-                        None => todo!(),
+                        None => &mut vk::ExportMemoryAllocateInfo {
+                            handle_types: vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT,
+                            ..vk::ExportMemoryAllocateInfo::default()
+                        },
                     };
 
                     let allocation_info = vk::MemoryAllocateInfo {
@@ -72,7 +75,7 @@ impl super::Context {
                         memory_type_index,
                         ..vk::MemoryAllocateInfo::default()
                     }
-                    .push_next(&mut external_info);
+                    .push_next(external_info);
 
                     let memory = self
                         .device
@@ -104,13 +107,7 @@ impl super::Context {
         };
 
         let data = match memory {
-            crate::Memory::External {
-                import_fd: Some(fd),
-            } => unsafe { mem::transmute(fd) },
-            crate::Memory::External { import_fd: None } => {
-                todo!("Fetch fd/handle using getMemoryWin32HandleKHR or eqv")
-            }
-            crate::Memory::Device => ptr::null_mut(),
+            crate::Memory::Device | crate::Memory::External { import_fd: _ } => ptr::null_mut(),
             crate::Memory::Shared | crate::Memory::Upload => unsafe {
                 block
                     .map(
@@ -137,6 +134,30 @@ impl super::Context {
             manager
                 .allocator
                 .dealloc(AshMemoryDevice::wrap(&self.device.core), block);
+        }
+    }
+
+    pub fn get_texture_fd(&self, texture: super::Texture) -> isize {
+        let mut manager = self.memory.lock().unwrap();
+        let block = manager.slab.get(texture.memory_handle)
+            .expect("get_texture_fd: Invalid memory_handle");
+
+        //TODO make non-windows variant
+        #[cfg(target_os = "windows")]
+        {
+            let get_handle_info = vk::MemoryGetWin32HandleInfoKHR {
+                handle_type: vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT,
+                memory: *block.memory(),
+                ..vk::MemoryGetWin32HandleInfoKHR::default()
+            };
+
+            unsafe {
+                mem::transmute(
+                    self.device.external_memory.as_ref()
+                        .expect("External memory isn't supported on the selected device")
+                        .get_memory_win32_handle(&get_handle_info)
+                        .expect("Failed to fetch win32 handle"))
+            }
         }
     }
 

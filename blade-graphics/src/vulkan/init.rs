@@ -563,6 +563,16 @@ impl super::Context {
             } else {
                 None
             },
+            external_memory: if capabilities.external_memory {
+                #[cfg(target_os = "windows")]
+                use khr::external_memory_win32::Device;
+                #[cfg(not(target_os = "windows"))]
+                use khr::external_memory_fd::Device;
+
+                Some(Device::new(&instance.core, &device_core))
+            } else {
+                None
+            },
             core: device_core,
             device_information: capabilities.device_information,
             command_scope: if desc.capture {
