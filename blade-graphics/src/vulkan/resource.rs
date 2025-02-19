@@ -1,10 +1,8 @@
+use crate::Memory;
 use ash::vk;
-use ash::vk::{
-    ExternalMemoryBufferCreateInfo, ExternalMemoryHandleTypeFlags, ImportMemoryFdInfoKHR,
-    ImportMemoryWin32HandleInfoKHR, MemoryAllocateInfo,
-};
-use gpu_alloc::{MemoryPropertyFlags, MemoryType};
+use ash::vk::ExternalMemoryHandleTypeFlags;
 use gpu_alloc_ash::AshMemoryDevice;
+use std::marker::PhantomData;
 use std::{mem, ptr};
 
 struct Allocation {
@@ -45,13 +43,20 @@ impl super::Context {
         let mut block = unsafe {
             match memory {
                 crate::Memory::External { import_fd } => {
-                    let memory_type: MemoryType = todo!("Find correct memory type");
+                    let memory_properties = unsafe {
+                        self.instance
+                            .core
+                            .get_physical_device_memory_properties(self.physical_device)
+                    };
+                    let memory_type_index = memory_types.ilog2();
+                    let memory_type: vk::MemoryType =
+                        memory_properties.memory_types[memory_type_index as usize];
                     let mut external_info = match import_fd {
                         #[cfg(target_os = "windows")]
-                        Some(handle) => ImportMemoryWin32HandleInfoKHR {
-                            handle_type: ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT,
+                        Some(handle) => vk::ImportMemoryWin32HandleInfoKHR {
+                            handle_type: vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT,
                             handle,
-                            ..ImportMemoryWin32HandleInfoKHR::default()
+                            ..vk::ImportMemoryWin32HandleInfoKHR::default()
                         },
                         #[cfg(not(target_os = "windows"))]
                         Some(fd) => ImportMemoryFdInfoKHR {
@@ -59,14 +64,13 @@ impl super::Context {
                             fd,
                             ..ImportMemoryFdInfoKHR::default()
                         },
-
                         None => todo!(),
                     };
 
-                    let allocation_info = MemoryAllocateInfo {
+                    let allocation_info = vk::MemoryAllocateInfo {
                         allocation_size: requirements.size,
-                        memory_type_index: memory_type.heap,
-                        ..MemoryAllocateInfo::default()
+                        memory_type_index,
+                        ..vk::MemoryAllocateInfo::default()
                     }
                     .push_next(&mut external_info);
 
@@ -78,8 +82,8 @@ impl super::Context {
 
                     manager.allocator.import_memory(
                         memory,
-                        memory_type.heap,
-                        memory_type.props,
+                        memory_type_index,
+                        gpu_alloc_ash::memory_properties_from_ash(memory_type.property_flags),
                         0,
                         requirements.size,
                     )
@@ -235,6 +239,16 @@ impl super::Context {
     }
 }
 
+const EXTERN_IMAGE: vk::ExternalMemoryImageCreateInfo = vk::ExternalMemoryImageCreateInfo {
+    s_type: vk::StructureType::EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+    p_next: ::core::ptr::null(),
+    _marker: PhantomData,
+    #[cfg(target_os = "windows")]
+    handle_types: vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT,
+    #[cfg(not(target_os = "windows"))]
+    handle_types: vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+};
+
 #[hidden_trait::expose]
 impl crate::traits::ResourceDevice for super::Context {
     type Buffer = super::Buffer;
@@ -312,6 +326,11 @@ impl crate::traits::ResourceDevice for super::Context {
         }
 
         let vk_info = vk::ImageCreateInfo {
+            p_next: if let Memory::External { import_fd } = desc.memory {
+                ptr::from_ref(&EXTERN_IMAGE) as *const core::ffi::c_void
+            } else {
+                ptr::null()
+            },
             flags: create_flags,
             image_type: map_texture_dimension(desc.dimension),
             format: super::map_texture_format(desc.format),
