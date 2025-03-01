@@ -17,7 +17,7 @@ struct Example {
     msaa_texture: Option<gpu::Texture>,
     msaa_view: Option<gpu::TextureView>,
 
-    export_image: bool
+    export_image: bool,
 }
 
 impl Example {
@@ -56,13 +56,24 @@ impl Example {
                 },
                 sample_count: self.sample_count,
                 dimension: gpu::TextureDimension::D2,
-                usage: gpu::TextureUsage::TARGET,
+                usage: gpu::TextureUsage::TARGET
+                    | gpu::TextureUsage::RESOURCE
+                    | gpu::TextureUsage::COPY,
                 array_layer_count: 1,
                 mip_level_count: 1,
-                memory: gpu::Memory::External { import_fd: None },
+                external: if self.export_image {
+                    Some(gpu::ExternalMemorySource::Win32KMT(None))
+                } else {
+                    None
+                },
             });
-            println!("msaa_texture: {:?}", msaa_texture);
-            println!("msaa_texture_fd: {:?}", self.context.get_texture_fd(msaa_texture));
+
+            if self.export_image {
+                println!(
+                    "msaa_texture_fd: {:?}",
+                    self.context.get_texture_fd(msaa_texture)
+                );
+            }
 
             let msaa_view = self.context.create_texture_view(
                 msaa_texture,
@@ -214,7 +225,11 @@ impl Example {
                     colors: &[gpu::RenderTarget {
                         view: self.msaa_view.unwrap(),
                         init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
-                        finish_op: gpu::FinishOp::ResolveTo(frame_view),
+                        finish_op: if self.export_image {
+                            gpu::FinishOp::Store
+                        } else {
+                            gpu::FinishOp::ResolveTo(frame_view)
+                        },
                     }],
                     depth_stencil: None,
                 },

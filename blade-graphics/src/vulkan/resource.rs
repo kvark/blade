@@ -1,9 +1,9 @@
-use crate::Memory;
+use crate::hal::Device;
+use crate::ExternalMemorySource;
 use ash::vk;
 use gpu_alloc_ash::AshMemoryDevice;
 use std::marker::PhantomData;
 use std::{mem, ptr};
-use crate::hal::Device;
 
 struct Allocation {
     memory: vk::DeviceMemory,
@@ -25,7 +25,7 @@ impl super::Context {
             gpu_alloc::UsageFlags::empty()
         };
         let alloc_usage = match memory {
-            crate::Memory::Device | crate::Memory::External { import_fd: _ } => {
+            crate::Memory::Device | crate::Memory::External(_) => {
                 gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS | device_address_usage
             }
             crate::Memory::Shared => {
@@ -42,7 +42,7 @@ impl super::Context {
         let memory_types = requirements.memory_type_bits & manager.valid_ash_memory_types;
         let mut block = unsafe {
             match memory {
-                crate::Memory::External { import_fd } => {
+                crate::Memory::External(e) => {
                     let memory_properties = unsafe {
                         self.instance
                             .core
@@ -51,22 +51,41 @@ impl super::Context {
                     let memory_type_index = memory_types.ilog2();
                     let memory_type: vk::MemoryType =
                         memory_properties.memory_types[memory_type_index as usize];
-                    let external_info: &mut dyn vk::ExtendsMemoryAllocateInfo = match import_fd {
+
+                    let handle_type = external_source_handle_type(&e);
+                    let external_info: &mut dyn vk::ExtendsMemoryAllocateInfo = match e {
                         #[cfg(target_os = "windows")]
-                        Some(handle) => &mut vk::ImportMemoryWin32HandleInfoKHR {
-                            handle_type: vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT,
-                            handle,
-                            ..vk::ImportMemoryWin32HandleInfoKHR::default()
-                        },
+                        ExternalMemorySource::Win32(Some(handle))
+                        | ExternalMemorySource::Win32KMT(Some(handle)) => {
+                            &mut vk::ImportMemoryWin32HandleInfoKHR {
+                                handle_type,
+                                handle,
+                                ..Default::default()
+                            }
+                        }
                         #[cfg(not(target_os = "windows"))]
-                        Some(fd) => ImportMemoryFdInfoKHR {
-                            handle_type: ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+                        ExternalMemorySource::Fd(Some(fd)) => vk::ImportMemoryFdInfoKHR {
+                            handle_type,
                             fd,
-                            ..ImportMemoryFdInfoKHR::default()
+                            ..Default::default()
                         },
-                        None => &mut vk::ExportMemoryAllocateInfo {
-                            handle_types: vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT,
-                            ..vk::ExportMemoryAllocateInfo::default()
+                        #[cfg(target_os = "linux")]
+                        ExternalMemorySource::Dma(Some(fd)) => &mut vk::ImportMemoryFdInfoKHR {
+                            handle_type,
+                            fd,
+                            ..Default::default()
+                        },
+                        ExternalMemorySource::HostAllocation(Some(p)) => {
+                            &mut vk::ImportMemoryHostPointerInfoEXT {
+                                handle_type,
+                                p_host_pointer: p,
+                                ..Default::default()
+                            }
+                        }
+                        // All sources that are exporting don't need a specific struct
+                        _ => &mut vk::ExportMemoryAllocateInfo {
+                            handle_types: handle_type,
+                            ..Default::default()
                         },
                     };
 
@@ -107,7 +126,7 @@ impl super::Context {
         };
 
         let data = match memory {
-            crate::Memory::Device | crate::Memory::External { import_fd: _ } => ptr::null_mut(),
+            crate::Memory::Device | crate::Memory::External(_) => ptr::null_mut(),
             crate::Memory::Shared | crate::Memory::Upload => unsafe {
                 block
                     .map(
@@ -139,7 +158,9 @@ impl super::Context {
 
     pub fn get_texture_fd(&self, texture: super::Texture) -> isize {
         let mut manager = self.memory.lock().unwrap();
-        let block = manager.slab.get(texture.memory_handle)
+        let block = manager
+            .slab
+            .get(texture.memory_handle)
             .expect("get_texture_fd: Invalid memory_handle");
 
         //TODO make non-windows variant
@@ -153,10 +174,13 @@ impl super::Context {
 
             unsafe {
                 mem::transmute(
-                    self.device.external_memory.as_ref()
+                    self.device
+                        .external_memory
+                        .as_ref()
                         .expect("External memory isn't supported on the selected device")
                         .get_memory_win32_handle(&get_handle_info)
-                        .expect("Failed to fetch win32 handle"))
+                        .expect("Failed to fetch win32 handle"),
+                )
             }
         }
     }
@@ -260,16 +284,6 @@ impl super::Context {
     }
 }
 
-const EXTERN_IMAGE: vk::ExternalMemoryImageCreateInfo = vk::ExternalMemoryImageCreateInfo {
-    s_type: vk::StructureType::EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
-    p_next: ::core::ptr::null(),
-    _marker: PhantomData,
-    #[cfg(target_os = "windows")]
-    handle_types: vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT,
-    #[cfg(not(target_os = "windows"))]
-    handle_types: vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
-};
-
 #[hidden_trait::expose]
 impl crate::traits::ResourceDevice for super::Context {
     type Buffer = super::Buffer;
@@ -280,6 +294,14 @@ impl crate::traits::ResourceDevice for super::Context {
 
     fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         use vk::BufferUsageFlags as Buf;
+        let external_next = match &desc.memory {
+            crate::Memory::External(e) => Some(vk::ExternalMemoryBufferCreateInfo {
+                handle_types: external_source_handle_type(e),
+                ..Default::default()
+            }),
+            _ => None,
+        };
+
         let mut vk_info = vk::BufferCreateInfo {
             size: desc.size,
             usage: Buf::TRANSFER_SRC
@@ -296,7 +318,17 @@ impl crate::traits::ResourceDevice for super::Context {
                 Buf::SHADER_DEVICE_ADDRESS | Buf::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
         }
 
-        let raw = unsafe { self.device.core.create_buffer(&vk_info, None).unwrap() };
+        let raw = unsafe {
+            if let Some(mut e) = external_next {
+                self.device
+                    .core
+                    .create_buffer(&vk_info.push_next(&mut e), None)
+            } else {
+                self.device.core.create_buffer(&vk_info, None)
+            }
+            .unwrap()
+        };
+
         let requirements = unsafe { self.device.core.get_buffer_memory_requirements(raw) };
         let allocation = self.allocate_memory(requirements, desc.memory);
 
@@ -346,12 +378,12 @@ impl crate::traits::ResourceDevice for super::Context {
             create_flags |= vk::ImageCreateFlags::CUBE_COMPATIBLE;
         }
 
+        let external_next = desc.external.map(|e| vk::ExternalMemoryImageCreateInfo {
+            handle_types: external_source_handle_type(&e),
+            ..Default::default()
+        });
+
         let vk_info = vk::ImageCreateInfo {
-            p_next: if let Memory::External { import_fd } = desc.memory {
-                ptr::from_ref(&EXTERN_IMAGE) as *const core::ffi::c_void
-            } else {
-                ptr::null()
-            },
             flags: create_flags,
             image_type: map_texture_dimension(desc.dimension),
             format: super::map_texture_format(desc.format),
@@ -369,9 +401,23 @@ impl crate::traits::ResourceDevice for super::Context {
             TODO(ErikWDev): Support lazily allocated texture with transient allocation for efficient msaa?
                             Measure bandwidth usage!
         */
-        let raw = unsafe { self.device.core.create_image(&vk_info, None).unwrap() };
+        let raw = unsafe {
+            if let Some(mut e) = external_next {
+                self.device
+                    .core
+                    .create_image(&vk_info.push_next(&mut e), None)
+            } else {
+                self.device.core.create_image(&vk_info, None)
+            }
+            .unwrap()
+        };
+
         let requirements = unsafe { self.device.core.get_image_memory_requirements(raw) };
-        let allocation = self.allocate_memory(requirements, desc.memory);
+        let allocation = self.allocate_memory(
+            requirements,
+            desc.external
+                .map_or(crate::Memory::Device, |e| crate::Memory::External(e)),
+        );
 
         log::info!(
             "Creating texture {:?} of size {} and format {:?}, name '{}', handle {:?}",
@@ -625,5 +671,25 @@ fn map_border_color(border_color: crate::TextureColor) -> vk::BorderColor {
         crate::TextureColor::TransparentBlack => vk::BorderColor::FLOAT_TRANSPARENT_BLACK,
         crate::TextureColor::OpaqueBlack => vk::BorderColor::FLOAT_OPAQUE_BLACK,
         crate::TextureColor::White => vk::BorderColor::FLOAT_OPAQUE_WHITE,
+    }
+}
+
+fn external_source_handle_type(
+    source: &crate::ExternalMemorySource,
+) -> vk::ExternalMemoryHandleTypeFlags {
+    match source {
+        #[cfg(target_os = "windows")]
+        crate::ExternalMemorySource::Win32(_) => vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32,
+        #[cfg(target_os = "windows")]
+        crate::ExternalMemorySource::Win32KMT(_) => {
+            vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT
+        }
+        #[cfg(not(target_os = "windows"))]
+        ExternalMemorySource::Fd(_) => k::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+        #[cfg(target_os = "linux")]
+        ExternalMemorySource::Dma(_) => vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+        crate::ExternalMemorySource::HostAllocation(_) => {
+            vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT
+        }
     }
 }

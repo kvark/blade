@@ -187,8 +187,7 @@ unsafe fn inspect_adapter(
         return None;
     }
 
-    let external_memory = supported_extensions.contains(&vk::KHR_EXTERNAL_MEMORY_WIN32_NAME)
-        || supported_extensions.contains(&vk::KHR_EXTERNAL_MEMORY_FD_NAME);
+    let external_memory = supported_extensions.contains(&vk::KHR_EXTERNAL_MEMORY_NAME);
 
     let timing = if properties.limits.timestamp_compute_and_graphics == vk::FALSE {
         log::info!("No timing because of queue support");
@@ -456,7 +455,7 @@ impl super::Context {
                 device_extensions.push(vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
             }
             if capabilities.external_memory {
-                log::info!("Enabling external memory support");
+                device_extensions.push(vk::KHR_EXTERNAL_MEMORY_NAME);
                 #[cfg(target_os = "windows")]
                 device_extensions.push(vk::KHR_EXTERNAL_MEMORY_WIN32_NAME);
                 #[cfg(not(target_os = "windows"))]
@@ -564,10 +563,10 @@ impl super::Context {
                 None
             },
             external_memory: if capabilities.external_memory {
-                #[cfg(target_os = "windows")]
-                use khr::external_memory_win32::Device;
                 #[cfg(not(target_os = "windows"))]
                 use khr::external_memory_fd::Device;
+                #[cfg(target_os = "windows")]
+                use khr::external_memory_win32::Device;
 
                 Some(Device::new(&instance.core, &device_core))
             } else {

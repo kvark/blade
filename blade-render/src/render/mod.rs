@@ -180,7 +180,7 @@ impl<const N: usize> RenderTarget<N> {
             mip_level_count: 1,
             usage: blade_graphics::TextureUsage::RESOURCE | blade_graphics::TextureUsage::STORAGE,
             sample_count: 1,
-            memory: Memory::Device,
+            external: None,
         });
         encoder.init_texture(texture);
 

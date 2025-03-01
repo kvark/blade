@@ -60,7 +60,7 @@ fn main() {
         mip_level_count,
         usage: gpu::TextureUsage::RESOURCE | gpu::TextureUsage::STORAGE | gpu::TextureUsage::COPY,
         sample_count: 1,
-        memory: gpu::Memory::Device,
+        external: None,
     });
     let views = (0..mip_level_count)
         .map(|i| {
