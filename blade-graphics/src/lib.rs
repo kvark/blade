@@ -166,7 +166,7 @@ pub enum Memory {
 
 /// If the source contains None it will export it otherwise it will import the value in Some
 //TODO add D3D11, D3D12 and metal support
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub enum ExternalMemorySource {
     #[cfg(target_os = "windows")]
     Win32(Option<isize>),
@@ -180,13 +180,16 @@ pub enum ExternalMemorySource {
     #[cfg(target_os = "linux")]
     Dma(Option<i32>),
 
-    HostAllocation(*mut std::ffi::c_void),
+    /// Is a pointer cast to usize, reason being it otherwise can't be used as sync and send, you should manage memory access to this yourself
+    HostAllocation(usize),
 }
 
 impl Memory {
     pub fn is_host_visible(&self) -> bool {
         match *self {
-            Self::Shared | Self::Upload | Self::External(ExternalMemorySource::HostAllocation(_)) => true,
+            Self::Shared
+            | Self::Upload
+            | Self::External(ExternalMemorySource::HostAllocation(_)) => true,
             Self::Device | Self::External(_) => false,
         }
     }

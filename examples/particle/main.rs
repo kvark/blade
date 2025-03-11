@@ -71,7 +71,7 @@ impl Example {
             if self.export_image {
                 println!(
                     "msaa_texture_fd: {:?}",
-                    self.context.get_texture_fd(msaa_texture)
+                    self.context.get_external_texture_source(msaa_texture)
                 );
             }
 
