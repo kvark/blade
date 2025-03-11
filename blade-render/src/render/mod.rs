@@ -8,7 +8,6 @@ pub use debug::{DebugBlit, DebugLine, DebugPoint};
 pub use dummy::DummyResources;
 pub use env_map::EnvironmentMap;
 
-use blade_graphics::Memory;
 use std::{collections::HashMap, mem, num::NonZeroU32, path::Path, ptr};
 
 const MAX_RESOURCES: u32 = 8192;

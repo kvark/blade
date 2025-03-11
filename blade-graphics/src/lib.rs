@@ -165,27 +165,29 @@ pub enum Memory {
 }
 
 /// If the source contains None it will export it otherwise it will import the value in Some
+//TODO add D3D11, D3D12 and metal support
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ExternalMemorySource {
     #[cfg(target_os = "windows")]
     Win32(Option<isize>),
+
     #[cfg(target_os = "windows")]
     Win32KMT(Option<isize>),
-    //TODO add D3D11, D3D12 and metal support
+
     #[cfg(not(target_os = "windows"))]
     Fd(Option<i32>),
 
     #[cfg(target_os = "linux")]
     Dma(Option<i32>),
 
-    HostAllocation(Option<*mut std::ffi::c_void>),
+    HostAllocation(*mut std::ffi::c_void),
 }
 
 impl Memory {
     pub fn is_host_visible(&self) -> bool {
         match *self {
+            Self::Shared | Self::Upload | Self::External(ExternalMemorySource::HostAllocation(_)) => true,
             Self::Device | Self::External(_) => false,
-            Self::Shared | Self::Upload => true,
         }
     }
 }
