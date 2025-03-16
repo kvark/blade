@@ -450,7 +450,7 @@ impl Context {
             log::warn!("Unable to filter devices by ID");
         }
 
-        let device = Retained::from_raw(metal::MTLCreateSystemDefaultDevice())
+        let device = metal::MTLCreateSystemDefaultDevice()
             .ok_or(super::NotSupportedError::NoSupportedDeviceFound)?;
         let queue = device.newCommandQueue().unwrap();
 
@@ -484,7 +484,7 @@ impl Context {
             use metal::MTLCounterSet as _;
             if let Some(counter_sets) = device.counterSets() {
                 for counter_set in counter_sets {
-                    if counter_set.name().as_ref() == objc2_foundation::ns_string!("timestamp") {
+                    if counter_set.name().to_string() == "timestampe" {
                         timestamp_counter_set = Some(counter_set);
                     }
                 }
@@ -506,7 +506,7 @@ impl Context {
             timestamp_counter_set,
             info: PrivateInfo {
                 //TODO: determine based on OS version
-                language_version: metal::MTLLanguageVersion::MTLLanguageVersion2_4,
+                language_version: metal::MTLLanguageVersion::Version2_4,
                 enable_debug_groups: desc.capture,
                 enable_dispatch_type: true,
             },
@@ -660,11 +660,12 @@ fn make_bottom_level_acceleration_structure_desc(
                         .setTransformationMatrixBufferOffset(mesh.transform_data.offset as usize);
                 }
             }
-            Retained::cast(descriptor)
+            Retained::cast_unchecked(descriptor)
         });
     }
 
-    let geometry_descriptor_array = objc2_foundation::NSArray::from_vec(geometry_descriptors);
+    let geometry_descriptor_array =
+        objc2_foundation::NSArray::from_retained_slice(&geometry_descriptors);
     let accel_descriptor = metal::MTLPrimitiveAccelerationStructureDescriptor::descriptor();
     accel_descriptor.setGeometryDescriptors(Some(&geometry_descriptor_array));
     accel_descriptor
