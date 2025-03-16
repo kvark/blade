@@ -484,7 +484,7 @@ impl Context {
             use metal::MTLCounterSet as _;
             if let Some(counter_sets) = device.counterSets() {
                 for counter_set in counter_sets {
-                    if counter_set.name().to_string() == "timestampe" {
+                    if counter_set.name().to_string() == "timestamp" {
                         timestamp_counter_set = Some(counter_set);
                     }
                 }
