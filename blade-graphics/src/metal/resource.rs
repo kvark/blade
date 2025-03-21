@@ -185,6 +185,7 @@ impl crate::traits::ResourceDevice for super::Context {
                 metal::MTLResourceOptions::StorageModeShared
                     | metal::MTLResourceOptions::CPUCacheModeWriteCombined
             }
+            crate::Memory::External(_) => unimplemented!(),
         };
         let object = objc2::rc::autoreleasepool(|_| {
             self.device

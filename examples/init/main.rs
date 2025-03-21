@@ -30,6 +30,7 @@ impl EnvMapSampler {
             dimension: gpu::TextureDimension::D2,
             usage: gpu::TextureUsage::TARGET,
             sample_count: 1,
+            external: None,
         });
         let accum_view = context.create_texture_view(
             accum_texture,

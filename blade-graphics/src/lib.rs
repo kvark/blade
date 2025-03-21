@@ -160,13 +160,37 @@ pub enum Memory {
     Shared,
     /// Upload memory. Can only be transferred on GPU.
     Upload,
+    /// External memory
+    External(ExternalMemorySource),
+}
+
+/// If the source contains None it will export it otherwise it will import the value in Some
+//TODO add D3D11, D3D12 and metal support
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
+pub enum ExternalMemorySource {
+    #[cfg(target_os = "windows")]
+    Win32(Option<isize>),
+
+    #[cfg(target_os = "windows")]
+    Win32KMT(Option<isize>),
+
+    #[cfg(not(target_os = "windows"))]
+    Fd(Option<i32>),
+
+    #[cfg(target_os = "linux")]
+    Dma(Option<i32>),
+
+    /// Is a pointer cast to usize, reason being it otherwise can't be used as sync and send, you should manage memory access to this yourself
+    HostAllocation(usize),
 }
 
 impl Memory {
     pub fn is_host_visible(&self) -> bool {
         match *self {
-            Self::Device => false,
-            Self::Shared | Self::Upload => true,
+            Self::Shared
+            | Self::Upload
+            | Self::External(ExternalMemorySource::HostAllocation(_)) => true,
+            Self::Device | Self::External(_) => false,
         }
     }
 }
@@ -415,6 +439,7 @@ pub struct TextureDesc<'a> {
     pub sample_count: u32,
     pub dimension: TextureDimension,
     pub usage: TextureUsage,
+    pub external: Option<ExternalMemorySource>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

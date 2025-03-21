@@ -44,6 +44,7 @@ struct AdapterCapabilities {
     buffer_marker: bool,
     shader_info: bool,
     full_screen_exclusive: bool,
+    external_memory: bool,
     timing: bool,
     bugs: SystemBugs,
 }
@@ -186,6 +187,8 @@ unsafe fn inspect_adapter(
         return None;
     }
 
+    let external_memory = supported_extensions.contains(&vk::KHR_EXTERNAL_MEMORY_NAME);
+
     let timing = if properties.limits.timestamp_compute_and_graphics == vk::FALSE {
         log::info!("No timing because of queue support");
         false
@@ -261,6 +264,7 @@ unsafe fn inspect_adapter(
         buffer_marker,
         shader_info,
         full_screen_exclusive,
+        external_memory,
         timing,
         bugs,
     })
@@ -450,6 +454,13 @@ impl super::Context {
             if capabilities.full_screen_exclusive {
                 device_extensions.push(vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
             }
+            if capabilities.external_memory {
+                device_extensions.push(vk::KHR_EXTERNAL_MEMORY_NAME);
+                #[cfg(target_os = "windows")]
+                device_extensions.push(vk::KHR_EXTERNAL_MEMORY_WIN32_NAME);
+                #[cfg(not(target_os = "windows"))]
+                device_extensions.push(vk::KHR_EXTERNAL_MEMORY_FD_NAME);
+            }
 
             let str_pointers = device_extensions
                 .iter()
@@ -548,6 +559,16 @@ impl super::Context {
                     &instance.core,
                     &device_core,
                 ))
+            } else {
+                None
+            },
+            external_memory: if capabilities.external_memory {
+                #[cfg(not(target_os = "windows"))]
+                use khr::external_memory_fd::Device;
+                #[cfg(target_os = "windows")]
+                use khr::external_memory_win32::Device;
+
+                Some(Device::new(&instance.core, &device_core))
             } else {
                 None
             },

@@ -58,6 +58,10 @@ struct Device {
     buffer_marker: Option<ash::amd::buffer_marker::Device>,
     shader_info: Option<ash::amd::shader_info::Device>,
     full_screen_exclusive: Option<ash::ext::full_screen_exclusive::Device>,
+    #[cfg(target_os = "windows")]
+    external_memory: Option<ash::khr::external_memory_win32::Device>,
+    #[cfg(not(target_os = "windows"))]
+    external_memory: Option<ash::khr::external_memory_fd::Device>,
     command_scope: Option<CommandScopeDevice>,
     timing: Option<TimingDevice>,
     workarounds: Workarounds,
@@ -121,6 +125,7 @@ impl Frame {
             memory_handle: !0,
             target_size: self.swapchain.target_size,
             format: self.swapchain.format,
+            external: None,
         }
     }
 
@@ -183,6 +188,7 @@ pub struct Buffer {
     raw: vk::Buffer,
     memory_handle: usize,
     mapped_data: *mut u8,
+    external: Option<crate::ExternalMemorySource>,
 }
 
 impl Default for Buffer {
@@ -191,6 +197,7 @@ impl Default for Buffer {
             raw: vk::Buffer::null(),
             memory_handle: !0,
             mapped_data: ptr::null_mut(),
+            external: None,
         }
     }
 }
@@ -210,6 +217,7 @@ pub struct Texture {
     memory_handle: usize,
     target_size: [u16; 2],
     format: crate::TextureFormat,
+    external: Option<crate::ExternalMemorySource>,
 }
 
 impl Default for Texture {
@@ -219,6 +227,7 @@ impl Default for Texture {
             memory_handle: !0,
             target_size: [0; 2],
             format: crate::TextureFormat::Rgba8Unorm,
+            external: None,
         }
     }
 }
