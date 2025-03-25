@@ -32,25 +32,25 @@ fn map_view_dimension(
     use crate::ViewDimension as Vd;
     use metal::MTLTextureType as Mtt;
     match dimension {
-        Vd::D1 => Mtt::MTLTextureType1D,
-        Vd::D1Array => Mtt::MTLTextureType1DArray,
+        Vd::D1 => Mtt::Type1D,
+        Vd::D1Array => Mtt::Type1DArray,
         Vd::D2 => {
             if sample_count <= 1 {
-                Mtt::MTLTextureType2D
+                Mtt::Type2D
             } else {
-                Mtt::MTLTextureType2DMultisample
+                Mtt::Type2DMultisample
             }
         }
         Vd::D2Array => {
             if sample_count <= 1 {
-                Mtt::MTLTextureType2DArray
+                Mtt::Type2DArray
             } else {
-                Mtt::MTLTextureType2DMultisampleArray
+                Mtt::Type2DMultisampleArray
             }
         }
-        Vd::D3 => Mtt::MTLTextureType3D,
-        Vd::Cube => Mtt::Cube,
-        Vd::CubeArray => Mtt::CubeArray,
+        Vd::D3 => Mtt::Type3D,
+        Vd::Cube => Mtt::TypeCube,
+        Vd::CubeArray => Mtt::TypeCubeArray,
     }
 }
 
@@ -144,7 +144,7 @@ impl super::Context {
                         packed_vec(transposed.w),
                     ],
                 },
-                options: metal::MTLAccelerationStructureInstanceOptions::MTLAccelerationStructureInstanceOptionNone,
+                options: metal::MTLAccelerationStructureInstanceOptions::None,
                 mask: instance.mask,
                 intersectionFunctionTableOffset: 0,
                 accelerationStructureIndex: instance.acceleration_structure_index,
@@ -159,7 +159,7 @@ impl super::Context {
                     ptr::NonNull::new(instance_descriptors.as_ptr() as *mut _).unwrap(),
                     mem::size_of::<metal::MTLAccelerationStructureUserIDInstanceDescriptor>()
                         * instances.len(),
-                    metal::MTLResourceOptions::MTLResourceStorageModeShared,
+                    metal::MTLResourceOptions::StorageModeShared,
                 )
                 .unwrap()
         });
@@ -179,11 +179,11 @@ impl crate::traits::ResourceDevice for super::Context {
 
     fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         let options = match desc.memory {
-            crate::Memory::Device => metal::MTLResourceOptions::MTLResourceStorageModePrivate,
-            crate::Memory::Shared => metal::MTLResourceOptions::MTLResourceStorageModeShared,
+            crate::Memory::Device => metal::MTLResourceOptions::StorageModePrivate,
+            crate::Memory::Shared => metal::MTLResourceOptions::StorageModeShared,
             crate::Memory::Upload => {
-                metal::MTLResourceOptions::MTLResourceStorageModeShared
-                    | metal::MTLResourceOptions::MTLResourceCPUCacheModeWriteCombined
+                metal::MTLResourceOptions::StorageModeShared
+                    | metal::MTLResourceOptions::CPUCacheModeWriteCombined
             }
             crate::Memory::External(_) => unimplemented!(),
         };
@@ -214,27 +214,27 @@ impl crate::traits::ResourceDevice for super::Context {
         let mtl_type = match desc.dimension {
             crate::TextureDimension::D1 => {
                 if desc.array_layer_count > 1 {
-                    metal::MTLTextureType::MTLTextureType1DArray
+                    metal::MTLTextureType::Type1DArray
                 } else {
-                    metal::MTLTextureType::MTLTextureType1D
+                    metal::MTLTextureType::Type1D
                 }
             }
             crate::TextureDimension::D2 => {
                 if desc.array_layer_count > 1 {
                     if desc.sample_count <= 1 {
-                        metal::MTLTextureType::MTLTextureType2DArray
+                        metal::MTLTextureType::Type2DArray
                     } else {
-                        metal::MTLTextureType::MTLTextureType2DMultisampleArray
+                        metal::MTLTextureType::Type2DMultisampleArray
                     }
                 } else {
                     if desc.sample_count <= 1 {
-                        metal::MTLTextureType::MTLTextureType2D
+                        metal::MTLTextureType::Type2D
                     } else {
-                        metal::MTLTextureType::MTLTextureType2DMultisample
+                        metal::MTLTextureType::Type2DMultisample
                     }
                 }
             }
-            crate::TextureDimension::D3 => metal::MTLTextureType::MTLTextureType3D,
+            crate::TextureDimension::D3 => metal::MTLTextureType::Type3D,
         };
         let mtl_usage = map_texture_usage(desc.usage);
 

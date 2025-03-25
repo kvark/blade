@@ -1,5 +1,6 @@
 use objc2::rc::Retained;
-use objc2_foundation::CGSize;
+use objc2::ClassType;
+use objc2_core_foundation::CGSize;
 use objc2_quartz_core::CAMetalLayer;
 
 const SURFACE_INFO: crate::SurfaceInfo = crate::SurfaceInfo {
@@ -23,7 +24,7 @@ impl super::Surface {
         let (drawable, texture) = objc2::rc::autoreleasepool(|_| unsafe {
             let drawable = self.render_layer.nextDrawable().unwrap();
             let texture = drawable.texture();
-            (Retained::cast(drawable), texture)
+            (Retained::cast_unchecked(drawable), texture)
         });
         super::Frame { drawable, texture }
     }
@@ -42,8 +43,8 @@ impl super::Context {
                 let view =
                     Retained::retain(handle.ui_view.as_ptr() as *mut objc2_ui_kit::UIView).unwrap();
                 let main_layer = view.layer();
-                let render_layer = if main_layer.is_kind_of::<CAMetalLayer>() {
-                    Retained::cast(main_layer)
+                let render_layer = if main_layer.isKindOfClass(&CAMetalLayer::class()) {
+                    Retained::cast_unchecked(main_layer)
                 } else {
                     use objc2_ui_kit::UIViewAutoresizing as Var;
                     let new_layer = CAMetalLayer::new();
@@ -64,7 +65,7 @@ impl super::Context {
                     new_layer
                 };
                 super::Surface {
-                    view: Some(Retained::cast(view)),
+                    view: Some(Retained::cast_unchecked(view)),
                     render_layer,
                     info: SURFACE_INFO,
                 }
@@ -76,9 +77,9 @@ impl super::Context {
                 let main_layer = view.layer();
                 let render_layer = if main_layer
                     .as_ref()
-                    .map_or(false, |layer| layer.is_kind_of::<CAMetalLayer>())
+                    .map_or(false, |layer| layer.isKindOfClass(&CAMetalLayer::class()))
                 {
-                    Retained::cast(main_layer.unwrap())
+                    Retained::cast_unchecked(main_layer.unwrap())
                 } else {
                     let new_layer = CAMetalLayer::new();
                     if let Some(layer) = main_layer {
@@ -93,7 +94,7 @@ impl super::Context {
                     new_layer
                 };
                 super::Surface {
-                    view: Some(Retained::cast(view)),
+                    view: Some(view.downcast().unwrap()),
                     render_layer,
                     info: SURFACE_INFO,
                 }

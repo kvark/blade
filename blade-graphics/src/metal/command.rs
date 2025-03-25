@@ -350,7 +350,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
                 };
                 let counters = unsafe {
                     slice::from_raw_parts(
-                        ns_data.bytes().as_ptr() as *const u64,
+                        ns_data.as_bytes_unchecked().as_ptr() as *const u64,
                         ns_data.len() / mem::size_of::<u64>(),
                     )
                 };
@@ -526,8 +526,8 @@ impl crate::traits::AccelerationStructureEncoder
             primitive_acceleration_structures.push(blas.as_retained());
         }
         let descriptor = metal::MTLInstanceAccelerationStructureDescriptor::descriptor();
-        descriptor.setInstancedAccelerationStructures(Some(&NSArray::from_vec(
-            primitive_acceleration_structures,
+        descriptor.setInstancedAccelerationStructures(Some(&NSArray::from_retained_slice(
+            &primitive_acceleration_structures,
         )));
         descriptor.setInstanceCount(instance_count as usize);
         unsafe {
