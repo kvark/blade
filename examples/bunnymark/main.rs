@@ -1,7 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
 use blade_graphics as gpu;
-use blade_graphics::Memory;
 use bytemuck::{Pod, Zeroable};
 use std::{mem, ptr};
 
