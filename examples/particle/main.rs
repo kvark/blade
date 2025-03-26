@@ -62,12 +62,20 @@ impl Example {
                 array_layer_count: 1,
                 mip_level_count: 1,
                 external: if self.export_image {
-                    Some(gpu::ExternalMemorySource::Win32KMT(None))
+                    #[cfg(target_os = "windows")]
+                    {
+                        Some(gpu::ExternalMemorySource::Win32KMT(None))
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        Some(gpu::ExternalMemorySource::Fd(None))
+                    }
                 } else {
                     None
                 },
             });
 
+            #[cfg(not(target_os = "macos"))]
             if self.export_image {
                 println!(
                     "msaa_texture_fd: {:?}",
