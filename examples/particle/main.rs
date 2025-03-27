@@ -16,6 +16,8 @@ struct Example {
     sample_count: u32,
     msaa_texture: Option<gpu::Texture>,
     msaa_view: Option<gpu::TextureView>,
+
+    export_image: bool,
 }
 
 impl Example {
@@ -43,7 +45,7 @@ impl Example {
         (width, height): (u32, u32),
         format: gpu::TextureFormat,
     ) {
-        if self.sample_count > 1 && self.msaa_texture.is_none() {
+        if (self.sample_count > 1 || self.export_image) && self.msaa_texture.is_none() {
             let msaa_texture = self.context.create_texture(gpu::TextureDesc {
                 name: "msaa texture",
                 format,
@@ -54,10 +56,33 @@ impl Example {
                 },
                 sample_count: self.sample_count,
                 dimension: gpu::TextureDimension::D2,
-                usage: gpu::TextureUsage::TARGET,
+                usage: gpu::TextureUsage::TARGET
+                    | gpu::TextureUsage::RESOURCE
+                    | gpu::TextureUsage::COPY,
                 array_layer_count: 1,
                 mip_level_count: 1,
+                external: if self.export_image {
+                    #[cfg(target_os = "windows")]
+                    {
+                        Some(gpu::ExternalMemorySource::Win32KMT(None))
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        Some(gpu::ExternalMemorySource::Fd(None))
+                    }
+                } else {
+                    None
+                },
             });
+
+            #[cfg(not(target_os = "macos"))]
+            if self.export_image {
+                println!(
+                    "msaa_texture_fd: {:?}",
+                    self.context.get_external_texture_source(msaa_texture)
+                );
+            }
+
             let msaa_view = self.context.create_texture_view(
                 msaa_texture,
                 gpu::TextureViewDesc {
@@ -139,6 +164,7 @@ impl Example {
             sample_count,
             msaa_texture: None,
             msaa_view: None,
+            export_image: false,
         }
     }
 
@@ -183,7 +209,7 @@ impl Example {
             .update_textures(&mut self.command_encoder, gui_textures, &self.context);
         self.particle_system.update(&mut self.command_encoder);
 
-        if self.sample_count <= 1 {
+        if self.sample_count <= 1 && !self.export_image {
             if let mut pass = self.command_encoder.render(
                 "draw particles and ui",
                 gpu::RenderTargetSet {
@@ -207,7 +233,11 @@ impl Example {
                     colors: &[gpu::RenderTarget {
                         view: self.msaa_view.unwrap(),
                         init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
-                        finish_op: gpu::FinishOp::ResolveTo(frame_view),
+                        finish_op: if self.export_image {
+                            gpu::FinishOp::Store
+                        } else {
+                            gpu::FinishOp::ResolveTo(frame_view)
+                        },
                     }],
                     depth_stencil: None,
                 },

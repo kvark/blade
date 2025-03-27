@@ -84,6 +84,7 @@ impl Example {
             mip_level_count: 1,
             sample_count: 1,
             usage: gpu::TextureUsage::RESOURCE | gpu::TextureUsage::STORAGE,
+            external: None,
         });
         let target_view = context.create_texture_view(
             target,

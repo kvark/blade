@@ -58,6 +58,7 @@ impl crate::traits::ResourceDevice for super::Context {
                     glow::MAP_PERSISTENT_BIT | glow::MAP_COHERENT_BIT | glow::MAP_WRITE_BIT;
                 glow::DYNAMIC_DRAW
             }
+            crate::Memory::External(_) => unimplemented!(),
         };
 
         unsafe {

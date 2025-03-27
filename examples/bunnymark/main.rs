@@ -140,6 +140,7 @@ impl Example {
             mip_level_count: 1,
             usage: gpu::TextureUsage::RESOURCE | gpu::TextureUsage::COPY,
             sample_count: 1,
+            external: None,
         });
         let view = context.create_texture_view(
             texture,
