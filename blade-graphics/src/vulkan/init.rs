@@ -188,6 +188,12 @@ unsafe fn inspect_adapter(
     }
 
     let external_memory = supported_extensions.contains(&vk::KHR_EXTERNAL_MEMORY_NAME);
+    #[cfg(target_os = "windows")]
+    let external_memory =
+        external_memory && supported_extensions.contains(&vk::KHR_EXTERNAL_MEMORY_WIN32_NAME);
+    #[cfg(not(target_os = "windows"))]
+    let external_memory =
+        external_memory && supported_extensions.contains(&vk::KHR_EXTERNAL_MEMORY_FD_NAME);
 
     let timing = if properties.limits.timestamp_compute_and_graphics == vk::FALSE {
         log::info!("No timing because of queue support");
