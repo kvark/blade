@@ -4,6 +4,7 @@ impl From<naga::ShaderStage> for super::ShaderVisibility {
             naga::ShaderStage::Compute => Self::COMPUTE,
             naga::ShaderStage::Vertex => Self::VERTEX,
             naga::ShaderStage::Fragment => Self::FRAGMENT,
+            _ => Self::empty(),
         }
     }
 }
@@ -124,7 +125,7 @@ impl super::Shader {
                         naga::TypeInner::Sampler { .. } => {
                             (crate::ShaderBinding::Sampler, naga::StorageAccess::empty())
                         }
-                        naga::TypeInner::AccelerationStructure => (
+                        naga::TypeInner::AccelerationStructure { vertex_return: _ } => (
                             crate::ShaderBinding::AccelerationStructure,
                             naga::StorageAccess::empty(),
                         ),
@@ -233,9 +234,9 @@ impl super::Shader {
                         }
                         let binding = naga::Binding::Location {
                             location: attribute_mappings.len() as u32,
-                            second_blend_source: false,
                             interpolation: None,
                             sampling: None,
+                            blend_src: None,
                         };
                         for (buffer_index, vertex_fetch) in fetch_states.iter().enumerate() {
                             for (attribute_index, &(at_name, _)) in
@@ -265,9 +266,9 @@ impl super::Shader {
                         if member.binding.is_none() {
                             member.binding = Some(naga::Binding::Location {
                                 location,
-                                second_blend_source: false,
                                 interpolation: None,
                                 sampling: None,
+                                blend_src: None,
                             });
                             location += 1;
                         }

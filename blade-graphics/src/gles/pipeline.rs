@@ -170,6 +170,7 @@ impl super::Context {
                 naga::ShaderStage::Vertex => glow::VERTEX_SHADER,
                 naga::ShaderStage::Fragment => glow::FRAGMENT_SHADER,
                 naga::ShaderStage::Compute => glow::COMPUTE_SHADER,
+                _ => panic!("Unsupported shader stage: {:?}", ep.stage),
             };
             let shader = gl.create_shader(target).unwrap();
             gl.shader_source(shader, &source);

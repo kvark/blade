@@ -48,6 +48,7 @@ impl super::Context {
             capabilities: None,
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
             zero_initialize_workgroup_memory: spv::ZeroInitializeWorkgroupMemoryMode::None,
+            force_loop_bounding: false,
             debug_info: None,
         }
     }
@@ -139,6 +140,7 @@ impl super::Context {
             naga::ShaderStage::Compute => vk::ShaderStageFlags::COMPUTE,
             naga::ShaderStage::Vertex => vk::ShaderStageFlags::VERTEX,
             naga::ShaderStage::Fragment => vk::ShaderStageFlags::FRAGMENT,
+            _ => panic!("Unsupported shader stage: {:?}", ep.stage),
         };
 
         let entry_point = ffi::CString::new(sf.entry_point).unwrap();
