@@ -21,8 +21,7 @@ glam = { version = "0.28", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
-# Needed for https://github.com/gfx-rs/wgpu/pull/7047
-naga = { git = "https://github.com/gfx-rs/wgpu", rev = "0f111cb27c3a06ac15325791212b9d4139d7eaa3", features = ["wgsl-in"] }
+naga = { version = "25.0", features = ["wgsl-in"] }
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.26", features = ["derive"] }
@@ -73,8 +72,10 @@ blade-macros = { version = "0.3", path = "blade-macros" }
 bytemuck = { workspace = true }
 choir = { workspace = true }
 egui = { workspace = true }
-egui-winit = { version="0.29", default-features=false, features=["links"] }
-transform-gizmo-egui = { git = "https://github.com/urholaukkarinen/transform-gizmo", rev = "7556fb38b37f3772c57dd0fae6a276976d314f9b" }
+egui-winit = { version = "0.29", default-features = false, features = [
+    "links",
+] }
+transform-gizmo-egui = "0.4"
 env_logger = "0.11"
 glam = { workspace = true }
 log = { workspace = true }
