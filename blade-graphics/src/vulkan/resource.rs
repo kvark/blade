@@ -677,12 +677,12 @@ fn fetch_external_source(
     device: &super::Device,
     allocation: Allocation,
 ) -> Option<crate::ExternalMemorySource> {
-    let device = device
-        .external_memory
-        .as_ref()
-        .expect("External memory is not supported");
     match allocation.memory_type {
         crate::Memory::External(e) => {
+            let device = device
+                .external_memory
+                .as_ref()
+                .expect("External memory is not supported");
             let memory = allocation.memory;
             let handle_type = external_source_handle_type(e);
 
