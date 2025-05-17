@@ -312,7 +312,8 @@ impl crate::traits::ResourceDevice for super::Context {
         }
 
         let raw = unsafe { self.device.core.create_buffer(&vk_info, None).unwrap() };
-        let requirements = unsafe { self.device.core.get_buffer_memory_requirements(raw) };
+        let mut requirements = unsafe { self.device.core.get_buffer_memory_requirements(raw) };
+        requirements.alignment = requirements.alignment.max(self.min_buffer_alignment);
         let allocation = self.allocate_memory(requirements, desc.memory);
 
         log::info!(
