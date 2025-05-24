@@ -87,6 +87,8 @@ fn update(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 }
 
+var<storage,read> draw_particles: array<Particle>;
+
 struct Transform2D {
     pos: vec2<f32>,
     scale: f32,
@@ -96,7 +98,7 @@ struct Transform2D {
 struct DrawParams {
     t_emitter: Transform2D,
     screen_center: vec2<f32>,
-    screen_extent: vec2<f32>, 
+    screen_extent: vec2<f32>,
 }
 var<uniform> draw_params: DrawParams;
 
@@ -116,7 +118,7 @@ fn draw_vs(
     @builtin(vertex_index) vertex_index: u32,
     @builtin(instance_index) instance_index: u32,
 ) -> VertexOutput {
-    let particle = particles[instance_index];
+    let particle = draw_particles[instance_index];
     var out: VertexOutput;
     let zero_one_pos = vec2<f32>(vec2<u32>(vertex_index&1u, vertex_index>>1u));
     let pt = Transform2D(particle.pos, particle.scale, particle.rot);
