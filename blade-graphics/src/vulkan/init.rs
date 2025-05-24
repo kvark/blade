@@ -775,6 +775,7 @@ impl Drop for super::Context {
         }
         unsafe {
             if let Ok(queue) = self.queue.lock() {
+                let _ = self.device.core.queue_wait_idle(queue.raw);
                 self.device
                     .core
                     .destroy_semaphore(queue.timeline_semaphore, None);
