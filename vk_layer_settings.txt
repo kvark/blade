@@ -1,3 +1,5 @@
 khronos_validation.debug_action = VK_DBG_LAYER_ACTION_LOG_MSG
 khronos_validation.enables = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,VALIDATION_CHECK_ENABLE_SYNCHRONIZATION_VALIDATION_QUEUE_SUBMIT
 khronos_validation.disables =
+# 0x1ed8505a: WARNING-VkDescriptorSetAllocateInfo-descriptorCount - we are intentionally trying to allocate from the pool and not assuming the outcome.
+khronos_validation.message_id_filter = 0x1ed8505a
