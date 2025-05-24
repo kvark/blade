@@ -66,7 +66,7 @@ struct DrawParams {
 
 #[derive(blade_macros::ShaderData)]
 struct DrawData {
-    particles: gpu::BufferPiece,
+    draw_particles: gpu::BufferPiece,
     draw_params: DrawParams,
 }
 
@@ -207,7 +207,7 @@ impl System {
         pc.bind(
             0,
             &DrawData {
-                particles: self.particle_buf.into(),
+                draw_particles: self.particle_buf.into(),
                 draw_params: DrawParams {
                     t_emitter: Transform2D {
                         pos: [0.0; 2],
