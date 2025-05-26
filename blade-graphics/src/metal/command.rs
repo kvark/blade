@@ -6,6 +6,8 @@ use objc2_metal::{
 };
 use std::{marker::PhantomData, mem, ptr::NonNull, slice, time::Duration};
 
+use crate::{DrawIndexedIndirectArgs, DrawIndirectArgs};
+
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let slot = ctx.targets[index as usize] as _;
@@ -863,14 +865,18 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
         }
     }
 
-    fn draw_indirect(&mut self, indirect_buf: crate::BufferPiece) {
+    fn draw_indirect(&mut self, indirect_buf: crate::BufferPiece, draw_count: u32) {
         unsafe {
-            self.encoder
-                .drawPrimitives_indirectBuffer_indirectBufferOffset(
-                    self.primitive_type,
-                    indirect_buf.buffer.as_ref(),
-                    indirect_buf.offset as usize,
-                );
+            let mut offset = 0;
+            for _ in 0..draw_count {
+                self.encoder
+                    .drawPrimitives_indirectBuffer_indirectBufferOffset(
+                        self.primitive_type,
+                        indirect_buf.buffer.as_ref(),
+                        indirect_buf.offset as usize + offset,
+                    );
+                offset += std::mem::size_of::<DrawIndirectArgs>();
+            }
         }
     }
 
@@ -879,17 +885,24 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
         index_buf: crate::BufferPiece,
         index_type: crate::IndexType,
         indirect_buf: crate::BufferPiece,
+        draw_count: u32,
     ) {
         let raw_index_type = super::map_index_type(index_type);
         unsafe {
-            self.encoder.drawIndexedPrimitives_indexType_indexBuffer_indexBufferOffset_indirectBuffer_indirectBufferOffset(
-            self.primitive_type,
-            raw_index_type,
-            index_buf.buffer.as_ref(),
-            index_buf.offset as usize,
-            indirect_buf.buffer.as_ref(),
-            indirect_buf.offset as usize,
-        );
+            let mut offset = 0;
+            for _ in 0..draw_count {
+                unsafe {
+                    self.encoder.drawIndexedPrimitives_indexType_indexBuffer_indexBufferOffset_indirectBuffer_indirectBufferOffset(
+                        self.primitive_type,
+                        raw_index_type,
+                        index_buf.buffer.as_ref(),
+                        index_buf.offset as usize,
+                        indirect_buf.buffer.as_ref(),
+                        indirect_buf.offset as usize + offset,
+                    );
+                }
+            }
+            offset += std::mem::size_of::<DrawIndexedIndirectArgs>();
         }
     }
 }

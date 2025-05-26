@@ -277,7 +277,7 @@ impl DebugRender {
                 depth,
             },
         );
-        pc.draw_indirect(self.buffer.at(0));
+        pc.draw_indirect(self.buffer.at(0), 1);
 
         if !debug_lines.is_empty() {
             let (lines_buf, count) = self.add_lines(debug_lines);

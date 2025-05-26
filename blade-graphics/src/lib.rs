@@ -88,6 +88,7 @@ pub use hal::*;
 #[cfg(target_arch = "wasm32")]
 pub const CANVAS_ID: &str = "blade";
 
+use bytemuck::{Pod, Zeroable};
 use std::{fmt, num::NonZeroU32};
 
 #[derive(Clone, Debug, Default)]
@@ -1189,3 +1190,37 @@ pub struct Viewport {
 }
 
 pub type Timings = Vec<(String, std::time::Duration)>;
+
+/// Argument buffer layout for `draw_indirect` commands.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Pod, Zeroable)]
+pub struct DrawIndirectArgs {
+    /// The number of vertices to draw.
+    pub vertex_count: u32,
+    /// The number of instances to draw.
+    pub instance_count: u32,
+    /// The Index of the first vertex to draw.
+    pub first_vertex: u32,
+    /// The instance ID of the first instance to draw.
+    ///
+    /// Has to be 0, unless [`Features::INDIRECT_FIRST_INSTANCE`](crate::Features::INDIRECT_FIRST_INSTANCE) is enabled.
+    pub first_instance: u32,
+}
+
+/// Argument buffer layout for `draw_indexed_indirect` commands.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Pod, Zeroable)]
+pub struct DrawIndexedIndirectArgs {
+    /// The number of indices to draw.
+    pub index_count: u32,
+    /// The number of instances to draw.
+    pub instance_count: u32,
+    /// The first index within the index buffer.
+    pub first_index: u32,
+    /// The value added to the vertex index before indexing into the vertex buffer.
+    pub base_vertex: i32,
+    /// The instance ID of the first instance to draw.
+    ///
+    /// Has to be 0, unless [`Features::INDIRECT_FIRST_INSTANCE`](crate::Features::INDIRECT_FIRST_INSTANCE) is enabled.
+    pub first_instance: u32,
+}

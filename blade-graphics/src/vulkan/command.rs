@@ -1,6 +1,8 @@
 use ash::vk;
 use std::{str, time::Duration};
 
+use crate::{DrawIndexedIndirectArgs, DrawIndirectArgs};
+
 impl super::CrashHandler {
     fn add_marker(&mut self, marker: &str) -> u32 {
         if self.next_offset < self.raw_string.len() {
@@ -1045,14 +1047,19 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
         }
     }
 
-    fn draw_indirect(&mut self, indirect_buf: crate::BufferPiece) {
+    fn draw_indirect(&mut self, indirect_buf: crate::BufferPiece, draw_count: u32) {
+        debug_assert_eq!(
+            std::mem::size_of::<DrawIndirectArgs>(),
+            std::mem::size_of::<vk::DrawIndirectCommand>()
+        );
+
         unsafe {
             self.device.core.cmd_draw_indirect(
                 self.cmd_buf.raw,
                 indirect_buf.buffer.raw,
                 indirect_buf.offset,
-                1,
-                0,
+                draw_count,
+                std::mem::size_of::<vk::DrawIndirectCommand>() as u32,
             );
         }
     }
@@ -1062,7 +1069,13 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
         index_buf: crate::BufferPiece,
         index_type: crate::IndexType,
         indirect_buf: crate::BufferPiece,
+        draw_count: u32,
     ) {
+        debug_assert_eq!(
+            std::mem::size_of::<DrawIndexedIndirectArgs>(),
+            std::mem::size_of::<vk::DrawIndexedIndirectCommand>()
+        );
+
         let raw_index_type = super::map_index_type(index_type);
         unsafe {
             self.device.core.cmd_bind_index_buffer(
@@ -1075,8 +1088,8 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
                 self.cmd_buf.raw,
                 indirect_buf.buffer.raw,
                 indirect_buf.offset,
-                1,
-                0,
+                draw_count,
+                std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
             );
         }
     }

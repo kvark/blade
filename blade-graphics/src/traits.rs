@@ -146,11 +146,12 @@ pub trait RenderPipelineEncoder: PipelineEncoder + RenderEncoder {
         start_instance: u32,
         instance_count: u32,
     );
-    fn draw_indirect(&mut self, indirect_buf: Self::BufferPiece);
+    fn draw_indirect(&mut self, indirect_buf: Self::BufferPiece, draw_count: u32);
     fn draw_indexed_indirect(
         &mut self,
         index_buf: Self::BufferPiece,
         index_type: crate::IndexType,
         indirect_buf: Self::BufferPiece,
+        draw_count: u32,
     );
 }
