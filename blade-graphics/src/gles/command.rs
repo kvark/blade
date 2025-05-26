@@ -537,7 +537,7 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
         });
     }
 
-    fn draw_indirect(&mut self, _indirect_buf: crate::BufferPiece) {
+    fn draw_indirect(&mut self, _indirect_buf: crate::BufferPiece, _draw_count: u32) {
         unimplemented!()
     }
 
@@ -546,6 +546,7 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
         _index_buf: crate::BufferPiece,
         _index_type: crate::IndexType,
         _indirect_buf: crate::BufferPiece,
+        _draw_count: u32,
     ) {
         unimplemented!()
     }
