@@ -442,6 +442,24 @@ struct ExecutionContext {
 }
 
 impl Context {
+    pub unsafe fn init<
+        W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+    >(
+        desc: crate::ContextDesc,
+        window: Option<&W>,
+    ) -> Result<Self, crate::NotSupportedError> {
+        let (platform_context, capabilities, toggles, limits, device_information) =
+            platform::init_platform(desc, window)?;
+
+        Ok(Self {
+            platform: platform_context,
+            capabilities,
+            toggles,
+            limits,
+            device_information,
+        })
+    }
+
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             ray_query: crate::ShaderVisibility::empty(),

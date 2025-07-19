@@ -13,7 +13,7 @@ struct CompiledShader<'a> {
 }
 
 impl super::Context {
-    fn make_spv_options(&self, data_layouts: &[&crate::ShaderDataLayout]) -> spv::Options {
+    fn make_spv_options(&self, data_layouts: &[&crate::ShaderDataLayout]) -> spv::Options<'_> {
         // collect all the array bindings into overrides
         let mut binding_map = spv::BindingMap::default();
         for (group_index, layout) in data_layouts.iter().enumerate() {
@@ -60,7 +60,7 @@ impl super::Context {
         group_layouts: &[&crate::ShaderDataLayout],
         group_infos: &mut [crate::ShaderDataInfo],
         vertex_fetch_states: &[crate::VertexFetchState],
-    ) -> CompiledShader {
+    ) -> CompiledShader<'_> {
         let ep_index = sf.entry_point_index();
         let ep = &sf.shader.module.entry_points[ep_index];
         let ep_info = sf.shader.info.get_entry_point(ep_index);

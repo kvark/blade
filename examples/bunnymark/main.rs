@@ -77,14 +77,17 @@ impl Example {
 
     fn new(window: &winit::window::Window) -> Self {
         let context = unsafe {
-            gpu::Context::init(gpu::ContextDesc {
-                presentation: true,
-                validation: cfg!(debug_assertions),
-                timing: false,
-                capture: false,
-                overlay: true,
-                device_id: 0,
-            })
+            gpu::Context::init(
+                gpu::ContextDesc {
+                    presentation: true,
+                    validation: cfg!(debug_assertions),
+                    timing: false,
+                    capture: false,
+                    overlay: true,
+                    device_id: 0,
+                },
+                Some(window),
+            )
             .unwrap()
         };
         println!("{:?}", context.device_information());

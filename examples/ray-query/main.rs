@@ -48,11 +48,14 @@ impl Example {
     fn new(window: &winit::window::Window) -> Self {
         let window_size = window.inner_size();
         let context = unsafe {
-            gpu::Context::init(gpu::ContextDesc {
-                presentation: true,
-                validation: cfg!(debug_assertions),
-                ..Default::default()
-            })
+            gpu::Context::init(
+                gpu::ContextDesc {
+                    presentation: true,
+                    validation: cfg!(debug_assertions),
+                    ..Default::default()
+                },
+                Some(window),
+            )
             .unwrap()
         };
         let capabilities = context.capabilities();

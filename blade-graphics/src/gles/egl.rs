@@ -151,7 +151,21 @@ impl<'a> Drop for ContextLock<'a> {
 }
 
 impl super::Context {
-    pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
+    pub unsafe fn init<
+        W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+    >(
+        desc: crate::ContextDesc,
+        _window: Option<&W>,
+    ) -> Result<
+        (
+            PlatformContext,
+            super::Capabilities,
+            super::Toggles,
+            super::Limits,
+            crate::DeviceInformation,
+        ),
+        crate::NotSupportedError,
+    > {
         let egl = unsafe {
             let egl_result = if cfg!(windows) {
                 egl::DynamicInstance::<egl::EGL1_4>::load_required_from_filename("libEGL.dll")
@@ -246,8 +260,8 @@ impl super::Context {
             egl_context.load_functions(&desc);
         egl_context.unmake_current();
 
-        Ok(Self {
-            platform: PlatformContext {
+        Ok((
+            PlatformContext {
                 inner: Mutex::new(ContextInner {
                     glow,
                     egl: egl_context,
@@ -257,7 +271,7 @@ impl super::Context {
             toggles,
             limits,
             device_information,
-        })
+        ))
     }
 
     pub fn create_surface<I: raw_window_handle::HasWindowHandle>(

@@ -31,7 +31,13 @@ impl gpu::ShaderData for Globals {
 
 fn main() {
     env_logger::init();
-    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    let context = unsafe {
+        gpu::Context::init(
+            gpu::ContextDesc::default(),
+            None as Option<&winit::window::Window>,
+        )
+        .unwrap()
+    };
 
     let global_layout = <Globals as gpu::ShaderData>::layout();
     let shader_source = std::fs::read_to_string("examples/mini/shader.wgsl").unwrap();

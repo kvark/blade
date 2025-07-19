@@ -50,7 +50,21 @@ impl PlatformContext {
 }
 
 impl super::Context {
-    pub unsafe fn init(_desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
+    pub unsafe fn init<
+        W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+    >(
+        _desc: crate::ContextDesc,
+        _window: Option<&W>,
+    ) -> Result<
+        (
+            PlatformContext,
+            super::Capabilities,
+            super::Toggles,
+            super::Limits,
+            crate::DeviceInformation,
+        ),
+        crate::NotSupportedError,
+    > {
         let canvas = web_sys::window()
             .and_then(|win| win.document())
             .expect("Cannot get document")
@@ -89,13 +103,13 @@ impl super::Context {
             driver_info: glow.get_parameter_string(glow::VERSION),
         };
 
-        Ok(super::Context {
-            platform: PlatformContext { webgl2, glow },
+        Ok((
+            PlatformContext { webgl2, glow },
             capabilities,
-            toggles: super::Toggles::default(),
+            super::Toggles::default(),
             limits,
             device_information,
-        })
+        ))
     }
 
     pub fn create_surface<I>(

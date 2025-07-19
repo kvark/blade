@@ -184,12 +184,15 @@ impl Example {
         log::info!("Initializing");
 
         let context = Arc::new(unsafe {
-            gpu::Context::init(gpu::ContextDesc {
-                presentation: true,
-                validation: cfg!(debug_assertions),
-                capture: true,
-                ..Default::default()
-            })
+            gpu::Context::init(
+                gpu::ContextDesc {
+                    presentation: true,
+                    validation: cfg!(debug_assertions),
+                    capture: true,
+                    ..Default::default()
+                },
+                Some(window),
+            )
             .unwrap()
         });
 

@@ -439,7 +439,12 @@ fn map_vertex_format(
 }
 
 impl Context {
-    pub unsafe fn init(desc: super::ContextDesc) -> Result<Self, super::NotSupportedError> {
+    pub unsafe fn init<
+        W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+    >(
+        desc: super::ContextDesc,
+        _window: Option<&W>,
+    ) -> Result<Self, super::NotSupportedError> {
         if desc.validation {
             std::env::set_var("METAL_DEVICE_WRAPPER_TYPE", "1");
         }

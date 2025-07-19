@@ -66,6 +66,7 @@ unsafe fn inspect_adapter(
     instance: &super::Instance,
     driver_api_version: u32,
     desc: &crate::ContextDesc,
+    surface: Option<vk::SurfaceKHR>,
 ) -> Option<AdapterCapabilities> {
     let mut inline_uniform_block_properties =
         vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
@@ -98,6 +99,33 @@ unsafe fn inspect_adapter(
         log::info!("Rejected device ID 0x{:X}", properties.device_id);
         return None;
     }
+
+    let queue_family_properties = instance
+        .core
+        .get_physical_device_queue_family_properties(phd);
+
+    let queue_family_index =
+        match queue_family_properties
+            .iter()
+            .enumerate()
+            .position(|(i, properties)| {
+                let mut good = properties.queue_flags.contains(vk::QueueFlags::GRAPHICS);
+                if let Some(surface) = surface {
+                    good &= instance
+                        .surface
+                        .as_ref()
+                        .unwrap()
+                        .get_physical_device_surface_support(phd, i as u32, surface)
+                        .unwrap_or(false);
+                }
+                good
+            }) {
+            Some(index) => index as u32,
+            None => {
+                log::warn!("\tRejected for no suitable queue");
+                return None;
+            }
+        };
 
     let api_version = properties.api_version.min(driver_api_version);
     if api_version < vk::API_VERSION_1_1 {
@@ -132,7 +160,6 @@ unsafe fn inspect_adapter(
         intel_fix_descriptor_pool_leak: cfg!(windows) && properties.vendor_id == db::intel::VENDOR,
     };
 
-    let queue_family_index = 0; //TODO
     if desc.presentation && bugs.intel_unable_to_present {
         log::warn!("Rejecting Intel for not presenting when Nvidia is present (on Linux)");
         return None;
@@ -285,7 +312,12 @@ unsafe fn inspect_adapter(
 }
 
 impl super::Context {
-    pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, NotSupportedError> {
+    pub unsafe fn init<
+        W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+    >(
+        desc: crate::ContextDesc,
+        window: Option<&W>,
+    ) -> Result<Self, NotSupportedError> {
         let entry = match ash::Entry::load() {
             Ok(entry) => entry,
             Err(err) => {
@@ -394,6 +426,7 @@ impl super::Context {
                 .chain(instance_extensions.iter())
                 .map(|&s| s.as_ptr())
                 .collect::<Vec<_>>();
+
             let (layer_strings, extension_strings) = str_pointers.split_at(layers.len());
             let create_info = vk::InstanceCreateInfo::default()
                 .application_info(&app_info)
@@ -404,22 +437,33 @@ impl super::Context {
                 .map_err(super::PlatformError::Init)?
         };
 
-        let instance =
-            super::Instance {
-                _debug_utils: ext::debug_utils::Instance::new(&entry, &core_instance),
-                get_physical_device_properties2:
-                    khr::get_physical_device_properties2::Instance::new(&entry, &core_instance),
-                get_surface_capabilities2: khr::get_surface_capabilities2::Instance::new(
-                    &entry,
-                    &core_instance,
-                ),
-                surface: if desc.presentation {
-                    Some(khr::surface::Instance::new(&entry, &core_instance))
-                } else {
-                    None
-                },
-                core: core_instance,
-            };
+        let foo = core_instance.clone();
+        let instance = super::Instance {
+            core: core_instance,
+            _debug_utils: ext::debug_utils::Instance::new(&entry, &foo),
+
+            get_physical_device_properties2: khr::get_physical_device_properties2::Instance::new(
+                &entry, &foo,
+            ),
+            get_surface_capabilities2: khr::get_surface_capabilities2::Instance::new(&entry, &foo),
+            surface: if desc.presentation {
+                Some(khr::surface::Instance::new(&entry, &foo))
+            } else {
+                None
+            },
+        };
+
+        let temp_surface = if desc.presentation {
+            let window = window.ok_or(NotSupportedError::PlatformNotSupported)?;
+            let raw_display = window.display_handle().unwrap().as_raw();
+            let raw_window = window.window_handle().unwrap().as_raw();
+            let surface =
+                ash_window::create_surface(&entry, &instance.core, raw_display, raw_window, None)
+                    .map_err(super::PlatformError::Init)?;
+            Some(surface)
+        } else {
+            None
+        };
 
         let physical_devices = instance
             .core
@@ -428,9 +472,16 @@ impl super::Context {
         let (physical_device, capabilities) = physical_devices
             .into_iter()
             .find_map(|phd| {
-                inspect_adapter(phd, &instance, driver_api_version, &desc).map(|caps| (phd, caps))
+                inspect_adapter(phd, &instance, driver_api_version, &desc, temp_surface)
+                    .map(|caps| (phd, caps))
             })
             .ok_or_else(|| NotSupportedError::NoSupportedDeviceFound)?;
+
+        if let Some(surface) = temp_surface {
+            if let Some(ref surface_ext) = instance.surface {
+                surface_ext.destroy_surface(surface, None);
+            }
+        }
 
         log::debug!("Adapter {:#?}", capabilities);
         let mut min_buffer_alignment = 1;

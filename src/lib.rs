@@ -412,14 +412,17 @@ impl Engine {
         log::info!("Initializing the engine");
 
         let gpu_context = Arc::new(unsafe {
-            gpu::Context::init(gpu::ContextDesc {
-                presentation: true,
-                validation: cfg!(debug_assertions),
-                timing: true,
-                capture: false,
-                overlay: false,
-                device_id: 0,
-            })
+            gpu::Context::init(
+                gpu::ContextDesc {
+                    presentation: true,
+                    validation: cfg!(debug_assertions),
+                    timing: true,
+                    capture: false,
+                    overlay: false,
+                    device_id: 0,
+                },
+                Some(window),
+            )
             .unwrap()
         });
 

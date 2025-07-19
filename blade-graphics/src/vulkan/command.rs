@@ -329,7 +329,7 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder {
+    pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder<'_> {
         self.begin_pass(label);
         super::TransferCommandEncoder {
             raw: self.buffers[0].raw,
@@ -340,7 +340,7 @@ impl super::CommandEncoder {
     pub fn acceleration_structure(
         &mut self,
         label: &str,
-    ) -> super::AccelerationStructureCommandEncoder {
+    ) -> super::AccelerationStructureCommandEncoder<'_> {
         self.begin_pass(label);
         super::AccelerationStructureCommandEncoder {
             raw: self.buffers[0].raw,
@@ -348,7 +348,7 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder {
+    pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder<'_> {
         self.begin_pass(label);
         super::ComputeCommandEncoder {
             cmd_buf: self.buffers.first_mut().unwrap(),
@@ -361,7 +361,7 @@ impl super::CommandEncoder {
         &mut self,
         label: &str,
         targets: crate::RenderTargetSet,
-    ) -> super::RenderCommandEncoder {
+    ) -> super::RenderCommandEncoder<'_> {
         self.begin_pass(label);
 
         let mut target_size = [0u16; 2];
