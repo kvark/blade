@@ -30,6 +30,7 @@ struct Instance {
 #[derive(Clone)]
 struct RayTracingDevice {
     acceleration_structure: khr::acceleration_structure::Device,
+    scratch_buffer_alignment: u64,
 }
 
 #[derive(Clone, Default)]
