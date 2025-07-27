@@ -701,18 +701,19 @@ impl crate::traits::AccelerationStructureEncoder
         meshes: &[crate::AccelerationStructureMesh],
         scratch_data: crate::BufferPiece,
     ) {
+        let rt = self.device.ray_tracing.as_ref().unwrap();
         let mut blas_input = self.device.map_acceleration_structure_meshes(meshes);
         blas_input.build_info.dst_acceleration_structure = acceleration_structure.raw;
         let scratch_address = self.device.get_device_address(&scratch_data);
-        assert!(
-            scratch_address & 0xFF == 0,
+        assert_eq!(
+            scratch_address & rt.scratch_buffer_alignment,
+            0,
             "BLAS scratch address {scratch_address} is not aligned"
         );
         blas_input.build_info.scratch_data = vk::DeviceOrHostAddressKHR {
             device_address: scratch_address,
         };
 
-        let rt = self.device.ray_tracing.as_ref().unwrap();
         unsafe {
             rt.acceleration_structure.cmd_build_acceleration_structures(
                 self.raw,

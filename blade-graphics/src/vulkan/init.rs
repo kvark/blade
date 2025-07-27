@@ -549,12 +549,13 @@ impl super::Context {
             debug_utils: ext::debug_utils::Device::new(&instance.core, &device_core),
             timeline_semaphore: khr::timeline_semaphore::Device::new(&instance.core, &device_core),
             dynamic_rendering: khr::dynamic_rendering::Device::new(&instance.core, &device_core),
-            ray_tracing: if capabilities.ray_tracing.is_some() {
+            ray_tracing: if let Some(ref caps) = capabilities.ray_tracing {
                 Some(super::RayTracingDevice {
                     acceleration_structure: khr::acceleration_structure::Device::new(
                         &instance.core,
                         &device_core,
                     ),
+                    scratch_buffer_alignment: caps.min_scratch_buffer_alignment,
                 })
             } else {
                 None
