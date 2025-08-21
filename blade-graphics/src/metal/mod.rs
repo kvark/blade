@@ -517,6 +517,7 @@ impl Context {
     pub fn capabilities(&self) -> crate::Capabilities {
         use metal::MTLDevice as _;
         let device = self.device.lock().unwrap();
+
         crate::Capabilities {
             ray_query: if device.supportsFamily(metal::MTLGPUFamily::Apple6) {
                 crate::ShaderVisibility::all()
@@ -527,6 +528,10 @@ impl Context {
             } else {
                 crate::ShaderVisibility::empty()
             },
+            sample_count_mask: (0u32..7)
+                .map(|v| 1 << v)
+                .filter(|&count| device.supportsTextureSampleCount(count as _))
+                .sum(),
         }
     }
 
@@ -538,12 +543,6 @@ impl Context {
     /// This is platform specific API.
     pub fn metal_device(&self) -> Retained<ProtocolObject<dyn metal::MTLDevice>> {
         self.device.lock().unwrap().clone()
-    }
-
-    /// Check if the device supports a specific texture sample count.
-    pub fn supports_texture_sample_count(&self, sample_count: u32) -> bool {
-        self.metal_device()
-            .supportsTextureSampleCount(sample_count as _)
     }
 }
 

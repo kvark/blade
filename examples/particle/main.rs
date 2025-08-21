@@ -130,10 +130,11 @@ impl Example {
             .unwrap();
         let surface_info = surface.info();
 
+        let caps = context.capabilities();
         let sample_count = [4, 2, 1]
             .into_iter()
-            .find(|&n| context.supports_texture_sample_count(n))
-            .unwrap_or(1);
+            .find(|&n| (caps.sample_count_mask & n) != 0)
+            .unwrap();
 
         let gui_painter = blade_egui::GuiPainter::new(surface_info, &context);
         let particle_system = particle::System::new(
@@ -275,16 +276,16 @@ impl Example {
         ui.heading("Particle System");
         self.particle_system.add_gui(ui);
 
-        let supported_samples = [1, 2, 4]
-            .into_iter()
-            .filter(|&n| self.context.supports_texture_sample_count(n))
-            .collect::<Vec<_>>();
-
         ui.add_space(5.0);
         ui.heading("Rendering Settings");
         egui::ComboBox::new("msaa dropdown", "MSAA samples")
             .selected_text(format!("x{}", self.sample_count))
             .show_ui(ui, |ui| {
+                let caps = self.context.capabilities();
+                let supported_samples = [1, 2, 4]
+                    .into_iter()
+                    .filter(|&n| (caps.sample_count_mask & n) != 0)
+                    .collect::<Vec<_>>();
                 for i in supported_samples {
                     if ui
                         .selectable_value(&mut self.sample_count, i, format!("x{i}"))
