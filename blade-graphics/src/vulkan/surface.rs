@@ -10,6 +10,7 @@ impl super::Surface {
     }
 
     unsafe fn deinit_swapchain(&mut self, raw_device: &ash::Device) {
+        raw_device.device_wait_idle().unwrap();
         self.device
             .destroy_swapchain(mem::take(&mut self.swapchain.raw), None);
         for frame in self.frames.drain(..) {
@@ -337,6 +338,7 @@ impl super::Context {
                 config.allow_exclusive_full_screen
             );
         }
+        unsafe { self.device.core.device_wait_idle().unwrap(); }
         let raw_swapchain = unsafe { surface.device.create_swapchain(&create_info, None).unwrap() };
 
         unsafe {
