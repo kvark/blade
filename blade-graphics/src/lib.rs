@@ -124,6 +124,8 @@ impl From<PlatformError> for NotSupportedError {
 pub struct Capabilities {
     /// Which shader stages support ray queries
     pub ray_query: ShaderVisibility,
+    /// Bit mask of supported MSAA sample counts.
+    pub sample_count_mask: u32,
 }
 
 #[derive(Clone, Debug, Default)]

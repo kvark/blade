@@ -738,6 +738,14 @@ impl super::Context {
             naga_flags,
             shader_debug_path,
             min_buffer_alignment,
+            sample_count_flags: capabilities
+                .properties
+                .limits
+                .framebuffer_color_sample_counts
+                & capabilities
+                    .properties
+                    .limits
+                    .framebuffer_depth_sample_counts,
             instance,
             entry,
         })
@@ -761,6 +769,7 @@ impl super::Context {
                 Some(_) => crate::ShaderVisibility::all(),
                 None => crate::ShaderVisibility::empty(),
             },
+            sample_count_mask: self.sample_count_flags.as_raw(),
         }
     }
 
