@@ -104,6 +104,8 @@ impl super::Context {
         let _ = unsafe {
             self.instance
                 .get_surface_capabilities2
+                .as_ref()
+                .unwrap()
                 .get_physical_device_surface_capabilities2(
                     self.physical_device,
                     &surface_info,

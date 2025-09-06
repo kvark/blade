@@ -350,16 +350,17 @@ impl super::Context {
             let mut instance_extensions = vec![
                 vk::EXT_DEBUG_UTILS_NAME,
                 vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME,
-                vk::KHR_GET_SURFACE_CAPABILITIES2_NAME,
             ];
             if desc.presentation {
                 instance_extensions.push(vk::KHR_SURFACE_NAME);
+                instance_extensions.push(vk::KHR_GET_SURFACE_CAPABILITIES2_NAME);
                 let candidates = [
                     vk::KHR_WAYLAND_SURFACE_NAME,
                     vk::KHR_XCB_SURFACE_NAME,
                     vk::KHR_XLIB_SURFACE_NAME,
                     vk::KHR_WIN32_SURFACE_NAME,
                     vk::KHR_ANDROID_SURFACE_NAME,
+                    vk::EXT_SWAPCHAIN_COLORSPACE_NAME,
                 ];
                 for candidate in candidates.iter() {
                     if supported_instance_extensions.contains(candidate) {
@@ -379,10 +380,6 @@ impl super::Context {
                 log::info!("Enabling Vulkan Portability");
                 instance_extensions.push(vk::KHR_PORTABILITY_ENUMERATION_NAME);
                 create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
-            }
-            if supported_instance_extensions.contains(&vk::EXT_SWAPCHAIN_COLORSPACE_NAME) {
-                log::info!("Enabling color space support");
-                instance_extensions.push(vk::EXT_SWAPCHAIN_COLORSPACE_NAME);
             }
 
             let app_info = vk::ApplicationInfo::default()
@@ -409,10 +406,14 @@ impl super::Context {
                 _debug_utils: ext::debug_utils::Instance::new(&entry, &core_instance),
                 get_physical_device_properties2:
                     khr::get_physical_device_properties2::Instance::new(&entry, &core_instance),
-                get_surface_capabilities2: khr::get_surface_capabilities2::Instance::new(
-                    &entry,
-                    &core_instance,
-                ),
+                get_surface_capabilities2: if desc.presentation {
+                    Some(khr::get_surface_capabilities2::Instance::new(
+                        &entry,
+                        &core_instance,
+                    ))
+                } else {
+                    None
+                },
                 surface: if desc.presentation {
                     Some(khr::surface::Instance::new(&entry, &core_instance))
                 } else {
