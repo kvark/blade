@@ -1,3 +1,6 @@
+use once_cell::sync::Lazy;
+use std::borrow::Cow;
+
 impl From<naga::ShaderStage> for super::ShaderVisibility {
     fn from(stage: naga::ShaderStage) -> Self {
         match stage {
@@ -48,12 +51,37 @@ impl super::Context {
     }
 }
 
+pub static EMPTY_CONSTANTS: Lazy<super::PipelineConstants> = Lazy::new(Default::default);
+
 impl super::Shader {
     pub fn at<'a>(&'a self, entry_point: &'a str) -> super::ShaderFunction<'a> {
         super::ShaderFunction {
             shader: self,
             entry_point,
+            constants: Lazy::force(&EMPTY_CONSTANTS),
         }
+    }
+
+    pub fn with_constants<'a>(
+        &'a self,
+        entry_point: &'a str,
+        constants: &'a super::PipelineConstants,
+    ) -> super::ShaderFunction<'a> {
+        super::ShaderFunction {
+            shader: self,
+            entry_point,
+            constants,
+        }
+    }
+
+    pub fn resolve_constants(
+        &self,
+        constants: &super::PipelineConstants,
+    ) -> (naga::Module, Cow<naga::valid::ModuleInfo>) {
+        let (module, info) =
+            naga::back::pipeline_constants::process_overrides(&self.module, &self.info, constants)
+                .unwrap();
+        (module.into_owned(), info)
     }
 
     pub fn get_struct_size(&self, struct_name: &str) -> u32 {

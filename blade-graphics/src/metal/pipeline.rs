@@ -199,7 +199,7 @@ impl super::Context {
         let ep_info = sf.shader.info.get_entry_point(ep_index);
         let _ = sf.shader.source;
 
-        let mut module = sf.shader.module.clone();
+        let (mut module, module_info) = sf.shader.resolve_constants(&sf.constants);
         crate::Shader::fill_resource_bindings(
             &mut module,
             &mut pipeline_layout.group_infos,
@@ -292,7 +292,7 @@ impl super::Context {
             vertex_buffer_mappings: Vec::new(),
         };
         let (source, info) =
-            msl::write_string(&module, &sf.shader.info, &naga_options, &pipeline_options).unwrap();
+            msl::write_string(&module, &module_info, &naga_options, &pipeline_options).unwrap();
 
         log::debug!(
             "Naga generated shader for entry point '{}' and stage {:?}\n{}",

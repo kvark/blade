@@ -65,7 +65,7 @@ impl super::Context {
         let ep = &sf.shader.module.entry_points[ep_index];
         let ep_info = sf.shader.info.get_entry_point(ep_index);
 
-        let mut module = sf.shader.module.clone();
+        let (mut module, module_info) = sf.shader.resolve_constants(&sf.constants);
         crate::Shader::fill_resource_bindings(
             &mut module,
             group_infos,
@@ -105,13 +105,8 @@ impl super::Context {
             naga_options_base
         };
 
-        let spv = spv::write_vec(
-            &module,
-            &sf.shader.info,
-            naga_options,
-            Some(&pipeline_options),
-        )
-        .unwrap();
+        let spv =
+            spv::write_vec(&module, &module_info, naga_options, Some(&pipeline_options)).unwrap();
 
         if let Some(dump_prefix) = DUMP_PREFIX {
             let mut file_name = String::new();
