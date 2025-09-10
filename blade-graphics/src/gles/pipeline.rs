@@ -117,9 +117,9 @@ impl super::Context {
             let ep = &sf.shader.module.entry_points[ep_index];
             let _ = sf.shader.source;
 
-            let mut module = sf.shader.module.clone();
+            let (mut module, module_info) = sf.shader.resolve_constants(&sf.constants);
             if force_explicit_bindings {
-                let ep_info = sf.shader.info.get_entry_point(ep_index);
+                let ep_info = module_info.get_entry_point(ep_index);
                 crate::Shader::fill_resource_bindings(
                     &mut module,
                     &mut group_infos,
@@ -151,7 +151,7 @@ impl super::Context {
             let mut writer = glsl::Writer::new(
                 &mut source,
                 &module,
-                &sf.shader.info,
+                &module_info,
                 &naga_options,
                 &pipeline_options,
                 Default::default(),

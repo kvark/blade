@@ -1,5 +1,11 @@
 Changelog for *Blade* project
 
+## blade-graphics-0.7 (TBD)
+
+- graphics
+  - pipeline constants API
+  - supported MSAA samples are now returned in context `Capabilities`
+
 ## blade-graphics-0.6, blade-util-0.2, blade-egui-0.6, blade-render-0.4, blade-0.3 (21 Dec 2024)
 
 - graphics:

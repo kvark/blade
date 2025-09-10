@@ -23,7 +23,7 @@
     clippy::pattern_type_mismatch,
 )]
 
-pub use naga::{StorageAccess, VectorSize};
+pub use naga::{back::PipelineConstants, StorageAccess, VectorSize};
 pub type Transform = mint::RowMatrix3x4<f32>;
 
 pub const IDENTITY_TRANSFORM: Transform = mint::RowMatrix3x4 {
@@ -620,6 +620,7 @@ pub struct Shader {
 pub struct ShaderFunction<'a> {
     pub shader: &'a Shader,
     pub entry_point: &'a str,
+    pub constants: &'a PipelineConstants,
 }
 
 impl ShaderFunction<'_> {
