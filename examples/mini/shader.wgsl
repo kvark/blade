@@ -2,6 +2,7 @@ var input: texture_2d<f32>;
 var output: texture_storage_2d<rgba8unorm, write>;
 
 var<uniform> modulator: vec4<f32>;
+var<uniform> demodulator: vec4<f32>;
 
 @compute
 @workgroup_size(8, 8)
