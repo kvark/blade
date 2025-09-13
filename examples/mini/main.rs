@@ -5,6 +5,7 @@ use std::{num::NonZeroU32, slice};
 
 struct Globals {
     modulator: [f32; 4],
+    demodulator: gpu::BufferPiece,
     input: gpu::TextureView,
     output: gpu::TextureView,
 }
@@ -16,6 +17,7 @@ impl gpu::ShaderData for Globals {
         gpu::ShaderDataLayout {
             bindings: vec![
                 ("modulator", gpu::ShaderBinding::Plain { size: 16 }),
+                ("demodulator", gpu::ShaderBinding::Buffer),
                 ("input", gpu::ShaderBinding::Texture),
                 ("output", gpu::ShaderBinding::Texture),
             ],
@@ -24,8 +26,9 @@ impl gpu::ShaderData for Globals {
     fn fill(&self, mut ctx: gpu::PipelineContext) {
         use gpu::ShaderBindable as _;
         self.modulator.bind_to(&mut ctx, 0);
-        self.input.bind_to(&mut ctx, 1);
-        self.output.bind_to(&mut ctx, 2);
+        self.demodulator.bind_to(&mut ctx, 1);
+        self.input.bind_to(&mut ctx, 2);
+        self.output.bind_to(&mut ctx, 3);
     }
 }
 
@@ -105,6 +108,11 @@ fn main() {
             }
         }
     }
+    let demodulator_buf = context.create_buffer(gpu::BufferDesc {
+        name: "demodulator",
+        size: 4,
+        memory: gpu::Memory::Shared,
+    });
 
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "main",
@@ -133,6 +141,7 @@ fn main() {
                         } else {
                             [1.0; 4]
                         },
+                        demodulator: demodulator_buf.at(0),
                         input: views[i as usize - 1],
                         output: views[i as usize],
                     },
@@ -168,6 +177,7 @@ fn main() {
     context.destroy_command_encoder(&mut command_encoder);
     context.destroy_buffer(result_buffer);
     context.destroy_buffer(upload_buffer);
+    context.destroy_buffer(demodulator_buf);
     for view in views {
         context.destroy_texture_view(view);
     }

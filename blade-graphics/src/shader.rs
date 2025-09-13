@@ -177,7 +177,9 @@ impl super::Shader {
                         }
                         _ => {
                             let type_layout = &layouter[var.ty];
-                            let proto = if var_access.is_empty() {
+                            let proto = if var_access.is_empty()
+                                && proto_binding != crate::ShaderBinding::Buffer
+                            {
                                 crate::ShaderBinding::Plain {
                                     size: type_layout.size,
                                 }
