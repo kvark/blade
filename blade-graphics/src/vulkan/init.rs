@@ -192,12 +192,12 @@ unsafe fn inspect_adapter(
     }
 
     let external_memory = supported_extensions.contains(&vk::KHR_EXTERNAL_MEMORY_NAME);
-    #[cfg(target_os = "windows")]
-    let external_memory =
-        external_memory && supported_extensions.contains(&vk::KHR_EXTERNAL_MEMORY_WIN32_NAME);
-    #[cfg(not(target_os = "windows"))]
-    let external_memory =
-        external_memory && supported_extensions.contains(&vk::KHR_EXTERNAL_MEMORY_FD_NAME);
+    let external_memory = external_memory
+        && supported_extensions.contains(if cfg!(target_os = "windows") {
+            &vk::KHR_EXTERNAL_MEMORY_WIN32_NAME
+        } else {
+            &vk::KHR_EXTERNAL_MEMORY_FD_NAME
+        });
 
     let timing = if properties.limits.timestamp_compute_and_graphics == vk::FALSE {
         log::info!("No timing because of queue support");
@@ -475,10 +475,11 @@ impl super::Context {
             }
             if capabilities.external_memory {
                 device_extensions.push(vk::KHR_EXTERNAL_MEMORY_NAME);
-                #[cfg(target_os = "windows")]
-                device_extensions.push(vk::KHR_EXTERNAL_MEMORY_WIN32_NAME);
-                #[cfg(not(target_os = "windows"))]
-                device_extensions.push(vk::KHR_EXTERNAL_MEMORY_FD_NAME);
+                device_extensions.push(if cfg!(target_os = "windows") {
+                    vk::KHR_EXTERNAL_MEMORY_WIN32_NAME
+                } else {
+                    vk::KHR_EXTERNAL_MEMORY_FD_NAME
+                });
             }
 
             let str_pointers = device_extensions
@@ -574,7 +575,7 @@ impl super::Context {
             } else {
                 None
             },
-            full_screen_exclusive: if capabilities.full_screen_exclusive {
+            full_screen_exclusive: if desc.presentation && capabilities.full_screen_exclusive {
                 Some(ext::full_screen_exclusive::Device::new(
                     &instance.core,
                     &device_core,
