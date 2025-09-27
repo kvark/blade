@@ -548,9 +548,10 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         assert_eq!(self.present, None);
         let wa = &self.device.workarounds;
         self.present = Some(super::Presentation {
-            acquire_semaphore: frame.internal.acquire_semaphore,
             swapchain: frame.swapchain.raw,
             image_index,
+            acquire_semaphore: frame.internal.acquire_semaphore,
+            present_semaphore: frame.internal.present_semaphore,
         });
 
         let barrier = vk::ImageMemoryBarrier {

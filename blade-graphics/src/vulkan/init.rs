@@ -709,11 +709,6 @@ impl super::Context {
             .core
             .create_semaphore(&timeline_semaphore_create_info, None)
             .unwrap();
-        let present_semaphore_create_info = vk::SemaphoreCreateInfo::default();
-        let present_semaphore = device
-            .core
-            .create_semaphore(&present_semaphore_create_info, None)
-            .unwrap();
 
         let mut naga_flags = spv::WriterFlags::FORCE_POINT_SIZE;
         let shader_debug_path = if desc.validation || desc.capture {
@@ -733,7 +728,6 @@ impl super::Context {
             queue: Mutex::new(super::Queue {
                 raw: queue,
                 timeline_semaphore,
-                present_semaphore,
                 last_progress,
             }),
             physical_device,
@@ -791,9 +785,6 @@ impl Drop for super::Context {
                 self.device
                     .core
                     .destroy_semaphore(queue.timeline_semaphore, None);
-                self.device
-                    .core
-                    .destroy_semaphore(queue.present_semaphore, None);
             }
             self.device.core.destroy_device(None);
             self.instance.core.destroy_instance(None);
