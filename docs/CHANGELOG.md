@@ -1,11 +1,13 @@
 Changelog for *Blade* project
 
-## blade-graphics-0.7 (TBD)
+## blade-graphics-0.7 (27 Sep 2025)
 
 - graphics
   - pipeline constants API
   - allow buffer bindings for uniform data
   - supported MSAA samples are now returned in context `Capabilities`
+  - Vulkan:
+    - improve correctness of present synchronization
 
 ## blade-graphics-0.6, blade-util-0.2, blade-egui-0.6, blade-render-0.4, blade-0.3 (21 Dec 2024)
 

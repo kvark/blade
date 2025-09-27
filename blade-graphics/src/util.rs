@@ -42,14 +42,14 @@ pub fn emit_annotated_error<E: Error>(ann_err: &naga::WithSpan<E>, filename: &st
 }
 
 impl super::TextureFormat {
-    pub fn block_info(&self) -> super::TexelBlockInfo {
-        fn uncompressed(size: u8) -> super::TexelBlockInfo {
+    pub const fn block_info(&self) -> super::TexelBlockInfo {
+        const fn uncompressed(size: u8) -> super::TexelBlockInfo {
             super::TexelBlockInfo {
                 dimensions: (1, 1),
                 size,
             }
         }
-        fn cx_bc(size: u8) -> super::TexelBlockInfo {
+        const fn cx_bc(size: u8) -> super::TexelBlockInfo {
             super::TexelBlockInfo {
                 dimensions: (4, 4),
                 size,
@@ -112,7 +112,7 @@ impl super::TextureFormat {
 }
 
 impl super::TextureColor {
-    pub fn stencil_clear_value(&self) -> u32 {
+    pub const fn stencil_clear_value(&self) -> u32 {
         match self {
             crate::TextureColor::TransparentBlack => 0,
             crate::TextureColor::OpaqueBlack => !0,
@@ -120,7 +120,7 @@ impl super::TextureColor {
         }
     }
 
-    pub fn depth_clear_value(&self) -> f32 {
+    pub const fn depth_clear_value(&self) -> f32 {
         match self {
             crate::TextureColor::TransparentBlack => 0.0,
             crate::TextureColor::OpaqueBlack => 0.0,
