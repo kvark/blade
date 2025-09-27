@@ -74,10 +74,10 @@ impl super::Shader {
         }
     }
 
-    pub fn resolve_constants(
-        &self,
+    pub fn resolve_constants<'a>(
+        &'a self,
         constants: &super::PipelineConstants,
-    ) -> (naga::Module, Cow<naga::valid::ModuleInfo>) {
+    ) -> (naga::Module, Cow<'a, naga::valid::ModuleInfo>) {
         let (module, info) =
             naga::back::pipeline_constants::process_overrides(&self.module, &self.info, constants)
                 .unwrap();

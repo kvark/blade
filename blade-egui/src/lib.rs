@@ -16,11 +16,7 @@
 const SHADER_SOURCE: &'static str = include_str!("../shader.wgsl");
 
 use blade_util::{BufferBelt, BufferBeltDescriptor};
-use std::{
-    collections::hash_map::{Entry, HashMap},
-    mem::size_of,
-    ptr,
-};
+use std::collections::hash_map::{Entry, HashMap};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -250,21 +246,6 @@ impl GuiPainter {
         for &(texture_id, ref image_delta) in textures_delta.set.iter() {
             let src = match image_delta.image {
                 egui::ImageData::Color(ref c) => self.belt.alloc_pod(c.pixels.as_slice(), context),
-                egui::ImageData::Font(ref a) => {
-                    let color_iter = a.srgba_pixels(None);
-                    let stage = self.belt.alloc(
-                        (color_iter.len() * size_of::<egui::Color32>()) as u64,
-                        context,
-                    );
-                    let mut ptr = stage.data() as *mut egui::Color32;
-                    for color in color_iter {
-                        unsafe {
-                            ptr::write(ptr, color);
-                            ptr = ptr.offset(1);
-                        }
-                    }
-                    stage
-                }
             };
 
             let image_size = image_delta.image.size();
