@@ -77,13 +77,13 @@ struct MemoryManager {
 struct Queue {
     raw: vk::Queue,
     timeline_semaphore: vk::Semaphore,
-    present_semaphore: vk::Semaphore,
     last_progress: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct InternalFrame {
     acquire_semaphore: vk::Semaphore,
+    present_semaphore: vk::Semaphore,
     image: vk::Image,
     view: vk::ImageView,
 }
@@ -110,6 +110,7 @@ struct Presentation {
     swapchain: vk::SwapchainKHR,
     image_index: u32,
     acquire_semaphore: vk::Semaphore,
+    present_semaphore: vk::Semaphore,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -486,11 +487,12 @@ impl crate::traits::CommandDevice for Context {
         let wait_values_all = [0];
         let mut wait_semaphores_all = [vk::Semaphore::null()];
         let wait_stages = [vk::PipelineStageFlags::ALL_COMMANDS];
-        let signal_semaphores_all = [queue.timeline_semaphore, queue.present_semaphore];
+        let mut signal_semaphores_all = [queue.timeline_semaphore, vk::Semaphore::null()];
         let signal_values_all = [progress, 0];
         let (num_wait_semaphores, num_signal_sepahores) = match encoder.present {
             Some(ref presentation) => {
                 wait_semaphores_all[0] = presentation.acquire_semaphore;
+                signal_semaphores_all[1] = presentation.present_semaphore;
                 (1, 2)
             }
             None => (0, 1),
@@ -515,7 +517,7 @@ impl crate::traits::CommandDevice for Context {
             let khr_swapchain = self.device.swapchain.as_ref().unwrap();
             let swapchains = [presentation.swapchain];
             let image_indices = [presentation.image_index];
-            let wait_semaphores = [queue.present_semaphore];
+            let wait_semaphores = [presentation.present_semaphore];
             let present_info = vk::PresentInfoKHR::default()
                 .swapchains(&swapchains)
                 .image_indices(&image_indices)

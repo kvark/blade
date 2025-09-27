@@ -10,11 +10,13 @@ impl super::Surface {
     }
 
     unsafe fn deinit_swapchain(&mut self, raw_device: &ash::Device) {
+        let _ = raw_device.device_wait_idle();
         self.device
             .destroy_swapchain(mem::take(&mut self.swapchain.raw), None);
         for frame in self.frames.drain(..) {
             raw_device.destroy_image_view(frame.view, None);
             raw_device.destroy_semaphore(frame.acquire_semaphore, None);
+            raw_device.destroy_semaphore(frame.present_semaphore, None);
         }
     }
 
@@ -375,8 +377,15 @@ impl super::Context {
                     .create_semaphore(&semaphore_create_info, None)
                     .unwrap()
             };
+            let present_semaphore = unsafe {
+                self.device
+                    .core
+                    .create_semaphore(&semaphore_create_info, None)
+                    .unwrap()
+            };
             surface.frames.push(super::InternalFrame {
                 acquire_semaphore,
+                present_semaphore,
                 image,
                 view,
             });
