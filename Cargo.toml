@@ -48,7 +48,7 @@ blade-asset = { version = "0.2", path = "blade-asset" }
 blade-egui = { version = "0.6", path = "blade-egui" }
 blade-graphics = { version = "0.7", path = "blade-graphics" }
 blade-helpers = { version = "0.1", path = "blade-helpers" }
-blade-util = { version = "0.2", path = "blade-util" }
+blade-util = { version = "0.3", path = "blade-util" }
 base64 = { workspace = true }
 choir = { workspace = true }
 colorsys = "0.6"
