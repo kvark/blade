@@ -217,12 +217,34 @@ impl GuiPainter {
 
     #[profiling::function]
     fn triage_deletions(&mut self, context: &blade_graphics::Context) {
-        let valid_pos = self
-            .textures_to_delete
-            .iter()
-            .position(|&(_, ref sp)| !context.wait_for(sp, 0))
-            .unwrap_or_default();
-        for (texture, _) in self.textures_to_delete.drain(..valid_pos) {
+        // Split the `textures_to_delete` into two groups: those that are ready to be deleted
+        // and those that are still busy or encountered an unexpected error.
+        let mut textures_to_delete_later = Vec::new();
+        let mut textures_to_delete_now = Vec::new();
+
+        for (texture, sp) in self.textures_to_delete.drain(..) {
+            match context.wait_for_result(&sp, 0) {
+                Ok(()) => {
+                    // GPU has finished with this texture, it's safe to delete.
+                    textures_to_delete_now.push(texture);
+                }
+                Err(blade_graphics::WaitError::Timeout) => {
+                    // GPU is still using this texture, keep it for later.
+                    textures_to_delete_later.push((texture, sp));
+                }
+                Err(e) => {
+                    // Unexpected error, log it and keep the texture for later.
+                    log::warn!("Unexpected wait error during texture deletion: {:?}", e);
+                    textures_to_delete_later.push((texture, sp));
+                }
+            }
+        }
+
+        // Replace the original vector with the textures that need to be kept.
+        self.textures_to_delete = textures_to_delete_later;
+
+        // Delete the textures that are ready.
+        for texture in textures_to_delete_now {
             context.destroy_texture_view(texture.view);
             context.destroy_texture(texture.allocation);
         }
