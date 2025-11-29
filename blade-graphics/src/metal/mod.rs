@@ -605,14 +605,24 @@ impl crate::traits::CommandDevice for Context {
     }
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
+        self.wait_for_result(sp, timeout_ms).is_ok()
+    }
+
+    fn wait_for_result(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<(), crate::WaitError> {
         use metal::MTLCommandBuffer as _;
         let start = time::Instant::now();
         loop {
-            if let metal::MTLCommandBufferStatus::Completed = sp.cmd_buf.status() {
-                return true;
+            match sp.cmd_buf.status() {
+                metal::MTLCommandBufferStatus::Completed => return Ok(()),
+                metal::MTLCommandBufferStatus::Error => {
+                    return Err(crate::WaitError::Other(
+                        "Metal command buffer error".to_string(),
+                    ))
+                }
+                _ => {}
             }
             if start.elapsed().as_millis() >= timeout_ms as u128 {
-                return false;
+                return Err(crate::WaitError::Timeout);
             }
             thread::sleep(time::Duration::from_millis(1));
         }
