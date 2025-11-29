@@ -786,7 +786,17 @@ impl Renderer {
         }
 
         log::info!("Hot reloading shaders");
-        gpu.wait_for(sync_point, !0);
+        match gpu.wait_for_result(sync_point, !0) {
+            Ok(()) => { /* Safe to reload shaders */ }
+            Err(blade_graphics::WaitError::DeviceLost) => {
+                log::error!("Cannot reload shaders: GPU device lost");
+                return false;
+            }
+            Err(e) => {
+                log::warn!("Shader reload wait failed: {:?}", e);
+                // Continue with caution
+            }
+        }
         for task in tasks {
             let _ = task.join();
         }
