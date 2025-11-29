@@ -530,20 +530,36 @@ impl crate::traits::CommandDevice for Context {
     }
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
-        //Note: technically we could get away without locking the queue,
-        // but also this isn't time-sensitive, so it's fine.
-        let timeline_semaphore = self.queue.lock().unwrap().timeline_semaphore;
+        self.wait_for_result(sp, timeout_ms).is_ok()
+    }
+
+    fn wait_for_result(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<(), crate::WaitError> {
+        let timeout_ns = map_timeout(timeout_ms);
+        let timeline_semaphore = {
+            //Note: technically we could get away without locking the queue,
+            // but also this isn't time-sensitive, so it's fine.
+            self.queue.lock().unwrap().timeline_semaphore
+        };
         let semaphores = [timeline_semaphore];
         let semaphore_values = [sp.progress];
-        let wait_info = vk::SemaphoreWaitInfoKHR::default()
+        let wait_info = vk::SemaphoreWaitInfo::builder()
+            .flags(vk::SemaphoreWaitFlags::empty())
             .semaphores(&semaphores)
             .values(&semaphore_values);
-        let timeout_ns = map_timeout(timeout_ms);
-        unsafe {
+
+        match unsafe {
             self.device
                 .timeline_semaphore
                 .wait_semaphores(&wait_info, timeout_ns)
-                .is_ok()
+        } {
+            Ok(()) => Ok(()),
+            Err(vk::Result::ERROR_DEVICE_LOST) => Err(crate::WaitError::DeviceLost),
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Err(crate::WaitError::OutOfDate),
+            Err(vk::Result::TIMEOUT) => Err(crate::WaitError::Timeout),
+            Err(other) => Err(crate::WaitError::Other(format!(
+                "Vulkan error: {:?}",
+                other
+            ))),
         }
     }
 }
