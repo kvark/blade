@@ -555,6 +555,10 @@ impl crate::traits::CommandDevice for Context {
     }
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
+        self.wait_for_result(sp, timeout_ms).is_ok()
+    }
+
+    fn wait_for_result(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<(), crate::WaitError> {
         use glow::HasContext as _;
 
         let gl = self.lock();
@@ -569,8 +573,12 @@ impl crate::traits::CommandDevice for Context {
         let status =
             unsafe { gl.client_wait_sync(sp.fence, glow::SYNC_FLUSH_COMMANDS_BIT, timeout_ns_i32) };
         match status {
-            glow::ALREADY_SIGNALED | glow::CONDITION_SATISFIED => true,
-            _ => false,
+            glow::ALREADY_SIGNALED | glow::CONDITION_SATISFIED => Ok(()),
+            glow::TIMEOUT_EXPIRED => Err(crate::WaitError::Timeout),
+            _ => Err(crate::WaitError::Other(format!(
+                "GL wait status: {}",
+                status
+            ))),
         }
     }
 }
