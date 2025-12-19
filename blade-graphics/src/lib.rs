@@ -126,6 +126,8 @@ pub struct Capabilities {
     pub ray_query: ShaderVisibility,
     /// Bit mask of supported MSAA sample counts.
     pub sample_count_mask: u32,
+    /// Support for dual-source blending.
+    pub dual_source_blending: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -913,6 +915,14 @@ pub enum BlendFactor {
     Constant,
     /// 1.0 - Constant
     OneMinusConstant,
+    /// S1.component
+    Src1,
+    /// 1.0 - S1.component
+    OneMinusSrc1,
+    /// S1.alpha
+    Src1Alpha,
+    /// 1.0 - S1.alpha
+    OneMinusSrc1Alpha,
 }
 
 /// Alpha blend operation.

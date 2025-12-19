@@ -21,6 +21,10 @@ fn map_blend_factor(factor: crate::BlendFactor) -> metal::MTLBlendFactor {
         Bf::Constant => Mbf::BlendColor,
         Bf::OneMinusConstant => Mbf::OneMinusBlendColor,
         Bf::SrcAlphaSaturated => Mbf::SourceAlphaSaturated,
+        Bf::Src1 => Mbf::Source1Color,
+        Bf::OneMinusSrc1 => Mbf::OneMinusSource1Color,
+        Bf::Src1Alpha => Mbf::Source1Alpha,
+        Bf::OneMinusSrc1Alpha => Mbf::OneMinusSource1Alpha,
     }
 }
 

@@ -586,6 +586,9 @@ impl crate::BlendFactor {
             Self::SrcAlphaSaturated => glow::SRC_ALPHA_SATURATE,
             Self::Constant => glow::CONSTANT_ALPHA,
             Self::OneMinusConstant => glow::ONE_MINUS_CONSTANT_ALPHA,
+            Self::Src1 | Self::OneMinusSrc1 | Self::Src1Alpha | Self::OneMinusSrc1Alpha => {
+                panic!("Dual-source blending is not supported on the GLES backend")
+            }
         }
     }
 }

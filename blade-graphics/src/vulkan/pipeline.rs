@@ -568,6 +568,12 @@ impl crate::traits::ShaderDevice for super::Context {
             let mut vk_attachment = vk::PipelineColorBlendAttachmentState::default()
                 .color_write_mask(vk::ColorComponentFlags::from_raw(ct.write_mask.bits()));
             if let Some(ref blend) = ct.blend {
+                let uses_dual_source = blend_component_uses_dual_source(&blend.color)
+                    || blend_component_uses_dual_source(&blend.alpha);
+                if uses_dual_source && !self.dual_source_blending {
+                    panic!("Dual-source blending is not supported by this Vulkan device");
+                }
+
                 let (color_op, color_src, color_dst) = map_blend_component(&blend.color);
                 let (alpha_op, alpha_src, alpha_dst) = map_blend_component(&blend.alpha);
                 vk_attachment = vk_attachment
@@ -629,6 +635,17 @@ impl crate::traits::ShaderDevice for super::Context {
             self.device.core.destroy_pipeline(pipeline.raw, None);
         }
     }
+}
+
+fn blend_component_uses_dual_source(component: &crate::BlendComponent) -> bool {
+    use crate::BlendFactor as Bf;
+    matches!(
+        component.src_factor,
+        Bf::Src1 | Bf::OneMinusSrc1 | Bf::Src1Alpha | Bf::OneMinusSrc1Alpha
+    ) || matches!(
+        component.dst_factor,
+        Bf::Src1 | Bf::OneMinusSrc1 | Bf::Src1Alpha | Bf::OneMinusSrc1Alpha
+    )
 }
 
 fn map_shader_visibility(visibility: crate::ShaderVisibility) -> vk::ShaderStageFlags {
@@ -734,6 +751,10 @@ fn map_blend_factor(factor: crate::BlendFactor) -> vk::BlendFactor {
         Bf::SrcAlphaSaturated => vk::BlendFactor::SRC_ALPHA_SATURATE,
         Bf::Constant => vk::BlendFactor::CONSTANT_COLOR,
         Bf::OneMinusConstant => vk::BlendFactor::ONE_MINUS_CONSTANT_COLOR,
+        Bf::Src1 => vk::BlendFactor::SRC1_COLOR,
+        Bf::OneMinusSrc1 => vk::BlendFactor::ONE_MINUS_SRC1_COLOR,
+        Bf::Src1Alpha => vk::BlendFactor::SRC1_ALPHA,
+        Bf::OneMinusSrc1Alpha => vk::BlendFactor::ONE_MINUS_SRC1_ALPHA,
     }
 }
 
