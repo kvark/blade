@@ -925,6 +925,18 @@ pub enum BlendFactor {
     OneMinusSrc1Alpha,
 }
 
+impl BlendFactor {
+    const fn uses_dual_source(&self) -> bool {
+        matches!(
+            self,
+            BlendFactor::Src1
+                | BlendFactor::OneMinusSrc1
+                | BlendFactor::Src1Alpha
+                | BlendFactor::OneMinusSrc1Alpha
+        )
+    }
+}
+
 /// Alpha blend operation.
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
 pub enum BlendOperation {
@@ -974,6 +986,10 @@ impl BlendComponent {
         dst_factor: BlendFactor::One,
         operation: BlendOperation::Add,
     };
+
+    const fn uses_dual_source(&self) -> bool {
+        self.src_factor.uses_dual_source() || self.dst_factor.uses_dual_source()
+    }
 }
 
 impl Default for BlendComponent {
@@ -1020,6 +1036,10 @@ impl BlendState {
         color: BlendComponent::ADDITIVE,
         alpha: BlendComponent::ADDITIVE,
     };
+
+    const fn uses_dual_source(&self) -> bool {
+        self.color.uses_dual_source() || self.alpha.uses_dual_source()
+    }
 }
 
 bitflags::bitflags! {
