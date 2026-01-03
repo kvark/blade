@@ -532,6 +532,7 @@ impl Context {
                 .map(|v| 1 << v)
                 .filter(|&count| device.supportsTextureSampleCount(count as _))
                 .sum(),
+            dual_source_blending: true,
         }
     }
 

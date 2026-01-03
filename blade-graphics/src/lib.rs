@@ -126,6 +126,8 @@ pub struct Capabilities {
     pub ray_query: ShaderVisibility,
     /// Bit mask of supported MSAA sample counts.
     pub sample_count_mask: u32,
+    /// Support for dual-source blending.
+    pub dual_source_blending: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -913,6 +915,26 @@ pub enum BlendFactor {
     Constant,
     /// 1.0 - Constant
     OneMinusConstant,
+    /// S1.component
+    Src1,
+    /// 1.0 - S1.component
+    OneMinusSrc1,
+    /// S1.alpha
+    Src1Alpha,
+    /// 1.0 - S1.alpha
+    OneMinusSrc1Alpha,
+}
+
+impl BlendFactor {
+    const fn uses_dual_source(&self) -> bool {
+        matches!(
+            self,
+            BlendFactor::Src1
+                | BlendFactor::OneMinusSrc1
+                | BlendFactor::Src1Alpha
+                | BlendFactor::OneMinusSrc1Alpha
+        )
+    }
 }
 
 /// Alpha blend operation.
@@ -964,6 +986,10 @@ impl BlendComponent {
         dst_factor: BlendFactor::One,
         operation: BlendOperation::Add,
     };
+
+    const fn uses_dual_source(&self) -> bool {
+        self.src_factor.uses_dual_source() || self.dst_factor.uses_dual_source()
+    }
 }
 
 impl Default for BlendComponent {
@@ -1010,6 +1036,10 @@ impl BlendState {
         color: BlendComponent::ADDITIVE,
         alpha: BlendComponent::ADDITIVE,
     };
+
+    const fn uses_dual_source(&self) -> bool {
+        self.color.uses_dual_source() || self.alpha.uses_dual_source()
+    }
 }
 
 bitflags::bitflags! {

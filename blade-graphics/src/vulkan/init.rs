@@ -50,6 +50,7 @@ struct AdapterCapabilities {
     full_screen_exclusive: bool,
     external_memory: bool,
     timing: bool,
+    dual_source_blending: bool,
     bugs: SystemBugs,
 }
 
@@ -160,6 +161,8 @@ unsafe fn inspect_adapter(
     instance
         .get_physical_device_properties2
         .get_physical_device_features2(phd, &mut features2_khr);
+
+    let dual_source_blending = features2_khr.features.dual_src_blend != 0;
 
     if inline_uniform_block_properties.max_inline_uniform_block_size
         < crate::limits::PLAIN_DATA_SIZE
@@ -280,6 +283,7 @@ unsafe fn inspect_adapter(
         full_screen_exclusive,
         external_memory,
         timing,
+        dual_source_blending,
         bugs,
     })
 }
@@ -742,6 +746,7 @@ impl super::Context {
                     .properties
                     .limits
                     .framebuffer_depth_sample_counts,
+            dual_source_blending: capabilities.dual_source_blending,
             instance,
             entry,
         })
@@ -766,6 +771,7 @@ impl super::Context {
                 None => crate::ShaderVisibility::empty(),
             },
             sample_count_mask: self.sample_count_flags.as_raw(),
+            dual_source_blending: self.dual_source_blending,
         }
     }
 
