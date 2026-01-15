@@ -362,7 +362,8 @@ impl super::Context {
                     layer as *mut ffi::c_void
                 };
                 window_ptr
-            }
+            },
+            Rwh::OhosNdk(handle) => handle.native_window.as_ptr(),
             other => {
                 panic!("Unable to connect with RWH {:?}", other);
             }
