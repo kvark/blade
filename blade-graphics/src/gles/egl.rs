@@ -362,7 +362,7 @@ impl super::Context {
                     layer as *mut ffi::c_void
                 };
                 window_ptr
-            },
+            }
             Rwh::OhosNdk(handle) => handle.native_window.as_ptr(),
             other => {
                 panic!("Unable to connect with RWH {:?}", other);
@@ -414,25 +414,43 @@ impl super::Context {
             crate::ColorSpace::Srgb => crate::TextureFormat::Rgba8Unorm,
         };
 
-        surface.platform.swapchain = Some(Swapchain {
-            // Careful, we can still be in 1.4 version even if `upcast` succeeds
-            surface: match inner.egl.instance.upcast::<egl::EGL1_5>() {
-                Some(egl) => {
-                    let attributes_usize = attributes
-                        .into_iter()
-                        .map(|v| v as usize)
-                        .collect::<Vec<_>>();
+        // Careful, we can still be in 1.4 version even if `upcast` succeeds
+        let surface_window = match inner.egl.instance.upcast::<egl::EGL1_5>() {
+            Some(egl1_5) => {
+                // ohos can upcast to 1.5 but it will return nullptr with create_platform_window_surface.
+                // And using 1.4 succeed.
+                if cfg!(target_env = "ohos") {
                     unsafe {
-                        egl.create_platform_window_surface(
-                            inner.egl.display,
-                            inner.egl.config,
-                            native_window_ptr,
-                            &attributes_usize,
-                        )
-                        .unwrap()
+                        inner
+                            .egl
+                            .instance
+                            .create_window_surface(
+                                inner.egl.display,
+                                inner.egl.config,
+                                native_window_ptr,
+                                Some(&attributes),
+                            )
+                            .unwrap()
+                    }
+                } else {
+                    // Use platform window surface for EGL 1.5 (except on ohos)
+                    let attributes_usize: Vec<usize> =
+                        attributes.iter().map(|&v| v as usize).collect();
+                    unsafe {
+                        egl1_5
+                            .create_platform_window_surface(
+                                inner.egl.display,
+                                inner.egl.config,
+                                native_window_ptr,
+                                &attributes_usize,
+                            )
+                            .unwrap()
                     }
                 }
-                _ => unsafe {
+            }
+            None => {
+                // Fallback to standard window surface for ohos or non-EGL1.5
+                unsafe {
                     inner
                         .egl
                         .instance
@@ -443,8 +461,12 @@ impl super::Context {
                             Some(&attributes),
                         )
                         .unwrap()
-                },
-            },
+                }
+            }
+        };
+
+        surface.platform.swapchain = Some(Swapchain {
+            surface: surface_window,
             extent: config.size,
             info: crate::SurfaceInfo { format, alpha },
             swap_interval: match config.display_sync {
