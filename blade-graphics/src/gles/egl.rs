@@ -387,7 +387,7 @@ impl super::Context {
             // We don't want any of the buffering done by the driver, because we
             // manage a swapchain on our side.
             // Some drivers just fail on surface creation seeing `EGL_SINGLE_BUFFER`.
-            if cfg!(any(target_os = "android", target_os = "macos", windows)) {
+            if cfg!(any(target_os = "android", target_os = "macos", windows, target_env = "ohos")) {
                 egl::BACK_BUFFER
             } else {
                 egl::SINGLE_BUFFER
@@ -876,7 +876,7 @@ fn choose_config(
             ][..],
         ),
         ("presentation", &[egl::SURFACE_TYPE, egl::WINDOW_BIT][..]),
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_env = "ohos")))]
         (
             "native-render",
             &[egl::NATIVE_RENDERABLE, egl::TRUE as _][..],
