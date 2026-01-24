@@ -690,7 +690,7 @@ impl Device {
     fn map_acceleration_structure_meshes(
         &self,
         meshes: &[crate::AccelerationStructureMesh],
-    ) -> BottomLevelAccelerationStructureInput {
+    ) -> BottomLevelAccelerationStructureInput<'_> {
         let mut total_primitive_count = 0;
         let mut max_primitive_counts = Vec::with_capacity(meshes.len());
         let mut build_range_infos = Vec::with_capacity(meshes.len());
