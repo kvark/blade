@@ -387,7 +387,12 @@ impl super::Context {
             // We don't want any of the buffering done by the driver, because we
             // manage a swapchain on our side.
             // Some drivers just fail on surface creation seeing `EGL_SINGLE_BUFFER`.
-            if cfg!(any(target_os = "android", target_os = "macos", windows, target_env = "ohos")) {
+            if cfg!(any(
+                target_os = "android",
+                target_os = "macos",
+                windows,
+                target_env = "ohos"
+            )) {
                 egl::BACK_BUFFER
             } else {
                 egl::SINGLE_BUFFER
