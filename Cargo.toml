@@ -21,7 +21,7 @@ glam = { version = "0.30", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
-naga = { version = "25.0", features = ["wgsl-in"] }
+naga = { version = "27.0", features = ["wgsl-in", "termcolor"] }
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.27", features = ["derive"] }

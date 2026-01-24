@@ -18,7 +18,7 @@ impl super::Context {
         desc: super::ShaderDesc,
     ) -> Result<super::Shader, &'static str> {
         let module = naga::front::wgsl::parse_str(desc.source).map_err(|e| {
-            e.emit_to_stderr_with_path(desc.source, "");
+            eprintln!("{}", e.emit_to_string_with_path(desc.source, ""));
             "compilation failed"
         })?;
 
@@ -83,7 +83,7 @@ impl super::Shader {
         constants: &super::PipelineConstants,
     ) -> (naga::Module, Cow<'a, naga::valid::ModuleInfo>) {
         let (module, info) =
-            naga::back::pipeline_constants::process_overrides(&self.module, &self.info, constants)
+            naga::back::pipeline_constants::process_overrides(&self.module, &self.info, None, constants)
                 .unwrap();
         (module.into_owned(), info)
     }
