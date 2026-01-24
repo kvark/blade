@@ -1,5 +1,5 @@
 use ash::vk;
-use std::{str, time::Duration};
+use std::{iter, ptr, str, time::Duration};
 
 impl super::CrashHandler {
     fn add_marker(&mut self, marker: &str) -> u32 {
@@ -32,7 +32,7 @@ impl super::PipelineContext<'_> {
     fn write<T>(&mut self, index: u32, value: T) {
         let offset = self.template_offsets[index as usize];
         unsafe {
-            std::ptr::write(
+            ptr::write(
                 self.update_data.as_mut_ptr().offset(offset as isize) as *mut T,
                 value,
             )
@@ -45,7 +45,7 @@ impl super::PipelineContext<'_> {
         let base_ptr =
             unsafe { self.update_data.as_mut_ptr().offset(base_offset as isize) as *mut I::Item };
         for (i, value) in iter.enumerate() {
-            unsafe { std::ptr::write(base_ptr.add(i), value) };
+            unsafe { ptr::write(base_ptr.add(i), value) };
         }
     }
 }
@@ -69,13 +69,18 @@ impl crate::ShaderBindable for super::TextureView {
 }
 impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::TextureArray<N> {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        assert!(self.data.len() <= N as usize);
         ctx.write_array(
             index,
-            self.data.iter().map(|view| vk::DescriptorImageInfo {
-                sampler: vk::Sampler::null(),
-                image_view: view.raw,
-                image_layout: vk::ImageLayout::GENERAL,
-            }),
+            self.data
+                .iter()
+                .map(|view| vk::DescriptorImageInfo {
+                    sampler: vk::Sampler::null(),
+                    image_view: view.raw,
+                    image_layout: vk::ImageLayout::GENERAL,
+                })
+                .cycle()
+                .take(N as usize),
         );
     }
 }
@@ -105,13 +110,18 @@ impl crate::ShaderBindable for crate::BufferPiece {
 }
 impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
+        assert!(self.data.len() <= N as usize);
         ctx.write_array(
             index,
-            self.data.iter().map(|piece| vk::DescriptorBufferInfo {
-                buffer: piece.buffer.raw,
-                offset: piece.offset,
-                range: vk::WHOLE_SIZE,
-            }),
+            self.data
+                .iter()
+                .map(|piece| vk::DescriptorBufferInfo {
+                    buffer: piece.buffer.raw,
+                    offset: piece.offset,
+                    range: vk::WHOLE_SIZE,
+                })
+                .cycle()
+                .take(N as usize),
         );
     }
 }
