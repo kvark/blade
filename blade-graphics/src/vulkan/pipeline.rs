@@ -95,8 +95,14 @@ impl super::Context {
             let mut hasher = DefaultHasher::new();
             sf.shader.source.hash(&mut hasher);
             file_path = temp_dir.join(format!("{}-{:x}.wgsl", sf.entry_point, hasher.finish()));
-            log::debug!("Dumping processed shader code to: {}", file_path.display());
+            log::info!("Dumping processed shader code to: {}", file_path.display());
             let _ = fs::write(&file_path, &sf.shader.source);
+
+            // Dump Naga Module IR alongside the WGSL for easier debugging.
+            let naga_ir_path =
+                temp_dir.join(format!("{}-{:x}.txt", sf.entry_point, hasher.finish()));
+            log::info!("Dumping Naga module IR to: {}", naga_ir_path.display());
+            let _ = fs::write(&naga_ir_path, format!("{:#?}\n", &module));
 
             naga_options_debug = naga_options_base.clone();
             file_name_str = file_path.to_string_lossy().into_owned();

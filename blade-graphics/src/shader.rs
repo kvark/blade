@@ -82,9 +82,13 @@ impl super::Shader {
         &'a self,
         constants: &super::PipelineConstants,
     ) -> (naga::Module, Cow<'a, naga::valid::ModuleInfo>) {
-        let (module, info) =
-            naga::back::pipeline_constants::process_overrides(&self.module, &self.info, None, constants)
-                .unwrap();
+        let (module, info) = naga::back::pipeline_constants::process_overrides(
+            &self.module,
+            &self.info,
+            None,
+            constants,
+        )
+        .unwrap();
         (module.into_owned(), info)
     }
 
