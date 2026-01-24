@@ -18,24 +18,23 @@ impl super::Context {
         let mut binding_map = spv::BindingMap::default();
         for (group_index, layout) in data_layouts.iter().enumerate() {
             for (binding_index, &(_, binding)) in layout.bindings.iter().enumerate() {
-                match binding {
+                let binding_array_size = match binding {
                     crate::ShaderBinding::TextureArray { count }
-                    | crate::ShaderBinding::BufferArray { count } => {
-                        let rb = naga::ResourceBinding {
-                            group: group_index as u32,
-                            binding: binding_index as u32,
-                        };
-                        binding_map.insert(
-                            rb,
-                            spv::BindingInfo {
-                                descriptor_set: group_index as u32,
-                                binding: binding_index as u32,
-                                binding_array_size: Some(count),
-                            },
-                        );
-                    }
-                    _ => {}
-                }
+                    | crate::ShaderBinding::BufferArray { count } => Some(count),
+                    _ => None,
+                };
+                let rb = naga::ResourceBinding {
+                    group: group_index as u32,
+                    binding: binding_index as u32,
+                };
+                binding_map.insert(
+                    rb,
+                    spv::BindingInfo {
+                        descriptor_set: group_index as u32,
+                        binding: binding_index as u32,
+                        binding_array_size,
+                    },
+                );
             }
         }
 
