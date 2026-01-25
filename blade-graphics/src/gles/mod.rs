@@ -444,6 +444,7 @@ struct ExecutionContext {
 impl Context {
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
+            binding_array: false,
             ray_query: crate::ShaderVisibility::empty(),
             sample_count_mask: 0x1 | 0x4, //TODO: accurate info
             dual_source_blending: false,
