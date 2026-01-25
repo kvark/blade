@@ -102,6 +102,13 @@ impl crate::ShaderBindable for crate::AccelerationStructure {
         }
     }
 }
+impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable
+    for &'a crate::AccelerationStructureArray<N>
+{
+    fn bind_to(&self, _ctx: &mut super::PipelineContext, _index: u32) {
+        unimplemented!()
+    }
+}
 
 impl super::TimingData {
     fn add(&mut self, label: &str) -> usize {

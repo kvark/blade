@@ -157,7 +157,8 @@ fn make_pipeline_layout(
                     num_buffers - 1
                 }
                 crate::ShaderBinding::TextureArray { .. }
-                | crate::ShaderBinding::BufferArray { .. } => unimplemented!(),
+                | crate::ShaderBinding::BufferArray { .. }
+                | crate::ShaderBinding::AccelerationStructureArray { .. } => unimplemented!(),
                 crate::ShaderBinding::AccelerationStructure => {
                     num_buffers += 1;
                     num_buffers - 1
@@ -268,7 +269,8 @@ impl super::Context {
                         ..Default::default()
                     },
                     crate::ShaderBinding::TextureArray { .. }
-                    | crate::ShaderBinding::BufferArray { .. } => todo!(),
+                    | crate::ShaderBinding::BufferArray { .. }
+                    | crate::ShaderBinding::AccelerationStructureArray { .. } => todo!(),
                 };
                 naga_resources.resources.insert(res_binding, bind_target);
             }
