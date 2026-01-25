@@ -291,6 +291,7 @@ impl super::Context {
         };
 
         let pipeline_options = msl::PipelineOptions {
+            entry_point: Some((ep.stage, ep.name.clone())),
             allow_and_force_point_size: flags.contains(ShaderFlags::ALLOW_POINT_SIZE),
             vertex_pulling_transform: false,
             vertex_buffer_mappings: Vec::new(),

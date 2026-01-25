@@ -926,7 +926,7 @@ pub enum BlendFactor {
 }
 
 impl BlendFactor {
-    const fn uses_dual_source(&self) -> bool {
+    pub const fn uses_dual_source(&self) -> bool {
         matches!(
             self,
             BlendFactor::Src1
@@ -987,7 +987,7 @@ impl BlendComponent {
         operation: BlendOperation::Add,
     };
 
-    const fn uses_dual_source(&self) -> bool {
+    pub const fn uses_dual_source(&self) -> bool {
         self.src_factor.uses_dual_source() || self.dst_factor.uses_dual_source()
     }
 }
@@ -1037,7 +1037,7 @@ impl BlendState {
         alpha: BlendComponent::ADDITIVE,
     };
 
-    const fn uses_dual_source(&self) -> bool {
+    pub const fn uses_dual_source(&self) -> bool {
         self.color.uses_dual_source() || self.alpha.uses_dual_source()
     }
 }

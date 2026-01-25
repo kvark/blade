@@ -132,7 +132,7 @@ impl super::CommandEncoder {
         self.raw.take().unwrap()
     }
 
-    pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder {
+    pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder<'_> {
         self.begin_pass(label);
         let raw = objc2::rc::autoreleasepool(|_| unsafe {
             let descriptor = metal::MTLBlitPassDescriptor::new();
@@ -162,7 +162,7 @@ impl super::CommandEncoder {
     pub fn acceleration_structure(
         &mut self,
         label: &str,
-    ) -> super::AccelerationStructureCommandEncoder {
+    ) -> super::AccelerationStructureCommandEncoder<'_> {
         let raw = objc2::rc::autoreleasepool(|_| unsafe {
             let descriptor = metal::MTLAccelerationStructurePassDescriptor::new();
 
@@ -188,7 +188,7 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder {
+    pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder<'_> {
         let raw = objc2::rc::autoreleasepool(|_| unsafe {
             let descriptor = metal::MTLComputePassDescriptor::new();
             if self.enable_dispatch_type {
@@ -222,7 +222,7 @@ impl super::CommandEncoder {
         &mut self,
         label: &str,
         targets: crate::RenderTargetSet,
-    ) -> super::RenderCommandEncoder {
+    ) -> super::RenderCommandEncoder<'_> {
         let raw = objc2::rc::autoreleasepool(|_| {
             let descriptor = unsafe { metal::MTLRenderPassDescriptor::new() };
 
