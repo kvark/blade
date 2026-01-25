@@ -1,3 +1,4 @@
+enable wgpu_ray_query;
 #include "quaternion.inc.wgsl"
 #include "camera.inc.wgsl"
 #include "debug.inc.wgsl"
