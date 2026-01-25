@@ -76,7 +76,10 @@ impl super::Context {
                         }
                         crate::ShaderBinding::TextureArray { .. }
                         | crate::ShaderBinding::BufferArray { .. }
-                        | crate::ShaderBinding::AccelerationStructure => unimplemented!(),
+                        | crate::ShaderBinding::AccelerationStructure
+                        | crate::ShaderBinding::AccelerationStructureArray { .. } => {
+                            unimplemented!()
+                        }
                         crate::ShaderBinding::Plain { .. } => {
                             num_buffers += 1;
                             num_buffers - 1
@@ -248,7 +251,8 @@ impl super::Context {
                         }
                         crate::ShaderBinding::TextureArray { .. }
                         | crate::ShaderBinding::BufferArray { .. }
-                        | crate::ShaderBinding::AccelerationStructure => {
+                        | crate::ShaderBinding::AccelerationStructure
+                        | crate::ShaderBinding::AccelerationStructureArray { .. } => {
                             unimplemented!()
                         }
                         crate::ShaderBinding::Plain { size } => {

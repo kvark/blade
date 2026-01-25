@@ -20,7 +20,8 @@ impl super::Context {
             for (binding_index, &(_, binding)) in layout.bindings.iter().enumerate() {
                 let binding_array_size = match binding {
                     crate::ShaderBinding::TextureArray { count }
-                    | crate::ShaderBinding::BufferArray { count } => Some(count),
+                    | crate::ShaderBinding::BufferArray { count }
+                    | crate::ShaderBinding::AccelerationStructureArray { count } => Some(count),
                     _ => None,
                 };
                 let rb = naga::ResourceBinding {
@@ -51,6 +52,7 @@ impl super::Context {
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
             zero_initialize_workgroup_memory: spv::ZeroInitializeWorkgroupMemoryMode::None,
             force_loop_bounding: false,
+            ray_query_initialization_tracking: true,
             use_storage_input_output_16: false,
             debug_info: None,
         }
@@ -240,6 +242,12 @@ impl super::Context {
                     mem::size_of::<vk::AccelerationStructureKHR>(),
                     1u32,
                     vk::DescriptorBindingFlags::empty(),
+                ),
+                crate::ShaderBinding::AccelerationStructureArray { count } => (
+                    vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                    mem::size_of::<vk::AccelerationStructureKHR>(),
+                    count,
+                    vk::DescriptorBindingFlags::PARTIALLY_BOUND,
                 ),
                 crate::ShaderBinding::Plain { size } => (
                     vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,

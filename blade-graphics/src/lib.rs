@@ -281,6 +281,8 @@ impl<T, const N: ResourceIndex> std::ops::IndexMut<ResourceIndex> for ResourceAr
 }
 pub type BufferArray<const N: ResourceIndex> = ResourceArray<BufferPiece, N>;
 pub type TextureArray<const N: ResourceIndex> = ResourceArray<TextureView, N>;
+pub type AccelerationStructureArray<const N: ResourceIndex> =
+    ResourceArray<AccelerationStructure, N>;
 
 #[derive(Clone, Copy, Debug)]
 pub struct TexturePiece {
@@ -644,6 +646,7 @@ pub enum ShaderBinding {
     Buffer,
     BufferArray { count: u32 },
     AccelerationStructure,
+    AccelerationStructureArray { count: u32 },
     Plain { size: u32 },
 }
 

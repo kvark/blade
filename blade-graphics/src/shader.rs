@@ -28,7 +28,9 @@ impl super::Context {
         let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
         let mut caps = naga::valid::Capabilities::empty();
         caps.set(
-            naga::valid::Capabilities::RAY_QUERY | naga::valid::Capabilities::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING,
+            naga::valid::Capabilities::RAY_QUERY
+                | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING
+                | naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY_NON_UNIFORM_INDEXING,
             !device_caps.ray_query.is_empty(),
         );
         caps.set(
@@ -170,6 +172,7 @@ impl super::Shader {
                             let count = match proto_binding {
                                 crate::ShaderBinding::TextureArray { count } => count,
                                 crate::ShaderBinding::BufferArray { count } => count,
+                                crate::ShaderBinding::AccelerationStructureArray { count } => count,
                                 _ => 0,
                             };
                             let proto = match module.types[base].inner {
@@ -178,6 +181,9 @@ impl super::Shader {
                                 }
                                 naga::TypeInner::Struct { .. } => {
                                     crate::ShaderBinding::BufferArray { count }
+                                }
+                                naga::TypeInner::AccelerationStructure { .. } => {
+                                    crate::ShaderBinding::AccelerationStructureArray { count }
                                 }
                                 ref other => panic!("Unsupported binding array for {:?}", other),
                             };
@@ -275,6 +281,7 @@ impl super::Shader {
                             interpolation: None,
                             sampling: None,
                             blend_src: None,
+                            per_primitive: false,
                         };
                         for (buffer_index, vertex_fetch) in fetch_states.iter().enumerate() {
                             for (attribute_index, &(at_name, _)) in
@@ -307,6 +314,7 @@ impl super::Shader {
                                 interpolation: None,
                                 sampling: None,
                                 blend_src: None,
+                                per_primitive: false,
                             });
                             location += 1;
                         }

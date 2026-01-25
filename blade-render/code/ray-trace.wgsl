@@ -1,3 +1,4 @@
+enable wgpu_ray_query;
 #include "quaternion.inc.wgsl"
 #include "random.inc.wgsl"
 #include "env-importance.inc.wgsl"
