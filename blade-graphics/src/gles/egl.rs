@@ -363,6 +363,7 @@ impl super::Context {
                 };
                 window_ptr
             }
+            Rwh::OhosNdk(handle) => handle.native_window.as_ptr(),
             other => {
                 panic!("Unable to connect with RWH {:?}", other);
             }
@@ -386,7 +387,12 @@ impl super::Context {
             // We don't want any of the buffering done by the driver, because we
             // manage a swapchain on our side.
             // Some drivers just fail on surface creation seeing `EGL_SINGLE_BUFFER`.
-            if cfg!(any(target_os = "android", target_os = "macos", windows)) {
+            if cfg!(any(
+                target_os = "android",
+                target_os = "macos",
+                windows,
+                target_env = "ohos"
+            )) {
                 egl::BACK_BUFFER
             } else {
                 egl::SINGLE_BUFFER
@@ -413,25 +419,23 @@ impl super::Context {
             crate::ColorSpace::Srgb => crate::TextureFormat::Rgba8Unorm,
         };
 
-        surface.platform.swapchain = Some(Swapchain {
-            // Careful, we can still be in 1.4 version even if `upcast` succeeds
-            surface: match inner.egl.instance.upcast::<egl::EGL1_5>() {
-                Some(egl) => {
-                    let attributes_usize = attributes
-                        .into_iter()
-                        .map(|v| v as usize)
-                        .collect::<Vec<_>>();
-                    unsafe {
-                        egl.create_platform_window_surface(
-                            inner.egl.display,
-                            inner.egl.config,
-                            native_window_ptr,
-                            &attributes_usize,
-                        )
-                        .unwrap()
-                    }
-                }
-                _ => unsafe {
+        // Careful, we can still be in 1.4 version even if `upcast` succeeds
+        let surface_window = match inner.egl.instance.upcast::<egl::EGL1_5>() {
+            Some(egl1_5) if !cfg!(target_env = "ohos") => unsafe {
+                inner
+                    .egl
+                    .instance
+                    .create_window_surface(
+                        inner.egl.display,
+                        inner.egl.config,
+                        native_window_ptr,
+                        Some(&attributes),
+                    )
+                    .unwrap()
+            },
+            _ => {
+                // Fallback to standard window surface for ohos or non-EGL1.5
+                unsafe {
                     inner
                         .egl
                         .instance
@@ -442,8 +446,12 @@ impl super::Context {
                             Some(&attributes),
                         )
                         .unwrap()
-                },
-            },
+                }
+            }
+        };
+
+        surface.platform.swapchain = Some(Swapchain {
+            surface: surface_window,
             extent: config.size,
             info: crate::SurfaceInfo { format, alpha },
             swap_interval: match config.display_sync {
@@ -853,7 +861,7 @@ fn choose_config(
             ][..],
         ),
         ("presentation", &[egl::SURFACE_TYPE, egl::WINDOW_BIT][..]),
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_env = "ohos")))]
         (
             "native-render",
             &[egl::NATIVE_RENDERABLE, egl::TRUE as _][..],
