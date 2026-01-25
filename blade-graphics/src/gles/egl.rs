@@ -421,39 +421,19 @@ impl super::Context {
 
         // Careful, we can still be in 1.4 version even if `upcast` succeeds
         let surface_window = match inner.egl.instance.upcast::<egl::EGL1_5>() {
-            Some(egl1_5) => {
-                // ohos can upcast to 1.5 but it will return nullptr with create_platform_window_surface.
-                // And using 1.4 succeed.
-                if cfg!(target_env = "ohos") {
-                    unsafe {
-                        inner
-                            .egl
-                            .instance
-                            .create_window_surface(
-                                inner.egl.display,
-                                inner.egl.config,
-                                native_window_ptr,
-                                Some(&attributes),
-                            )
-                            .unwrap()
-                    }
-                } else {
-                    // Use platform window surface for EGL 1.5 (except on ohos)
-                    let attributes_usize: Vec<usize> =
-                        attributes.iter().map(|&v| v as usize).collect();
-                    unsafe {
-                        egl1_5
-                            .create_platform_window_surface(
-                                inner.egl.display,
-                                inner.egl.config,
-                                native_window_ptr,
-                                &attributes_usize,
-                            )
-                            .unwrap()
-                    }
-                }
-            }
-            None => {
+            Some(egl1_5) if !cfg!(target_env = "ohos") => unsafe {
+                inner
+                    .egl
+                    .instance
+                    .create_window_surface(
+                        inner.egl.display,
+                        inner.egl.config,
+                        native_window_ptr,
+                        Some(&attributes),
+                    )
+                    .unwrap()
+            },
+            _ => {
                 // Fallback to standard window surface for ohos or non-EGL1.5
                 unsafe {
                     inner
