@@ -122,7 +122,9 @@ impl From<PlatformError> for NotSupportedError {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Capabilities {
-    /// Which shader stages support ray queries
+    /// Support binding arrays of handles.
+    pub binding_array: bool,
+    /// Which shader stages support ray queries.
     pub ray_query: ShaderVisibility,
     /// Bit mask of supported MSAA sample counts.
     pub sample_count_mask: u32,

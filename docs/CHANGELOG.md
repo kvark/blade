@@ -1,5 +1,9 @@
 Changelog for *Blade* project
 
+## blade-graphics-0.8 (TBD)
+- graphics
+  - separate `Capabilities` flag for binding arrays, including TLAS arrays
+
 ## blade-graphics-0.7 (27 Sep 2025)
 
 - graphics

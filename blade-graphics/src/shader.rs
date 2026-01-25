@@ -28,9 +28,15 @@ impl super::Context {
         let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
         let mut caps = naga::valid::Capabilities::empty();
         caps.set(
-            naga::valid::Capabilities::RAY_QUERY
+            naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY
+                | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY
                 | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING
                 | naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY_NON_UNIFORM_INDEXING,
+            device_caps.binding_array,
+        );
+        caps.set(
+            naga::valid::Capabilities::RAY_QUERY
+                | naga::valid::Capabilities::ACCELERATION_STRUCTURE_BINDING_ARRAY,
             !device_caps.ray_query.is_empty(),
         );
         caps.set(

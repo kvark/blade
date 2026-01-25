@@ -159,6 +159,7 @@ pub struct Context {
     min_buffer_alignment: u64,
     sample_count_flags: vk::SampleCountFlags,
     dual_source_blending: bool,
+    binding_array: bool,
     instance: Instance,
     entry: ash::Entry,
 }
