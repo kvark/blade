@@ -540,6 +540,16 @@ impl super::Context {
                     .push_next(&mut khr_ray_query);
             }
 
+            let mut core_features = vk::PhysicalDeviceFeatures::default();
+            if capabilities.dual_source_blending {
+                core_features.dual_src_blend = vk::TRUE;
+            }
+
+            let mut device_features2 =
+                vk::PhysicalDeviceFeatures2::default().features(core_features);
+
+            device_create_info = device_create_info.push_next(&mut device_features2);
+
             instance
                 .core
                 .create_device(physical_device, &device_create_info, None)
