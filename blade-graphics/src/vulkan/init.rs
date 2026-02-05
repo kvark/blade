@@ -1,6 +1,6 @@
 use ash::{amd, ext, khr, vk};
 use naga::back::spv;
-use std::{ffi, fs, sync::Mutex};
+use std::{env, ffi, fs, sync::Mutex};
 
 use crate::NotSupportedError;
 
@@ -62,12 +62,27 @@ fn is_nvidia_prime_forced() -> bool {
     }
 }
 
+fn env_flag(name: &str) -> bool {
+    match env::var(name) {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(env::VarError::NotPresent) => false,
+        Err(error) => {
+            log::warn!("Failed to read {name}: {error}");
+            false
+        }
+    }
+}
+
 unsafe fn inspect_adapter(
     phd: vk::PhysicalDevice,
     instance: &super::Instance,
     driver_api_version: u32,
     desc: &crate::ContextDesc,
 ) -> Option<AdapterCapabilities> {
+    let ray_tracing_enabled = !env_flag("BLADE_DISABLE_RAY_TRACING");
     let mut inline_uniform_block_properties =
         vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
     let mut timeline_semaphore_properties =
@@ -209,7 +224,10 @@ unsafe fn inspect_adapter(
         true
     };
 
-    let ray_tracing = if !supported_extensions.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME)
+    let ray_tracing = if !ray_tracing_enabled {
+        log::info!("Ray tracing disabled via BLADE_DISABLE_RAY_TRACING");
+        None
+    } else if !supported_extensions.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME)
         || !supported_extensions.contains(&vk::KHR_RAY_QUERY_NAME)
     {
         log::info!("No ray tracing extensions are supported");
