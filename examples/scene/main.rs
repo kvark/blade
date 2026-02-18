@@ -186,6 +186,7 @@ impl Example {
         let context = Arc::new(unsafe {
             gpu::Context::init(gpu::ContextDesc {
                 presentation: true,
+                ray_tracing: true,
                 validation: cfg!(debug_assertions),
                 capture: true,
                 ..Default::default()
