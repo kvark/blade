@@ -321,7 +321,7 @@ impl super::Context {
             });
 
         let ep = &module.entry_points[ep_index];
-        // MSL compilation with per_entry_point_map produces info with only one entry point at index 0
+        // MSL compilation with PipelineOptions::entry_point specified produces info with only one entry point at index 0
         let name = info.entry_point_names[0].as_ref().unwrap();
         let wg_size = metal::MTLSize {
             width: ep.workgroup_size[0] as _,
