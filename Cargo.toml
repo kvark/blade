@@ -21,7 +21,7 @@ glam = { version = "0.30", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
-naga = { version = "27.0", features = ["wgsl-in", "termcolor"] }
+naga = { git = "https://github.com/gfx-rs/wgpu", rev = "760032a20d6d742d1df28136f36a673ab2584929", features = ["wgsl-in", "termcolor"] }
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.27", features = ["derive"] }

@@ -28,6 +28,9 @@ impl<'a, const N: ResourceIndex> HasShaderBinding for &'a super::TextureArray<N>
 impl HasShaderBinding for super::AccelerationStructure {
     const TYPE: ShaderBinding = ShaderBinding::AccelerationStructure;
 }
+impl<'a, const N: ResourceIndex> HasShaderBinding for &'a super::AccelerationStructureArray<N> {
+    const TYPE: ShaderBinding = ShaderBinding::AccelerationStructureArray { count: N };
+}
 
 pub trait HasVertexAttribute {
     const FORMAT: VertexFormat;

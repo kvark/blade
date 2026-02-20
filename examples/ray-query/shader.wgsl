@@ -1,3 +1,4 @@
+enable wgpu_ray_query;
 const MAX_BOUNCES: i32 = 3;
 
 struct Parameters {

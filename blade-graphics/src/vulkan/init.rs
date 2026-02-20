@@ -44,6 +44,7 @@ struct AdapterCapabilities {
     device_information: crate::DeviceInformation,
     queue_family_index: u32,
     layered: bool,
+    binding_array: bool,
     ray_tracing: Option<RayTracingCapabilities>,
     buffer_marker: bool,
     shader_info: bool,
@@ -209,6 +210,14 @@ unsafe fn inspect_adapter(
         true
     };
 
+    let supports_descriptor_indexing = api_version >= vk::API_VERSION_1_2
+        || supported_extensions.contains(&vk::EXT_DESCRIPTOR_INDEXING_NAME);
+    let binding_array = supports_descriptor_indexing
+        && descriptor_indexing_features.descriptor_binding_partially_bound == vk::TRUE
+        && descriptor_indexing_features.shader_storage_buffer_array_non_uniform_indexing
+            == vk::TRUE
+        && descriptor_indexing_features.shader_sampled_image_array_non_uniform_indexing == vk::TRUE;
+
     let ray_tracing = if !supported_extensions.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME)
         || !supported_extensions.contains(&vk::KHR_RAY_QUERY_NAME)
     {
@@ -277,6 +286,7 @@ unsafe fn inspect_adapter(
         device_information,
         queue_family_index,
         layered: portability_subset_properties.min_vertex_input_binding_stride_alignment != 0,
+        binding_array,
         ray_tracing,
         buffer_marker,
         shader_info,
@@ -457,9 +467,13 @@ impl super::Context {
                 log::info!("Enabling Vulkan Portability");
                 device_extensions.push(vk::KHR_PORTABILITY_SUBSET_NAME);
             }
+            let needs_descriptor_indexing =
+                capabilities.binding_array || capabilities.ray_tracing.is_some();
+            if needs_descriptor_indexing && capabilities.api_version < vk::API_VERSION_1_2 {
+                device_extensions.push(vk::EXT_DESCRIPTOR_INDEXING_NAME);
+            }
             if capabilities.ray_tracing.is_some() {
                 if capabilities.api_version < vk::API_VERSION_1_2 {
-                    device_extensions.push(vk::EXT_DESCRIPTOR_INDEXING_NAME);
                     device_extensions.push(vk::KHR_BUFFER_DEVICE_ADDRESS_NAME);
                     device_extensions.push(vk::KHR_SHADER_FLOAT_CONTROLS_NAME);
                     device_extensions.push(vk::KHR_SPIRV_1_4_NAME);
@@ -514,13 +528,16 @@ impl super::Context {
             let mut khr_buffer_device_address;
             let mut khr_acceleration_structure;
             let mut khr_ray_query;
-            if capabilities.ray_tracing.is_some() {
+            if needs_descriptor_indexing {
                 ext_descriptor_indexing = vk::PhysicalDeviceDescriptorIndexingFeaturesEXT {
                     shader_storage_buffer_array_non_uniform_indexing: vk::TRUE,
                     shader_sampled_image_array_non_uniform_indexing: vk::TRUE,
                     descriptor_binding_partially_bound: vk::TRUE,
                     ..Default::default()
                 };
+                device_create_info = device_create_info.push_next(&mut ext_descriptor_indexing);
+            }
+            if capabilities.ray_tracing.is_some() {
                 khr_buffer_device_address = vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR {
                     buffer_device_address: vk::TRUE,
                     ..Default::default()
@@ -534,7 +551,6 @@ impl super::Context {
                     ..Default::default()
                 };
                 device_create_info = device_create_info
-                    .push_next(&mut ext_descriptor_indexing)
                     .push_next(&mut khr_buffer_device_address)
                     .push_next(&mut khr_acceleration_structure)
                     .push_next(&mut khr_ray_query);
@@ -757,6 +773,7 @@ impl super::Context {
                     .limits
                     .framebuffer_depth_sample_counts,
             dual_source_blending: capabilities.dual_source_blending,
+            binding_array: capabilities.binding_array,
             instance,
             entry,
         })
@@ -776,6 +793,7 @@ impl super::Context {
 
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
+            binding_array: self.binding_array,
             ray_query: match self.device.ray_tracing {
                 Some(_) => crate::ShaderVisibility::all(),
                 None => crate::ShaderVisibility::empty(),

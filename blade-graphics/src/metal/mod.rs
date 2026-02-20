@@ -519,6 +519,7 @@ impl Context {
         let device = self.device.lock().unwrap();
 
         crate::Capabilities {
+            binding_array: false,
             ray_query: if device.supportsFamily(metal::MTLGPUFamily::Apple6) {
                 crate::ShaderVisibility::all()
             } else if device.supportsFamily(metal::MTLGPUFamily::Mac2)
