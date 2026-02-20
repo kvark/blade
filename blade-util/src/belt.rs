@@ -55,10 +55,19 @@ impl BufferBelt {
             }
         }
 
-        let index_maybe = self
-            .buffers
-            .iter()
-            .position(|(rb, sp)| size <= rb.size && gpu.wait_for(sp, 0));
+        let index_maybe = self.buffers.iter().position(|(rb, sp)| {
+            if size > rb.size {
+                return false;
+            }
+            match gpu.wait_for_result(sp, 0) {
+                Ok(()) => true,
+                Err(gpu::WaitError::Timeout) => false,
+                Err(e) => {
+                    log::warn!("Unexpected wait error: {:?}", e);
+                    false
+                }
+            }
+        });
         if let Some(index) = index_maybe {
             let (rb, _) = self.buffers.remove(index);
             let piece = rb.raw.into();

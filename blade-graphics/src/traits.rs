@@ -1,5 +1,13 @@
 use std::{fmt::Debug, hash::Hash};
 
+#[derive(Debug)]
+pub enum WaitError {
+    Timeout,
+    DeviceLost,
+    OutOfDate,
+    Other(String),
+}
+
 pub trait ResourceDevice {
     type Buffer: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
     type Texture: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
@@ -45,6 +53,7 @@ pub trait CommandDevice {
     fn destroy_command_encoder(&self, encoder: &mut Self::CommandEncoder);
     fn submit(&self, encoder: &mut Self::CommandEncoder) -> Self::SyncPoint;
     fn wait_for(&self, sp: &Self::SyncPoint, timeout_ms: u32) -> bool;
+    fn wait_for_result(&self, sp: &Self::SyncPoint, timeout_ms: u32) -> Result<(), WaitError>;
 }
 
 pub trait CommandEncoder {
