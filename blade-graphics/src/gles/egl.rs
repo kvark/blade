@@ -223,7 +223,10 @@ impl super::Context {
                         &display_attributes,
                     )
                     .unwrap()
-            } else if client_extensions.contains("EGL_MESA_platform_surfaceless") {
+            } else if client_extensions.contains("EGL_MESA_platform_surfaceless")
+                && !desc.presentation
+            {
+                // ONLY use surfaceless for headless contexts
                 log::info!("Using surfaceless platform");
                 egl1_5
                     .get_platform_display(
