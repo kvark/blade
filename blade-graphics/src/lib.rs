@@ -90,10 +90,12 @@ pub const CANVAS_ID: &str = "blade";
 
 use std::{fmt, num::NonZeroU32};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ContextDesc {
     /// Ability to present contents to a window.
     pub presentation: bool,
+    /// Enable ray tracing setup (acceleration structures and ray queries) where supported.
+    pub ray_tracing: bool,
     /// Enable validation of the GAPI, shaders,
     /// and insert crash markers into command buffers.
     pub validation: bool,
@@ -105,6 +107,20 @@ pub struct ContextDesc {
     pub overlay: bool,
     /// Force selection of a specific Device ID, unless 0.
     pub device_id: u32,
+}
+
+impl Default for ContextDesc {
+    fn default() -> Self {
+        Self {
+            presentation: false,
+            ray_tracing: true,
+            validation: false,
+            timing: false,
+            capture: false,
+            overlay: false,
+            device_id: 0,
+        }
+    }
 }
 
 #[derive(Debug)]
