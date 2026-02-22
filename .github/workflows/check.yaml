@@ -96,3 +96,35 @@ jobs:
       - name: run rustfmt
         run: |
           cargo fmt -- --check
+
+  gpu-test:
+    name: GPU Init (${{ matrix.name }})
+    strategy:
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          - name: macOS
+            os: macos-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Install Vulkan (Linux)
+        if: matrix.name == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
+
+      - name: Run init example
+        run: |
+          cargo run -p blade --example init

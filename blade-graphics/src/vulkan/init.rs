@@ -24,6 +24,15 @@ const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
     vk::KHR_DYNAMIC_RENDERING_NAME,
 ];
 
+fn is_promoted_instance_extension(name: &ffi::CStr, api_version: u32) -> bool {
+    if api_version < vk::API_VERSION_1_1 {
+        return false;
+    }
+
+    name == vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME
+        || name == vk::KHR_GET_SURFACE_CAPABILITIES2_NAME
+}
+
 #[derive(Debug)]
 struct RayTracingCapabilities {
     min_scratch_buffer_alignment: u64,
@@ -374,15 +383,24 @@ impl super::Context {
                 }
             }
 
-            for inst_ext in instance_extensions.iter() {
-                if !supported_instance_extensions.contains(inst_ext) {
+            let mut enabled_instance_extensions = Vec::with_capacity(instance_extensions.len());
+            for inst_ext in instance_extensions.drain(..) {
+                if supported_instance_extensions.contains(&inst_ext) {
+                    enabled_instance_extensions.push(inst_ext);
+                } else if is_promoted_instance_extension(inst_ext, driver_api_version) {
+                    log::info!(
+                        "Skipping promoted instance extension {:?} (core version {:x})",
+                        inst_ext,
+                        driver_api_version
+                    );
+                } else {
                     log::error!("Instance extension {:?} is not supported", inst_ext);
                     return Err(NotSupportedError::NoSupportedDeviceFound);
                 }
             }
             if supported_instance_extensions.contains(&vk::KHR_PORTABILITY_ENUMERATION_NAME) {
                 log::info!("Enabling Vulkan Portability");
-                instance_extensions.push(vk::KHR_PORTABILITY_ENUMERATION_NAME);
+                enabled_instance_extensions.push(vk::KHR_PORTABILITY_ENUMERATION_NAME);
                 create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
             }
 
@@ -392,7 +410,7 @@ impl super::Context {
                 .api_version(vk::HEADER_VERSION_COMPLETE);
             let str_pointers = layers
                 .iter()
-                .chain(instance_extensions.iter())
+                .chain(enabled_instance_extensions.iter())
                 .map(|&s| s.as_ptr())
                 .collect::<Vec<_>>();
             let (layer_strings, extension_strings) = str_pointers.split_at(layers.len());
