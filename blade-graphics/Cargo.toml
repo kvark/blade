@@ -1,6 +1,6 @@
 [package]
 name = "blade-graphics"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 description = "Graphics abstraction for Blade"
 keywords = ["graphics"]
