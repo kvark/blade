@@ -1,5 +1,11 @@
 Changelog for *Blade* project
 
+## blade-graphics-0.7.1 (22 Feb 2025)
+- vk: make us compatible with Mesa's LavaPipe
+
+## blade-egui-0.7 (21 Feb 2025)
+- update to egui-0.33 and blade-graphics-0.7
+
 ## blade-graphics-0.7 (27 Sep 2025)
 
 - graphics
