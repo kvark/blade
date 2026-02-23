@@ -414,6 +414,7 @@ impl Engine {
         let gpu_context = Arc::new(unsafe {
             gpu::Context::init(gpu::ContextDesc {
                 presentation: true,
+                ray_tracing: true,
                 validation: cfg!(debug_assertions),
                 timing: true,
                 capture: false,

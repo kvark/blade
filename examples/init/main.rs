@@ -143,7 +143,13 @@ fn main() {
     let mut rd = renderdoc::RenderDoc::<renderdoc::V120>::new();
 
     println!("Initializing");
-    let context = Arc::new(unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() });
+    let context = Arc::new(unsafe {
+        gpu::Context::init(gpu::ContextDesc {
+            ray_tracing: true,
+            ..Default::default()
+        })
+        .unwrap()
+    });
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     if let Ok(ref mut rd) = rd {

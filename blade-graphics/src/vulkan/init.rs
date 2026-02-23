@@ -218,7 +218,10 @@ unsafe fn inspect_adapter(
         true
     };
 
-    let ray_tracing = if !supported_extensions.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME)
+    let ray_tracing = if !desc.ray_tracing {
+        log::info!("Ray tracing disabled via ContextDesc");
+        None
+    } else if !supported_extensions.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME)
         || !supported_extensions.contains(&vk::KHR_RAY_QUERY_NAME)
     {
         log::info!("No ray tracing extensions are supported");
