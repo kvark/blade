@@ -2,6 +2,7 @@
 
 use blade_graphics as gpu;
 use std::{mem, ptr, time};
+use winit::application::ApplicationHandler;
 
 const TORUS_RADIUS: f32 = 3.0;
 const TARGET_FORMAT: gpu::TextureFormat = gpu::TextureFormat::Rgba16Float;
@@ -30,6 +31,26 @@ struct DrawData {
 }
 
 struct Example {
+    window: Option<winit::window::Window>,
+    inner: Option<ExampleInner>,
+}
+
+impl Example {
+    pub fn new() -> Self {
+        Self {
+            window: None,
+            inner: None,
+        }
+    }
+
+    pub fn delete(self) {
+        if let Some(inner) = self.inner {
+            inner.delete();
+        }
+    }
+}
+
+struct ExampleInner {
     start_time: time::Instant,
     target: gpu::Texture,
     target_view: gpu::TextureView,
@@ -44,7 +65,7 @@ struct Example {
     surface: gpu::Surface,
 }
 
-impl Example {
+impl ExampleInner {
     fn new(window: &winit::window::Window) -> Self {
         let window_size = window.inner_size();
         let context = unsafe {
@@ -330,52 +351,65 @@ impl Example {
     }
 }
 
+impl ApplicationHandler for Example {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        let window_attributes =
+            winit::window::Window::default_attributes().with_title("blade-ray-query");
+        let window = event_loop.create_window(window_attributes).unwrap();
+
+        if self.inner.is_none() {
+            self.inner = Some(ExampleInner::new(&window))
+        }
+        self.window = Some(window);
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        match event {
+            winit::event::WindowEvent::KeyboardInput {
+                event:
+                    winit::event::KeyEvent {
+                        physical_key: winit::keyboard::PhysicalKey::Code(key_code),
+                        state: winit::event::ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => {
+                if key_code == winit::keyboard::KeyCode::Escape {
+                    event_loop.exit();
+                }
+            }
+            winit::event::WindowEvent::RedrawRequested => {
+                event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+                if let Some(inner) = &mut self.inner {
+                    inner.render();
+                }
+            }
+            winit::event::WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        if let Some(window) = &mut self.window {
+            window.request_redraw();
+        }
+    }
+}
+
 fn main() {
     env_logger::init();
 
+    let mut example = Example::new();
+
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    let window_attributes =
-        winit::window::Window::default_attributes().with_title("blade-ray-query");
-
-    let window = event_loop.create_window(window_attributes).unwrap();
-
-    let mut example = Example::new(&window);
-
-    event_loop
-        .run(|event, target| {
-            target.set_control_flow(winit::event_loop::ControlFlow::Poll);
-            match event {
-                winit::event::Event::AboutToWait => {
-                    window.request_redraw();
-                }
-                winit::event::Event::WindowEvent { event, .. } => match event {
-                    winit::event::WindowEvent::KeyboardInput {
-                        event:
-                            winit::event::KeyEvent {
-                                physical_key: winit::keyboard::PhysicalKey::Code(key_code),
-                                state: winit::event::ElementState::Pressed,
-                                ..
-                            },
-                        ..
-                    } => match key_code {
-                        winit::keyboard::KeyCode::Escape => {
-                            target.exit();
-                        }
-                        _ => {}
-                    },
-                    winit::event::WindowEvent::RedrawRequested => {
-                        target.set_control_flow(winit::event_loop::ControlFlow::Wait);
-                        example.render();
-                    }
-                    winit::event::WindowEvent::CloseRequested => {
-                        target.exit();
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        })
-        .unwrap();
+    event_loop.run_app(&mut example).unwrap();
 
     example.delete();
 }
