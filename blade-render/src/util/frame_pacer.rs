@@ -29,14 +29,31 @@ impl FramePacer {
 
     #[profiling::function]
     pub fn wait_for_previous_frame(&mut self, context: &blade_graphics::Context) {
+        let mut cleanup = true;
         if let Some(sp) = self.prev_sync_point.take() {
-            context.wait_for(&sp, !0);
+            match context.wait_for_result(&sp, !0) {
+                Ok(()) => {}
+                Err(blade_graphics::WaitError::DeviceLost) => {
+                    log::error!("GPU device lost during frame sync");
+                    // TODO: Implement device recovery strategy
+                    cleanup = false;
+                }
+                Err(e) => {
+                    log::error!("Frame sync failed: {:?}", e);
+                    cleanup = false;
+                }
+            }
         }
-        for buffer in self.prev_resources.buffers.drain(..) {
-            context.destroy_buffer(buffer);
-        }
-        for accel_structure in self.prev_resources.acceleration_structures.drain(..) {
-            context.destroy_acceleration_structure(accel_structure);
+        // clean up previous frame resources
+        // if no sync point or no error
+        // TODO: think if we need clean up if error happens, proper error handling
+        if cleanup {
+            for buffer in self.prev_resources.buffers.drain(..) {
+                context.destroy_buffer(buffer);
+            }
+            for accel_structure in self.prev_resources.acceleration_structures.drain(..) {
+                context.destroy_acceleration_structure(accel_structure);
+            }
         }
     }
 

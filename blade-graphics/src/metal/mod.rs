@@ -606,18 +606,59 @@ impl crate::traits::CommandDevice for Context {
     }
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
+        self.wait_for_result(sp, timeout_ms).is_ok()
+    }
+
+    fn wait_for_result(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<(), crate::WaitError> {
         use metal::MTLCommandBuffer as _;
         let start = time::Instant::now();
         loop {
-            if let metal::MTLCommandBufferStatus::Completed = sp.cmd_buf.status() {
-                return true;
+            match sp.cmd_buf.status() {
+                metal::MTLCommandBufferStatus::Completed => return Ok(()),
+                metal::MTLCommandBufferStatus::Error => {
+                    if let Some(error) = sp.cmd_buf.error() {
+                        let error_desc = error.localized_description();
+
+                        if is_device_removed_error(&error) {
+                            return Err(crate::WaitError::DeviceLost);
+                        }
+
+                        if is_timeout_error(&error) {
+                            return Err(crate::WaitError::Timeout);
+                        }
+
+                        // Return error with actual description
+                        return Err(crate::WaitError::Other(format!(
+                            "Metal command buffer error: {}",
+                            error_desc
+                        )));
+                    }
+                    return Err(crate::WaitError::Other(
+                        "Metal command buffer failed with unknown error".to_string(),
+                    ));
+                }
+                _ => {}
             }
             if start.elapsed().as_millis() >= timeout_ms as u128 {
-                return false;
+                return Err(crate::WaitError::Timeout);
             }
             thread::sleep(time::Duration::from_millis(1));
         }
     }
+}
+
+fn is_device_removed_error(error: &metal::NSError) -> bool {
+    let domain = error.domain();
+    let code = error.code();
+
+    domain == "MTLCommandBufferErrorDomain" && code == MTLCommandBufferError::DeviceRemoved.0
+}
+
+fn is_timeout_error(error: &metal::NSError) -> bool {
+    let domain = error.domain();
+    let code = error.code();
+
+    domain == "MTLCommandBufferErrorDomain" && code == MTLCommandBufferError::Timeout.0
 }
 
 impl Drop for Context {
