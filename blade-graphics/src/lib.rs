@@ -90,10 +90,40 @@ pub const CANVAS_ID: &str = "blade";
 
 use std::{fmt, num::NonZeroU32};
 
+#[cfg(not(any(
+    vulkan,
+    windows,
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd"
+)))]
+pub mod openxr {
+    #[derive(Clone, Debug)]
+    pub enum Instance {}
+    #[derive(Clone, Debug)]
+    pub enum SystemId {}
+}
+
+#[derive(Clone)]
+pub struct XrDesc {
+    pub instance: openxr::Instance,
+    pub system_id: openxr::SystemId,
+}
+
+impl fmt::Debug for XrDesc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("XrDesc")
+            .field("system_id", &self.system_id)
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ContextDesc {
     /// Ability to present contents to a window.
     pub presentation: bool,
+    /// Enable VR/AR.
+    pub xr: Option<XrDesc>,
     /// Enable validation of the GAPI, shaders,
     /// and insert crash markers into command buffers.
     pub validation: bool,
@@ -1182,6 +1212,25 @@ pub struct SurfaceConfig {
     pub color_space: ColorSpace,
     pub transparent: bool,
     pub allow_exclusive_full_screen: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct XrSurfaceConfig {
+    pub size: Extent,
+    pub usage: TextureUsage,
+    pub color_space: ColorSpace,
+    pub view_count: u32,
+}
+
+impl Default for XrSurfaceConfig {
+    fn default() -> Self {
+        Self {
+            size: Extent::default(),
+            usage: TextureUsage::TARGET,
+            color_space: ColorSpace::Linear,
+            view_count: 2,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]

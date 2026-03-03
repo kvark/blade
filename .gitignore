@@ -13,3 +13,7 @@ libGLESv2.dylib
 .DS_Store
 /.vs
 /.vscode
+
+/PLAN.md
+/examples-android/keystore/
+/examples-android/libs/

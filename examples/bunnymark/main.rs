@@ -79,6 +79,7 @@ impl Example {
         let context = unsafe {
             gpu::Context::init(gpu::ContextDesc {
                 presentation: true,
+                xr: None,
                 validation: cfg!(debug_assertions),
                 timing: false,
                 capture: false,

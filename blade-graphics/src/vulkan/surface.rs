@@ -1,4 +1,5 @@
-use ash::vk;
+use ash::vk::{self, Handle as _};
+use openxr as xr;
 use std::mem;
 
 impl super::Surface {
@@ -14,6 +15,11 @@ impl super::Surface {
         self.device
             .destroy_swapchain(mem::take(&mut self.swapchain.raw), None);
         for frame in self.frames.drain(..) {
+            for view in frame.xr_views {
+                if view != vk::ImageView::null() {
+                    raw_device.destroy_image_view(view, None);
+                }
+            }
             raw_device.destroy_image_view(frame.view, None);
             raw_device.destroy_semaphore(frame.acquire_semaphore, None);
             raw_device.destroy_semaphore(frame.present_semaphore, None);
@@ -39,6 +45,9 @@ impl super::Surface {
                     internal: self.frames[index as usize],
                     swapchain: self.swapchain,
                     image_index: Some(index),
+                    xr_swapchain: 0,
+                    xr_view_count: 0,
+                    xr_views: [super::XrView::default(); super::MAX_XR_EYES],
                 }
             }
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
@@ -47,10 +56,114 @@ impl super::Surface {
                     internal: self.frames[0],
                     swapchain: self.swapchain,
                     image_index: None,
+                    xr_swapchain: 0,
+                    xr_view_count: 0,
+                    xr_views: [super::XrView::default(); super::MAX_XR_EYES],
                 }
             }
             Err(other) => panic!("Aquire image error {}", other),
         }
+    }
+}
+
+impl super::XrSurface {
+    pub fn acquire_frame(&mut self, context: &super::Context) -> Option<super::Frame> {
+        let xr_state = context.xr.as_ref()?;
+        {
+            let mut xr = xr_state.lock().unwrap();
+            let frame_state = xr.frame_wait.wait().ok()?;
+            xr.frame_stream.begin().ok()?;
+            xr.predicted_display_time = Some(frame_state.predicted_display_time);
+            if !frame_state.should_render {
+                xr.predicted_display_time = None;
+                let environment_blend_mode = xr.environment_blend_mode;
+                xr.frame_stream
+                    .end(
+                        frame_state.predicted_display_time,
+                        environment_blend_mode,
+                        &[],
+                    )
+                    .ok()?;
+                return None;
+            }
+        }
+
+        let image_index = self.raw.acquire_image().ok()?;
+        self.raw.wait_image(xr::Duration::INFINITE).ok()?;
+        let mut xr_views = [super::XrView::default(); super::MAX_XR_EYES];
+        let xr_view_count = {
+            let xr = xr_state.lock().unwrap();
+            let predicted_display_time = xr.predicted_display_time?;
+            let space = xr.space.as_ref()?;
+            let (_, views) = xr
+                .session
+                .locate_views(xr.view_type, predicted_display_time, space)
+                .ok()?;
+            let count = views.len().min(self.view_count as usize);
+            if views.len() > self.view_count as usize {
+                log::warn!(
+                    "OpenXR returned {} views, truncating to {}",
+                    views.len(),
+                    self.view_count
+                );
+            }
+            for (i, view) in views.iter().take(count).enumerate() {
+                xr_views[i] = super::XrView {
+                    pose: super::XrPose {
+                        orientation: [
+                            view.pose.orientation.x,
+                            view.pose.orientation.y,
+                            view.pose.orientation.z,
+                            view.pose.orientation.w,
+                        ],
+                        position: [
+                            view.pose.position.x,
+                            view.pose.position.y,
+                            view.pose.position.z,
+                        ],
+                    },
+                    fov: super::XrFov {
+                        angle_left: view.fov.angle_left,
+                        angle_right: view.fov.angle_right,
+                        angle_up: view.fov.angle_up,
+                        angle_down: view.fov.angle_down,
+                    },
+                };
+            }
+            count as u32
+        };
+        Some(super::Frame {
+            internal: self.frames[image_index as usize],
+            swapchain: self.swapchain,
+            image_index: Some(image_index),
+            xr_swapchain: (&mut self.raw as *mut xr::Swapchain<xr::Vulkan>) as usize,
+            xr_view_count,
+            xr_views,
+        })
+    }
+
+    pub fn release_frame(&mut self) {
+        self.raw.release_image().unwrap();
+    }
+
+    pub fn extent(&self) -> crate::Extent {
+        crate::Extent {
+            width: self.swapchain.target_size[0] as u32,
+            height: self.swapchain.target_size[1] as u32,
+            depth: 1,
+        }
+    }
+
+    pub fn view_count(&self) -> u32 {
+        self.view_count
+    }
+
+    pub fn format(&self) -> crate::TextureFormat {
+        self.swapchain.format
+    }
+
+    pub fn swapchain(&self) -> &xr::Swapchain<xr::Vulkan> {
+        &self.raw
     }
 }
 
@@ -388,6 +501,7 @@ impl super::Context {
                 present_semaphore,
                 image,
                 view,
+                xr_views: [vk::ImageView::null(); super::MAX_XR_EYES],
             });
         }
         surface.swapchain = super::Swapchain {
@@ -397,4 +511,265 @@ impl super::Context {
             target_size,
         };
     }
+
+    fn xr_recommended_surface_config(
+        &self,
+        view_type: xr::ViewConfigurationType,
+    ) -> Option<crate::XrSurfaceConfig> {
+        let xr = self.xr.as_ref()?;
+        let xr = xr.lock().unwrap();
+        let views = xr
+            .instance
+            .enumerate_view_configuration_views(xr.system_id, view_type)
+            .ok()?;
+        let first = *views.first()?;
+        let view_count = (views.len() as u32).min(super::MAX_XR_EYES as u32);
+        Some(crate::XrSurfaceConfig {
+            size: crate::Extent {
+                width: first.recommended_image_rect_width,
+                height: first.recommended_image_rect_height,
+                depth: 1,
+            },
+            usage: crate::TextureUsage::TARGET,
+            color_space: crate::ColorSpace::Linear,
+            view_count,
+        })
+    }
+
+    pub fn create_xr_surface(&self) -> Option<super::XrSurface> {
+        let config =
+            self.xr_recommended_surface_config(xr::ViewConfigurationType::PRIMARY_STEREO)?;
+        self.create_xr_surface_configured(config)
+    }
+
+    fn create_xr_surface_configured(
+        &self,
+        config: crate::XrSurfaceConfig,
+    ) -> Option<super::XrSurface> {
+        let xr = self.xr.as_ref()?;
+        let mut surface = {
+            let xr = xr.lock().unwrap();
+            let (raw_format, format) = select_xr_swapchain_format(&xr.session, config.color_space);
+            let raw = xr
+                .session
+                .create_swapchain(&xr::SwapchainCreateInfo {
+                    create_flags: xr::SwapchainCreateFlags::EMPTY,
+                    usage_flags: xr_swapchain_usage(config.usage),
+                    format: raw_format,
+                    sample_count: 1,
+                    width: config.size.width,
+                    height: config.size.height,
+                    face_count: 1,
+                    array_size: config.view_count.max(1),
+                    mip_count: 1,
+                })
+                .ok()?;
+            super::XrSurface {
+                raw,
+                frames: Vec::new(),
+                swapchain: super::Swapchain {
+                    raw: vk::SwapchainKHR::null(),
+                    format,
+                    alpha: crate::AlphaMode::Ignored,
+                    target_size: [config.size.width as u16, config.size.height as u16],
+                },
+                view_count: config.view_count.max(1),
+            }
+        };
+        self.reconfigure_xr_surface(&mut surface, config);
+        Some(surface)
+    }
+
+    pub fn destroy_xr_surface(&self, surface: &mut super::XrSurface) {
+        for frame in surface.frames.drain(..) {
+            for view in frame.xr_views {
+                if view != vk::ImageView::null() {
+                    unsafe { self.device.core.destroy_image_view(view, None) };
+                }
+            }
+            unsafe {
+                self.device.core.destroy_image_view(frame.view, None);
+                self.device
+                    .core
+                    .destroy_semaphore(frame.acquire_semaphore, None);
+                self.device
+                    .core
+                    .destroy_semaphore(frame.present_semaphore, None);
+            }
+        }
+    }
+
+    fn reconfigure_xr_surface(
+        &self,
+        surface: &mut super::XrSurface,
+        config: crate::XrSurfaceConfig,
+    ) {
+        self.destroy_xr_surface(surface);
+        let xr = self.xr.as_ref().expect("XR is not enabled in this context");
+        let xr = xr.lock().unwrap();
+        assert!(
+            config.view_count as usize <= super::MAX_XR_EYES,
+            "XR view count {} exceeds MAX_XR_EYES={}",
+            config.view_count,
+            super::MAX_XR_EYES
+        );
+        let (raw_format, format) = select_xr_swapchain_format(&xr.session, config.color_space);
+
+        let new_handle = xr
+            .session
+            .create_swapchain(&xr::SwapchainCreateInfo {
+                create_flags: xr::SwapchainCreateFlags::EMPTY,
+                usage_flags: xr_swapchain_usage(config.usage),
+                format: raw_format,
+                sample_count: 1,
+                width: config.size.width,
+                height: config.size.height,
+                face_count: 1,
+                array_size: config.view_count.max(1),
+                mip_count: 1,
+            })
+            .unwrap();
+        surface.raw = new_handle;
+
+        let target_size = [config.size.width as u16, config.size.height as u16];
+        let view_type = if config.view_count > 1 {
+            vk::ImageViewType::TYPE_2D_ARRAY
+        } else {
+            vk::ImageViewType::TYPE_2D
+        };
+        let subresource_range = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: config.view_count.max(1),
+        };
+
+        for raw_image in surface.raw.enumerate_images().unwrap() {
+            let image = vk::Image::from_raw(raw_image);
+            let view_create_info = vk::ImageViewCreateInfo {
+                image,
+                view_type,
+                format: super::map_texture_format(format),
+                subresource_range,
+                ..Default::default()
+            };
+            let view = unsafe {
+                self.device
+                    .core
+                    .create_image_view(&view_create_info, None)
+                    .unwrap()
+            };
+            let mut xr_views = [vk::ImageView::null(); super::MAX_XR_EYES];
+            for eye in 0..config.view_count.max(1) {
+                let xr_view_info = vk::ImageViewCreateInfo {
+                    image,
+                    view_type: vk::ImageViewType::TYPE_2D,
+                    format: super::map_texture_format(format),
+                    subresource_range: vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: eye,
+                        layer_count: 1,
+                    },
+                    ..Default::default()
+                };
+                let xr_view = unsafe {
+                    self.device
+                        .core
+                        .create_image_view(&xr_view_info, None)
+                        .unwrap()
+                };
+                xr_views[eye as usize] = xr_view;
+            }
+            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
+            let acquire_semaphore = unsafe {
+                self.device
+                    .core
+                    .create_semaphore(&semaphore_create_info, None)
+                    .unwrap()
+            };
+            let present_semaphore = unsafe {
+                self.device
+                    .core
+                    .create_semaphore(&semaphore_create_info, None)
+                    .unwrap()
+            };
+            surface.frames.push(super::InternalFrame {
+                acquire_semaphore,
+                present_semaphore,
+                image,
+                view,
+                xr_views,
+            });
+        }
+
+        surface.swapchain = super::Swapchain {
+            raw: vk::SwapchainKHR::null(),
+            format,
+            alpha: crate::AlphaMode::Ignored,
+            target_size,
+        };
+        surface.view_count = config.view_count.max(1);
+    }
+}
+
+fn xr_swapchain_usage(usage: crate::TextureUsage) -> xr::SwapchainUsageFlags {
+    let mut out = xr::SwapchainUsageFlags::EMPTY;
+    if usage.contains(crate::TextureUsage::TARGET) {
+        out |= xr::SwapchainUsageFlags::COLOR_ATTACHMENT;
+    }
+    if usage.contains(crate::TextureUsage::RESOURCE) {
+        out |= xr::SwapchainUsageFlags::SAMPLED;
+    }
+    if usage.contains(crate::TextureUsage::STORAGE) {
+        out |= xr::SwapchainUsageFlags::UNORDERED_ACCESS;
+    }
+    if out.is_empty() {
+        out = xr::SwapchainUsageFlags::COLOR_ATTACHMENT;
+    }
+    out
+}
+
+fn texture_format_from_xr_raw(raw: u32) -> Option<crate::TextureFormat> {
+    let format = vk::Format::from_raw(raw as i32);
+    Some(match format {
+        vk::Format::R8G8B8A8_UNORM => crate::TextureFormat::Rgba8Unorm,
+        vk::Format::R8G8B8A8_SRGB => crate::TextureFormat::Rgba8UnormSrgb,
+        vk::Format::B8G8R8A8_UNORM => crate::TextureFormat::Bgra8Unorm,
+        vk::Format::B8G8R8A8_SRGB => crate::TextureFormat::Bgra8UnormSrgb,
+        _ => return None,
+    })
+}
+
+fn select_xr_swapchain_format(
+    session: &xr::Session<xr::Vulkan>,
+    color_space: crate::ColorSpace,
+) -> (u32, crate::TextureFormat) {
+    let formats = session.enumerate_swapchain_formats().unwrap();
+    let mut linear_candidate = None;
+    let mut srgb_candidate = None;
+    for raw in formats {
+        if let Some(format) = texture_format_from_xr_raw(raw) {
+            match format {
+                crate::TextureFormat::Rgba8Unorm | crate::TextureFormat::Bgra8Unorm => {
+                    if linear_candidate.is_none() {
+                        linear_candidate = Some((raw, format));
+                    }
+                }
+                crate::TextureFormat::Rgba8UnormSrgb | crate::TextureFormat::Bgra8UnormSrgb => {
+                    if srgb_candidate.is_none() {
+                        srgb_candidate = Some((raw, format));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    match color_space {
+        crate::ColorSpace::Linear => linear_candidate.or(srgb_candidate),
+        crate::ColorSpace::Srgb => srgb_candidate.or(linear_candidate),
+    }
+    .expect("No compatible XR swapchain format available")
 }
