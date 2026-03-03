@@ -1,8 +1,31 @@
 #![allow(irrefutable_let_patterns)]
 
-use std::{env, path::Path, ptr, sync::Arc};
-
 use blade_graphics as gpu;
+use blade_graphics::ShaderData;
+use std::slice;
+
+#[derive(Clone, Copy)]
+struct DispatchGlobals {
+    input: gpu::BufferPiece,
+    output: gpu::BufferPiece,
+}
+
+impl gpu::ShaderData for DispatchGlobals {
+    fn layout() -> gpu::ShaderDataLayout {
+        gpu::ShaderDataLayout {
+            bindings: vec![
+                ("input", gpu::ShaderBinding::Buffer),
+                ("output", gpu::ShaderBinding::Buffer),
+            ],
+        }
+    }
+
+    fn fill(&self, mut ctx: gpu::PipelineContext) {
+        use gpu::ShaderBindable as _;
+        self.input.bind_to(&mut ctx, 0);
+        self.output.bind_to(&mut ctx, 1);
+    }
+}
 
 #[derive(blade_macros::ShaderData)]
 struct EnvSampleData {
@@ -19,7 +42,7 @@ struct EnvMapSampler {
 }
 
 impl EnvMapSampler {
-    fn new(size: gpu::Extent, shader: &blade_graphics::Shader, context: &gpu::Context) -> Self {
+    fn new(size: gpu::Extent, shader: &gpu::Shader, context: &gpu::Context) -> Self {
         let format = gpu::TextureFormat::Rgba16Float;
         let accum_texture = context.create_texture(gpu::TextureDesc {
             name: "env-test",
@@ -28,7 +51,7 @@ impl EnvMapSampler {
             array_layer_count: 1,
             mip_level_count: 1,
             dimension: gpu::TextureDimension::D2,
-            usage: gpu::TextureUsage::TARGET,
+            usage: gpu::TextureUsage::TARGET | gpu::TextureUsage::COPY,
             sample_count: 1,
             external: None,
         });
@@ -129,118 +152,132 @@ impl EnvMapSampler {
         };
     }
 
-    fn destroy(self, context: &gpu::Context) {
+    fn destroy(mut self, context: &gpu::Context) {
+        context.destroy_render_pipeline(&mut self.init_pipeline);
+        context.destroy_render_pipeline(&mut self.accum_pipeline);
         context.destroy_texture_view(self.accum_view);
         context.destroy_texture(self.accum_texture);
     }
 }
 
-const NUM_WORKERS: usize = 2;
+#[test]
+#[ignore = "requires a working GPU context"]
+fn dispatch_gpu_test() {
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
 
-fn main() {
-    env_logger::init();
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    let mut rd = renderdoc::RenderDoc::<renderdoc::V120>::new();
+    let input = context.create_buffer(gpu::BufferDesc {
+        name: "dispatch-input",
+        size: 16,
+        memory: gpu::Memory::Shared,
+    });
+    let output = context.create_buffer(gpu::BufferDesc {
+        name: "dispatch-output",
+        size: 16,
+        memory: gpu::Memory::Shared,
+    });
 
-    println!("Initializing");
-    let context = Arc::new(unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() });
-
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    if let Ok(ref mut rd) = rd {
-        rd.start_frame_capture(ptr::null(), ptr::null());
+    unsafe {
+        let input_data = slice::from_raw_parts_mut(input.data() as *mut u32, 4);
+        input_data.copy_from_slice(&[1, 2, 3, 4]);
     }
+    context.sync_buffer(input);
 
-    let choir = Arc::new(choir::Choir::new());
-    let _workers = (0..NUM_WORKERS)
-        .map(|i| choir.add_worker(&format!("Worker-{}", i)))
-        .collect::<Vec<_>>();
+    let shader = context.create_shader(gpu::ShaderDesc {
+        source: include_str!("shaders/dispatch.wgsl"),
+    });
+    let global_layout = DispatchGlobals::layout();
+    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        name: "dispatch-test",
+        data_layouts: &[&global_layout],
+        compute: shader.at("main"),
+    });
 
-    let mut asset_hub = blade_render::AssetHub::new(Path::new("asset-cache"), &choir, &context);
-    let mut environment_map = None;
-    let mut _object = None;
-
-    println!("Populating the scene");
-    let mut load_finish = choir.spawn("load finish").init_dummy();
-    let (shader_main_handle, shader_main_task) = asset_hub
-        .shaders
-        .load("examples/init/env-sample.wgsl", blade_render::shader::Meta);
-    load_finish.depend_on(shader_main_task);
-    let (shader_init_handle, shader_init_task) = asset_hub.shaders.load(
-        "blade-render/code/env-prepare.wgsl",
-        blade_render::shader::Meta,
-    );
-    load_finish.depend_on(shader_init_task);
-
-    for arg in env::args().skip(1) {
-        if arg.ends_with(".exr") {
-            println!("\tenvironment map = {}", arg);
-            let meta = blade_render::texture::Meta {
-                format: blade_graphics::TextureFormat::Rgba32Float,
-                generate_mips: false,
-                y_flip: false,
-            };
-            let (texture, texture_task) = asset_hub.textures.load(arg, meta);
-            load_finish.depend_on(texture_task);
-            environment_map = Some(texture);
-        } else if arg.ends_with(".gltf") {
-            println!("\tmodels += {}", arg);
-            let (model, model_task) = asset_hub
-                .models
-                .load(arg, blade_render::model::Meta::default());
-            load_finish.depend_on(model_task);
-            _object = Some(blade_render::Object::from(model));
-        } else {
-            print!("\tunrecognized: {}", arg);
-        }
-    }
-    println!("Waiting for scene to load");
-    let _ = load_finish.run().join();
-
-    println!("Flushing GPU work");
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
-        name: "init",
+        name: "dispatch-test",
         buffer_count: 1,
     });
     command_encoder.start();
-    let mut dummy = blade_render::DummyResources::new(&mut command_encoder, &context);
-    let mut temp_buffers = Vec::new();
-    asset_hub.flush(&mut command_encoder, &mut temp_buffers);
-
-    let mut env_map = blade_render::EnvironmentMap::new(
-        asset_hub.shaders[shader_init_handle].raw.as_ref().unwrap(),
-        &dummy,
-        &context,
-    );
-    let env_size = match environment_map {
-        Some(handle) => {
-            let texture = &asset_hub.textures[handle];
-            env_map.assign(texture.view, texture.extent, &mut command_encoder, &context);
-            texture.extent
+    if let mut compute = command_encoder.compute("dispatch") {
+        if let mut pass = compute.with(&pipeline) {
+            pass.bind(
+                0,
+                &DispatchGlobals {
+                    input: input.into(),
+                    output: output.into(),
+                },
+            );
+            pass.dispatch([1, 1, 1]);
         }
-        None => dummy.size,
-    };
-    let env_sampler = EnvMapSampler::new(
-        env_size,
-        asset_hub.shaders[shader_main_handle].raw.as_ref().unwrap(),
-        &context,
-    );
-    env_sampler.accumulate(&mut command_encoder, env_map.main_view, env_map.weight_view);
+    }
+
     let sync_point = context.submit(&mut command_encoder);
+    assert!(context.wait_for(&sync_point, 2000));
 
-    context.wait_for(&sync_point, !0);
+    let actual = unsafe { slice::from_raw_parts(output.data() as *const u32, 4) };
+    let expected = [3, 5, 7, 9];
+    assert_eq!(actual, expected);
+
     context.destroy_command_encoder(&mut command_encoder);
-    for buffer in temp_buffers {
-        context.destroy_buffer(buffer);
-    }
-    env_map.destroy(&context);
-    env_sampler.destroy(&context);
-    dummy.destroy(&context);
-    asset_hub.destroy();
+    context.destroy_compute_pipeline(&mut pipeline);
+    context.destroy_buffer(output);
+    context.destroy_buffer(input);
+}
 
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    if let Ok(ref mut rd) = rd {
-        rd.end_frame_capture(ptr::null(), ptr::null());
-        // RenderDoc doesn't like when the app suddenly closes at the end.
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+#[test]
+#[ignore = "requires a working GPU context"]
+fn env_map_gpu_test() {
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+
+    let shader_prepare = context.create_shader(gpu::ShaderDesc {
+        source: include_str!("../blade-render/code/env-prepare.wgsl"),
+    });
+    let shader_sample = context.create_shader(gpu::ShaderDesc {
+        source: include_str!("shaders/env_map_sample.wgsl"),
+    });
+
+    let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "env-map-test",
+        buffer_count: 1,
+    });
+    command_encoder.start();
+
+    let mut dummy = blade_render::DummyResources::new(&mut command_encoder, &context);
+    let mut env_map = blade_render::EnvironmentMap::new(&shader_prepare, &dummy, &context);
+    env_map.assign(dummy.white_view, dummy.size, &mut command_encoder, &context);
+
+    let env_sampler = EnvMapSampler::new(dummy.size, &shader_sample, &context);
+    env_sampler.accumulate(&mut command_encoder, env_map.main_view, env_map.weight_view);
+
+    let readback = context.create_buffer(gpu::BufferDesc {
+        name: "env-map-readback",
+        size: 8,
+        memory: gpu::Memory::Shared,
+    });
+    if let mut transfer = command_encoder.transfer("readback-env-map") {
+        transfer.copy_texture_to_buffer(
+            env_sampler.accum_texture.into(),
+            readback.into(),
+            8,
+            gpu::Extent {
+                width: 1,
+                height: 1,
+                depth: 1,
+            },
+        );
     }
+
+    let sync_point = context.submit(&mut command_encoder);
+    assert!(context.wait_for(&sync_point, 2000));
+
+    let actual = unsafe { slice::from_raw_parts(readback.data(), 8) };
+    assert!(
+        actual.iter().any(|b| *b != 0),
+        "environment map output is entirely zero"
+    );
+
+    context.destroy_buffer(readback);
+    env_map.destroy(&context);
+    dummy.destroy(&context);
+    env_sampler.destroy(&context);
+    context.destroy_command_encoder(&mut command_encoder);
 }

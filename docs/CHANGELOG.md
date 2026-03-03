@@ -1,5 +1,9 @@
 Changelog for *Blade* project
 
+## blade-graphicis-0.8 (TBD)
+- graphics
+  - OpenXR / Android support (tested on Quest 3S)
+
 ## blade-graphics-0.7.1 (22 Feb 2025)
 - vk: make us compatible with Mesa's LavaPipe
 
