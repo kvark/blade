@@ -60,14 +60,14 @@ jobs:
           command: check
           args: --target ${{ matrix.target }} --workspace --all --no-default-features
 
-      - name: Test Basics
+      - name: Test CPU Basics
         if: matrix.full
         uses: actions-rs/cargo@v1
         with:
           command: test
           args: -p blade-render --no-default-features
 
-      - name: Test All
+      - name: Test CPU Workspace
         if: matrix.full
         uses: actions-rs/cargo@v1
         with:
@@ -103,7 +103,7 @@ jobs:
           cargo fmt -- --check
 
   gpu-test:
-    name: GPU Init (${{ matrix.name }})
+    name: GPU Tests (${{ matrix.name }})
     strategy:
       matrix:
         include:
@@ -130,6 +130,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
 
-      - name: Run init example
+      - name: Run GPU integration tests
         run: |
-          cargo run -p blade --example init
+          cargo test --test gpu_examples -- --ignored --nocapture
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json

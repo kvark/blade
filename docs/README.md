@@ -32,7 +32,25 @@ Just the usual :crab: workflow. E.g. to run the bunny-mark benchmark run:
 cargo run --release --example bunnymark
 ```
 
+CPU tests run with the default command:
+
+```bash
+cargo test
+```
+
+GPU integration tests are marked `#[ignore]` and need to be requested explicitly:
+
+```bash
+cargo test --test gpu_examples -- --ignored --nocapture
+```
+
 ## Platforms
 
+Blade-graphics can run on:
+- Linux (Vulkan and GLES)
+- Windows (Vulkan)
+- iOS/MacOS/tvOS (Metal)
+- Android (OpenXR/Vulkan)
+- Web (WebGL2)
+
 The full-stack Blade Engine can only run on Vulkan with hardware Ray Tracing support.
-However, on secondary platforms, such as Metal and GLES/WebGL2, one can still use Blde-Graphics and Blade-Egui.
