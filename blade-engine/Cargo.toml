@@ -1,0 +1,32 @@
+[package]
+name = "blade-engine"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.65"
+license = "MIT"
+repository = "https://github.com/kvark/blade"
+description = "Blade engine layer"
+
+[dependencies]
+blade-asset = { version = "0.2", path = "../blade-asset" }
+blade-egui = { version = "0.7", path = "../blade-egui" }
+blade-graphics = { version = "0.7", path = "../blade-graphics" }
+blade-helpers = { version = "0.1", path = "../blade-helpers" }
+blade-render = { version = "0.4", path = "../blade-render" }
+base64 = { workspace = true }
+choir = { workspace = true }
+colorsys = "0.6"
+egui = { workspace = true }
+gltf = { workspace = true }
+log = { workspace = true }
+mint = { workspace = true, features = ["serde"] }
+nalgebra = { version = "0.33", features = ["mint"] }
+num_cpus = { workspace = true }
+profiling = { workspace = true }
+rapier3d = { version = "0.23", features = ["debug-render"] }
+serde = { version = "1", features = ["serde_derive"] }
+slab = { workspace = true }
+winit = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }

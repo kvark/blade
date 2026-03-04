@@ -138,7 +138,7 @@ pub struct DebugRender {
 }
 
 impl DebugRender {
-    pub(super) fn init(
+    pub(crate) fn init(
         encoder: &mut blade_graphics::CommandEncoder,
         gpu: &blade_graphics::Context,
         shader_draw: &blade_graphics::Shader,
@@ -206,7 +206,7 @@ impl DebugRender {
         this
     }
 
-    pub(super) fn destroy(&mut self, gpu: &blade_graphics::Context) {
+    pub(crate) fn destroy(&mut self, gpu: &blade_graphics::Context) {
         gpu.destroy_buffer(self.buffer);
         gpu.destroy_buffer(self.variance_buffer);
         gpu.destroy_buffer(self.entry_buffer);
@@ -260,7 +260,7 @@ impl DebugRender {
         (self.cpu_lines_buffer.at(original_offset), count as u32)
     }
 
-    pub(super) fn render_lines(
+    pub(crate) fn render_lines(
         &self,
         debug_lines: &[DebugLine],
         camera: super::CameraParams,
@@ -293,7 +293,7 @@ impl DebugRender {
         }
     }
 
-    pub(super) fn render_blits(
+    pub(crate) fn render_blits(
         &self,
         debug_blits: &[DebugBlit],
         samp: blade_graphics::Sampler,

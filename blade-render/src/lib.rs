@@ -12,6 +12,7 @@
 
 mod asset_hub;
 pub mod model;
+pub mod raster;
 mod render;
 pub mod shader;
 pub mod texture;
@@ -19,6 +20,7 @@ pub mod util;
 
 pub use asset_hub::*;
 pub use model::Model;
+pub use raster::{RasterConfig, Rasterizer};
 pub use render::*;
 pub use shader::Shader;
 pub use texture::Texture;
@@ -56,4 +58,14 @@ impl From<blade_asset::Handle<Model>> for Object {
             prev_transform: blade_graphics::IDENTITY_TRANSFORM,
         }
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+struct CameraParams {
+    position: [f32; 3],
+    depth: f32,
+    orientation: [f32; 4],
+    fov: [f32; 2],
+    target_size: [u32; 2],
 }

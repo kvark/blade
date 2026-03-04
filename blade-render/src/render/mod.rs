@@ -2,8 +2,10 @@ mod debug;
 mod dummy;
 mod env_map;
 
-use debug::{DebugEntry, DebugRender, DebugVariance};
+use crate::CameraParams;
+use debug::{DebugEntry, DebugVariance};
 
+pub(crate) use debug::DebugRender;
 pub use debug::{DebugBlit, DebugLine, DebugPoint};
 pub use dummy::DummyResources;
 pub use env_map::EnvironmentMap;
@@ -308,7 +310,7 @@ struct Blur {
     a_trous_pipeline: blade_graphics::ComputePipeline,
 }
 
-/// Blade Renderer is a comprehensive rendering solution for
+/// Blade RayTracer is a comprehensive rendering solution for
 /// end user applications.
 ///
 /// It takes care of the shaders, geometry buffers, acceleration structures,
@@ -317,7 +319,7 @@ struct Blur {
 /// It doesn't:
 ///   - manage or submit any command encoders
 ///   - know about the window to display on
-pub struct Renderer {
+pub struct RayTracer {
     shaders: Shaders,
     targets: RestirTargets,
     post_proc_input_index: usize,
@@ -348,18 +350,8 @@ pub struct Renderer {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
-struct CameraParams {
-    position: [f32; 3],
-    depth: f32,
-    orientation: [f32; 4],
-    fov: [f32; 2],
-    target_size: [u32; 2],
-}
-
-#[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct DebugParams {
+pub(crate) struct DebugParams {
     view_mode: u32,
     draw_flags: u32,
     texture_flags: u32,
@@ -499,13 +491,14 @@ struct HitEntry {
 
 #[derive(Clone, PartialEq)]
 pub struct Shaders {
-    env_prepare: blade_asset::Handle<crate::Shader>,
-    fill_gbuf: blade_asset::Handle<crate::Shader>,
-    ray_trace: blade_asset::Handle<crate::Shader>,
-    a_trous: blade_asset::Handle<crate::Shader>,
-    post_proc: blade_asset::Handle<crate::Shader>,
-    debug_draw: blade_asset::Handle<crate::Shader>,
-    debug_blit: blade_asset::Handle<crate::Shader>,
+    pub(crate) env_prepare: blade_asset::Handle<crate::Shader>,
+    pub(crate) fill_gbuf: blade_asset::Handle<crate::Shader>,
+    pub(crate) ray_trace: blade_asset::Handle<crate::Shader>,
+    pub(crate) a_trous: blade_asset::Handle<crate::Shader>,
+    pub(crate) post_proc: blade_asset::Handle<crate::Shader>,
+    pub(crate) raster: blade_asset::Handle<crate::Shader>,
+    pub(crate) debug_draw: blade_asset::Handle<crate::Shader>,
+    pub(crate) debug_blit: blade_asset::Handle<crate::Shader>,
 }
 
 impl Shaders {
@@ -517,6 +510,7 @@ impl Shaders {
             ray_trace: ctx.load_shader("ray-trace.wgsl"),
             a_trous: ctx.load_shader("a-trous.wgsl"),
             post_proc: ctx.load_shader("post-proc.wgsl"),
+            raster: ctx.load_shader("raster.wgsl"),
             debug_draw: ctx.load_shader("debug-draw.wgsl"),
             debug_blit: ctx.load_shader("debug-blit.wgsl"),
         };
@@ -653,7 +647,7 @@ pub struct FrameResources {
     pub acceleration_structures: Vec<blade_graphics::AccelerationStructure>,
 }
 
-impl Renderer {
+impl RayTracer {
     /// Create a new renderer with a given configuration.
     ///
     /// Panics if the system is not compatible.
