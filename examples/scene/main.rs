@@ -135,7 +135,7 @@ struct Example {
     scene_path: PathBuf,
     scene_environment_map: String,
     pacer: blade_render::util::FramePacer,
-    renderer: blade_render::Renderer,
+    renderer: blade_render::RayTracer,
     scene_load_task: Option<choir::RunningTask>,
     gui_painter: blade_egui::GuiPainter,
     asset_hub: blade_render::AssetHub,
@@ -220,7 +220,7 @@ impl Example {
             surface_info,
             max_debug_lines: 1000,
         };
-        let renderer = blade_render::Renderer::new(
+        let renderer = blade_render::RayTracer::new(
             command_encoder,
             &context,
             shaders,

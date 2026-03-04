@@ -4,14 +4,14 @@ use std::{f32::consts, fs, mem, ops, path::PathBuf, time};
 
 #[derive(Clone)]
 struct Wheel {
-    object: blade::ObjectHandle,
-    spin_joint: blade::JointHandle,
-    suspender: Option<blade::ObjectHandle>,
-    steer_joint: Option<blade::JointHandle>,
+    object: blade_engine::ObjectHandle,
+    spin_joint: blade_engine::JointHandle,
+    suspender: Option<blade_engine::ObjectHandle>,
+    steer_joint: Option<blade_engine::JointHandle>,
 }
 
 struct Vehicle {
-    body_handle: blade::ObjectHandle,
+    body_handle: blade_engine::ObjectHandle,
     jump_impulse: f32,
     roll_impulse: f32,
     wheels: Vec<Wheel>,
@@ -19,7 +19,7 @@ struct Vehicle {
 
 struct Game {
     // engine stuff
-    engine: blade::Engine,
+    engine: blade_engine::Engine,
     last_physics_update: time::Instant,
     last_camera_update: time::Instant,
     last_camera_base_quat: glam::Quat,
@@ -29,7 +29,7 @@ struct Game {
     egui_state: egui_winit::State,
     egui_viewport_id: egui::ViewportId,
     // game data
-    _ground_handle: blade::ObjectHandle,
+    _ground_handle: blade_engine::ObjectHandle,
     vehicle: Vehicle,
     cam_config: config::Camera,
     spawn_pos: glam::Vec3,
@@ -40,8 +40,8 @@ struct Isometry {
     position: glam::Vec3,
     orientation: glam::Quat,
 }
-impl From<blade::Transform> for Isometry {
-    fn from(transform: blade::Transform) -> Self {
+impl From<blade_engine::Transform> for Isometry {
+    fn from(transform: blade_engine::Transform) -> Self {
         Self {
             position: transform.position.into(),
             orientation: transform.orientation.into(),
@@ -57,8 +57,8 @@ impl Isometry {
         }
     }
 
-    fn to_blade(&self) -> blade::Transform {
-        blade::Transform {
+    fn to_blade(&self) -> blade_engine::Transform {
+        blade_engine::Transform {
             position: self.position.into(),
             orientation: self.orientation.into(),
         }
@@ -101,12 +101,13 @@ impl Game {
         };
 
         let data_path = PathBuf::from("examples/vehicle/data");
-        let mut engine = blade::Engine::new(
+        let mut engine = blade_engine::Engine::new(
             &window,
-            &blade::config::Engine {
+            &blade_engine::config::Engine {
                 shader_path: "blade-render/code".to_string(),
                 data_path: data_path.as_os_str().to_string_lossy().into_owned(),
                 time_step: 0.01,
+                render_backend: blade_engine::config::RenderBackend::RayTracer,
             },
         );
 
@@ -120,15 +121,15 @@ impl Game {
 
         let ground_handle = engine.add_object(
             &lev_config.ground,
-            blade::Transform::default(),
-            blade::DynamicInput::Empty,
+            blade_engine::Transform::default(),
+            blade_engine::DynamicInput::Empty,
         );
 
         let veh_config: config::Vehicle = ron::de::from_bytes(
             &fs::read(data_path.join("raceFuture.ron")).expect("Unable to open the vehicle config"),
         )
         .expect("Unable to parse the vehicle config");
-        let body_config = blade::config::Object {
+        let body_config = blade_engine::config::Object {
             name: "vehicle/body".to_string(),
             visuals: vec![veh_config.body.visual],
             colliders: vec![veh_config.body.collider],
@@ -138,23 +139,23 @@ impl Game {
         let mut vehicle = Vehicle {
             body_handle: engine.add_object(
                 &body_config,
-                blade::Transform {
+                blade_engine::Transform {
                     position: spawn_pos.into(),
                     ..Default::default()
                 },
-                blade::DynamicInput::Full,
+                blade_engine::DynamicInput::Full,
             ),
             jump_impulse: veh_config.jump_impulse,
             roll_impulse: veh_config.roll_impulse,
             wheels: Vec::new(),
         };
-        let wheel_config = blade::config::Object {
+        let wheel_config = blade_engine::config::Object {
             name: "vehicle/wheel".to_string(),
             visuals: vec![veh_config.wheel.visual],
             colliders: vec![veh_config.wheel.collider],
             additional_mass: None,
         };
-        let suspender_config = blade::config::Object {
+        let suspender_config = blade_engine::config::Object {
             name: "vehicle/suspender".to_string(),
             visuals: vec![],
             colliders: vec![],
@@ -173,16 +174,16 @@ impl Game {
 
                 let wheel_handle = engine.add_object(
                     &wheel_config,
-                    blade::Transform {
+                    blade_engine::Transform {
                         position: (spawn_pos + offset).into(),
                         orientation: rotation.into(),
                     },
-                    blade::DynamicInput::Full,
+                    blade_engine::DynamicInput::Full,
                 );
                 let wheel_angular_freedoms = mint::Vector3 {
-                    x: Some(blade::FreedomAxis {
+                    x: Some(blade_engine::FreedomAxis {
                         limits: None,
-                        motor: Some(blade::config::Motor {
+                        motor: Some(blade_engine::config::Motor {
                             stiffness: 0.0,
                             damping: veh_config.drive_factor,
                             max_force: 1000.0,
@@ -197,25 +198,25 @@ impl Game {
                         let max_angle = ac.max_steering_angle.to_radians();
                         let suspender_handle = engine.add_object(
                             &suspender_config,
-                            blade::Transform {
+                            blade_engine::Transform {
                                 position: (spawn_pos + offset).into(),
                                 ..Default::default()
                             },
-                            blade::DynamicInput::Full,
+                            blade_engine::DynamicInput::Full,
                         );
 
                         let suspension_joint = engine.add_joint(
                             vehicle.body_handle,
                             suspender_handle,
-                            blade::JointDesc {
-                                parent_anchor: blade::Transform {
+                            blade_engine::JointDesc {
+                                parent_anchor: blade_engine::Transform {
                                     position: offset.into(),
                                     ..Default::default()
                                 },
                                 linear: mint::Vector3 {
                                     x: None,
                                     y: if ac.max_suspension_offset > 0.0 {
-                                        Some(blade::FreedomAxis {
+                                        Some(blade_engine::FreedomAxis {
                                             limits: Some(0.0..ac.max_suspension_offset),
                                             motor: Some(ac.suspension),
                                         })
@@ -227,7 +228,7 @@ impl Game {
                                 angular: mint::Vector3 {
                                     x: None,
                                     y: if ac.max_steering_angle > 0.0 {
-                                        Some(blade::FreedomAxis {
+                                        Some(blade_engine::FreedomAxis {
                                             limits: Some(-max_angle..max_angle),
                                             motor: Some(ac.steering),
                                         })
@@ -243,8 +244,8 @@ impl Game {
                         let wheel_joint = engine.add_joint(
                             suspender_handle,
                             wheel_handle,
-                            blade::JointDesc {
-                                child_anchor: blade::Transform {
+                            blade_engine::JointDesc {
+                                child_anchor: blade_engine::Transform {
                                     orientation: rotation.into(),
                                     ..Default::default()
                                 },
@@ -256,9 +257,9 @@ impl Game {
                         let _extra_joint = engine.add_joint(
                             vehicle.body_handle,
                             wheel_handle,
-                            blade::JointDesc {
-                                linear: blade::FreedomAxis::ALL_FREE,
-                                angular: blade::FreedomAxis::ALL_FREE,
+                            blade_engine::JointDesc {
+                                linear: blade_engine::FreedomAxis::ALL_FREE,
+                                angular: blade_engine::FreedomAxis::ALL_FREE,
                                 ..Default::default()
                             },
                         );
@@ -277,12 +278,12 @@ impl Game {
                         let wheel_joint = engine.add_joint(
                             vehicle.body_handle,
                             wheel_handle,
-                            blade::JointDesc {
-                                parent_anchor: blade::Transform {
+                            blade_engine::JointDesc {
+                                parent_anchor: blade_engine::Transform {
                                     position: offset.into(),
                                     ..Default::default()
                                 },
-                                child_anchor: blade::Transform {
+                                child_anchor: blade_engine::Transform {
                                     orientation: rotation.into(),
                                     ..Default::default()
                                 },
@@ -329,7 +330,7 @@ impl Game {
         for wheel in self.vehicle.wheels.iter() {
             self.engine.set_joint_motor(
                 wheel.spin_joint,
-                blade::JointAxis::AngularX,
+                blade_engine::JointAxis::AngularX,
                 0.0,
                 velocity,
             );
@@ -340,26 +341,31 @@ impl Game {
         self.update_time();
         for wheel in self.vehicle.wheels.iter() {
             if let Some(handle) = wheel.steer_joint {
-                self.engine
-                    .set_joint_motor(handle, blade::JointAxis::AngularY, angle_rad, 0.0);
+                self.engine.set_joint_motor(
+                    handle,
+                    blade_engine::JointAxis::AngularY,
+                    angle_rad,
+                    0.0,
+                );
             }
         }
     }
 
-    fn teleport_object_rel(&mut self, handle: blade::ObjectHandle, isometry: &Isometry) {
+    fn teleport_object_rel(&mut self, handle: blade_engine::ObjectHandle, isometry: &Isometry) {
         let prev_transform = self
             .engine
-            .get_object_transform(handle, blade::Prediction::LastKnown);
+            .get_object_transform(handle, blade_engine::Prediction::LastKnown);
         let next = isometry.clone() * Isometry::from(prev_transform);
         self.engine.teleport_object(handle, next.to_blade());
     }
 
     fn teleport(&mut self, position: glam::Vec3) {
-        let old_transform = self
-            .engine
-            .get_object_transform(self.vehicle.body_handle, blade::Prediction::LastKnown);
+        let old_transform = self.engine.get_object_transform(
+            self.vehicle.body_handle,
+            blade_engine::Prediction::LastKnown,
+        );
         let old_isometry_inv = Isometry::from(old_transform).inverse();
-        let new_transform = blade::Transform {
+        let new_transform = blade_engine::Transform {
             position: position.into(),
             ..Default::default()
         };
@@ -426,7 +432,7 @@ impl Game {
                 winit::keyboard::KeyCode::Comma => {
                     let transform = self.engine.get_object_transform(
                         self.vehicle.body_handle,
-                        blade::Prediction::LastKnown,
+                        blade_engine::Prediction::LastKnown,
                     );
                     let forward = glam::Quat::from(transform.orientation) * glam::Vec3::Z;
                     self.engine.apply_angular_impulse(
@@ -437,7 +443,7 @@ impl Game {
                 winit::keyboard::KeyCode::Period => {
                     let transform = self.engine.get_object_transform(
                         self.vehicle.body_handle,
-                        blade::Prediction::LastKnown,
+                        blade_engine::Prediction::LastKnown,
                     );
                     let forward = glam::Quat::from(transform.orientation) * glam::Vec3::Z;
                     self.engine.apply_angular_impulse(
@@ -448,7 +454,7 @@ impl Game {
                 winit::keyboard::KeyCode::Space => {
                     let transform = self.engine.get_object_transform(
                         self.vehicle.body_handle,
-                        blade::Prediction::LastKnown,
+                        blade_engine::Prediction::LastKnown,
                     );
                     let mut up = glam::Quat::from(transform.orientation) * glam::Vec3::Y;
                     up.y = up.y.abs();
@@ -545,7 +551,7 @@ impl Game {
                     if ui.button("Recover").clicked() {
                         let transform = self.engine.get_object_transform(
                             self.vehicle.body_handle,
-                            blade::Prediction::LastKnown,
+                            blade_engine::Prediction::LastKnown,
                         );
                         let pos = glam::Vec3::from(transform.position);
                         let bounds = self.engine.get_object_bounds(self.vehicle.body_handle);
@@ -593,7 +599,7 @@ impl Game {
         let camera = {
             let veh_transform = self.engine.get_object_transform(
                 self.vehicle.body_handle,
-                blade::Prediction::IntegrateVelocityAndForces,
+                blade_engine::Prediction::IntegrateVelocityAndForces,
             );
             let veh_isometry = Isometry::from(veh_transform);
             // Projection of the rotation of the vehicle on the Y axis
@@ -627,7 +633,7 @@ impl Game {
                 position: local_affine.translation.into(),
                 orientation: glam::Quat::from_affine3(&local_affine),
             };
-            blade::FrameCamera {
+            blade_engine::FrameCamera {
                 transform: (base * local.inverse()).to_blade(),
                 fov_y: cc.fov,
             }

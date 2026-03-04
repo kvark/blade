@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "blade-asset",
+    "blade-engine",
     "blade-egui",
     "blade-graphics",
     "blade-helpers",
@@ -29,6 +30,7 @@ strum = { version = "0.27", features = ["derive"] }
 web-sys = "0.3.60"
 winit = { version = "0.30" }
 openxr = "0.19"
+num_cpus = "1"
 
 [lib]
 
@@ -46,31 +48,15 @@ readme = "docs/README.md"
 [features]
 
 [dependencies]
-blade-asset = { version = "0.2", path = "blade-asset" }
-blade-egui = { version = "0.7", path = "blade-egui" }
-blade-graphics = { version = "0.7", path = "blade-graphics" }
-blade-helpers = { version = "0.1", path = "blade-helpers" }
-blade-util = { version = "0.3", path = "blade-util" }
-base64 = { workspace = true }
-choir = { workspace = true }
-colorsys = "0.6"
-egui = { workspace = true }
-gltf = { workspace = true }
-nalgebra = { version = "0.33", features = ["mint"] }
-log = { workspace = true }
-mint = { workspace = true, features = ["serde"] }
-num_cpus = "1"
-profiling = { workspace = true }
-rapier3d = { version = "0.23", features = ["debug-render"] }
-serde = { version = "1", features = ["serde_derive"] }
-slab = "0.4"
-winit = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-blade-render = { version = "0.4", path = "blade-render" }
 
 [dev-dependencies]
-blade-macros = { version = "0.3", path = "blade-macros" }
+blade-graphics = { path = "blade-graphics" }
+blade-helpers = { path = "blade-helpers" }
+blade-egui = { path = "blade-egui" }
+blade-asset = { path = "blade-asset" }
+blade-engine = { path = "blade-engine" }
+blade-render = { path = "blade-render" }
+blade-macros = { path = "blade-macros" }
 bytemuck = { workspace = true }
 choir = { workspace = true }
 egui = { workspace = true }
@@ -79,6 +65,7 @@ egui-winit = { version = "0.33", default-features = false, features = [
 ] }
 transform-gizmo-egui = "0.8"
 env_logger = "0.11"
+num_cpus = { workspace = true }
 glam = { workspace = true }
 log = { workspace = true }
 mint = { workspace = true, features = ["serde"] }
@@ -91,6 +78,7 @@ strum = { workspace = true }
 # not following semver :(
 del-msh-core = "=0.1.33"
 del-geo = "=0.1.29"
+winit = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 console_error_panic_hook = "0.1.7"

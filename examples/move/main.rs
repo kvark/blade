@@ -3,7 +3,7 @@ use std::{f32::consts, path::PathBuf, time};
 
 struct Game {
     // engine stuff
-    engine: blade::Engine,
+    engine: blade_engine::Engine,
     last_update: time::Instant,
     is_paused: bool,
     camera: ControlledCamera,
@@ -12,8 +12,8 @@ struct Game {
     egui_state: egui_winit::State,
     egui_viewport_id: egui::ViewportId,
     // game data
-    _ground_handle: blade::ObjectHandle,
-    object_handle: blade::ObjectHandle,
+    _ground_handle: blade_engine::ObjectHandle,
+    object_handle: blade_engine::ObjectHandle,
     angle: f32,
     last_event: time::Instant,
     last_mouse_pos: [i32; 2],
@@ -50,40 +50,41 @@ impl Game {
         };
 
         let data_path = PathBuf::from("examples/move/data");
-        let mut engine = blade::Engine::new(
+        let mut engine = blade_engine::Engine::new(
             &window,
-            &blade::config::Engine {
+            &blade_engine::config::Engine {
                 shader_path: "blade-render/code".to_string(),
                 data_path: data_path.as_os_str().to_string_lossy().into_owned(),
                 time_step: 0.01,
+                render_backend: blade_engine::config::RenderBackend::RayTracer,
             },
         );
 
         let ground_handle = engine.add_object(
-            &blade::config::Object {
+            &blade_engine::config::Object {
                 name: "ground".to_string(),
-                visuals: vec![blade::config::Visual {
+                visuals: vec![blade_engine::config::Visual {
                     model: "plane.glb".to_string(),
                     ..Default::default()
                 }],
                 colliders: vec![],
                 additional_mass: None,
             },
-            blade::Transform::default(),
-            blade::DynamicInput::Empty,
+            blade_engine::Transform::default(),
+            blade_engine::DynamicInput::Empty,
         );
         let object_handle = engine.add_object(
-            &blade::config::Object {
+            &blade_engine::config::Object {
                 name: "object".to_string(),
-                visuals: vec![blade::config::Visual {
+                visuals: vec![blade_engine::config::Visual {
                     model: "sphere.glb".to_string(),
                     ..Default::default()
                 }],
                 colliders: vec![],
                 additional_mass: None,
             },
-            blade::Transform::default(),
-            blade::DynamicInput::SetPosition,
+            blade_engine::Transform::default(),
+            blade_engine::DynamicInput::SetPosition,
         );
 
         let egui_context = egui::Context::default();
@@ -115,7 +116,7 @@ impl Game {
         if !self.is_paused {
             self.engine.teleport_object(
                 self.object_handle,
-                blade::Transform {
+                blade_engine::Transform {
                     position: (glam::Vec3::new(0.0, 1.0, 0.0)
                         + 5.0 * glam::Vec3::new(self.angle.sin(), 0.0, self.angle.cos()))
                     .into(),
