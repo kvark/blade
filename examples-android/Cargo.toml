@@ -21,6 +21,7 @@ ndk-glue = "0.7"
 ndk-context = "0.1"
 android-activity = { version = "0.6", features = ["native-activity"] }
 android_logger = "0.14"
+del-msh-core = "=0.1.33"
 
 [lib]
 name = "xr"
