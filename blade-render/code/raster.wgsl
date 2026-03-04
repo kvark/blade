@@ -33,11 +33,11 @@ struct VertexOutput {
     @location(4) uv: vec2<f32>,
 }
 
-@group(0) @binding(0) var<uniform> frame: RasterFrameParams;
-@group(0) @binding(1) var samp: sampler;
-@group(1) @binding(0) var<uniform> draw: RasterDrawParams;
-@group(1) @binding(1) var base_color_tex: texture_2d<f32>;
-@group(1) @binding(2) var normal_tex: texture_2d<f32>;
+var<uniform> frame: RasterFrameParams;
+var samp: sampler;
+var<uniform> draw: RasterDrawParams;
+var base_color_tex: texture_2d<f32>;
+var normal_tex: texture_2d<f32>;
 
 fn decode_normal(raw: u32) -> vec3<f32> {
     return unpack4x8snorm(raw).xyz;
