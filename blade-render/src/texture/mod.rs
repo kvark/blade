@@ -426,11 +426,9 @@ impl blade_asset::Baker for Baker {
 
             let block_info = image.format.0.block_info();
             let extent = base_extent.at_mip_level(i as u32);
-            let bytes_per_row = ((extent.width + block_info.dimensions.0 as u32 - 1)
-                / block_info.dimensions.0 as u32)
-                * block_info.size as u32;
-            let rows_per_image = (extent.height + block_info.dimensions.1 as u32 - 1)
-                / block_info.dimensions.1 as u32;
+            let bytes_per_row =
+                extent.width.div_ceil(block_info.dimensions.0 as u32) * block_info.size as u32;
+            let rows_per_image = extent.height.div_ceil(block_info.dimensions.1 as u32);
             assert!(mip.data.len() >= rows_per_image as usize * bytes_per_row as usize,
                 "Image mip[{i}] data of size {} is insufficient for {bytes_per_row} bytes per {rows_per_image} rows",
                 mip.data.len());

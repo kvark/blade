@@ -41,6 +41,7 @@ impl Default for RasterConfig {
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct RasterFrameParams {
     view_proj: [f32; 16],
+    inv_view_proj: [f32; 16],
     camera_pos: [f32; 4],
     light_dir: [f32; 4],
     light_color: [f32; 4],
@@ -70,8 +71,16 @@ struct RasterDrawData {
     normal_tex: gpu::TextureView,
 }
 
+#[derive(blade_macros::ShaderData)]
+struct RasterSkyData {
+    frame: RasterFrameParams,
+    samp: gpu::Sampler,
+    env_map: gpu::TextureView,
+}
+
 struct RasterPipelines {
     main: gpu::RenderPipeline,
+    sky: gpu::RenderPipeline,
 }
 
 impl RasterPipelines {
@@ -110,6 +119,35 @@ impl RasterPipelines {
         })
     }
 
+    fn create_sky(
+        shader: &gpu::Shader,
+        info: gpu::SurfaceInfo,
+        gpu: &gpu::Context,
+    ) -> gpu::RenderPipeline {
+        shader.check_struct_size::<RasterFrameParams>();
+        let sky_layout = <RasterSkyData as gpu::ShaderData>::layout();
+        gpu.create_render_pipeline(gpu::RenderPipelineDesc {
+            name: "raster-sky",
+            data_layouts: &[&sky_layout],
+            vertex: shader.at("raster_sky_vs"),
+            vertex_fetches: &[],
+            primitive: gpu::PrimitiveState {
+                topology: gpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: Some(gpu::DepthStencilState {
+                format: gpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: gpu::CompareFunction::LessEqual,
+                stencil: gpu::StencilState::default(),
+                bias: gpu::DepthBiasState::default(),
+            }),
+            fragment: Some(shader.at("raster_sky_fs")),
+            color_targets: &[info.format.into()],
+            multisample_state: gpu::MultisampleState::default(),
+        })
+    }
+
     fn init(
         shaders: &Shaders,
         config: &crate::render::RenderConfig,
@@ -119,13 +157,14 @@ impl RasterPipelines {
         let shader = shader_man[shaders.raster].raw.as_ref().unwrap();
         Ok(Self {
             main: Self::create_main(shader, config.surface_info, gpu),
+            sky: Self::create_sky(shader, config.surface_info, gpu),
         })
     }
 }
 
 pub struct Rasterizer {
     shaders: Shaders,
-    pipeline: gpu::RenderPipeline,
+    pipelines: RasterPipelines,
     sampler_linear: gpu::Sampler,
     debug: crate::render::DebugRender,
     dummy: DummyResources,
@@ -170,7 +209,7 @@ impl Rasterizer {
 
         Self {
             shaders,
-            pipeline: pipelines.main,
+            pipelines,
             sampler_linear,
             debug,
             dummy,
@@ -187,7 +226,8 @@ impl Rasterizer {
         gpu.destroy_texture_view(self.depth_view);
         gpu.destroy_texture(self.depth_texture);
         gpu.destroy_sampler(self.sampler_linear);
-        gpu.destroy_render_pipeline(&mut self.pipeline);
+        gpu.destroy_render_pipeline(&mut self.pipelines.main);
+        gpu.destroy_render_pipeline(&mut self.pipelines.sky);
     }
 
     #[profiling::function]
@@ -214,7 +254,8 @@ impl Rasterizer {
 
         if self.shaders.raster != old.raster {
             if let Ok(ref shader) = asset_hub.shaders[self.shaders.raster].raw {
-                self.pipeline = RasterPipelines::create_main(shader, self.surface_info, gpu);
+                self.pipelines.main = RasterPipelines::create_main(shader, self.surface_info, gpu);
+                self.pipelines.sky = RasterPipelines::create_sky(shader, self.surface_info, gpu);
             }
         }
 
@@ -227,6 +268,10 @@ impl Rasterizer {
 
     pub fn depth_view(&self) -> gpu::TextureView {
         self.depth_view
+    }
+
+    pub fn depth_texture(&self) -> gpu::Texture {
+        self.depth_texture
     }
 
     pub fn resize_screen(
@@ -253,83 +298,116 @@ impl Rasterizer {
         camera: &crate::Camera,
         objects: &[Object],
         asset_hub: &AssetHub,
+        environment_map: Option<blade_asset::Handle<crate::Texture>>,
         config: RasterConfig,
-        debug_lines: &[crate::DebugLine],
     ) {
-        let frame_params = self.make_frame_params(camera, config);
-        let mut pc = pass.with(&self.pipeline);
-        pc.bind(
-            0,
-            &RasterFrameData {
-                frame: frame_params,
-                samp: self.sampler_linear,
-            },
-        );
+        let env_map_enabled = environment_map.is_some();
+        let frame_params = self.make_frame_params(camera, config, env_map_enabled);
+        if let mut pc = pass.with(&self.pipelines.main) {
+            pc.bind(
+                0,
+                &RasterFrameData {
+                    frame: frame_params,
+                    samp: self.sampler_linear,
+                },
+            );
 
-        for object in objects.iter() {
-            let model = &asset_hub.models[object.model];
-            let object_transform = mat4_transform(&object.transform);
-            let object_normal = object_transform.inverse().transpose();
+            for object in objects.iter() {
+                let model = &asset_hub.models[object.model];
+                let object_transform = mat4_transform(&object.transform);
+                let object_normal = object_transform.inverse().transpose();
 
-            pc.bind_vertex(0, model.vertex_buffer.at(0));
+                pc.bind_vertex(0, model.vertex_buffer.at(0));
 
-            for geometry in model.geometries.iter() {
-                let geometry_transform = mat4_transform(&geometry.transform);
-                let world_transform = object_transform * geometry_transform;
-                let normal_transform = object_normal * geometry_transform.inverse().transpose();
-                let material = &model.materials[geometry.material_index];
+                for geometry in model.geometries.iter() {
+                    let geometry_transform = mat4_transform(&geometry.transform);
+                    let world_transform = object_transform * geometry_transform;
+                    let normal_transform = object_normal * geometry_transform.inverse().transpose();
+                    let material = &model.materials[geometry.material_index];
 
-                let (normal_tex, normal_scale) = match material.normal_texture {
-                    Some(handle) => {
-                        let texture = &asset_hub.textures[handle];
-                        (texture.view, material.normal_scale)
-                    }
-                    None => (self.dummy.white_view, 0.0),
-                };
-                let base_color_tex = match material.base_color_texture {
-                    Some(handle) => asset_hub.textures[handle].view,
-                    None => self.dummy.white_view,
-                };
+                    let (normal_tex, normal_scale) = match material.normal_texture {
+                        Some(handle) => {
+                            let texture = &asset_hub.textures[handle];
+                            (texture.view, material.normal_scale)
+                        }
+                        None => (self.dummy.white_view, 0.0),
+                    };
+                    let base_color_tex = match material.base_color_texture {
+                        Some(handle) => asset_hub.textures[handle].view,
+                        None => self.dummy.white_view,
+                    };
 
-                pc.bind(
-                    1,
-                    &RasterDrawData {
-                        draw: RasterDrawParams {
-                            model: world_transform.to_cols_array(),
-                            normal: normal_transform.to_cols_array(),
-                            base_color_factor: material.base_color_factor,
-                            material: [normal_scale, 0.0, 0.0, 0.0],
+                    pc.bind(
+                        1,
+                        &RasterDrawData {
+                            draw: RasterDrawParams {
+                                model: world_transform.to_cols_array(),
+                                normal: normal_transform.to_cols_array(),
+                                base_color_factor: material.base_color_factor,
+                                material: [normal_scale, 0.0, 0.0, 0.0],
+                            },
+                            base_color_tex,
+                            normal_tex,
                         },
-                        base_color_tex,
-                        normal_tex,
-                    },
-                );
+                    );
 
-                let vertex_count = geometry.vertex_range.end - geometry.vertex_range.start;
-                let index_count = geometry.triangle_count * 3;
-                match geometry.index_type {
-                    Some(index_type) => {
-                        pc.draw_indexed(
-                            model.index_buffer.at(geometry.index_offset),
-                            index_type,
-                            index_count,
-                            geometry.vertex_range.start as i32,
-                            0,
-                            1,
-                        );
-                    }
-                    None => {
-                        pc.draw(geometry.vertex_range.start, vertex_count, 0, 1);
+                    let vertex_count = geometry.vertex_range.end - geometry.vertex_range.start;
+                    let index_count = geometry.triangle_count * 3;
+                    match geometry.index_type {
+                        Some(index_type) => {
+                            pc.draw_indexed(
+                                model.index_buffer.at(geometry.index_offset),
+                                index_type,
+                                index_count,
+                                geometry.vertex_range.start as i32,
+                                0,
+                                1,
+                            );
+                        }
+                        None => {
+                            pc.draw(geometry.vertex_range.start, vertex_count, 0, 1);
+                        }
                     }
                 }
             }
         }
 
-        if !debug_lines.is_empty() {
-            let camera_params = self.make_camera_params(camera);
-            self.debug
-                .render_lines(debug_lines, camera_params, self.depth_view, pass);
+        let env_map = environment_map
+            .map(|handle| asset_hub.textures[handle].view)
+            .unwrap_or(self.dummy.black_view);
+        self.render_sky(pass, frame_params, env_map);
+    }
+
+    pub fn render_debug_lines(
+        &self,
+        pass: &mut gpu::RenderCommandEncoder,
+        camera: &crate::Camera,
+        debug_lines: &[crate::DebugLine],
+    ) {
+        if debug_lines.is_empty() {
+            return;
         }
+        let camera_params = self.make_camera_params(camera);
+        self.debug
+            .render_lines(debug_lines, camera_params, self.depth_view, pass);
+    }
+
+    fn render_sky(
+        &self,
+        pass: &mut gpu::RenderCommandEncoder,
+        frame_params: RasterFrameParams,
+        env_map: gpu::TextureView,
+    ) {
+        let mut pc = pass.with(&self.pipelines.sky);
+        pc.bind(
+            0,
+            &RasterSkyData {
+                frame: frame_params,
+                samp: self.sampler_linear,
+                env_map,
+            },
+        );
+        pc.draw(0, 3, 0, 1);
     }
 
     fn create_depth_target(
@@ -373,16 +451,23 @@ impl Rasterizer {
         }
     }
 
-    fn make_frame_params(&self, camera: &crate::Camera, config: RasterConfig) -> RasterFrameParams {
+    fn make_frame_params(
+        &self,
+        camera: &crate::Camera,
+        config: RasterConfig,
+        env_map_enabled: bool,
+    ) -> RasterFrameParams {
         let pos = glam::Vec3::from(camera.pos);
         let rot = glam::Quat::from(camera.rot);
         let view = glam::Mat4::from_rotation_translation(rot, pos).inverse();
         let aspect = self.surface_size.width as f32 / self.surface_size.height.max(1) as f32;
         let proj = glam::Mat4::perspective_rh(camera.fov_y, aspect, 0.01, camera.depth);
         let view_proj = proj * view;
+        let inv_view_proj = view_proj.inverse();
         let light_dir = glam::Vec3::from(config.light_dir).normalize_or_zero();
         RasterFrameParams {
             view_proj: view_proj.to_cols_array(),
+            inv_view_proj: inv_view_proj.to_cols_array(),
             camera_pos: [pos.x, pos.y, pos.z, 1.0],
             light_dir: [light_dir.x, light_dir.y, light_dir.z, 0.0],
             light_color: {
@@ -393,7 +478,12 @@ impl Rasterizer {
                 let c = config.ambient_color;
                 [c.x, c.y, c.z, 0.0]
             },
-            material: [config.roughness, config.metallic, 0.0, 0.0],
+            material: [
+                config.roughness,
+                config.metallic,
+                env_map_enabled as u32 as f32,
+                0.0,
+            ],
         }
     }
 }

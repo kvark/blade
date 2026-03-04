@@ -113,7 +113,7 @@ impl super::TextureFormat {
 
 impl super::TextureColor {
     pub const fn stencil_clear_value(&self) -> u32 {
-        match self {
+        match *self {
             crate::TextureColor::TransparentBlack => 0,
             crate::TextureColor::OpaqueBlack => !0,
             crate::TextureColor::White => !0,
@@ -121,7 +121,7 @@ impl super::TextureColor {
     }
 
     pub const fn depth_clear_value(&self) -> f32 {
-        match self {
+        match *self {
             crate::TextureColor::TransparentBlack => 0.0,
             crate::TextureColor::OpaqueBlack => 0.0,
             crate::TextureColor::White => 1.0,
@@ -134,9 +134,9 @@ impl super::ComputePipeline {
     pub fn get_dispatch_for(&self, extent: super::Extent) -> [u32; 3] {
         let wg_size = self.get_workgroup_size();
         [
-            (extent.width + wg_size[0] - 1) / wg_size[0],
-            (extent.height + wg_size[1] - 1) / wg_size[1],
-            (extent.depth + wg_size[2] - 1) / wg_size[2],
+            extent.width.div_ceil(wg_size[0]),
+            extent.height.div_ceil(wg_size[1]),
+            extent.depth.div_ceil(wg_size[2]),
         ]
     }
 }

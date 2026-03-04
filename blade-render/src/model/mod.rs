@@ -292,15 +292,11 @@ impl CookedModel<'_> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FrontFace {
     Clockwise,
+    #[default]
     CounterClockwise,
-}
-impl Default for FrontFace {
-    fn default() -> Self {
-        Self::CounterClockwise
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]

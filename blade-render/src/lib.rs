@@ -1,5 +1,9 @@
 #![cfg(not(any(gles, target_arch = "wasm32")))]
-#![allow(irrefutable_let_patterns, clippy::new_without_default)]
+#![allow(
+    irrefutable_let_patterns,
+    clippy::new_without_default,
+    clippy::needless_borrowed_reference
+)]
 #![warn(
     trivial_casts,
     trivial_numeric_casts,

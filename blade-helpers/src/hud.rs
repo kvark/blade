@@ -57,6 +57,67 @@ impl ExposeHud for blade_render::PostProcConfig {
     }
 }
 
+impl ExposeHud for blade_render::RasterConfig {
+    fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Clear color");
+            egui::ComboBox::from_id_salt("raster-clear-color")
+                .selected_text(format!("{:?}", self.clear_color))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.clear_color,
+                        blade_graphics::TextureColor::TransparentBlack,
+                        "TransparentBlack",
+                    );
+                    ui.selectable_value(
+                        &mut self.clear_color,
+                        blade_graphics::TextureColor::OpaqueBlack,
+                        "OpaqueBlack",
+                    );
+                    ui.selectable_value(
+                        &mut self.clear_color,
+                        blade_graphics::TextureColor::White,
+                        "White",
+                    );
+                });
+        });
+
+        ui.add(egui::Slider::new(&mut self.roughness, 0.0..=1.0).text("Roughness"));
+        ui.add(egui::Slider::new(&mut self.metallic, 0.0..=1.0).text("Metallic"));
+
+        ui.label("Light direction");
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut self.light_dir.x).speed(0.05));
+            ui.add(egui::DragValue::new(&mut self.light_dir.y).speed(0.05));
+            ui.add(egui::DragValue::new(&mut self.light_dir.z).speed(0.05));
+        });
+
+        let mut light_color = [self.light_color.x, self.light_color.y, self.light_color.z];
+        if ui.color_edit_button_rgb(&mut light_color).changed() {
+            self.light_color = mint::Vector3 {
+                x: light_color[0],
+                y: light_color[1],
+                z: light_color[2],
+            };
+        }
+        ui.label("Light color");
+
+        let mut ambient_color = [
+            self.ambient_color.x,
+            self.ambient_color.y,
+            self.ambient_color.z,
+        ];
+        if ui.color_edit_button_rgb(&mut ambient_color).changed() {
+            self.ambient_color = mint::Vector3 {
+                x: ambient_color[0],
+                y: ambient_color[1],
+                z: ambient_color[2],
+            };
+        }
+        ui.label("Ambient color");
+    }
+}
+
 impl ExposeHud for blade_render::DebugConfig {
     fn populate_hud(&mut self, ui: &mut egui::Ui) {
         use strum::IntoEnumIterator as _;

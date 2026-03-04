@@ -103,7 +103,7 @@ impl<T: bytemuck::Pod, const C: usize> Flat for [T; C] {
     }
 }
 
-impl<'a, T: bytemuck::Pod> Flat for &'a [T] {
+impl<T: bytemuck::Pod> Flat for &[T] {
     const ALIGNMENT: usize = mem::align_of::<T>();
     const FIXED_SIZE: Option<NonZeroUsize> = None;
     fn size(&self) -> usize {

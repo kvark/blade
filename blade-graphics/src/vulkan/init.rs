@@ -12,10 +12,8 @@ mod db {
 }
 mod layer {
     use std::ffi::CStr;
-    pub const KHRONOS_VALIDATION: &CStr =
-        unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_KHRONOS_validation\0") };
-    pub const MESA_OVERLAY: &CStr =
-        unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_MESA_overlay\0") };
+    pub const KHRONOS_VALIDATION: &CStr = c"VK_LAYER_KHRONOS_validation";
+    pub const MESA_OVERLAY: &CStr = c"VK_LAYER_MESA_overlay";
 }
 
 const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
@@ -423,7 +421,7 @@ impl super::Context {
             }
 
             let app_info = vk::ApplicationInfo::default()
-                .engine_name(ffi::CStr::from_bytes_with_nul(b"blade\0").unwrap())
+                .engine_name(c"blade")
                 .engine_version(1)
                 .api_version(vk::HEADER_VERSION_COMPLETE);
             let str_pointers = layers
@@ -438,12 +436,14 @@ impl super::Context {
                 .enabled_layer_names(layer_strings)
                 .enabled_extension_names(extension_strings);
             if let Some(ref xr_desc) = desc.xr {
+                let get_instance_proc_addr: openxr::sys::platform::VkGetInstanceProcAddr =
+                    std::mem::transmute(entry.static_fn().get_instance_proc_addr);
                 let raw_instance = unsafe {
                     xr_desc
                         .instance
                         .create_vulkan_instance(
                             xr_desc.system_id,
-                            std::mem::transmute(entry.static_fn().get_instance_proc_addr),
+                            get_instance_proc_addr,
                             &create_info as *const _ as *const _,
                         )
                         .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?
@@ -621,12 +621,14 @@ impl super::Context {
             device_create_info = device_create_info.push_next(&mut device_features2);
 
             if let Some(ref xr_desc) = desc.xr {
+                let get_instance_proc_addr: openxr::sys::platform::VkGetInstanceProcAddr =
+                    std::mem::transmute(entry.static_fn().get_instance_proc_addr);
                 let raw_device = unsafe {
                     xr_desc
                         .instance
                         .create_vulkan_device(
                             xr_desc.system_id,
-                            std::mem::transmute(entry.static_fn().get_instance_proc_addr),
+                            get_instance_proc_addr,
                             physical_device.as_raw() as _,
                             &device_create_info as *const _ as *const _,
                         )
@@ -744,7 +746,7 @@ impl super::Context {
 
             let properties = gpu_alloc::DeviceProperties {
                 max_memory_allocation_count: limits.max_memory_allocation_count,
-                max_memory_allocation_size: u64::max_value(), // TODO
+                max_memory_allocation_size: u64::MAX, // TODO
                 non_coherent_atom_size: limits.non_coherent_atom_size,
                 memory_types: memory_types
                     .iter()

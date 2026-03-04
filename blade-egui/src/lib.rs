@@ -13,7 +13,7 @@
     clippy::pattern_type_mismatch,
 )]
 
-const SHADER_SOURCE: &'static str = include_str!("../shader.wgsl");
+const SHADER_SOURCE: &str = include_str!("../shader.wgsl");
 
 use blade_util::{BufferBelt, BufferBeltDescriptor};
 use std::collections::hash_map::{Entry, HashMap};

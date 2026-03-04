@@ -12,6 +12,7 @@ repository = "https://github.com/kvark/blade"
 [features]
 
 [dependencies]
+blade-graphics = { version = "0.7", path = "../blade-graphics" }
 blade-render = { version = "0.4", path = "../blade-render" }
 egui = { workspace = true }
 glam = { workspace = true }
@@ -20,7 +21,13 @@ strum = { workspace = true }
 winit = { workspace = true }
 
 [package.metadata.cargo_check_external_types]
-allowed_external_types = ["blade_render::*", "epaint::*", "mint::*", "winit::*"]
+allowed_external_types = [
+    "blade_graphics::*",
+    "blade_render::*",
+    "epaint::*",
+    "mint::*",
+    "winit::*",
+]
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }

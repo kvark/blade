@@ -68,7 +68,7 @@ impl super::Context {
         let ep = &sf.shader.module.entry_points[ep_index];
         let ep_info = sf.shader.info.get_entry_point(ep_index);
 
-        let (mut module, module_info) = sf.shader.resolve_constants(&sf.constants);
+        let (mut module, module_info) = sf.shader.resolve_constants(sf.constants);
         crate::Shader::fill_resource_bindings(
             &mut module,
             group_infos,
@@ -609,7 +609,7 @@ impl crate::traits::ShaderDevice for super::Context {
 
         let create_info = vk::GraphicsPipelineCreateInfo::default()
             .layout(layout.raw)
-            .stages(&stages)
+            .stages(stages)
             .vertex_input_state(&vk_vertex_input)
             .input_assembly_state(&vk_input_assembly)
             .rasterization_state(&vk_rasterization)

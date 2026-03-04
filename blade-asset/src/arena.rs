@@ -20,7 +20,7 @@ struct Address {
 pub struct Handle<T>(Address, PhantomData<T>);
 impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
-        Handle(self.0, PhantomData)
+        *self
     }
 }
 impl<T> Copy for Handle<T> {}
