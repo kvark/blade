@@ -59,15 +59,15 @@ struct RasterDrawParams {
 
 #[derive(blade_macros::ShaderData)]
 struct RasterFrameData {
-    params: RasterFrameParams,
-    sampler_linear: gpu::Sampler,
+    frame: RasterFrameParams,
+    samp: gpu::Sampler,
 }
 
 #[derive(blade_macros::ShaderData)]
 struct RasterDrawData {
-    params: RasterDrawParams,
-    base_color: gpu::TextureView,
-    normal_map: gpu::TextureView,
+    draw: RasterDrawParams,
+    base_color_tex: gpu::TextureView,
+    normal_tex: gpu::TextureView,
 }
 
 struct RasterPipelines {
@@ -261,8 +261,8 @@ impl Rasterizer {
         pc.bind(
             0,
             &RasterFrameData {
-                params: frame_params,
-                sampler_linear: self.sampler_linear,
+                frame: frame_params,
+                samp: self.sampler_linear,
             },
         );
 
@@ -279,14 +279,14 @@ impl Rasterizer {
                 let normal_transform = object_normal * geometry_transform.inverse().transpose();
                 let material = &model.materials[geometry.material_index];
 
-                let (normal_map, normal_scale) = match material.normal_texture {
+                let (normal_tex, normal_scale) = match material.normal_texture {
                     Some(handle) => {
                         let texture = &asset_hub.textures[handle];
                         (texture.view, material.normal_scale)
                     }
                     None => (self.dummy.white_view, 0.0),
                 };
-                let base_color = match material.base_color_texture {
+                let base_color_tex = match material.base_color_texture {
                     Some(handle) => asset_hub.textures[handle].view,
                     None => self.dummy.white_view,
                 };
@@ -294,14 +294,14 @@ impl Rasterizer {
                 pc.bind(
                     1,
                     &RasterDrawData {
-                        params: RasterDrawParams {
+                        draw: RasterDrawParams {
                             model: world_transform.to_cols_array(),
                             normal: normal_transform.to_cols_array(),
                             base_color_factor: material.base_color_factor,
                             material: [normal_scale, 0.0, 0.0, 0.0],
                         },
-                        base_color,
-                        normal_map,
+                        base_color_tex,
+                        normal_tex,
                     },
                 );
 
