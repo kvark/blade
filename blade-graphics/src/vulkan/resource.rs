@@ -236,7 +236,11 @@ impl super::Context {
                 ..Default::default()
             };
             let vk_instance = vk::AccelerationStructureInstanceKHR {
-                transform: unsafe { mem::transmute(instance.transform) },
+                transform: unsafe {
+                    mem::transmute::<mint::RowMatrix3x4<f32>, vk::TransformMatrixKHR>(
+                        instance.transform,
+                    )
+                },
                 instance_custom_index_and_mask: vk::Packed24_8::new(
                     instance.custom_index,
                     instance.mask as u8,
@@ -356,7 +360,7 @@ impl crate::traits::ResourceDevice for super::Context {
     fn create_texture(&self, desc: crate::TextureDesc) -> super::Texture {
         let mut create_flags = vk::ImageCreateFlags::empty();
         if desc.dimension == crate::TextureDimension::D2
-            && desc.size.depth % 6 == 0
+            && desc.size.depth.is_multiple_of(6)
             && desc.sample_count == 1
             && desc.size.width == desc.size.height
         {

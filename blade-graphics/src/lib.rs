@@ -551,7 +551,7 @@ pub enum CompareFunction {
     Always,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TextureColor {
     TransparentBlack,
     OpaqueBlack,

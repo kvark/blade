@@ -102,6 +102,25 @@ jobs:
         run: |
           cargo fmt -- --check
 
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v3
+
+      - name: install rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          components: clippy
+
+      - name: run clippy
+        run: |
+          cargo clippy -p blade-engine -p blade-render -p blade-graphics --all-targets
+
   gpu-test:
     name: GPU Tests (${{ matrix.name }})
     strategy:

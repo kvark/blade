@@ -1,5 +1,6 @@
 struct RasterFrameParams {
     view_proj: mat4x4<f32>,
+    inv_view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
     light_dir: vec4<f32>,
     light_color: vec4<f32>,
@@ -38,6 +39,7 @@ var samp: sampler;
 var<uniform> draw: RasterDrawParams;
 var base_color_tex: texture_2d<f32>;
 var normal_tex: texture_2d<f32>;
+var env_map: texture_2d<f32>;
 
 fn decode_normal(raw: u32) -> vec3<f32> {
     return unpack4x8snorm(raw).xyz;
@@ -61,6 +63,12 @@ fn raster_vs(input: Vertex) -> VertexOutput {
 
 fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - cos_theta, 5.0);
+}
+
+fn map_equirect_dir_to_uv(dir: vec3<f32>) -> vec2<f32> {
+    let yaw = atan2(dir.x, dir.z);
+    let pitch = asin(clamp(dir.y, -1.0, 1.0));
+    return vec2<f32>((yaw / PI + 1.0) * 0.5, pitch / PI + 0.5);
 }
 
 fn distribution_ggx(n: vec3<f32>, h: vec3<f32>, roughness: f32) -> f32 {
@@ -126,6 +134,47 @@ fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let ambient = albedo * frame.ambient_color.xyz;
     let color = ambient + light;
 
+    let mapped = color / (color + vec3<f32>(1.0));
+    let gamma = pow(mapped, vec3<f32>(1.0 / 2.2));
+    return vec4<f32>(gamma, 1.0);
+}
+
+struct SkyOutput {
+    @builtin(position) clip_pos: vec4<f32>,
+    @location(0) ndc: vec2<f32>,
+}
+
+@vertex
+fn raster_sky_vs(@builtin(vertex_index) vertex_id: u32) -> SkyOutput {
+    let positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(3.0, -1.0),
+        vec2<f32>(-1.0, 3.0),
+    );
+    let pos = positions[vertex_id];
+    var out: SkyOutput;
+    out.clip_pos = vec4<f32>(pos, 1.0, 1.0);
+    out.ndc = pos;
+    return out;
+}
+
+@fragment
+fn raster_sky_fs(input: SkyOutput) -> @location(0) vec4<f32> {
+    let ndc = vec4<f32>(input.ndc, 1.0, 1.0);
+    let world = frame.inv_view_proj * ndc;
+    let world_pos = world.xyz / world.w;
+    let dir = normalize(world_pos - frame.camera_pos.xyz);
+    let env_enabled = frame.material.z > 0.5;
+    var color = vec3<f32>(0.0);
+    if (env_enabled) {
+        let uv = map_equirect_dir_to_uv(dir);
+        color = textureSampleLevel(env_map, samp, uv, 0.0).xyz;
+    } else {
+        let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+        let horizon = vec3<f32>(0.6, 0.7, 0.9);
+        let zenith = vec3<f32>(0.2, 0.35, 0.6);
+        color = mix(horizon, zenith, t);
+    }
     let mapped = color / (color + vec3<f32>(1.0));
     let gamma = pow(mapped, vec3<f32>(1.0 / 2.2));
     return vec4<f32>(gamma, 1.0);

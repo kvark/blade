@@ -91,7 +91,8 @@ impl BufferBelt {
         bp
     }
 
-    // SAFETY: T should be zeroable and ordinary data, no references, pointers, cells or other complicated data type.
+    /// # Safety
+    /// T should be zeroable and ordinary data, no references, pointers, cells or other complicated data type.
     /// Allocate a region to hold the typed `data` slice contents.
     pub unsafe fn alloc_typed<T>(&mut self, data: &[T], gpu: &gpu::Context) -> gpu::BufferPiece {
         assert!(!data.is_empty());

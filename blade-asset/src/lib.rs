@@ -36,10 +36,7 @@ pub struct Handle<T> {
 }
 impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
-        Handle {
-            inner: self.inner,
-            version: self.version,
-        }
+        *self
     }
 }
 impl<T> Copy for Handle<T> {}

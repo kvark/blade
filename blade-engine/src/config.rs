@@ -1,12 +1,8 @@
-#[derive(serde::Deserialize)]
+#[derive(Default, serde::Deserialize)]
 pub enum FrontFace {
     Cw,
+    #[default]
     Ccw,
-}
-impl Default for FrontFace {
-    fn default() -> Self {
-        Self::Ccw
-    }
 }
 
 fn default_vec() -> mint::Vector3<f32> {

@@ -7,7 +7,7 @@ impl super::CrashHandler {
             self.raw_string[self.next_offset] = b'|';
             self.next_offset += 1;
         }
-        let len = marker.as_bytes().len().min(self.raw_string.len());
+        let len = marker.len().min(self.raw_string.len());
         if self.next_offset + len > self.raw_string.len() {
             self.next_offset = 0;
         }

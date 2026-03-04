@@ -45,9 +45,12 @@ struct Samplers {
     linear: blade_graphics::Sampler,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, blade_macros::AsPrimitive, strum::EnumIter)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, PartialOrd, blade_macros::AsPrimitive, strum::EnumIter,
+)]
 #[repr(u32)]
 pub enum DebugMode {
+    #[default]
     Final = 0,
     Depth = 1,
     DiffuseAlbedoTexture = 2,
@@ -60,12 +63,6 @@ pub enum DebugMode {
     HitConsistency = 9,
     SampleReuse = 10,
     Variance = 15,
-}
-
-impl Default for DebugMode {
-    fn default() -> Self {
-        Self::Final
-    }
 }
 
 bitflags::bitflags! {
