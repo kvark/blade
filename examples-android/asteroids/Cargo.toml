@@ -1,0 +1,56 @@
+[package]
+name = "blade-android-asteroids"
+version = "0.1.0"
+publish = false
+edition = "2021"
+
+[features]
+
+[dependencies]
+
+[target.'cfg(target_os = "android")'.dependencies]
+blade-engine = { version = "0.1", path = "../../blade-engine" }
+blade-graphics = { version = "0.7", path = "../../blade-graphics" }
+openxr = { workspace = true }
+log = "0.4"
+libc = "0.2.50"
+libloading = "0.8"
+ndk-glue = "0.7"
+ndk-context = "0.1"
+android_logger = "0.14"
+
+[lib]
+name = "asteroids"
+path = "asteroids.rs"
+crate-type = ["cdylib"]
+
+[package.metadata.android]
+build_targets = ["aarch64-linux-android"]
+runtime_libs = "../libs"
+assets = "../../blade-render/code"
+label = "Blade Asteroids"
+
+[package.metadata.android.sdk]
+min_sdk_version = 21
+target_sdk_version = 30
+
+[package.metadata.android.signing.release]
+path = "../keystore/debug.keystore"
+keystore_password = "android"
+key_alias = "androiddebugkey"
+key_password = "android"
+
+[package.metadata.android.application.activity]
+label = "Blade Asteroids"
+theme = "@android:style/Theme.Black.NoTitleBar.Fullscreen"
+config_changes = "density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
+launch_mode = "singleTask"
+orientation = "landscape"
+resizeable_activity = false
+
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = [
+    "com.oculus.intent.category.VR",
+    "android.intent.category.LAUNCHER",
+]

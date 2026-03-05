@@ -10,7 +10,8 @@ members = [
     "blade-render",
     "blade-util",
     "run-wasm",
-    "examples-android",
+    "examples-android/xr",
+    "examples-android/asteroids",
 ]
 exclude = []
 

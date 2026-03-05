@@ -376,15 +376,14 @@ pub fn main() {
                             if xr_debug {
                                 info!("XR state READY -> begin session");
                             }
-                            mark!("XR mark: calling session.begin");
-                            context.xr_session().unwrap().begin(VIEW_TYPE).unwrap();
-                            mark!("XR mark: session.begin returned");
-
                             if matches!(state, AppState::Idle) {
                                 mark!("XR mark: calling Example::new");
                                 state = AppState::Running(Example::new(&context, xr_debug));
                                 mark!("XR mark: Example created");
                             }
+                            mark!("XR mark: calling session.begin");
+                            context.xr_session().unwrap().begin(VIEW_TYPE).unwrap();
+                            mark!("XR mark: session.begin returned");
                         }
                         xr::SessionState::STOPPING => {
                             if xr_debug {
