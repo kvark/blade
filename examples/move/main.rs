@@ -57,6 +57,7 @@ impl Game {
                 data_path: data_path.as_os_str().to_string_lossy().into_owned(),
                 time_step: 0.01,
                 render_backend: blade_engine::config::RenderBackend::Rasterizer,
+                gui_enabled: cfg!(debug_assertions),
             },
         );
 

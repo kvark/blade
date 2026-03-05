@@ -120,6 +120,10 @@ fn default_render_backend() -> RenderBackend {
     RenderBackend::RayTracer
 }
 
+fn default_gui_enabled() -> bool {
+    cfg!(debug_assertions)
+}
+
 #[derive(serde::Deserialize)]
 pub struct Engine {
     pub shader_path: String,
@@ -128,4 +132,6 @@ pub struct Engine {
     pub time_step: f32,
     #[serde(default = "default_render_backend")]
     pub render_backend: RenderBackend,
+    #[serde(default = "default_gui_enabled")]
+    pub gui_enabled: bool,
 }
