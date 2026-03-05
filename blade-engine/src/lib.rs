@@ -360,9 +360,19 @@ impl From<blade_render::Camera> for FrameCamera {
 }
 
 #[allow(clippy::large_enum_variant)]
-enum RendererBackend {
-    RayTracer(blade_render::RayTracer),
-    Rasterizer(blade_render::Rasterizer),
+enum Renderer {
+    RayTracer {
+        inner: blade_render::RayTracer,
+        frame_config: blade_render::FrameConfig,
+        ray_config: blade_render::RayConfig,
+        denoiser_enabled: bool,
+        denoiser_config: blade_render::DenoiserConfig,
+        post_proc_config: blade_render::PostProcConfig,
+    },
+    Rasterizer {
+        inner: blade_render::Rasterizer,
+        raster_config: blade_render::RasterConfig,
+    },
 }
 
 /// Blade Engine encapsulates all the context for applications,
@@ -370,7 +380,7 @@ enum RendererBackend {
 /// asset hub, physics context, task processing, and more.
 pub struct Engine {
     pacer: blade_render::util::FramePacer,
-    renderer: RendererBackend,
+    renderer: Renderer,
     physics: Physics,
     load_tasks: Vec<choir::RunningTask>,
     gui_painter: Option<blade_egui::GuiPainter>,
@@ -383,12 +393,6 @@ pub struct Engine {
     selected_collider: Option<rapier3d::geometry::ColliderHandle>,
     render_objects: Vec<blade_render::Object>,
     debug: blade_render::DebugConfig,
-    pub frame_config: blade_render::FrameConfig,
-    pub ray_config: blade_render::RayConfig,
-    pub raster_config: blade_render::RasterConfig,
-    pub denoiser_enabled: bool,
-    pub denoiser_config: blade_render::DenoiserConfig,
-    pub post_proc_config: blade_render::PostProcConfig,
     track_hot_reloads: bool,
     workers: Vec<choir::WorkerHandle>,
     choir: Arc<choir::Choir>,
@@ -464,24 +468,42 @@ impl Engine {
             max_debug_lines: 1 << 14,
         };
         let renderer = match config.render_backend {
-            config::RenderBackend::RayTracer => {
-                RendererBackend::RayTracer(blade_render::RayTracer::new(
+            config::RenderBackend::RayTracer => Renderer::RayTracer {
+                inner: blade_render::RayTracer::new(
                     command_encoder,
                     &gpu_context,
                     shaders,
                     &asset_hub.shaders,
                     &render_config,
-                ))
-            }
-            config::RenderBackend::Rasterizer => {
-                RendererBackend::Rasterizer(blade_render::Rasterizer::new(
+                ),
+                frame_config: blade_render::FrameConfig {
+                    frozen: false,
+                    debug_draw: true,
+                    reset_variance: false,
+                    reset_reservoirs: true,
+                },
+                ray_config: blade_helpers::default_ray_config(),
+                denoiser_enabled: true,
+                denoiser_config: blade_render::DenoiserConfig {
+                    num_passes: 4,
+                    temporal_weight: 0.1,
+                },
+                post_proc_config: blade_render::PostProcConfig {
+                    average_luminocity: 0.5,
+                    exposure_key_value: 1.0 / 9.6,
+                    white_level: 1.0,
+                },
+            },
+            config::RenderBackend::Rasterizer => Renderer::Rasterizer {
+                inner: blade_render::Rasterizer::new(
                     command_encoder,
                     &gpu_context,
                     shaders,
                     &asset_hub.shaders,
                     &render_config,
-                ))
-            }
+                ),
+                raster_config: blade_render::RasterConfig::default(),
+            },
         };
 
         pacer.end_frame(&gpu_context);
@@ -510,24 +532,6 @@ impl Engine {
             selected_collider: None,
             render_objects: Vec::new(),
             debug: blade_render::DebugConfig::default(),
-            frame_config: blade_render::FrameConfig {
-                frozen: false,
-                debug_draw: true,
-                reset_variance: false,
-                reset_reservoirs: true,
-            },
-            ray_config: blade_helpers::default_ray_config(),
-            raster_config: blade_render::RasterConfig::default(),
-            denoiser_enabled: true,
-            denoiser_config: blade_render::DenoiserConfig {
-                num_passes: 4,
-                temporal_weight: 0.1,
-            },
-            post_proc_config: blade_render::PostProcConfig {
-                average_luminocity: 0.5,
-                exposure_key_value: 1.0 / 9.6,
-                white_level: 1.0,
-            },
             track_hot_reloads: false,
             workers,
             choir,
@@ -545,11 +549,11 @@ impl Engine {
         }
         self.gpu_context.destroy_surface(&mut self.gpu_surface);
         match self.renderer {
-            RendererBackend::RayTracer(ref mut renderer) => {
-                renderer.destroy(&self.gpu_context);
+            Renderer::RayTracer { ref mut inner, .. } => {
+                inner.destroy(&self.gpu_context);
             }
-            RendererBackend::Rasterizer(ref mut renderer) => {
-                renderer.destroy(&self.gpu_context);
+            Renderer::Rasterizer { ref mut inner, .. } => {
+                inner.destroy(&self.gpu_context);
             }
         }
         self.asset_hub.destroy();
@@ -577,11 +581,11 @@ impl Engine {
         if self.track_hot_reloads {
             let sync_point = self.pacer.last_sync_point().unwrap();
             match self.renderer {
-                RendererBackend::RayTracer(ref mut renderer) => {
-                    renderer.hot_reload(&self.asset_hub, &self.gpu_context, sync_point);
+                Renderer::RayTracer { ref mut inner, .. } => {
+                    inner.hot_reload(&self.asset_hub, &self.gpu_context, sync_point);
                 }
-                RendererBackend::Rasterizer(ref mut renderer) => {
-                    renderer.hot_reload(&self.asset_hub, &self.gpu_context, sync_point);
+                Renderer::Rasterizer { ref mut inner, .. } => {
+                    inner.hot_reload(&self.asset_hub, &self.gpu_context, sync_point);
                 }
             }
         }
@@ -591,8 +595,8 @@ impl Engine {
         let surface_config = Self::make_surface_config(physical_size);
         let new_render_size = surface_config.size;
         let current_render_size = match self.renderer {
-            RendererBackend::RayTracer(ref renderer) => renderer.get_surface_size(),
-            RendererBackend::Rasterizer(ref renderer) => renderer.get_surface_size(),
+            Renderer::RayTracer { ref inner, .. } => inner.get_surface_size(),
+            Renderer::Rasterizer { ref inner, .. } => inner.get_surface_size(),
         };
         if new_render_size != current_render_size {
             log::info!("Resizing to {}", new_render_size);
@@ -604,17 +608,25 @@ impl Engine {
         let (command_encoder, temp) = self.pacer.begin_frame();
         if new_render_size != current_render_size {
             match self.renderer {
-                RendererBackend::RayTracer(ref mut renderer) => {
-                    renderer.resize_screen(new_render_size, command_encoder, &self.gpu_context);
+                Renderer::RayTracer {
+                    ref mut inner,
+                    ref mut frame_config,
+                    ..
+                } => {
+                    inner.resize_screen(new_render_size, command_encoder, &self.gpu_context);
+                    frame_config.reset_reservoirs = true;
                 }
-                RendererBackend::Rasterizer(ref mut renderer) => {
-                    renderer.resize_screen(new_render_size, command_encoder, &self.gpu_context);
+                Renderer::Rasterizer { ref mut inner, .. } => {
+                    inner.resize_screen(new_render_size, command_encoder, &self.gpu_context);
                 }
             }
-            self.frame_config.reset_reservoirs = true;
         }
-        if matches!(&self.renderer, RendererBackend::RayTracer(_)) {
-            self.frame_config.reset_variance = self.debug.mouse_pos.is_none();
+        if let Renderer::RayTracer {
+            ref mut frame_config,
+            ..
+        } = self.renderer
+        {
+            frame_config.reset_variance = self.debug.mouse_pos.is_none();
         }
 
         if let Some(ref mut painter) = self.gui_painter {
@@ -661,10 +673,17 @@ impl Engine {
             }
 
             match self.renderer {
-                RendererBackend::RayTracer(ref mut renderer) => {
+                Renderer::RayTracer {
+                    ref mut inner,
+                    ref mut frame_config,
+                    ref mut ray_config,
+                    ref mut denoiser_enabled,
+                    ref mut denoiser_config,
+                    ..
+                } => {
                     // Rebuilding every frame
-                    if !self.frame_config.frozen {
-                        renderer.build_scene(
+                    if !frame_config.frozen {
+                        inner.build_scene(
                             command_encoder,
                             &self.render_objects,
                             self.environment_map,
@@ -674,7 +693,7 @@ impl Engine {
                         );
                     }
 
-                    renderer.prepare(
+                    inner.prepare(
                         command_encoder,
                         &blade_render::Camera {
                             pos: camera.transform.position,
@@ -682,18 +701,18 @@ impl Engine {
                             fov_y: camera.fov_y,
                             depth: MAX_DEPTH,
                         },
-                        self.frame_config,
+                        *frame_config,
                     );
-                    self.frame_config.reset_reservoirs = false;
+                    frame_config.reset_reservoirs = false;
 
                     if !self.render_objects.is_empty() {
-                        renderer.ray_trace(command_encoder, self.debug, self.ray_config);
-                        if self.denoiser_enabled {
-                            renderer.denoise(command_encoder, self.denoiser_config);
+                        inner.ray_trace(command_encoder, self.debug, *ray_config);
+                        if *denoiser_enabled {
+                            inner.denoise(command_encoder, *denoiser_config);
                         }
                     }
                 }
-                RendererBackend::Rasterizer(_) => {}
+                Renderer::Rasterizer { .. } => {}
             }
         }
 
@@ -749,7 +768,11 @@ impl Engine {
         command_encoder.init_texture(frame.texture());
 
         match self.renderer {
-            RendererBackend::RayTracer(ref mut renderer) => {
+            Renderer::RayTracer {
+                ref mut inner,
+                ref post_proc_config,
+                ..
+            } => {
                 if let mut pass = command_encoder.render(
                     "draw",
                     gpu::RenderTargetSet {
@@ -766,10 +789,10 @@ impl Engine {
                         scale_factor,
                     };
                     if can_render {
-                        renderer.post_proc(
+                        inner.post_proc(
                             &mut pass,
                             self.debug,
-                            self.post_proc_config,
+                            *post_proc_config,
                             &debug_lines,
                             &[],
                         );
@@ -779,37 +802,40 @@ impl Engine {
                     }
                 }
             }
-            RendererBackend::Rasterizer(ref mut renderer) => {
+            Renderer::Rasterizer {
+                ref mut inner,
+                ref raster_config,
+            } => {
                 let render_camera = blade_render::Camera {
                     pos: camera.transform.position,
                     rot: camera.transform.orientation,
                     fov_y: camera.fov_y,
                     depth: MAX_DEPTH,
                 };
-                command_encoder.init_texture(renderer.depth_texture());
+                command_encoder.init_texture(inner.depth_texture());
                 if let mut pass = command_encoder.render(
                     "raster",
                     gpu::RenderTargetSet {
                         colors: &[gpu::RenderTarget {
                             view: frame.texture_view(),
-                            init_op: gpu::InitOp::Clear(self.raster_config.clear_color),
+                            init_op: gpu::InitOp::Clear(raster_config.clear_color),
                             finish_op: gpu::FinishOp::Store,
                         }],
                         depth_stencil: Some(gpu::RenderTarget {
-                            view: renderer.depth_view(),
+                            view: inner.depth_view(),
                             init_op: gpu::InitOp::Clear(gpu::TextureColor::White),
                             finish_op: gpu::FinishOp::Store,
                         }),
                     },
                 ) {
                     if can_render {
-                        renderer.render(
+                        inner.render(
                             &mut pass,
                             &render_camera,
                             &self.render_objects,
                             &self.asset_hub,
                             self.environment_map,
-                            self.raster_config,
+                            *raster_config,
                         );
                     }
                 }
@@ -827,7 +853,7 @@ impl Engine {
                             depth_stencil: None,
                         },
                     ) {
-                        renderer.render_debug_lines(&mut pass, &render_camera, &debug_lines);
+                        inner.render_debug_lines(&mut pass, &render_camera, &debug_lines);
                         let screen_desc = blade_egui::ScreenDescriptor {
                             physical_size: (physical_size.width, physical_size.height),
                             scale_factor,
@@ -860,8 +886,8 @@ impl Engine {
 
         let mut selection = blade_render::SelectionInfo::default();
         if self.debug.mouse_pos.is_some() {
-            if let RendererBackend::RayTracer(ref mut renderer) = self.renderer {
-                selection = renderer.read_debug_selection_info();
+            if let Renderer::RayTracer { ref mut inner, .. } = self.renderer {
+                selection = inner.read_debug_selection_info();
                 self.selected_object_handle = self.find_object(selection.custom_index);
             }
         }
@@ -871,21 +897,31 @@ impl Engine {
         egui::CollapsingHeader::new("Rendering")
             .default_open(false)
             .show(ui, |ui| match self.renderer {
-                RendererBackend::RayTracer(_) => {
-                    self.ray_config.populate_hud(ui);
-                    self.frame_config.reset_reservoirs |= ui.button("Reset Accumulation").clicked();
-                    ui.checkbox(&mut self.denoiser_enabled, "Enable Denoiser");
-                    self.denoiser_config.populate_hud(ui);
-                    self.post_proc_config.populate_hud(ui);
+                Renderer::RayTracer {
+                    ref mut ray_config,
+                    ref mut denoiser_enabled,
+                    ref mut denoiser_config,
+                    ref mut post_proc_config,
+                    ref mut frame_config,
+                    ..
+                } => {
+                    ray_config.populate_hud(ui);
+                    frame_config.reset_reservoirs |= ui.button("Reset Accumulation").clicked();
+                    ui.checkbox(denoiser_enabled, "Enable Denoiser");
+                    denoiser_config.populate_hud(ui);
+                    post_proc_config.populate_hud(ui);
                 }
-                RendererBackend::Rasterizer(_) => {
-                    self.raster_config.populate_hud(ui);
+                Renderer::Rasterizer {
+                    ref mut raster_config,
+                    ..
+                } => {
+                    raster_config.populate_hud(ui);
                 }
             });
         egui::CollapsingHeader::new("Debug")
             .default_open(true)
             .show(ui, |ui| {
-                if matches!(&self.renderer, RendererBackend::RayTracer(_)) {
+                if matches!(&self.renderer, Renderer::RayTracer { .. }) {
                     self.debug.populate_hud(ui);
                     blade_helpers::populate_debug_selection(
                         &mut self.debug.mouse_pos,
@@ -1031,8 +1067,8 @@ impl Engine {
 
     pub fn screen_aspect(&self) -> f32 {
         let size = match self.renderer {
-            RendererBackend::RayTracer(ref renderer) => renderer.get_surface_size(),
-            RendererBackend::Rasterizer(ref renderer) => renderer.get_surface_size(),
+            Renderer::RayTracer { ref inner, .. } => inner.get_surface_size(),
+            Renderer::Rasterizer { ref inner, .. } => inner.get_surface_size(),
         };
         size.width as f32 / size.height.max(1) as f32
     }
@@ -1343,8 +1379,34 @@ impl Engine {
         self.physics.gravity.y = -force;
     }
 
+    pub fn set_frozen(&mut self, frozen: bool) {
+        if let Renderer::RayTracer {
+            ref mut frame_config,
+            ..
+        } = self.renderer
+        {
+            frame_config.frozen = frozen;
+        }
+    }
+
+    pub fn set_debug_draw(&mut self, enabled: bool) {
+        if let Renderer::RayTracer {
+            ref mut frame_config,
+            ..
+        } = self.renderer
+        {
+            frame_config.debug_draw = enabled;
+        }
+    }
+
     pub fn set_average_luminosity(&mut self, avg_lum: f32) {
-        self.post_proc_config.average_luminocity = avg_lum;
+        if let Renderer::RayTracer {
+            ref mut post_proc_config,
+            ..
+        } = self.renderer
+        {
+            post_proc_config.average_luminocity = avg_lum;
+        }
     }
 
     pub fn set_debug_pixel(&mut self, mouse_pos: Option<[i32; 2]>) {
