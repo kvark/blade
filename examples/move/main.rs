@@ -217,8 +217,8 @@ impl Game {
     fn on_draw(&mut self) -> time::Duration {
         self.update_time();
 
-        self.engine.frame_config.frozen = self.is_paused;
-        self.engine.frame_config.debug_draw = self.is_point_selected;
+        self.engine.set_frozen(self.is_paused);
+        self.engine.set_debug_draw(self.is_point_selected);
         self.engine.set_debug_pixel(if self.is_debug_active {
             Some(self.last_mouse_pos)
         } else {
