@@ -373,7 +373,7 @@ pub struct Engine {
     renderer: RendererBackend,
     physics: Physics,
     load_tasks: Vec<choir::RunningTask>,
-    gui_painter: blade_egui::GuiPainter,
+    gui_painter: Option<blade_egui::GuiPainter>,
     asset_hub: blade_render::AssetHub,
     gpu_surface: gpu::Surface,
     gpu_context: Arc<gpu::Context>,
@@ -486,7 +486,11 @@ impl Engine {
 
         pacer.end_frame(&gpu_context);
 
-        let gui_painter = blade_egui::GuiPainter::new(surface_info, &gpu_context);
+        let gui_painter = if config.gui_enabled {
+            Some(blade_egui::GuiPainter::new(surface_info, &gpu_context))
+        } else {
+            None
+        };
         let mut physics = Physics::default();
         physics.debug_pipeline.mode = rapier3d::pipeline::DebugRenderMode::empty();
         physics.integration_params.dt = config.time_step;
@@ -535,7 +539,10 @@ impl Engine {
     pub fn destroy(&mut self) {
         self.workers.clear();
         self.pacer.destroy(&self.gpu_context);
-        self.gui_painter.destroy(&self.gpu_context);
+        if let Some(gui_painter) = self.gui_painter.take() {
+            let mut painter = gui_painter;
+            painter.destroy(&self.gpu_context);
+        }
         self.gpu_context.destroy_surface(&mut self.gpu_surface);
         match self.renderer {
             RendererBackend::RayTracer(ref mut renderer) => {
@@ -610,8 +617,9 @@ impl Engine {
             self.frame_config.reset_variance = self.debug.mouse_pos.is_none();
         }
 
-        self.gui_painter
-            .update_textures(command_encoder, gui_textures, &self.gpu_context);
+        if let Some(ref mut painter) = self.gui_painter {
+            painter.update_textures(command_encoder, gui_textures, &self.gpu_context);
+        }
 
         self.asset_hub.flush(command_encoder, &mut temp.buffers);
 
@@ -766,12 +774,9 @@ impl Engine {
                             &[],
                         );
                     }
-                    self.gui_painter.paint(
-                        &mut pass,
-                        gui_primitives,
-                        &screen_desc,
-                        &self.gpu_context,
-                    );
+                    if let Some(ref mut painter) = self.gui_painter {
+                        painter.paint(&mut pass, gui_primitives, &screen_desc, &self.gpu_context);
+                    }
                 }
             }
             RendererBackend::Rasterizer(ref mut renderer) => {
@@ -810,35 +815,41 @@ impl Engine {
                 }
 
                 // GUI is a dev-only overlay, so a separate pass keeps the raster path simpler.
-                if let mut pass = command_encoder.render(
-                    "gui",
-                    gpu::RenderTargetSet {
-                        colors: &[gpu::RenderTarget {
-                            view: frame.texture_view(),
-                            init_op: gpu::InitOp::Load,
-                            finish_op: gpu::FinishOp::Store,
-                        }],
-                        depth_stencil: None,
-                    },
-                ) {
-                    renderer.render_debug_lines(&mut pass, &render_camera, &debug_lines);
-                    let screen_desc = blade_egui::ScreenDescriptor {
-                        physical_size: (physical_size.width, physical_size.height),
-                        scale_factor,
-                    };
-                    self.gui_painter.paint(
-                        &mut pass,
-                        gui_primitives,
-                        &screen_desc,
-                        &self.gpu_context,
-                    );
+                if self.gui_painter.is_some() {
+                    if let mut pass = command_encoder.render(
+                        "gui",
+                        gpu::RenderTargetSet {
+                            colors: &[gpu::RenderTarget {
+                                view: frame.texture_view(),
+                                init_op: gpu::InitOp::Load,
+                                finish_op: gpu::FinishOp::Store,
+                            }],
+                            depth_stencil: None,
+                        },
+                    ) {
+                        renderer.render_debug_lines(&mut pass, &render_camera, &debug_lines);
+                        let screen_desc = blade_egui::ScreenDescriptor {
+                            physical_size: (physical_size.width, physical_size.height),
+                            scale_factor,
+                        };
+                        if let Some(ref mut painter) = self.gui_painter {
+                            painter.paint(
+                                &mut pass,
+                                gui_primitives,
+                                &screen_desc,
+                                &self.gpu_context,
+                            );
+                        }
+                    }
                 }
             }
         }
 
         command_encoder.present(frame);
         let sync_point = self.pacer.end_frame(&self.gpu_context);
-        self.gui_painter.after_submit(sync_point);
+        if let Some(ref mut painter) = self.gui_painter {
+            painter.after_submit(sync_point);
+        }
 
         profiling::finish_frame!();
     }
