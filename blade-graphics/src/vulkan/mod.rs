@@ -58,6 +58,7 @@ struct Device {
     timeline_semaphore: khr::timeline_semaphore::Device,
     dynamic_rendering: khr::dynamic_rendering::Device,
     ray_tracing: Option<RayTracingDevice>,
+    buffer_device_address: bool,
     buffer_marker: Option<ash::amd::buffer_marker::Device>,
     shader_info: Option<ash::amd::shader_info::Device>,
     full_screen_exclusive: Option<ash::ext::full_screen_exclusive::Device>,

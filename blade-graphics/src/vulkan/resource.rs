@@ -17,7 +17,7 @@ impl super::Context {
         memory: crate::Memory,
     ) -> Allocation {
         let mut manager = self.memory.lock().unwrap();
-        let device_address_usage = if self.device.ray_tracing.is_some() {
+        let device_address_usage = if self.device.buffer_device_address {
             gpu_alloc::UsageFlags::DEVICE_ADDRESS
         } else {
             gpu_alloc::UsageFlags::empty()
@@ -310,9 +310,11 @@ impl crate::traits::ResourceDevice for super::Context {
         if let Some(external_next) = external_next.as_mut() {
             vk_info = vk_info.push_next(external_next);
         }
+        if self.device.buffer_device_address {
+            vk_info.usage |= Buf::SHADER_DEVICE_ADDRESS;
+        }
         if self.device.ray_tracing.is_some() {
-            vk_info.usage |=
-                Buf::SHADER_DEVICE_ADDRESS | Buf::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
+            vk_info.usage |= Buf::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
         }
 
         let raw = unsafe { self.device.core.create_buffer(&vk_info, None).unwrap() };

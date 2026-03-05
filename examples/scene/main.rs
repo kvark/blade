@@ -186,6 +186,7 @@ impl Example {
         let context = Arc::new(unsafe {
             gpu::Context::init(gpu::ContextDesc {
                 presentation: true,
+                ray_tracing: true,
                 validation: cfg!(debug_assertions),
                 capture: true,
                 ..Default::default()
@@ -209,7 +210,7 @@ impl Example {
 
         let asset_hub = blade_render::AssetHub::new(Path::new("asset-cache"), &choir, &context);
         let (shaders, shader_task) =
-            blade_render::Shaders::load("blade-render/code/".as_ref(), &asset_hub);
+            blade_render::Shaders::load("blade-render/code/".as_ref(), &asset_hub, true);
 
         log::info!("Spinning up the renderer");
         shader_task.join();

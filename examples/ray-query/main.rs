@@ -50,6 +50,7 @@ impl Example {
         let context = unsafe {
             gpu::Context::init(gpu::ContextDesc {
                 presentation: true,
+                ray_tracing: true,
                 validation: cfg!(debug_assertions),
                 ..Default::default()
             })
