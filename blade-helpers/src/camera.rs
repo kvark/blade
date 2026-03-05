@@ -53,6 +53,7 @@ impl ControlledCamera {
         self.inner.rot = (quat * rotation).into();
     }
 
+    #[cfg(not(target_os = "android"))]
     pub fn on_key(&mut self, code: winit::keyboard::KeyCode, delta: f32) -> bool {
         use winit::keyboard::KeyCode as Kc;
 
@@ -89,6 +90,7 @@ impl ControlledCamera {
         true
     }
 
+    #[cfg(not(target_os = "android"))]
     pub fn on_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
         let shift = match delta {
             winit::event::MouseScrollDelta::LineDelta(_, lines) => lines,

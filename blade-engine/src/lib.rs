@@ -15,7 +15,7 @@
 )]
 
 use blade_graphics as gpu;
-use std::{ops, path::Path, sync::Arc};
+use std::{ops, path::PathBuf, sync::Arc};
 
 pub mod config;
 mod trimesh;
@@ -208,6 +208,7 @@ impl UiValue for egui::Ui {
     }
 }
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 #[derive(Default)]
 struct DebugPhysicsRender {
     lines: Vec<blade_render::DebugLine>,
@@ -289,6 +290,7 @@ impl Physics {
         );
         self.last_time += self.integration_params.dt;
     }
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     fn render_debug(&mut self) -> Vec<blade_render::DebugLine> {
         let mut backend = DebugPhysicsRender::default();
         self.debug_pipeline.render(
@@ -375,6 +377,23 @@ enum Renderer {
     },
 }
 
+pub enum Presentation<'a> {
+    #[cfg(not(target_os = "android"))]
+    Window(&'a winit::window::Window),
+    Xr(gpu::XrDesc),
+    #[cfg(target_os = "android")]
+    #[doc(hidden)]
+    __Marker(std::marker::PhantomData<&'a ()>),
+}
+
+#[allow(clippy::large_enum_variant)]
+enum TargetSurface {
+    #[cfg(not(target_os = "android"))]
+    Window(gpu::Surface),
+    #[cfg(target_os = "android")]
+    Xr(gpu::XrSurface),
+}
+
 /// Blade Engine encapsulates all the context for applications,
 /// such as the GPU context, Ray-tracing context, EGUI integration,
 /// asset hub, physics context, task processing, and more.
@@ -385,7 +404,7 @@ pub struct Engine {
     load_tasks: Vec<choir::RunningTask>,
     gui_painter: Option<blade_egui::GuiPainter>,
     asset_hub: blade_render::AssetHub,
-    gpu_surface: gpu::Surface,
+    target_surface: TargetSurface,
     gpu_context: Arc<gpu::Context>,
     environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
     objects: slab::Slab<Object>,
@@ -401,6 +420,7 @@ pub struct Engine {
 }
 
 impl Engine {
+    #[cfg(not(target_os = "android"))]
     fn make_surface_config(physical_size: winit::dpi::PhysicalSize<u32>) -> gpu::SurfaceConfig {
         gpu::SurfaceConfig {
             size: gpu::Extent {
@@ -417,31 +437,133 @@ impl Engine {
         }
     }
 
-    /// Create a new context based on a given window.
+    fn hot_reload_if_needed(&mut self) {
+        if !self.track_hot_reloads {
+            return;
+        }
+        let sync_point = self.pacer.last_sync_point().unwrap();
+        match self.renderer {
+            Renderer::RayTracer { ref mut inner, .. } => {
+                inner.hot_reload(&self.asset_hub, &self.gpu_context, sync_point);
+            }
+            Renderer::Rasterizer { ref mut inner, .. } => {
+                inner.hot_reload(&self.asset_hub, &self.gpu_context, sync_point);
+            }
+        }
+    }
+
+    fn update_render_objects(
+        physics: &mut Physics,
+        objects: &mut slab::Slab<Object>,
+        render_objects: &mut Vec<blade_render::Object>,
+        time_ahead: f32,
+    ) {
+        render_objects.clear();
+        for (_, object) in objects.iter_mut() {
+            let isometry = physics
+                .rigid_bodies
+                .get(object.rigid_body)
+                .unwrap()
+                .predict_position_using_velocity_and_forces(time_ahead);
+
+            for visual in object.visuals.iter() {
+                let mc = (isometry * visual.similarity).to_homogeneous().transpose();
+                let mp = (object.prev_isometry * visual.similarity)
+                    .to_homogeneous()
+                    .transpose();
+                render_objects.push(blade_render::Object {
+                    transform: gpu::Transform {
+                        x: mc.column(0).into(),
+                        y: mc.column(1).into(),
+                        z: mc.column(2).into(),
+                    },
+                    prev_transform: gpu::Transform {
+                        x: mp.column(0).into(),
+                        y: mp.column(1).into(),
+                        z: mp.column(2).into(),
+                    },
+                    model: visual.model,
+                });
+            }
+            object.prev_isometry = isometry;
+        }
+    }
+
+    fn flush_assets_and_check_ready(
+        asset_hub: &blade_render::AssetHub,
+        load_tasks: &mut Vec<choir::RunningTask>,
+        command_encoder: &mut gpu::CommandEncoder,
+        temp: &mut blade_render::FrameResources,
+    ) -> bool {
+        asset_hub.flush(command_encoder, &mut temp.buffers);
+        load_tasks.retain(|task| !task.is_done());
+        load_tasks.is_empty()
+    }
+
+    #[cfg(target_os = "android")]
+    fn asset_cache_path() -> PathBuf {
+        ndk_glue::native_activity()
+            .internal_data_path()
+            .join("asset-cache")
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn asset_cache_path() -> PathBuf {
+        PathBuf::from("asset-cache")
+    }
+
     #[profiling::function]
-    pub fn new(window: &winit::window::Window, config: &config::Engine) -> Self {
+    pub fn new(presentation: Presentation<'_>, config: &config::Engine) -> Self {
         log::info!("Initializing the engine");
 
-        let gpu_context = Arc::new(unsafe {
-            gpu::Context::init(gpu::ContextDesc {
-                presentation: true,
-                xr: None,
-                ray_tracing: matches!(config.render_backend, config::RenderBackend::RayTracer),
-                validation: cfg!(debug_assertions),
-                timing: true,
-                capture: false,
-                overlay: false,
-                device_id: 0,
-            })
-            .unwrap()
-        });
+        let xr = match presentation {
+            #[cfg(not(target_os = "android"))]
+            Presentation::Window(_) => None,
+            Presentation::Xr(ref xr_desc) => Some(xr_desc.clone()),
+            #[cfg(target_os = "android")]
+            Presentation::__Marker(_) => unreachable!(),
+        };
+        let context_desc = gpu::ContextDesc {
+            presentation: xr.is_none(),
+            xr,
+            ray_tracing: matches!(config.render_backend, config::RenderBackend::RayTracer),
+            validation: cfg!(debug_assertions),
+            timing: true,
+            capture: false,
+            overlay: false,
+            device_id: 0,
+        };
+        let gpu_context = Arc::new(unsafe { gpu::Context::init(context_desc).unwrap() });
 
-        let surface_config = Self::make_surface_config(window.inner_size());
-        let surface_size = surface_config.size;
-        let gpu_surface = gpu_context
-            .create_surface_configured(window, surface_config)
-            .unwrap();
-        let surface_info = gpu_surface.info();
+        let (surface_size, surface_info, target_surface) = match presentation {
+            #[cfg(not(target_os = "android"))]
+            Presentation::Window(window) => {
+                let surface_config = Self::make_surface_config(window.inner_size());
+                let surface_size = surface_config.size;
+                let gpu_surface = gpu_context
+                    .create_surface_configured(window, surface_config)
+                    .unwrap();
+                let surface_info = gpu_surface.info();
+                (
+                    surface_size,
+                    surface_info,
+                    TargetSurface::Window(gpu_surface),
+                )
+            }
+            Presentation::Xr(_) => {
+                let xr_surface = gpu_context
+                    .create_xr_surface()
+                    .expect("Unable to create XR surface from GPU context");
+                let surface_size = xr_surface.extent();
+                let surface_info = gpu::SurfaceInfo {
+                    format: xr_surface.format(),
+                    alpha: gpu::AlphaMode::Ignored,
+                };
+                (surface_size, surface_info, TargetSurface::Xr(xr_surface))
+            }
+            #[cfg(target_os = "android")]
+            Presentation::__Marker(_) => unreachable!(),
+        };
 
         let num_workers = num_cpus::get_physical().max((num_cpus::get() * 3 + 2) / 4);
         log::info!("Initializing Choir with {} workers", num_workers);
@@ -450,7 +572,8 @@ impl Engine {
             .map(|i| choir.add_worker(&format!("Worker-{}", i)))
             .collect();
 
-        let asset_hub = blade_render::AssetHub::new(Path::new("asset-cache"), &choir, &gpu_context);
+        let asset_cache_path = Self::asset_cache_path();
+        let asset_hub = blade_render::AssetHub::new(&asset_cache_path, &choir, &gpu_context);
         let (shaders, shader_task) = blade_render::Shaders::load(
             config.shader_path.as_ref(),
             &asset_hub,
@@ -524,7 +647,7 @@ impl Engine {
             load_tasks: Vec::new(),
             gui_painter,
             asset_hub,
-            gpu_surface,
+            target_surface,
             gpu_context,
             environment_map: None,
             objects: slab::Slab::new(),
@@ -547,7 +670,16 @@ impl Engine {
             let mut painter = gui_painter;
             painter.destroy(&self.gpu_context);
         }
-        self.gpu_context.destroy_surface(&mut self.gpu_surface);
+        match self.target_surface {
+            #[cfg(not(target_os = "android"))]
+            TargetSurface::Window(ref mut surface) => {
+                self.gpu_context.destroy_surface(surface);
+            }
+            #[cfg(target_os = "android")]
+            TargetSurface::Xr(ref mut xr_surface) => {
+                self.gpu_context.destroy_xr_surface(xr_surface);
+            }
+        }
         match self.renderer {
             Renderer::RayTracer { ref mut inner, .. } => {
                 inner.destroy(&self.gpu_context);
@@ -570,6 +702,7 @@ impl Engine {
     }
 
     #[profiling::function]
+    #[cfg(not(target_os = "android"))]
     pub fn render(
         &mut self,
         camera: &FrameCamera,
@@ -578,17 +711,7 @@ impl Engine {
         physical_size: winit::dpi::PhysicalSize<u32>,
         scale_factor: f32,
     ) {
-        if self.track_hot_reloads {
-            let sync_point = self.pacer.last_sync_point().unwrap();
-            match self.renderer {
-                Renderer::RayTracer { ref mut inner, .. } => {
-                    inner.hot_reload(&self.asset_hub, &self.gpu_context, sync_point);
-                }
-                Renderer::Rasterizer { ref mut inner, .. } => {
-                    inner.hot_reload(&self.asset_hub, &self.gpu_context, sync_point);
-                }
-            }
-        }
+        self.hot_reload_if_needed();
 
         // Note: the resize is split in 2 parts because `wait_for_previous_frame`
         // wants to borrow `self` mutably, and `command_encoder` blocks that.
@@ -601,8 +724,13 @@ impl Engine {
         if new_render_size != current_render_size {
             log::info!("Resizing to {}", new_render_size);
             self.pacer.wait_for_previous_frame(&self.gpu_context);
-            self.gpu_context
-                .reconfigure_surface(&mut self.gpu_surface, surface_config);
+            match self.target_surface {
+                TargetSurface::Window(ref mut surface) => {
+                    self.gpu_context
+                        .reconfigure_surface(surface, surface_config);
+                }
+                _ => panic!("Engine::render is only available with TargetSurface::Window"),
+            }
         }
 
         let (command_encoder, temp) = self.pacer.begin_frame();
@@ -628,91 +756,60 @@ impl Engine {
         {
             frame_config.reset_variance = self.debug.mouse_pos.is_none();
         }
-
         if let Some(ref mut painter) = self.gui_painter {
             painter.update_textures(command_encoder, gui_textures, &self.gpu_context);
         }
-
-        self.asset_hub.flush(command_encoder, &mut temp.buffers);
-
-        self.load_tasks.retain(|task| !task.is_done());
-        let can_render = self.load_tasks.is_empty();
+        let can_render = Self::flush_assets_and_check_ready(
+            &self.asset_hub,
+            &mut self.load_tasks,
+            command_encoder,
+            temp,
+        );
 
         // We should be able to update TLAS and render content
         // even while it's still being loaded.
         if can_render {
-            self.render_objects.clear();
-            for (_, object) in self.objects.iter_mut() {
-                let isometry = self
-                    .physics
-                    .rigid_bodies
-                    .get(object.rigid_body)
-                    .unwrap()
-                    .predict_position_using_velocity_and_forces(self.time_ahead);
+            Self::update_render_objects(
+                &mut self.physics,
+                &mut self.objects,
+                &mut self.render_objects,
+                self.time_ahead,
+            );
+            if let Renderer::RayTracer {
+                ref mut inner,
+                ref mut frame_config,
+                ref mut ray_config,
+                ref mut denoiser_enabled,
+                ref mut denoiser_config,
+                ..
+            } = self.renderer
+            {
+                inner.build_scene(
+                    command_encoder,
+                    &self.render_objects,
+                    self.environment_map,
+                    &self.asset_hub,
+                    &self.gpu_context,
+                    temp,
+                );
+                inner.prepare(
+                    command_encoder,
+                    &blade_render::Camera {
+                        pos: camera.transform.position,
+                        rot: camera.transform.orientation,
+                        fov_y: camera.fov_y,
+                        depth: MAX_DEPTH,
+                    },
+                    *frame_config,
+                );
+                frame_config.reset_reservoirs = false;
 
-                for visual in object.visuals.iter() {
-                    let mc = (isometry * visual.similarity).to_homogeneous().transpose();
-                    let mp = (object.prev_isometry * visual.similarity)
-                        .to_homogeneous()
-                        .transpose();
-                    self.render_objects.push(blade_render::Object {
-                        transform: gpu::Transform {
-                            x: mc.column(0).into(),
-                            y: mc.column(1).into(),
-                            z: mc.column(2).into(),
-                        },
-                        prev_transform: gpu::Transform {
-                            x: mp.column(0).into(),
-                            y: mp.column(1).into(),
-                            z: mp.column(2).into(),
-                        },
-                        model: visual.model,
-                    });
-                }
-                object.prev_isometry = isometry;
-            }
-
-            match self.renderer {
-                Renderer::RayTracer {
-                    ref mut inner,
-                    ref mut frame_config,
-                    ref mut ray_config,
-                    ref mut denoiser_enabled,
-                    ref mut denoiser_config,
-                    ..
-                } => {
-                    // Rebuilding every frame
-                    if !frame_config.frozen {
-                        inner.build_scene(
-                            command_encoder,
-                            &self.render_objects,
-                            self.environment_map,
-                            &self.asset_hub,
-                            &self.gpu_context,
-                            temp,
-                        );
-                    }
-
-                    inner.prepare(
-                        command_encoder,
-                        &blade_render::Camera {
-                            pos: camera.transform.position,
-                            rot: camera.transform.orientation,
-                            fov_y: camera.fov_y,
-                            depth: MAX_DEPTH,
-                        },
-                        *frame_config,
-                    );
-                    frame_config.reset_reservoirs = false;
-
-                    if !self.render_objects.is_empty() {
-                        inner.ray_trace(command_encoder, self.debug, *ray_config);
-                        if *denoiser_enabled {
-                            inner.denoise(command_encoder, *denoiser_config);
-                        }
+                if !self.render_objects.is_empty() {
+                    inner.ray_trace(command_encoder, self.debug, *ray_config);
+                    if *denoiser_enabled {
+                        inner.denoise(command_encoder, *denoiser_config);
                     }
                 }
-                Renderer::Rasterizer { .. } => {}
             }
         }
 
@@ -764,7 +861,10 @@ impl Engine {
             }
         }
 
-        let frame = self.gpu_surface.acquire_frame();
+        let frame = match self.target_surface {
+            TargetSurface::Window(ref mut surface) => surface.acquire_frame(),
+            _ => panic!("Engine::render is only available with TargetSurface::Window"),
+        };
         command_encoder.init_texture(frame.texture());
 
         match self.renderer {
@@ -878,6 +978,211 @@ impl Engine {
         }
 
         profiling::finish_frame!();
+    }
+
+    #[cfg(target_os = "android")]
+    /// Render a stereo XR frame and present it through the owned XR surface.
+    ///
+    /// Returns `false` when the runtime indicates the frame should not be
+    /// rendered (for example while transitioning session state).
+    #[profiling::function]
+    pub fn render_xr(&mut self) -> bool {
+        self.hot_reload_if_needed();
+
+        let xr_surface = match self.target_surface {
+            TargetSurface::Xr(ref mut xr_surface) => xr_surface,
+            #[cfg(not(target_os = "android"))]
+            _ => panic!("Engine::render_xr is only available with TargetSurface::Xr"),
+        };
+        let frame = match xr_surface.acquire_frame(&self.gpu_context) {
+            Some(frame) => frame,
+            None => return false,
+        };
+
+        let target_size = xr_surface.extent();
+        let view_count = frame.xr_view_count() as usize;
+
+        let (command_encoder, temp) = self.pacer.begin_frame();
+        match self.renderer {
+            Renderer::RayTracer {
+                ref mut inner,
+                ref mut frame_config,
+                ..
+            } => {
+                inner.resize_screen(target_size, command_encoder, &self.gpu_context);
+                frame_config.reset_variance = self.debug.mouse_pos.is_none();
+            }
+            Renderer::Rasterizer { ref mut inner, .. } => {
+                inner.resize_screen(target_size, command_encoder, &self.gpu_context);
+            }
+        }
+
+        let can_render = Self::flush_assets_and_check_ready(
+            &self.asset_hub,
+            &mut self.load_tasks,
+            command_encoder,
+            temp,
+        );
+
+        if can_render {
+            Self::update_render_objects(
+                &mut self.physics,
+                &mut self.objects,
+                &mut self.render_objects,
+                self.time_ahead,
+            );
+        }
+
+        command_encoder.init_texture(frame.texture());
+
+        match self.renderer {
+            Renderer::RayTracer {
+                ref mut inner,
+                ray_config,
+                ref mut frame_config,
+                denoiser_enabled,
+                denoiser_config,
+                post_proc_config,
+            } => {
+                if can_render {
+                    inner.build_scene(
+                        command_encoder,
+                        &self.render_objects,
+                        self.environment_map,
+                        &self.asset_hub,
+                        &self.gpu_context,
+                        temp,
+                    );
+                }
+                // Current ray path is monoscopic in engine terms. For XR we render
+                // each eye independently by re-preparing camera state per-eye.
+                for eye in 0..view_count {
+                    let xr_view = frame.xr_view(eye as u32);
+                    let render_camera = blade_render::Camera {
+                        pos: xr_view.pose.position.into(),
+                        rot: mint::Quaternion {
+                            s: xr_view.pose.orientation[3],
+                            v: mint::Vector3 {
+                                x: xr_view.pose.orientation[0],
+                                y: xr_view.pose.orientation[1],
+                                z: xr_view.pose.orientation[2],
+                            },
+                        },
+                        fov_y: xr_view.fov.angle_up - xr_view.fov.angle_down,
+                        depth: MAX_DEPTH,
+                    };
+                    inner.prepare(command_encoder, &render_camera, *frame_config);
+                    frame_config.reset_reservoirs = false;
+                    if !self.render_objects.is_empty() {
+                        inner.ray_trace(command_encoder, self.debug, ray_config);
+                        if denoiser_enabled {
+                            inner.denoise(command_encoder, denoiser_config);
+                        }
+                    }
+                    if let mut pass = command_encoder.render(
+                        "xr-draw",
+                        gpu::RenderTargetSet {
+                            colors: &[gpu::RenderTarget {
+                                view: frame.xr_texture_view(eye as u32),
+                                init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
+                                finish_op: gpu::FinishOp::Store,
+                            }],
+                            depth_stencil: None,
+                        },
+                    ) {
+                        if can_render {
+                            inner.post_proc(&mut pass, self.debug, post_proc_config, &[], &[]);
+                        }
+                    }
+                }
+            }
+            Renderer::Rasterizer {
+                ref mut inner,
+                raster_config,
+            } => {
+                command_encoder.init_texture(inner.depth_texture());
+                for eye in 0..view_count {
+                    let xr_view = frame.xr_view(eye as u32);
+                    let render_camera = blade_render::Camera {
+                        pos: xr_view.pose.position.into(),
+                        rot: mint::Quaternion {
+                            s: xr_view.pose.orientation[3],
+                            v: mint::Vector3 {
+                                x: xr_view.pose.orientation[0],
+                                y: xr_view.pose.orientation[1],
+                                z: xr_view.pose.orientation[2],
+                            },
+                        },
+                        fov_y: xr_view.fov.angle_up - xr_view.fov.angle_down,
+                        depth: MAX_DEPTH,
+                    };
+                    if let mut pass = command_encoder.render(
+                        "xr-raster",
+                        gpu::RenderTargetSet {
+                            colors: &[gpu::RenderTarget {
+                                view: frame.xr_texture_view(eye as u32),
+                                init_op: gpu::InitOp::Clear(raster_config.clear_color),
+                                finish_op: gpu::FinishOp::Store,
+                            }],
+                            depth_stencil: Some(gpu::RenderTarget {
+                                view: inner.depth_view(),
+                                init_op: gpu::InitOp::Clear(gpu::TextureColor::White),
+                                finish_op: gpu::FinishOp::Store,
+                            }),
+                        },
+                    ) {
+                        if can_render {
+                            inner.render(
+                                &mut pass,
+                                &render_camera,
+                                &self.render_objects,
+                                &self.asset_hub,
+                                self.environment_map,
+                                raster_config,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        command_encoder.present(frame);
+        self.pacer.end_frame(&self.gpu_context);
+        profiling::finish_frame!();
+        true
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn begin_xr(&self) {
+        use openxr as xr;
+        match self.target_surface {
+            TargetSurface::Xr(_) => {}
+            #[cfg(not(target_os = "android"))]
+            TargetSurface::Window(_) => {
+                panic!("Engine::begin_xr is only available with Presentation::Xr")
+            }
+        }
+        self.gpu_context
+            .xr_session()
+            .expect("XR session is unavailable")
+            .begin(xr::ViewConfigurationType::PRIMARY_STEREO)
+            .unwrap();
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn end_xr(&self) {
+        match self.target_surface {
+            TargetSurface::Xr(_) => {}
+            #[cfg(not(target_os = "android"))]
+            TargetSurface::Window(_) => {
+                panic!("Engine::end_xr is only available with Presentation::Xr")
+            }
+        }
+        self.gpu_context
+            .xr_session()
+            .expect("XR session is unavailable")
+            .end()
+            .unwrap();
     }
 
     #[profiling::function]

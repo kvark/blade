@@ -51,7 +51,7 @@ impl Game {
 
         let data_path = PathBuf::from("examples/move/data");
         let mut engine = blade_engine::Engine::new(
-            &window,
+            blade_engine::Presentation::Window(&window),
             &blade_engine::config::Engine {
                 shader_path: "blade-render/code".to_string(),
                 data_path: data_path.as_os_str().to_string_lossy().into_owned(),
