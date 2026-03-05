@@ -53,6 +53,7 @@ struct AdapterCapabilities {
     queue_family_index: u32,
     layered: bool,
     ray_tracing: Option<RayTracingCapabilities>,
+    buffer_device_address: bool,
     buffer_marker: bool,
     shader_info: bool,
     full_screen_exclusive: bool,
@@ -217,7 +218,14 @@ unsafe fn inspect_adapter(
         true
     };
 
-    let ray_tracing = if !supported_extensions.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME)
+    let buffer_device_address = buffer_device_address_features.buffer_device_address == vk::TRUE
+        && (properties.api_version >= vk::API_VERSION_1_2
+            || supported_extensions.contains(&vk::KHR_BUFFER_DEVICE_ADDRESS_NAME));
+
+    let ray_tracing = if !desc.ray_tracing {
+        log::info!("Ray tracing disabled by configuration");
+        None
+    } else if !supported_extensions.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME)
         || !supported_extensions.contains(&vk::KHR_RAY_QUERY_NAME)
     {
         log::info!("No ray tracing extensions are supported");
@@ -286,6 +294,7 @@ unsafe fn inspect_adapter(
         queue_family_index,
         layered: portability_subset_properties.min_vertex_input_binding_stride_alignment != 0,
         ray_tracing,
+        buffer_device_address,
         buffer_marker,
         shader_info,
         full_screen_exclusive,
@@ -537,6 +546,10 @@ impl super::Context {
                 device_extensions.push(vk::KHR_DEFERRED_HOST_OPERATIONS_NAME);
                 device_extensions.push(vk::KHR_ACCELERATION_STRUCTURE_NAME);
                 device_extensions.push(vk::KHR_RAY_QUERY_NAME);
+            } else if capabilities.buffer_device_address
+                && capabilities.api_version < vk::API_VERSION_1_2
+            {
+                device_extensions.push(vk::KHR_BUFFER_DEVICE_ADDRESS_NAME);
             }
             if capabilities.buffer_marker {
                 device_extensions.push(vk::AMD_BUFFER_MARKER_NAME);
@@ -584,15 +597,19 @@ impl super::Context {
             let mut khr_buffer_device_address;
             let mut khr_acceleration_structure;
             let mut khr_ray_query;
+            if capabilities.buffer_device_address {
+                khr_buffer_device_address = vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR {
+                    buffer_device_address: vk::TRUE,
+                    ..Default::default()
+                };
+                device_create_info = device_create_info.push_next(&mut khr_buffer_device_address);
+            }
+
             if capabilities.ray_tracing.is_some() {
                 ext_descriptor_indexing = vk::PhysicalDeviceDescriptorIndexingFeaturesEXT {
                     shader_storage_buffer_array_non_uniform_indexing: vk::TRUE,
                     shader_sampled_image_array_non_uniform_indexing: vk::TRUE,
                     descriptor_binding_partially_bound: vk::TRUE,
-                    ..Default::default()
-                };
-                khr_buffer_device_address = vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR {
-                    buffer_device_address: vk::TRUE,
                     ..Default::default()
                 };
                 khr_acceleration_structure = vk::PhysicalDeviceAccelerationStructureFeaturesKHR {
@@ -605,7 +622,6 @@ impl super::Context {
                 };
                 device_create_info = device_create_info
                     .push_next(&mut ext_descriptor_indexing)
-                    .push_next(&mut khr_buffer_device_address)
                     .push_next(&mut khr_acceleration_structure)
                     .push_next(&mut khr_ray_query);
             }
@@ -669,6 +685,7 @@ impl super::Context {
             } else {
                 None
             },
+            buffer_device_address: capabilities.buffer_device_address,
             buffer_marker: if capabilities.buffer_marker && desc.validation {
                 Some(amd::buffer_marker::Device::new(
                     &instance.core,
@@ -764,7 +781,7 @@ impl super::Context {
                         size: memory_heap.size,
                     })
                     .collect(),
-                buffer_device_address: capabilities.ray_tracing.is_some(),
+                buffer_device_address: capabilities.buffer_device_address,
             };
 
             let known_memory_flags = vk::MemoryPropertyFlags::DEVICE_LOCAL

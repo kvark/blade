@@ -751,21 +751,27 @@ impl blade_asset::Baker for Baker {
         assert!(index_offset <= total_index_size);
         assert_eq!(transform_offset, total_transform_size);
 
-        let sizes = self
-            .gpu_context
-            .get_bottom_level_acceleration_structure_sizes(&meshes);
-        let acceleration_structure = self.gpu_context.create_acceleration_structure(
-            blade_graphics::AccelerationStructureDesc {
-                name: str::from_utf8(model.name).unwrap(),
-                ty: blade_graphics::AccelerationStructureType::BottomLevel,
-                size: sizes.data,
-            },
-        );
-        let scratch = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
-            name: "BLAS scratch",
-            size: sizes.scratch,
-            memory: blade_graphics::Memory::Device,
-        });
+        let ray_tracing_enabled = !self.gpu_context.capabilities().ray_query.is_empty();
+        let (acceleration_structure, scratch) = if ray_tracing_enabled {
+            let sizes = self
+                .gpu_context
+                .get_bottom_level_acceleration_structure_sizes(&meshes);
+            let acceleration_structure = self.gpu_context.create_acceleration_structure(
+                blade_graphics::AccelerationStructureDesc {
+                    name: str::from_utf8(model.name).unwrap(),
+                    ty: blade_graphics::AccelerationStructureType::BottomLevel,
+                    size: sizes.data,
+                },
+            );
+            let scratch = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
+                name: "BLAS scratch",
+                size: sizes.scratch,
+                memory: blade_graphics::Memory::Device,
+            });
+            (acceleration_structure, Some(scratch))
+        } else {
+            (blade_graphics::AccelerationStructure::default(), None)
+        };
 
         let mut pending_ops = self.pending_operations.lock().unwrap();
         pending_ops.transfers.push(Transfer {
@@ -783,11 +789,13 @@ impl blade_asset::Baker for Baker {
             dst: transform_buffer,
             size: total_transform_size,
         });
-        pending_ops.blas_constructs.push(BlasConstruct {
-            meshes,
-            scratch,
-            dst: acceleration_structure,
-        });
+        if let Some(scratch) = scratch {
+            pending_ops.blas_constructs.push(BlasConstruct {
+                meshes,
+                scratch,
+                dst: acceleration_structure,
+            });
+        }
 
         Model {
             name: String::from_utf8_lossy(model.name).into_owned(),
@@ -802,8 +810,10 @@ impl blade_asset::Baker for Baker {
     }
 
     fn delete(&self, model: Self::Output) {
-        self.gpu_context
-            .destroy_acceleration_structure(model.acceleration_structure);
+        if model.acceleration_structure != blade_graphics::AccelerationStructure::default() {
+            self.gpu_context
+                .destroy_acceleration_structure(model.acceleration_structure);
+        }
         self.gpu_context.destroy_buffer(model.vertex_buffer);
         self.gpu_context.destroy_buffer(model.index_buffer);
         self.gpu_context.destroy_buffer(model.transform_buffer);

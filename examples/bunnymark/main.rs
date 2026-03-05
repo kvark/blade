@@ -80,6 +80,7 @@ impl Example {
             gpu::Context::init(gpu::ContextDesc {
                 presentation: true,
                 xr: None,
+                ray_tracing: false,
                 validation: cfg!(debug_assertions),
                 timing: false,
                 capture: false,

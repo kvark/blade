@@ -499,14 +499,24 @@ pub struct Shaders {
 }
 
 impl Shaders {
-    pub fn load(path: &Path, asset_hub: &crate::AssetHub) -> (Self, choir::RunningTask) {
+    pub fn load(
+        path: &Path,
+        asset_hub: &crate::AssetHub,
+        ray_tracing: bool,
+    ) -> (Self, choir::RunningTask) {
         let mut ctx = asset_hub.open_context(path, "shader finish");
+        let noop = if ray_tracing {
+            None
+        } else {
+            Some(ctx.load_shader("noop.wgsl"))
+        };
+        let mut ray_shader = |name: &str| noop.unwrap_or_else(|| ctx.load_shader(name));
         let shaders = Self {
-            env_prepare: ctx.load_shader("env-prepare.wgsl"),
-            fill_gbuf: ctx.load_shader("fill-gbuf.wgsl"),
-            ray_trace: ctx.load_shader("ray-trace.wgsl"),
-            a_trous: ctx.load_shader("a-trous.wgsl"),
-            post_proc: ctx.load_shader("post-proc.wgsl"),
+            env_prepare: ray_shader("env-prepare.wgsl"),
+            fill_gbuf: ray_shader("fill-gbuf.wgsl"),
+            ray_trace: ray_shader("ray-trace.wgsl"),
+            a_trous: ray_shader("a-trous.wgsl"),
+            post_proc: ray_shader("post-proc.wgsl"),
             raster: ctx.load_shader("raster.wgsl"),
             debug_draw: ctx.load_shader("debug-draw.wgsl"),
             debug_blit: ctx.load_shader("debug-blit.wgsl"),

@@ -124,6 +124,8 @@ pub struct ContextDesc {
     pub presentation: bool,
     /// Enable VR/AR.
     pub xr: Option<XrDesc>,
+    /// Enable ray tracing support (acceleration structures and ray queries).
+    pub ray_tracing: bool,
     /// Enable validation of the GAPI, shaders,
     /// and insert crash markers into command buffers.
     pub validation: bool,

@@ -422,6 +422,7 @@ impl Engine {
             gpu::Context::init(gpu::ContextDesc {
                 presentation: true,
                 xr: None,
+                ray_tracing: matches!(config.render_backend, config::RenderBackend::RayTracer),
                 validation: cfg!(debug_assertions),
                 timing: true,
                 capture: false,
@@ -446,8 +447,11 @@ impl Engine {
             .collect();
 
         let asset_hub = blade_render::AssetHub::new(Path::new("asset-cache"), &choir, &gpu_context);
-        let (shaders, shader_task) =
-            blade_render::Shaders::load(config.shader_path.as_ref(), &asset_hub);
+        let (shaders, shader_task) = blade_render::Shaders::load(
+            config.shader_path.as_ref(),
+            &asset_hub,
+            matches!(config.render_backend, config::RenderBackend::RayTracer),
+        );
 
         log::info!("Spinning up the renderer");
         shader_task.join();

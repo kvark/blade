@@ -2,11 +2,13 @@ Changelog for *Blade* project
 
 ## blade-engine-0.1 (TBD)
 - moved the engine from "blade" itself, reserving it for future use
-- choise between ray-tracing and rasterization rendering pipelines
+- choice between ray-tracing and rasterization rendering pipelines
+- first-class XR support
 
 ## blade-graphicis-0.8 (TBD)
 - graphics
   - OpenXR / Android support (tested on Quest 3S)
+  - disable ray tracing initialization
 
 ## blade-graphics-0.7.1 (22 Feb 2025)
 - vk: make us compatible with Mesa's LavaPipe
