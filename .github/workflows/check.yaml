@@ -44,82 +44,71 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          target: ${{ matrix.target }}
-          override: true
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
 
       - name: Check Basics
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --target ${{ matrix.target }} --workspace --all --no-default-features
+        run: cargo check --target ${{ matrix.target }} --workspace --no-default-features
 
       - name: Test CPU Basics
         if: matrix.full
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: -p blade-render --no-default-features
+        run: cargo test -p blade-render --no-default-features
 
       - name: Test CPU Workspace
         if: matrix.full
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --workspace --all-features
+        run: cargo test --workspace --all-features
 
       - name: Test GLES
         if: matrix.name == 'Linux'
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --example bunnymark
+        run: cargo build --example bunnymark
         env:
           RUSTFLAGS: "--cfg gles"
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MSRV toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+
+      - name: Check MSRV
+        run: cargo check --workspace --no-default-features
 
   fmt:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - name: checkout repo
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: install rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          components: rustfmt
-
-      - name: run rustfmt
+      - name: Setup Rust
         run: |
-          cargo fmt -- --check
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+
+      - name: Run rustfmt
+        run: cargo fmt -- --check
 
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - name: checkout repo
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: install rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          components: clippy
-
-      - name: run clippy
+      - name: Setup Rust
         run: |
-          cargo clippy -p blade-engine -p blade-render -p blade-graphics --all-targets
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets
 
   gpu-test:
     name: GPU Tests (${{ matrix.name }})
@@ -134,14 +123,12 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
       - name: Install Vulkan (Linux)
         if: matrix.name == 'Linux'

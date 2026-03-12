@@ -8,6 +8,7 @@ members = [
     "blade-helpers",
     "blade-macros",
     "blade-render",
+    "blade-util",
     "run-wasm",
     "examples-android",
 ]
@@ -39,7 +40,7 @@ name = "blade"
 description = "Sharp and simple graphics library"
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.65"
+rust-version = "1.88"
 keywords = ["graphics"]
 license = "MIT"
 repository = "https://github.com/kvark/blade"
