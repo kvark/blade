@@ -1,370 +1,29 @@
 #![allow(irrefutable_let_patterns)]
 
+mod example;
+
 use blade_graphics as gpu;
-use bytemuck::{Pod, Zeroable};
-use std::{mem, ptr};
 
-const BUNNY_SIZE: f32 = 0.15 * 256.0;
-const GRAVITY: f32 = -9.8 * 100.0;
-const MAX_VELOCITY: i32 = 750;
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Globals {
-    mvp_transform: [[f32; 4]; 4],
-    sprite_size: [f32; 2],
-    pad: [f32; 2],
-}
-
-#[derive(blade_macros::ShaderData)]
-struct Params {
-    globals: Globals,
-    sprite_texture: gpu::TextureView,
-    sprite_sampler: gpu::Sampler,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Locals {
-    position: [f32; 2],
-    velocity: [f32; 2],
-    color: u32,
-    pad: u32,
-}
-
-#[derive(blade_macros::ShaderData)]
-struct SpriteData {
-    locals: Locals,
-}
-#[derive(blade_macros::Vertex)]
-struct SpriteVertex {
-    pos: [f32; 2],
-}
-struct Sprite {
-    data: SpriteData,
-    vertex_buf: gpu::BufferPiece,
-}
-
-struct Example {
-    pipeline: gpu::RenderPipeline,
-    command_encoder: gpu::CommandEncoder,
-    prev_sync_point: Option<gpu::SyncPoint>,
-    texture: gpu::Texture,
-    view: gpu::TextureView,
-    sampler: gpu::Sampler,
-    vertex_buf: gpu::Buffer,
-    window_size: winit::dpi::PhysicalSize<u32>,
-    bunnies: Vec<Sprite>,
-    rng: nanorand::WyRand,
-    surface: gpu::Surface,
-    context: gpu::Context,
-}
-
-impl Example {
-    fn make_surface_config(size: winit::dpi::PhysicalSize<u32>) -> gpu::SurfaceConfig {
-        log::info!("Window size: {:?}", size);
-        gpu::SurfaceConfig {
-            size: gpu::Extent {
-                width: size.width,
-                height: size.height,
-                depth: 1,
-            },
-            usage: gpu::TextureUsage::TARGET,
-            display_sync: gpu::DisplaySync::Recent,
-            ..Default::default()
-        }
-    }
-
-    fn new(window: &winit::window::Window) -> Self {
-        let context = unsafe {
-            gpu::Context::init(gpu::ContextDesc {
-                presentation: true,
-                xr: None,
-                ray_tracing: false,
-                validation: cfg!(debug_assertions),
-                timing: false,
-                capture: false,
-                overlay: true,
-                device_id: 0,
-            })
-            .unwrap()
-        };
-        println!("{:?}", context.device_information());
-        let window_size = window.inner_size();
-
-        let surface = context
-            .create_surface_configured(window, Self::make_surface_config(window_size))
-            .unwrap();
-
-        let global_layout = <Params as gpu::ShaderData>::layout();
-        let local_layout = <SpriteData as gpu::ShaderData>::layout();
-        #[cfg(target_arch = "wasm32")]
-        let shader_source = include_str!("shader.wgsl");
-        #[cfg(not(target_arch = "wasm32"))]
-        let shader_source = std::fs::read_to_string("examples/bunnymark/shader.wgsl").unwrap();
-        let shader = context.create_shader(gpu::ShaderDesc {
-            source: &shader_source,
-        });
-
-        let pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
-            name: "main",
-            data_layouts: &[&global_layout, &local_layout],
-            vertex: shader.at("vs_main"),
-            vertex_fetches: &[gpu::VertexFetchState {
-                layout: &<SpriteVertex as gpu::Vertex>::layout(),
-                instanced: false,
-            }],
-            primitive: gpu::PrimitiveState {
-                topology: gpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            fragment: Some(shader.at("fs_main")),
-            color_targets: &[gpu::ColorTargetState {
-                format: surface.info().format,
-                blend: Some(gpu::BlendState::ALPHA_BLENDING),
-                write_mask: gpu::ColorWrites::default(),
-            }],
-            multisample_state: gpu::MultisampleState::default(),
-        });
-
-        let extent = gpu::Extent {
-            width: 1,
-            height: 1,
+fn make_surface_config(size: winit::dpi::PhysicalSize<u32>) -> gpu::SurfaceConfig {
+    log::info!("Window size: {:?}", size);
+    gpu::SurfaceConfig {
+        size: gpu::Extent {
+            width: size.width,
+            height: size.height,
             depth: 1,
-        };
-        let texture = context.create_texture(gpu::TextureDesc {
-            name: "texutre",
-            format: gpu::TextureFormat::Rgba8Unorm,
-            size: extent,
-            dimension: gpu::TextureDimension::D2,
-            array_layer_count: 1,
-            mip_level_count: 1,
-            usage: gpu::TextureUsage::RESOURCE | gpu::TextureUsage::COPY,
-            sample_count: 1,
-            external: None,
-        });
-        let view = context.create_texture_view(
-            texture,
-            gpu::TextureViewDesc {
-                name: "view",
-                format: gpu::TextureFormat::Rgba8Unorm,
-                dimension: gpu::ViewDimension::D2,
-                subresources: &Default::default(),
-            },
-        );
-
-        let upload_buffer = context.create_buffer(gpu::BufferDesc {
-            name: "staging",
-            size: (extent.width * extent.height) as u64 * 4,
-            memory: gpu::Memory::Upload,
-        });
-        let texture_data = [0xFFu8; 4];
-        unsafe {
-            ptr::copy_nonoverlapping(
-                texture_data.as_ptr(),
-                upload_buffer.data(),
-                texture_data.len(),
-            );
-        }
-        context.sync_buffer(upload_buffer);
-
-        let sampler = context.create_sampler(gpu::SamplerDesc {
-            name: "main",
-            ..Default::default()
-        });
-
-        let vertex_data = [
-            SpriteVertex { pos: [0.0, 0.0] },
-            SpriteVertex { pos: [1.0, 0.0] },
-            SpriteVertex { pos: [0.0, 1.0] },
-            SpriteVertex { pos: [1.0, 1.0] },
-        ];
-        let vertex_buf = context.create_buffer(gpu::BufferDesc {
-            name: "vertex",
-            size: (vertex_data.len() * mem::size_of::<SpriteVertex>()) as u64,
-            memory: gpu::Memory::Shared,
-        });
-        unsafe {
-            ptr::copy_nonoverlapping(
-                vertex_data.as_ptr(),
-                vertex_buf.data() as *mut SpriteVertex,
-                vertex_data.len(),
-            );
-        }
-        context.sync_buffer(vertex_buf);
-
-        let mut bunnies = Vec::new();
-        bunnies.push(Sprite {
-            data: SpriteData {
-                locals: Locals {
-                    position: [-100.0, 100.0],
-                    velocity: [10.0, 0.0],
-                    color: 0xFFFFFFFF,
-                    pad: 0,
-                },
-            },
-            vertex_buf: vertex_buf.into(),
-        });
-
-        let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
-            name: "main",
-            buffer_count: 2,
-        });
-        command_encoder.start();
-        command_encoder.init_texture(texture);
-        if let mut transfer = command_encoder.transfer("init texture") {
-            transfer.copy_buffer_to_texture(upload_buffer.into(), 4, texture.into(), extent);
-        }
-        let sync_point = context.submit(&mut command_encoder);
-        context.wait_for(&sync_point, !0);
-
-        context.destroy_buffer(upload_buffer);
-
-        Self {
-            pipeline,
-            command_encoder,
-            prev_sync_point: None,
-            texture,
-            view,
-            sampler,
-            vertex_buf,
-            window_size,
-            bunnies,
-            rng: nanorand::WyRand::new_seed(73),
-            surface,
-            context,
-        }
-    }
-
-    fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
-        self.window_size = size;
-        let config = Self::make_surface_config(size);
-        self.context.reconfigure_surface(&mut self.surface, config);
-    }
-
-    fn increase(&mut self) {
-        use nanorand::Rng as _;
-        let spawn_count = 64 + self.bunnies.len() / 2;
-        for _ in 0..spawn_count {
-            let speed = self.rng.generate_range(-MAX_VELOCITY..=MAX_VELOCITY) as f32;
-            self.bunnies.push(Sprite {
-                data: SpriteData {
-                    locals: Locals {
-                        position: [0.0, 0.5 * (self.window_size.height as f32)],
-                        velocity: [speed, 0.0],
-                        color: self.rng.generate::<u32>(),
-                        pad: 0,
-                    },
-                },
-                vertex_buf: self.vertex_buf.into(),
-            });
-        }
-        println!("Population: {} bunnies", self.bunnies.len());
-    }
-
-    fn step(&mut self, delta: f32) {
-        for bunny in self.bunnies.iter_mut() {
-            let Sprite {
-                data:
-                    SpriteData {
-                        locals:
-                            Locals {
-                                position: ref mut pos,
-                                velocity: ref mut vel,
-                                ..
-                            },
-                    },
-                ..
-            } = *bunny;
-
-            pos[0] += vel[0] * delta;
-            pos[1] += vel[1] * delta;
-            vel[1] += GRAVITY * delta;
-            if (vel[0] > 0.0 && pos[0] + 0.5 * BUNNY_SIZE > self.window_size.width as f32)
-                || (vel[0] < 0.0 && pos[0] - 0.5 * BUNNY_SIZE < 0.0)
-            {
-                vel[0] *= -1.0;
-            }
-            if vel[1] < 0.0 && pos[1] < 0.5 * BUNNY_SIZE {
-                vel[1] *= -1.0;
-            }
-        }
-    }
-
-    fn render(&mut self) {
-        if self.window_size == Default::default() {
-            return;
-        }
-        let frame = self.surface.acquire_frame();
-
-        self.command_encoder.start();
-        self.command_encoder.init_texture(frame.texture());
-
-        if let mut pass = self.command_encoder.render(
-            "main",
-            gpu::RenderTargetSet {
-                colors: &[gpu::RenderTarget {
-                    view: frame.texture_view(),
-                    init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
-                    finish_op: gpu::FinishOp::Store,
-                }],
-                depth_stencil: None,
-            },
-        ) {
-            let mut rc = pass.with(&self.pipeline);
-            rc.bind(
-                0,
-                &Params {
-                    globals: Globals {
-                        mvp_transform: [
-                            [2.0 / self.window_size.width as f32, 0.0, 0.0, 0.0],
-                            [0.0, 2.0 / self.window_size.height as f32, 0.0, 0.0],
-                            [0.0, 0.0, 1.0, 0.0],
-                            [-1.0, -1.0, 0.0, 1.0],
-                        ],
-                        sprite_size: [BUNNY_SIZE; 2],
-                        pad: [0.0; 2],
-                    },
-                    sprite_texture: self.view,
-                    sprite_sampler: self.sampler,
-                },
-            );
-
-            for sprite in self.bunnies.iter() {
-                //Note: technically, we could get away with either of those bindings
-                // but not them together. However, the purpose of this test is to
-                // mimic a real world draw call, not a super optimized ideal.
-                rc.bind(1, &sprite.data);
-                rc.bind_vertex(0, sprite.vertex_buf);
-                rc.draw(0, 4, 0, 1);
-            }
-        }
-        self.command_encoder.present(frame);
-        let sync_point = self.context.submit(&mut self.command_encoder);
-        if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(&sp, !0);
-        }
-        self.prev_sync_point = Some(sync_point);
-    }
-
-    fn deinit(&mut self) {
-        if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(&sp, !0);
-        }
-        self.context.destroy_texture_view(self.view);
-        self.context.destroy_texture(self.texture);
-        self.context.destroy_sampler(self.sampler);
-        self.context.destroy_buffer(self.vertex_buf);
-        self.context
-            .destroy_command_encoder(&mut self.command_encoder);
-        self.context.destroy_render_pipeline(&mut self.pipeline);
-        self.context.destroy_surface(&mut self.surface);
+        },
+        usage: gpu::TextureUsage::TARGET,
+        display_sync: gpu::DisplaySync::Recent,
+        ..Default::default()
     }
 }
 
 struct App {
-    example: Option<Example>,
+    example: Option<example::Example>,
+    command_encoder: Option<gpu::CommandEncoder>,
+    prev_sync_point: Option<gpu::SyncPoint>,
+    surface: Option<gpu::Surface>,
+    context: Option<gpu::Context>,
     window: Option<winit::window::Window>,
     #[cfg(not(target_arch = "wasm32"))]
     last_snapshot: std::time::Instant,
@@ -393,14 +52,49 @@ impl winit::application::ApplicationHandler for App {
                 .expect("couldn't append canvas to document body");
         }
 
+        let context = unsafe {
+            gpu::Context::init(gpu::ContextDesc {
+                presentation: true,
+                xr: None,
+                ray_tracing: false,
+                validation: cfg!(debug_assertions),
+                timing: false,
+                capture: false,
+                overlay: true,
+                device_id: 0,
+            })
+            .unwrap()
+        };
+        println!("{:?}", context.device_information());
+
+        let window_size = window.inner_size();
+        let surface = context
+            .create_surface_configured(&window, make_surface_config(window_size))
+            .unwrap();
+
+        let screen_size = gpu::Extent {
+            width: window_size.width,
+            height: window_size.height,
+            depth: 1,
+        };
+
         #[allow(unused_mut)]
-        let mut example = Example::new(&window);
+        let mut example = example::Example::new(&context, screen_size, surface.info().format);
         #[cfg(target_arch = "wasm32")]
         {
             example.increase();
             example.increase();
         }
+
+        let command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+            name: "main",
+            buffer_count: 2,
+        });
+
         self.example = Some(example);
+        self.command_encoder = Some(command_encoder);
+        self.surface = Some(surface);
+        self.context = Some(context);
         self.window = Some(window);
     }
 
@@ -417,9 +111,17 @@ impl winit::application::ApplicationHandler for App {
         event: winit::event::WindowEvent,
     ) {
         let example = self.example.as_mut().unwrap();
+        let context = self.context.as_ref().unwrap();
         match event {
             winit::event::WindowEvent::Resized(size) => {
-                example.resize(size);
+                let screen_size = gpu::Extent {
+                    width: size.width,
+                    height: size.height,
+                    depth: 1,
+                };
+                example.set_screen_size(screen_size);
+                let config = make_surface_config(size);
+                context.reconfigure_surface(self.surface.as_mut().unwrap(), config);
             }
             #[cfg(not(target_arch = "wasm32"))]
             winit::event::WindowEvent::KeyboardInput {
@@ -454,8 +156,32 @@ impl winit::application::ApplicationHandler for App {
                     self.last_snapshot = std::time::Instant::now();
                     self.frame_count = 0;
                 }
+
+                if example.screen_size()
+                    == (gpu::Extent {
+                        width: 0,
+                        height: 0,
+                        depth: 1,
+                    })
+                {
+                    return;
+                }
+
+                let surface = self.surface.as_mut().unwrap();
+                let command_encoder = self.command_encoder.as_mut().unwrap();
+                let frame = surface.acquire_frame();
+
                 example.step(0.01);
-                example.render();
+
+                command_encoder.start();
+                command_encoder.init_texture(frame.texture());
+                example.render(command_encoder, frame.texture_view());
+                command_encoder.present(frame);
+                let sync_point = context.submit(command_encoder);
+                if let Some(sp) = self.prev_sync_point.take() {
+                    context.wait_for(&sp, !0);
+                }
+                self.prev_sync_point = Some(sync_point);
             }
             _ => {}
         }
@@ -469,6 +195,10 @@ fn main() {
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
     let mut app = App {
         example: None,
+        command_encoder: None,
+        prev_sync_point: None,
+        surface: None,
+        context: None,
         window: None,
         #[cfg(not(target_arch = "wasm32"))]
         last_snapshot: std::time::Instant::now(),
@@ -476,7 +206,17 @@ fn main() {
     };
     event_loop.run_app(&mut app).unwrap();
 
+    let context = app.context.as_ref().unwrap();
+    if let Some(sp) = app.prev_sync_point.take() {
+        context.wait_for(&sp, !0);
+    }
     if let Some(mut example) = app.example.take() {
-        example.deinit();
+        example.deinit(context);
+    }
+    if let Some(mut command_encoder) = app.command_encoder.take() {
+        context.destroy_command_encoder(&mut command_encoder);
+    }
+    if let Some(mut surface) = app.surface.take() {
+        context.destroy_surface(&mut surface);
     }
 }

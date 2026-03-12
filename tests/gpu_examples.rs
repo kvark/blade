@@ -4,6 +4,10 @@ use blade_graphics as gpu;
 use blade_graphics::ShaderData;
 use std::slice;
 
+#[path = "../examples/bunnymark/example.rs"]
+mod bunnymark_example;
+mod snapshot;
+
 #[derive(Clone, Copy)]
 struct DispatchGlobals {
     input: gpu::BufferPiece,
@@ -280,4 +284,61 @@ fn env_map_gpu_test() {
     dummy.destroy(&context);
     env_sampler.destroy(&context);
     context.destroy_command_encoder(&mut command_encoder);
+}
+
+#[test]
+#[ignore = "requires a working GPU context"]
+fn snapshot_bunnymark() {
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    let size = gpu::Extent {
+        width: 400,
+        height: 300,
+        depth: 1,
+    };
+    let format = gpu::TextureFormat::Rgba8Unorm;
+
+    let target = snapshot::OffscreenTarget::new(&context, size, format);
+    let mut example = bunnymark_example::Example::new(&context, size, format);
+
+    // Add bunnies and step the simulation for a deterministic scene
+    example.increase();
+    for _ in 0..10 {
+        example.step(0.01);
+    }
+
+    let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "snapshot-bunnymark",
+        buffer_count: 1,
+    });
+    command_encoder.start();
+    command_encoder.init_texture(target.texture);
+    example.render(&mut command_encoder, target.view);
+
+    let pixels = target.read_pixels(&context, &mut command_encoder);
+
+    let reference_path = std::path::Path::new("tests/reference/bunnymark.png");
+    if std::env::var("BLADE_UPDATE_SNAPSHOTS").is_ok() {
+        snapshot::save_image(reference_path, &pixels, size);
+        println!("Updated reference image: {}", reference_path.display());
+    } else {
+        let (reference, ref_size) = snapshot::load_reference(reference_path);
+        assert_eq!(
+            ref_size, size,
+            "Reference image size mismatch: expected {:?}, got {:?}",
+            size, ref_size
+        );
+        if let Err(report) = snapshot::compare_images(&pixels, &reference, size, 2) {
+            let actual_path = std::path::Path::new("tests/reference/bunnymark_actual.png");
+            snapshot::save_image(actual_path, &pixels, size);
+            panic!(
+                "Bunnymark snapshot mismatch! {}\nActual output saved to: {}",
+                report,
+                actual_path.display()
+            );
+        }
+    }
+
+    example.deinit(&context);
+    context.destroy_command_encoder(&mut command_encoder);
+    target.destroy(&context);
 }
