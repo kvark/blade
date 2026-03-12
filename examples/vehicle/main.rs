@@ -84,7 +84,7 @@ impl Drop for Game {
 }
 
 impl Game {
-    fn new(event_loop: &winit::event_loop::EventLoop<()>) -> Self {
+    fn new(event_loop: &winit::event_loop::ActiveEventLoop) -> Self {
         log::info!("Initializing");
 
         let window_attributes = winit::window::Window::default_attributes().with_title("RayCraft");
@@ -656,31 +656,42 @@ impl Game {
     }
 }
 
+struct App {
+    game: Option<Game>,
+}
+
+impl winit::application::ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        self.game = Some(Game::new(event_loop));
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        if let Some(game) = &self.game {
+            game.window.request_redraw();
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        let game = self.game.as_mut().unwrap();
+        match game.on_event(&event) {
+            Ok(control_flow) => {
+                event_loop.set_control_flow(control_flow);
+            }
+            Err(QuitEvent) => {
+                event_loop.exit();
+            }
+        }
+    }
+}
+
 fn main() {
     env_logger::init();
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    let mut game = Game::new(&event_loop);
-    let mut last_event = time::Instant::now();
-
-    event_loop
-        .run(|event, target| {
-            let _delta = last_event.elapsed().as_secs_f32();
-            last_event = time::Instant::now();
-
-            match event {
-                winit::event::Event::AboutToWait => {
-                    game.window.request_redraw();
-                }
-                winit::event::Event::WindowEvent { event, .. } => match game.on_event(&event) {
-                    Ok(control_flow) => {
-                        target.set_control_flow(control_flow);
-                    }
-                    Err(QuitEvent) => {
-                        target.exit();
-                    }
-                },
-                _ => {}
-            }
-        })
-        .unwrap();
+    let mut app = App { game: None };
+    event_loop.run_app(&mut app).unwrap();
 }

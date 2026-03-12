@@ -5,6 +5,7 @@ struct Globals {
 }
 
 #[derive(blade_macros::ShaderData)]
+#[allow(dead_code)]
 struct ShaderParams {
     globals: Globals,
     sprite_texture: blade_graphics::TextureView,

@@ -363,95 +363,120 @@ impl Example {
     }
 }
 
+struct App {
+    example: Option<Example>,
+    window: Option<winit::window::Window>,
+    #[cfg(not(target_arch = "wasm32"))]
+    last_snapshot: std::time::Instant,
+    frame_count: u32,
+}
+
+impl winit::application::ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        let window_attributes =
+            winit::window::Window::default_attributes().with_title("blade-bunnymark");
+        let window = event_loop.create_window(window_attributes).unwrap();
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::WindowExtWebSys as _;
+
+            console_error_panic_hook::set_once();
+            console_log::init().expect("could not initialize logger");
+            // On wasm, append the canvas to the document body
+            let canvas = window.canvas().unwrap();
+            canvas.set_id(gpu::CANVAS_ID);
+            web_sys::window()
+                .and_then(|win| win.document())
+                .and_then(|doc| doc.body())
+                .and_then(|body| body.append_child(&web_sys::Element::from(canvas)).ok())
+                .expect("couldn't append canvas to document body");
+        }
+
+        #[allow(unused_mut)]
+        let mut example = Example::new(&window);
+        #[cfg(target_arch = "wasm32")]
+        {
+            example.increase();
+            example.increase();
+        }
+        self.example = Some(example);
+        self.window = Some(window);
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        let example = self.example.as_mut().unwrap();
+        match event {
+            winit::event::WindowEvent::Resized(size) => {
+                example.resize(size);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            winit::event::WindowEvent::KeyboardInput {
+                event:
+                    winit::event::KeyEvent {
+                        physical_key: winit::keyboard::PhysicalKey::Code(key_code),
+                        state: winit::event::ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => match key_code {
+                winit::keyboard::KeyCode::Escape => {
+                    event_loop.exit();
+                }
+                winit::keyboard::KeyCode::Space => {
+                    example.increase();
+                }
+                _ => {}
+            },
+            winit::event::WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            winit::event::WindowEvent::RedrawRequested => {
+                self.frame_count += 1;
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.frame_count == 100 {
+                    let accum_time = self.last_snapshot.elapsed().as_secs_f32();
+                    println!(
+                        "Avg frame time {}ms",
+                        accum_time * 1000.0 / self.frame_count as f32
+                    );
+                    self.last_snapshot = std::time::Instant::now();
+                    self.frame_count = 0;
+                }
+                example.step(0.01);
+                example.render();
+            }
+            _ => {}
+        }
+    }
+}
+
 fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     env_logger::init();
 
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    let window_attributes =
-        winit::window::Window::default_attributes().with_title("blade-bunnymark");
+    let mut app = App {
+        example: None,
+        window: None,
+        #[cfg(not(target_arch = "wasm32"))]
+        last_snapshot: std::time::Instant::now(),
+        frame_count: 0,
+    };
+    event_loop.run_app(&mut app).unwrap();
 
-    let window = event_loop.create_window(window_attributes).unwrap();
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        use winit::platform::web::WindowExtWebSys as _;
-
-        console_error_panic_hook::set_once();
-        console_log::init().expect("could not initialize logger");
-        // On wasm, append the canvas to the document body
-        let canvas = window.canvas().unwrap();
-        canvas.set_id(gpu::CANVAS_ID);
-        web_sys::window()
-            .and_then(|win| win.document())
-            .and_then(|doc| doc.body())
-            .and_then(|body| body.append_child(&web_sys::Element::from(canvas)).ok())
-            .expect("couldn't append canvas to document body");
+    if let Some(mut example) = app.example.take() {
+        example.deinit();
     }
-
-    let mut example = Example::new(&window);
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut last_snapshot = std::time::Instant::now();
-    #[cfg(target_arch = "wasm32")]
-    {
-        example.increase();
-        example.increase();
-    }
-    let mut frame_count = 0;
-
-    event_loop
-        .run(|event, target| {
-            target.set_control_flow(winit::event_loop::ControlFlow::Poll);
-            match event {
-                winit::event::Event::AboutToWait => {
-                    window.request_redraw();
-                }
-                winit::event::Event::WindowEvent { event, .. } => match event {
-                    winit::event::WindowEvent::Resized(size) => {
-                        example.resize(size);
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    winit::event::WindowEvent::KeyboardInput {
-                        event:
-                            winit::event::KeyEvent {
-                                physical_key: winit::keyboard::PhysicalKey::Code(key_code),
-                                state: winit::event::ElementState::Pressed,
-                                ..
-                            },
-                        ..
-                    } => match key_code {
-                        winit::keyboard::KeyCode::Escape => {
-                            target.exit();
-                        }
-                        winit::keyboard::KeyCode::Space => {
-                            example.increase();
-                        }
-                        _ => {}
-                    },
-                    winit::event::WindowEvent::CloseRequested => {
-                        target.exit();
-                    }
-                    winit::event::WindowEvent::RedrawRequested => {
-                        frame_count += 1;
-                        #[cfg(not(target_arch = "wasm32"))]
-                        if frame_count == 100 {
-                            let accum_time = last_snapshot.elapsed().as_secs_f32();
-                            println!(
-                                "Avg frame time {}ms",
-                                accum_time * 1000.0 / frame_count as f32
-                            );
-                            last_snapshot = std::time::Instant::now();
-                            frame_count = 0;
-                        }
-                        example.step(0.01);
-                        example.render();
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        })
-        .unwrap();
-
-    example.deinit();
 }
