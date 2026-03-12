@@ -2,12 +2,18 @@ use blade_graphics as gpu;
 use std::io::BufReader;
 use std::path::Path;
 
+const SSIM_THRESHOLD: f64 = 0.95;
+const REFERENCE_DIR: &str = "tests/reference";
+// SSIM constants for 8-bit images: C1 = (K1*L)^2, C2 = (K2*L)^2 where L=255
+const C1: f64 = 6.5025; // (0.01 * 255)^2
+const C2: f64 = 58.5225; // (0.03 * 255)^2
+const BLOCK: usize = 8;
+
 pub struct OffscreenTarget {
     pub texture: gpu::Texture,
     pub view: gpu::TextureView,
     pub readback: gpu::Buffer,
     pub size: gpu::Extent,
-    pub format: gpu::TextureFormat,
 }
 
 impl OffscreenTarget {
@@ -42,7 +48,6 @@ impl OffscreenTarget {
             view,
             readback,
             size,
-            format,
         }
     }
 
@@ -79,72 +84,97 @@ impl OffscreenTarget {
     }
 }
 
-pub struct DiffReport {
-    pub max_deviation: u8,
-    pub rmse: f64,
-    pub different_pixels: usize,
-    pub total_pixels: usize,
-}
+/// Compute mean SSIM between two RGBA images over non-overlapping 8x8 blocks.
+/// Uses luminance: Y = 0.299*R + 0.587*G + 0.114*B
+fn compute_ssim(a: &[u8], b: &[u8], width: usize, height: usize) -> f64 {
+    let luminance = |rgba: &[u8]| -> f64 {
+        0.299 * rgba[0] as f64 + 0.587 * rgba[1] as f64 + 0.114 * rgba[2] as f64
+    };
 
-impl std::fmt::Display for DiffReport {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Image diff: {}/{} pixels differ, max deviation = {}, RMSE = {:.2}",
-            self.different_pixels, self.total_pixels, self.max_deviation, self.rmse
-        )
+    let blocks_x = width / BLOCK;
+    let blocks_y = height / BLOCK;
+    if blocks_x == 0 || blocks_y == 0 {
+        return 1.0;
     }
-}
 
-pub fn compare_images(
-    actual: &[u8],
-    expected: &[u8],
-    size: gpu::Extent,
-    tolerance: u8,
-) -> Result<(), DiffReport> {
-    let total_pixels = (size.width * size.height) as usize;
-    assert_eq!(actual.len(), total_pixels * 4);
-    assert_eq!(expected.len(), total_pixels * 4);
+    let n = (BLOCK * BLOCK) as f64;
+    let mut ssim_sum = 0.0;
 
-    let mut max_deviation: u8 = 0;
-    let mut sum_sq: f64 = 0.0;
-    let mut different_pixels = 0;
+    for by in 0..blocks_y {
+        for bx in 0..blocks_x {
+            let mut sum_a = 0.0;
+            let mut sum_b = 0.0;
+            let mut sum_a2 = 0.0;
+            let mut sum_b2 = 0.0;
+            let mut sum_ab = 0.0;
 
-    for i in 0..total_pixels {
-        let base = i * 4;
-        let mut pixel_differs = false;
-        for c in 0..4 {
-            let a = actual[base + c];
-            let e = expected[base + c];
-            let diff = a.abs_diff(e);
-            if diff > max_deviation {
-                max_deviation = diff;
+            for dy in 0..BLOCK {
+                for dx in 0..BLOCK {
+                    let px = bx * BLOCK + dx;
+                    let py = by * BLOCK + dy;
+                    let off = (py * width + px) * 4;
+                    let va = luminance(&a[off..]);
+                    let vb = luminance(&b[off..]);
+                    sum_a += va;
+                    sum_b += vb;
+                    sum_a2 += va * va;
+                    sum_b2 += vb * vb;
+                    sum_ab += va * vb;
+                }
             }
-            sum_sq += (diff as f64) * (diff as f64);
-            if diff > tolerance {
-                pixel_differs = true;
-            }
-        }
-        if pixel_differs {
-            different_pixels += 1;
+
+            let mu_a = sum_a / n;
+            let mu_b = sum_b / n;
+            let var_a = sum_a2 / n - mu_a * mu_a;
+            let var_b = sum_b2 / n - mu_b * mu_b;
+            let cov_ab = sum_ab / n - mu_a * mu_b;
+
+            let numerator = (2.0 * mu_a * mu_b + C1) * (2.0 * cov_ab + C2);
+            let denominator = (mu_a * mu_a + mu_b * mu_b + C1) * (var_a + var_b + C2);
+            ssim_sum += numerator / denominator;
         }
     }
 
-    let rmse = (sum_sq / (total_pixels * 4) as f64).sqrt();
+    ssim_sum / (blocks_x * blocks_y) as f64
+}
 
-    if max_deviation > tolerance {
-        Err(DiffReport {
-            max_deviation,
-            rmse,
-            different_pixels,
-            total_pixels,
-        })
-    } else {
-        Ok(())
+pub fn check(name: &str, pixels: &[u8], size: gpu::Extent) {
+    let dir = Path::new(REFERENCE_DIR);
+    let reference_path = dir.join(format!("{name}.png"));
+    let actual_path = dir.join(format!("{name}_actual.png"));
+
+    if std::env::var("BLADE_UPDATE_SNAPSHOTS").is_ok() {
+        save_image(&reference_path, pixels, size);
+        println!("Updated reference image: {}", reference_path.display());
+        return;
+    }
+
+    let (reference, ref_size) = load_reference(&reference_path);
+    assert_eq!(
+        ref_size, size,
+        "Reference image size mismatch: expected {:?}, got {:?}",
+        size, ref_size
+    );
+
+    let ssim = compute_ssim(
+        pixels,
+        &reference,
+        size.width as usize,
+        size.height as usize,
+    );
+    println!("{name}: SSIM = {ssim:.4}");
+
+    if ssim < SSIM_THRESHOLD {
+        save_image(&actual_path, pixels, size);
+        panic!(
+            "{name} snapshot SSIM = {ssim:.4} (threshold {SSIM_THRESHOLD})\n\
+             Actual output saved to: {}",
+            actual_path.display()
+        );
     }
 }
 
-pub fn load_reference(path: &Path) -> (Vec<u8>, gpu::Extent) {
+fn load_reference(path: &Path) -> (Vec<u8>, gpu::Extent) {
     let file = std::fs::File::open(path).unwrap_or_else(|e| {
         panic!(
             "Failed to open reference image '{}': {}. \
@@ -166,7 +196,7 @@ pub fn load_reference(path: &Path) -> (Vec<u8>, gpu::Extent) {
     (buf, size)
 }
 
-pub fn save_image(path: &Path, data: &[u8], size: gpu::Extent) {
+fn save_image(path: &Path, data: &[u8], size: gpu::Extent) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap();
     }

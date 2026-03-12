@@ -6,6 +6,10 @@ use std::slice;
 
 #[path = "../examples/bunnymark/example.rs"]
 mod bunnymark_example;
+#[path = "../examples/particle/particle.rs"]
+mod particle_system;
+#[path = "../examples/ray-query/example.rs"]
+mod ray_query_example;
 mod snapshot;
 
 #[derive(Clone, Copy)]
@@ -315,30 +319,123 @@ fn snapshot_bunnymark() {
     example.render(&mut command_encoder, target.view);
 
     let pixels = target.read_pixels(&context, &mut command_encoder);
-
-    let reference_path = std::path::Path::new("tests/reference/bunnymark.png");
-    if std::env::var("BLADE_UPDATE_SNAPSHOTS").is_ok() {
-        snapshot::save_image(reference_path, &pixels, size);
-        println!("Updated reference image: {}", reference_path.display());
-    } else {
-        let (reference, ref_size) = snapshot::load_reference(reference_path);
-        assert_eq!(
-            ref_size, size,
-            "Reference image size mismatch: expected {:?}, got {:?}",
-            size, ref_size
-        );
-        if let Err(report) = snapshot::compare_images(&pixels, &reference, size, 2) {
-            let actual_path = std::path::Path::new("tests/reference/bunnymark_actual.png");
-            snapshot::save_image(actual_path, &pixels, size);
-            panic!(
-                "Bunnymark snapshot mismatch! {}\nActual output saved to: {}",
-                report,
-                actual_path.display()
-            );
-        }
-    }
+    snapshot::check("bunnymark", &pixels, size);
 
     example.deinit(&context);
+    context.destroy_command_encoder(&mut command_encoder);
+    target.destroy(&context);
+}
+
+#[test]
+#[ignore = "requires a working GPU context with ray tracing"]
+fn snapshot_ray_query() {
+    // Metal acceleration structure APIs can throw uncatchable ObjC exceptions
+    // in CI environments, even when the device reports ray tracing support.
+    if cfg!(target_os = "macos") {
+        println!("Skipping: ray tracing snapshot not supported on macOS CI");
+        return;
+    }
+
+    let context = unsafe {
+        match gpu::Context::init(gpu::ContextDesc {
+            ray_tracing: true,
+            ..Default::default()
+        }) {
+            Ok(c) => c,
+            Err(e) => {
+                println!("Skipping: GPU context with ray tracing not available: {e:?}");
+                return;
+            }
+        }
+    };
+    let capabilities = context.capabilities();
+    if !capabilities
+        .ray_query
+        .contains(gpu::ShaderVisibility::COMPUTE)
+    {
+        println!("Skipping: ray_query compute not supported");
+        return;
+    }
+
+    let size = gpu::Extent {
+        width: 400,
+        height: 300,
+        depth: 1,
+    };
+    let format = gpu::TextureFormat::Rgba8Unorm;
+
+    let target = snapshot::OffscreenTarget::new(&context, size, format);
+    let mut example = ray_query_example::Example::new(&context, size, format);
+
+    let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "snapshot-ray-query",
+        buffer_count: 1,
+    });
+    command_encoder.start();
+    command_encoder.init_texture(target.texture);
+    // Fixed rotation angle for deterministic output
+    example.render(&mut command_encoder, target.view, 1.0);
+
+    let pixels = target.read_pixels(&context, &mut command_encoder);
+    snapshot::check("ray-query", &pixels, size);
+
+    example.deinit(&context);
+    context.destroy_command_encoder(&mut command_encoder);
+    target.destroy(&context);
+}
+
+#[test]
+#[ignore = "requires a working GPU context"]
+fn snapshot_particle() {
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    let size = gpu::Extent {
+        width: 400,
+        height: 300,
+        depth: 1,
+    };
+    let format = gpu::TextureFormat::Rgba8Unorm;
+
+    let target = snapshot::OffscreenTarget::new(&context, size, format);
+    let mut particle_system = particle_system::System::new(
+        &context,
+        particle_system::SystemDesc {
+            name: "snapshot particle",
+            capacity: 10_000,
+            draw_format: format,
+        },
+        1, // no MSAA for testing
+    );
+
+    let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "snapshot-particle",
+        buffer_count: 1,
+    });
+    command_encoder.start();
+    particle_system.reset(&mut command_encoder);
+    // Run several update cycles to emit and move particles
+    for _ in 0..20 {
+        particle_system.update(&mut command_encoder);
+    }
+
+    command_encoder.init_texture(target.texture);
+    if let mut pass = command_encoder.render(
+        "draw particles",
+        gpu::RenderTargetSet {
+            colors: &[gpu::RenderTarget {
+                view: target.view,
+                init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
+                finish_op: gpu::FinishOp::Store,
+            }],
+            depth_stencil: None,
+        },
+    ) {
+        particle_system.draw(&mut pass, (size.width, size.height));
+    }
+
+    let pixels = target.read_pixels(&context, &mut command_encoder);
+    snapshot::check("particle", &pixels, size);
+
+    particle_system.destroy(&context);
     context.destroy_command_encoder(&mut command_encoder);
     target.destroy(&context);
 }
