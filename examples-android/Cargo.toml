@@ -14,7 +14,7 @@ blade-macros = { version = "0.3", path = "../blade-macros" }
 openxr = { workspace = true }
 bytemuck = { workspace = true }
 glam = { workspace = true }
-log = "0.4"
+log = { workspace = true }
 libc = "0.2.50"
 libloading = "0.8"
 ndk-glue = "0.7"
