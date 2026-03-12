@@ -334,112 +334,139 @@ impl Example {
     }
 }
 
+struct App {
+    example: Option<Example>,
+    window: Option<winit::window::Window>,
+    egui_winit: Option<egui_winit::State>,
+    viewport_id: egui::ViewportId,
+}
+
+impl winit::application::ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        let window_attributes =
+            winit::window::Window::default_attributes().with_title("blade-particle");
+        let window = event_loop.create_window(window_attributes).unwrap();
+
+        let egui_ctx = egui::Context::default();
+        self.viewport_id = egui_ctx.viewport_id();
+        self.egui_winit = Some(egui_winit::State::new(
+            egui_ctx,
+            self.viewport_id,
+            &window,
+            None,
+            None,
+            None,
+        ));
+
+        self.example = Some(Example::new(&window));
+        self.window = Some(window);
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        let example = self.example.as_mut().unwrap();
+        let window = self.window.as_ref().unwrap();
+        let egui_winit = self.egui_winit.as_mut().unwrap();
+
+        let response = egui_winit.on_window_event(window, &event);
+        if response.consumed {
+            return;
+        }
+        if response.repaint {
+            window.request_redraw();
+        }
+
+        match event {
+            winit::event::WindowEvent::KeyboardInput {
+                event:
+                    winit::event::KeyEvent {
+                        physical_key: winit::keyboard::PhysicalKey::Code(key_code),
+                        state: winit::event::ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => match key_code {
+                winit::keyboard::KeyCode::Escape => {
+                    event_loop.exit();
+                }
+                _ => {}
+            },
+            winit::event::WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+
+            winit::event::WindowEvent::Resized(size) => {
+                example.resize(size);
+            }
+
+            winit::event::WindowEvent::RedrawRequested => {
+                let raw_input = egui_winit.take_egui_input(window);
+                let egui_output = egui_winit.egui_ctx().run(raw_input, |egui_ctx| {
+                    egui::SidePanel::left("info").show(egui_ctx, |ui| {
+                        ui.add_space(5.0);
+                        example.add_gui(ui);
+
+                        ui.add_space(5.0);
+                        if ui.button("Quit").clicked() {
+                            event_loop.exit();
+                        }
+                    });
+                });
+
+                egui_winit.handle_platform_output(window, egui_output.platform_output);
+                let repaint_delay = egui_output.viewport_output[&self.viewport_id].repaint_delay;
+
+                let pixels_per_point = egui_winit::pixels_per_point(egui_winit.egui_ctx(), window);
+                let primitives = egui_winit
+                    .egui_ctx()
+                    .tessellate(egui_output.shapes, pixels_per_point);
+
+                let control_flow = if let Some(repaint_after_instant) =
+                    std::time::Instant::now().checked_add(repaint_delay)
+                {
+                    winit::event_loop::ControlFlow::WaitUntil(repaint_after_instant.into())
+                } else {
+                    winit::event_loop::ControlFlow::Wait
+                };
+                event_loop.set_control_flow(control_flow);
+
+                //Note: this will probably look different with proper support for resizing
+                let window_size = window.inner_size();
+                let screen_desc = blade_egui::ScreenDescriptor {
+                    physical_size: (window_size.width, window_size.height),
+                    scale_factor: pixels_per_point,
+                };
+
+                example.render(&primitives, &egui_output.textures_delta, &screen_desc);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn main() {
     env_logger::init();
 
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    let window_attributes =
-        winit::window::Window::default_attributes().with_title("blade-particle");
+    let mut app = App {
+        example: None,
+        window: None,
+        egui_winit: None,
+        viewport_id: egui::ViewportId::ROOT,
+    };
+    event_loop.run_app(&mut app).unwrap();
 
-    let window = event_loop.create_window(window_attributes).unwrap();
-
-    let egui_ctx = egui::Context::default();
-    let viewport_id = egui_ctx.viewport_id();
-    let mut egui_winit = egui_winit::State::new(egui_ctx, viewport_id, &window, None, None, None);
-
-    let mut example = Example::new(&window);
-
-    event_loop
-        .run(|event, target| {
-            target.set_control_flow(winit::event_loop::ControlFlow::Poll);
-            match event {
-                winit::event::Event::AboutToWait => {
-                    window.request_redraw();
-                }
-
-                winit::event::Event::WindowEvent { event, .. } => {
-                    let response = egui_winit.on_window_event(&window, &event);
-                    if response.consumed {
-                        return;
-                    }
-                    if response.repaint {
-                        window.request_redraw();
-                    }
-
-                    match event {
-                        winit::event::WindowEvent::KeyboardInput {
-                            event:
-                                winit::event::KeyEvent {
-                                    physical_key: winit::keyboard::PhysicalKey::Code(key_code),
-                                    state: winit::event::ElementState::Pressed,
-                                    ..
-                                },
-                            ..
-                        } => match key_code {
-                            winit::keyboard::KeyCode::Escape => {
-                                target.exit();
-                            }
-                            _ => {}
-                        },
-                        winit::event::WindowEvent::CloseRequested => {
-                            target.exit();
-                        }
-
-                        winit::event::WindowEvent::Resized(size) => {
-                            example.resize(size);
-                        }
-
-                        winit::event::WindowEvent::RedrawRequested => {
-                            let raw_input = egui_winit.take_egui_input(&window);
-                            let egui_output = egui_winit.egui_ctx().run(raw_input, |egui_ctx| {
-                                egui::SidePanel::left("info").show(egui_ctx, |ui| {
-                                    ui.add_space(5.0);
-                                    example.add_gui(ui);
-
-                                    ui.add_space(5.0);
-                                    if ui.button("Quit").clicked() {
-                                        target.exit();
-                                    }
-                                });
-                            });
-
-                            egui_winit.handle_platform_output(&window, egui_output.platform_output);
-                            let repaint_delay =
-                                egui_output.viewport_output[&viewport_id].repaint_delay;
-
-                            let pixels_per_point =
-                                egui_winit::pixels_per_point(egui_winit.egui_ctx(), &window);
-                            let primitives = egui_winit
-                                .egui_ctx()
-                                .tessellate(egui_output.shapes, pixels_per_point);
-
-                            let control_flow = if let Some(repaint_after_instant) =
-                                std::time::Instant::now().checked_add(repaint_delay)
-                            {
-                                winit::event_loop::ControlFlow::WaitUntil(
-                                    repaint_after_instant.into(),
-                                )
-                            } else {
-                                winit::event_loop::ControlFlow::Wait
-                            };
-                            target.set_control_flow(control_flow);
-
-                            //Note: this will probably look different with proper support for resizing
-                            let window_size = window.inner_size();
-                            let screen_desc = blade_egui::ScreenDescriptor {
-                                physical_size: (window_size.width, window_size.height),
-                                scale_factor: pixels_per_point,
-                            };
-
-                            example.render(&primitives, &egui_output.textures_delta, &screen_desc);
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        })
-        .unwrap();
-
-    example.destroy();
+    if let Some(mut example) = app.example.take() {
+        example.destroy();
+    }
 }

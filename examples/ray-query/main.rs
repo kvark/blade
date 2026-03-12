@@ -331,52 +331,70 @@ impl Example {
     }
 }
 
+struct App {
+    example: Option<Example>,
+    window: Option<winit::window::Window>,
+}
+
+impl winit::application::ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        let window_attributes =
+            winit::window::Window::default_attributes().with_title("blade-ray-query");
+        let window = event_loop.create_window(window_attributes).unwrap();
+        self.example = Some(Example::new(&window));
+        self.window = Some(window);
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        let example = self.example.as_mut().unwrap();
+        match event {
+            winit::event::WindowEvent::KeyboardInput {
+                event:
+                    winit::event::KeyEvent {
+                        physical_key: winit::keyboard::PhysicalKey::Code(key_code),
+                        state: winit::event::ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => match key_code {
+                winit::keyboard::KeyCode::Escape => {
+                    event_loop.exit();
+                }
+                _ => {}
+            },
+            winit::event::WindowEvent::RedrawRequested => {
+                example.render();
+            }
+            winit::event::WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            _ => {}
+        }
+    }
+}
+
 fn main() {
     env_logger::init();
 
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    let window_attributes =
-        winit::window::Window::default_attributes().with_title("blade-ray-query");
+    let mut app = App {
+        example: None,
+        window: None,
+    };
+    event_loop.run_app(&mut app).unwrap();
 
-    let window = event_loop.create_window(window_attributes).unwrap();
-
-    let mut example = Example::new(&window);
-
-    event_loop
-        .run(|event, target| {
-            target.set_control_flow(winit::event_loop::ControlFlow::Poll);
-            match event {
-                winit::event::Event::AboutToWait => {
-                    window.request_redraw();
-                }
-                winit::event::Event::WindowEvent { event, .. } => match event {
-                    winit::event::WindowEvent::KeyboardInput {
-                        event:
-                            winit::event::KeyEvent {
-                                physical_key: winit::keyboard::PhysicalKey::Code(key_code),
-                                state: winit::event::ElementState::Pressed,
-                                ..
-                            },
-                        ..
-                    } => match key_code {
-                        winit::keyboard::KeyCode::Escape => {
-                            target.exit();
-                        }
-                        _ => {}
-                    },
-                    winit::event::WindowEvent::RedrawRequested => {
-                        target.set_control_flow(winit::event_loop::ControlFlow::Wait);
-                        example.render();
-                    }
-                    winit::event::WindowEvent::CloseRequested => {
-                        target.exit();
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        })
-        .unwrap();
-
-    example.delete();
+    if let Some(example) = app.example.take() {
+        example.delete();
+    }
 }
