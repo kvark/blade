@@ -458,8 +458,31 @@ impl Rasterizer {
         let pos = glam::Vec3::from(camera.pos);
         let rot = glam::Quat::from(camera.rot);
         let view = glam::Mat4::from_rotation_translation(rot, pos).inverse();
-        let aspect = self.surface_size.width as f32 / self.surface_size.height.max(1) as f32;
-        let proj = glam::Mat4::perspective_rh(camera.fov_y, aspect, 0.01, camera.depth);
+        let near = 0.01;
+        let far = camera.depth;
+        let proj = if let Some(fov) = camera.fov {
+            // Asymmetric off-center projection for XR
+            let left = -fov.left.tan() * near;
+            let right = fov.right.tan() * near;
+            let bottom = -fov.down.tan() * near;
+            let top = fov.up.tan() * near;
+            let w = right - left;
+            let h = top - bottom;
+            glam::Mat4::from_cols(
+                glam::Vec4::new(2.0 * near / w, 0.0, 0.0, 0.0),
+                glam::Vec4::new(0.0, 2.0 * near / h, 0.0, 0.0),
+                glam::Vec4::new(
+                    (right + left) / w,
+                    (top + bottom) / h,
+                    far / (near - far),
+                    -1.0,
+                ),
+                glam::Vec4::new(0.0, 0.0, far * near / (near - far), 0.0),
+            )
+        } else {
+            let aspect = self.surface_size.width as f32 / self.surface_size.height.max(1) as f32;
+            glam::Mat4::perspective_rh(camera.fov_y, aspect, near, far)
+        };
         let view_proj = proj * view;
         let inv_view_proj = view_proj.inverse();
         let light_dir = glam::Vec3::from(config.light_dir).normalize_or_zero();

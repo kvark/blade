@@ -807,6 +807,7 @@ impl Engine {
                         rot: camera.transform.orientation,
                         fov_y: camera.fov_y,
                         depth: MAX_DEPTH,
+                        fov: None,
                     },
                     *frame_config,
                 );
@@ -920,6 +921,7 @@ impl Engine {
                     rot: camera.transform.orientation,
                     fov_y: camera.fov_y,
                     depth: MAX_DEPTH,
+                    fov: None,
                 };
                 command_encoder.init_texture(inner.depth_texture());
                 if let mut pass = command_encoder.render(
@@ -1079,6 +1081,12 @@ impl Engine {
                         },
                         fov_y: xr_view.fov.angle_up - xr_view.fov.angle_down,
                         depth: MAX_DEPTH,
+                        fov: Some(blade_render::Fov {
+                            left: (-xr_view.fov.angle_left).max(0.0),
+                            right: xr_view.fov.angle_right.max(0.0),
+                            up: xr_view.fov.angle_up.max(0.0),
+                            down: (-xr_view.fov.angle_down).max(0.0),
+                        }),
                     };
                     inner.prepare(command_encoder, &render_camera, *frame_config);
                     frame_config.reset_reservoirs = false;
@@ -1124,6 +1132,12 @@ impl Engine {
                         },
                         fov_y: xr_view.fov.angle_up - xr_view.fov.angle_down,
                         depth: MAX_DEPTH,
+                        fov: Some(blade_render::Fov {
+                            left: (-xr_view.fov.angle_left).max(0.0),
+                            right: xr_view.fov.angle_right.max(0.0),
+                            up: xr_view.fov.angle_up.max(0.0),
+                            down: (-xr_view.fov.angle_down).max(0.0),
+                        }),
                     };
                     if let mut pass = command_encoder.render(
                         "xr-raster",
@@ -1577,6 +1591,52 @@ impl Engine {
             visuals: vec![visual],
         });
         ObjectHandle(raw_handle)
+    }
+
+    /// Set the linear and angular velocity of an object.
+    pub fn set_velocity(
+        &mut self,
+        handle: ObjectHandle,
+        linear: mint::Vector3<f32>,
+        angular: mint::Vector3<f32>,
+    ) {
+        let object = &self.objects[handle.0];
+        let body = self
+            .physics
+            .rigid_bodies
+            .get_mut(object.rigid_body)
+            .unwrap();
+        body.set_linvel(linear.into(), true);
+        body.set_angvel(angular.into(), true);
+    }
+
+    /// Get the position of an object.
+    pub fn get_object_position(&self, handle: ObjectHandle) -> mint::Vector3<f32> {
+        let object = &self.objects[handle.0];
+        let body = &self.physics.rigid_bodies[object.rigid_body];
+        body.position().translation.vector.into()
+    }
+
+    /// Remove an object and its physics state.
+    pub fn remove_object(&mut self, handle: ObjectHandle) {
+        if let Some(object) = self.objects.try_remove(handle.0) {
+            for &collider in object.colliders.iter() {
+                self.physics.colliders.remove(
+                    collider,
+                    &mut self.physics.island_manager,
+                    &mut self.physics.rigid_bodies,
+                    false,
+                );
+            }
+            self.physics.rigid_bodies.remove(
+                object.rigid_body,
+                &mut self.physics.island_manager,
+                &mut self.physics.colliders,
+                &mut self.physics.impulse_joints,
+                &mut self.physics.multibody_joints,
+                true,
+            );
+        }
     }
 
     pub fn wake_up(&mut self, object: ObjectHandle) {

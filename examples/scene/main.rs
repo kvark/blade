@@ -305,6 +305,7 @@ impl Example {
                 .into(),
             fov_y: config_scene.camera.fov_y,
             depth: MAX_DEPTH,
+            fov: None,
         };
         self.camera.fly_speed = config_scene.camera.speed;
         self.ray_config.environment_importance_sampling = !config_scene.environment_map.is_empty();
