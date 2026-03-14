@@ -477,6 +477,125 @@ impl Baker {
     }
 }
 
+/// Description of a procedural model geometry.
+pub struct ProceduralGeometry {
+    pub name: String,
+    pub vertices: Vec<crate::Vertex>,
+    pub indices: Vec<u32>,
+    pub base_color_factor: [f32; 4],
+}
+
+impl Baker {
+    /// Create a model from procedural geometry data, bypassing the asset cooking pipeline.
+    pub fn create_model(&self, name: &str, geometries: Vec<ProceduralGeometry>) -> Model {
+        assert!(!geometries.is_empty(), "Need at least one geometry");
+
+        let total_vertices: usize = geometries.iter().map(|g| g.vertices.len()).sum();
+        let total_vertex_size = (total_vertices * mem::size_of::<crate::Vertex>()) as u64;
+        let vertex_buffer = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
+            name: "proc vertex",
+            size: total_vertex_size,
+            memory: blade_graphics::Memory::Shared,
+        });
+
+        let total_indices: usize = geometries.iter().map(|g| g.indices.len()).sum();
+        let total_index_size = total_indices as u64 * 4
+            + geometries.len() as u64 * blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT;
+        let index_buffer = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
+            name: "proc index",
+            size: total_index_size,
+            memory: blade_graphics::Memory::Shared,
+        });
+
+        let total_transform_size =
+            (geometries.len() * mem::size_of::<blade_graphics::Transform>()) as u64;
+        let transform_buffer = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
+            name: "proc transform",
+            size: total_transform_size,
+            memory: blade_graphics::Memory::Shared,
+        });
+
+        let mut start_vertex = 0u32;
+        let mut index_offset = 0u64;
+        let mut transform_offset = 0u64;
+        let mut model_geometries = Vec::with_capacity(geometries.len());
+        let mut materials = Vec::with_capacity(geometries.len());
+
+        for geo in geometries.iter() {
+            index_offset = crate::util::align_to(
+                index_offset,
+                blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
+            );
+
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    geo.vertices.as_ptr(),
+                    (vertex_buffer.data() as *mut crate::Vertex).add(start_vertex as usize),
+                    geo.vertices.len(),
+                );
+                ptr::copy_nonoverlapping(
+                    geo.indices.as_ptr(),
+                    index_buffer.data().add(index_offset as usize) as *mut u32,
+                    geo.indices.len(),
+                );
+            }
+            let transform = blade_graphics::IDENTITY_TRANSFORM;
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    ptr::from_ref(&transform).cast::<u8>(),
+                    transform_buffer.data().add(transform_offset as usize),
+                    mem::size_of::<blade_graphics::Transform>(),
+                );
+            }
+
+            let index_type = if geo.indices.is_empty() {
+                None
+            } else {
+                Some(blade_graphics::IndexType::U32)
+            };
+            let triangle_count = if geo.indices.is_empty() {
+                geo.vertices.len() as u32 / 3
+            } else {
+                geo.indices.len() as u32 / 3
+            };
+
+            let material_index = materials.len();
+            materials.push(Material {
+                base_color_texture: None,
+                base_color_factor: geo.base_color_factor,
+                normal_texture: None,
+                normal_scale: 0.0,
+                transparent: false,
+            });
+
+            model_geometries.push(Geometry {
+                name: geo.name.clone(),
+                vertex_range: start_vertex..start_vertex + geo.vertices.len() as u32,
+                index_offset,
+                index_type,
+                triangle_count,
+                transform,
+                material_index,
+            });
+
+            start_vertex += geo.vertices.len() as u32;
+            index_offset += geo.indices.len() as u64 * 4;
+            transform_offset += mem::size_of::<blade_graphics::Transform>() as u64;
+        }
+
+        Model {
+            name: name.to_string(),
+            winding: 1.0,
+            geometries: model_geometries,
+            materials,
+            vertex_buffer,
+            index_buffer,
+            transform_buffer,
+            acceleration_structure: blade_graphics::AccelerationStructure::default(),
+        }
+    }
+}
+
 impl blade_asset::Baker for Baker {
     type Meta = Meta;
     type Data<'a> = CookedModel<'a>;

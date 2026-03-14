@@ -36,7 +36,7 @@ pub mod util;
 #[cfg(not(any(gles, target_arch = "wasm32")))]
 pub use asset_hub::*;
 #[cfg(not(any(gles, target_arch = "wasm32")))]
-pub use model::Model;
+pub use model::{Model, ProceduralGeometry};
 #[cfg(not(any(gles, target_arch = "wasm32")))]
 pub use raster::{RasterConfig, Rasterizer};
 #[cfg(not(any(gles, target_arch = "wasm32")))]

@@ -577,6 +577,24 @@ impl<B: Baker> AssetManager<B> {
         }
     }
 
+    /// Insert a pre-built asset directly, bypassing the cooking pipeline.
+    ///
+    /// Returns a handle that can be used to access the asset immediately.
+    pub fn insert(&self, asset: B::Output) -> Handle<B::Output> {
+        let (handle, slot_ptr) = self.slots.alloc_default();
+        let slot = unsafe { &mut *slot_ptr };
+        assert_eq!(slot.version, 0);
+        *slot = Slot {
+            version: 1,
+            data: Some(asset),
+            ..Slot::default()
+        };
+        Handle {
+            inner: handle,
+            version: 1,
+        }
+    }
+
     /// Clear the asset manager by deleting all the stored assets.
     ///
     /// Invalidates all handles produced from loading assets.

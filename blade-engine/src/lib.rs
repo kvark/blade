@@ -553,15 +553,20 @@ impl Engine {
             }
             #[allow(unreachable_code)]
             Presentation::Xr(_) => {
-                let xr_surface = gpu_context
-                    .create_xr_surface()
-                    .expect("Unable to create XR surface from GPU context");
-                let surface_size = xr_surface.extent();
-                let surface_info = gpu::SurfaceInfo {
-                    format: xr_surface.format(),
-                    alpha: gpu::AlphaMode::Ignored,
-                };
-                (surface_size, surface_info, TargetSurface::Xr(xr_surface))
+                #[cfg(not(target_os = "android"))]
+                panic!("XR presentation is only supported on Android");
+                #[cfg(target_os = "android")]
+                {
+                    let xr_surface = gpu_context
+                        .create_xr_surface()
+                        .expect("Unable to create XR surface from GPU context");
+                    let surface_size = xr_surface.extent();
+                    let surface_info = gpu::SurfaceInfo {
+                        format: xr_surface.format(),
+                        alpha: gpu::AlphaMode::Ignored,
+                    };
+                    (surface_size, surface_info, TargetSurface::Xr(xr_surface))
+                }
             }
             #[cfg(target_os = "android")]
             Presentation::__Marker(_) => unreachable!(),
@@ -1529,6 +1534,47 @@ impl Engine {
             prev_isometry: nalgebra::Isometry3::default(),
             colliders,
             visuals,
+        });
+        ObjectHandle(raw_handle)
+    }
+
+    /// Create a procedural model from raw geometry data.
+    ///
+    /// Returns a handle that can be used to spawn objects with this model.
+    /// The model uses shared memory, so no GPU transfer is needed.
+    pub fn create_model(
+        &mut self,
+        name: &str,
+        geometries: Vec<blade_render::ProceduralGeometry>,
+    ) -> blade_asset::Handle<blade_render::Model> {
+        let model = self.asset_hub.models.baker.create_model(name, geometries);
+        self.asset_hub.models.insert(model)
+    }
+
+    /// Add a visual object from a pre-existing model handle and physics config.
+    pub fn add_object_with_model(
+        &mut self,
+        name: &str,
+        model: blade_asset::Handle<blade_render::Model>,
+        transform: Transform,
+        dynamic_input: DynamicInput,
+    ) -> ObjectHandle {
+        let visual = Visual {
+            model,
+            similarity: nalgebra::geometry::Similarity3::identity(),
+        };
+
+        let rigid_body = rapier3d::dynamics::RigidBodyBuilder::new(dynamic_input.into_rapier())
+            .position(transform.into_isometry())
+            .build();
+        let rb_handle = self.physics.rigid_bodies.insert(rigid_body);
+
+        let raw_handle = self.objects.insert(Object {
+            name: name.to_string(),
+            rigid_body: rb_handle,
+            prev_isometry: nalgebra::Isometry3::default(),
+            colliders: Vec::new(),
+            visuals: vec![visual],
         });
         ObjectHandle(raw_handle)
     }
