@@ -98,14 +98,7 @@ impl super::Context {
             let mut hasher = DefaultHasher::new();
             sf.shader.source.hash(&mut hasher);
             file_path = temp_dir.join(format!("{}-{:x}.wgsl", sf.entry_point, hasher.finish()));
-            log::info!("Dumping processed shader code to: {}", file_path.display());
             let _ = fs::write(&file_path, &sf.shader.source);
-
-            // Dump Naga Module IR alongside the WGSL for easier debugging.
-            let naga_ir_path =
-                temp_dir.join(format!("{}-{:x}.txt", sf.entry_point, hasher.finish()));
-            log::info!("Dumping Naga module IR to: {}", naga_ir_path.display());
-            let _ = fs::write(&naga_ir_path, format!("{:#?}\n", &module));
 
             naga_options_debug = naga_options_base.clone();
             file_name_str = file_path.to_string_lossy().into_owned();
@@ -258,6 +251,22 @@ impl super::Context {
                     vk::DescriptorBindingFlags::empty(),
                 ),
             };
+            if descriptor_type == vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT {
+                assert_eq!(
+                    descriptor_count % 4,
+                    0,
+                    "Inline uniform block binding {} size must be 4-byte aligned, got {}",
+                    binding_index,
+                    descriptor_count
+                );
+                assert!(
+                    descriptor_count <= crate::limits::PLAIN_DATA_SIZE,
+                    "Inline uniform block binding {} size {} exceeds blade limit {}",
+                    binding_index,
+                    descriptor_count,
+                    crate::limits::PLAIN_DATA_SIZE
+                );
+            }
 
             vk_bindings.push(vk::DescriptorSetLayoutBinding {
                 binding: binding_index as u32,
@@ -391,7 +400,9 @@ impl crate::traits::ShaderDevice for super::Context {
             self.device
                 .core
                 .create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None)
-                .unwrap()
+                .unwrap_or_else(|(_, err)| {
+                    panic!("Failed to create compute pipeline '{}': {err:?}", desc.name)
+                })
         };
         let raw = raw_vec.pop().unwrap();
 
@@ -634,7 +645,9 @@ impl crate::traits::ShaderDevice for super::Context {
             self.device
                 .core
                 .create_graphics_pipelines(vk::PipelineCache::null(), &[create_info], None)
-                .unwrap()
+                .unwrap_or_else(|(_, err)| {
+                    panic!("Failed to create render pipeline '{}': {err:?}", desc.name)
+                })
         };
         let raw = raw_vec.pop().unwrap();
 

@@ -12,7 +12,7 @@ const PI: f32 = 3.1415926;
 
 struct RasterDrawParams {
     model: mat4x4<f32>,
-    normal: mat4x4<f32>,
+    normal_quat: vec4<f32>,
     base_color_factor: vec4<f32>,
     material: vec4<f32>,
 }
@@ -25,6 +25,10 @@ struct Vertex {
     tangent: u32,
 }
 
+struct VertexBuffer {
+    data: array<Vertex>,
+}
+
 struct VertexOutput {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
@@ -34,25 +38,30 @@ struct VertexOutput {
     @location(4) uv: vec2<f32>,
 }
 
-var<uniform> frame: RasterFrameParams;
+var<uniform> frame_params: RasterFrameParams;
+var<uniform> draw_params: RasterDrawParams;
+var<storage, read> vertices: VertexBuffer;
 var samp: sampler;
-var<uniform> draw: RasterDrawParams;
 var base_color_tex: texture_2d<f32>;
 var normal_tex: texture_2d<f32>;
-var env_map: texture_2d<f32>;
 
 fn decode_normal(raw: u32) -> vec3<f32> {
     return unpack4x8snorm(raw).xyz;
 }
 
+fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+}
+
 @vertex
-fn raster_vs(input: Vertex) -> VertexOutput {
+fn raster_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    let input = vertices.data[vertex_index];
     var out: VertexOutput;
-    let pos_world = draw.model * vec4<f32>(input.position, 1.0);
-    out.clip_pos = frame.view_proj * pos_world;
+    let pos_world = draw_params.model * vec4<f32>(input.position, 1.0);
+    out.clip_pos = frame_params.view_proj * pos_world;
     out.world_pos = pos_world.xyz;
-    let n = normalize((draw.normal * vec4<f32>(decode_normal(input.normal), 0.0)).xyz);
-    let t = normalize((draw.normal * vec4<f32>(decode_normal(input.tangent), 0.0)).xyz);
+    let n = normalize(quat_rotate(draw_params.normal_quat, decode_normal(input.normal)));
+    let t = normalize(quat_rotate(draw_params.normal_quat, decode_normal(input.tangent)));
     let b = normalize(cross(n, t)) * input.bitangent_sign;
     out.normal = n;
     out.tangent = t;
@@ -95,10 +104,10 @@ fn geometry_smith(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, roughness: f32) -> f
 
 @fragment
 fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let albedo = textureSample(base_color_tex, samp, input.uv).rgb * draw.base_color_factor.rgb;
+    let albedo = textureSample(base_color_tex, samp, input.uv).rgb * draw_params.base_color_factor.rgb;
 
     var n = normalize(input.normal);
-    let normal_scale = draw.material.x;
+    let normal_scale = draw_params.material.x;
     if (normal_scale > 0.0) {
         let raw_unorm = textureSample(normal_tex, samp, input.uv).xy;
         let n_xy = normal_scale * (2.0 * raw_unorm - 1.0);
@@ -108,12 +117,12 @@ fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         n = normalize(tbn * n_tangent);
     }
 
-    let v = normalize(frame.camera_pos.xyz - input.world_pos);
-    let l = normalize(frame.light_dir.xyz);
+    let v = normalize(frame_params.camera_pos.xyz - input.world_pos);
+    let l = normalize(frame_params.light_dir.xyz);
     let h = normalize(v + l);
 
-    let roughness = clamp(frame.material.x, 0.04, 1.0);
-    let metallic = clamp(frame.material.y, 0.0, 1.0);
+    let roughness = clamp(frame_params.material.x, 0.04, 1.0);
+    let metallic = clamp(frame_params.material.y, 0.0, 1.0);
     let f0 = mix(vec3<f32>(0.04), albedo, metallic);
 
     let n_dot_l = max(dot(n, l), 0.0);
@@ -130,8 +139,8 @@ fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let k_d = (vec3<f32>(1.0) - k_s) * (1.0 - metallic);
     let diffuse = k_d * albedo / PI;
 
-    let light = (diffuse + specular) * frame.light_color.xyz * n_dot_l;
-    let ambient = albedo * frame.ambient_color.xyz;
+    let light = (diffuse + specular) * frame_params.light_color.xyz * n_dot_l;
+    let ambient = albedo * frame_params.ambient_color.xyz;
     let color = ambient + light;
 
     let mapped = color / (color + vec3<f32>(1.0));
@@ -143,6 +152,9 @@ struct SkyOutput {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) ndc: vec2<f32>,
 }
+
+var<uniform> sky_params: RasterFrameParams;
+var env_map: texture_2d<f32>;
 
 @vertex
 fn raster_sky_vs(@builtin(vertex_index) vertex_id: u32) -> SkyOutput {
@@ -161,10 +173,10 @@ fn raster_sky_vs(@builtin(vertex_index) vertex_id: u32) -> SkyOutput {
 @fragment
 fn raster_sky_fs(input: SkyOutput) -> @location(0) vec4<f32> {
     let ndc = vec4<f32>(input.ndc, 1.0, 1.0);
-    let world = frame.inv_view_proj * ndc;
+    let world = sky_params.inv_view_proj * ndc;
     let world_pos = world.xyz / world.w;
-    let dir = normalize(world_pos - frame.camera_pos.xyz);
-    let env_enabled = frame.material.z > 0.5;
+    let dir = normalize(world_pos - sky_params.camera_pos.xyz);
+    let env_enabled = sky_params.material.z > 0.5;
     var color = vec3<f32>(0.0);
     if (env_enabled) {
         let uv = map_equirect_dir_to_uv(dir);

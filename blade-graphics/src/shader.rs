@@ -241,8 +241,10 @@ impl super::Shader {
     ) -> Vec<crate::VertexAttributeMapping> {
         let mut attribute_mappings = Vec::new();
         for (ep_index, ep) in module.entry_points.iter().enumerate() {
-            let mut location = 0;
             if ep.stage != naga::ShaderStage::Vertex {
+                continue;
+            }
+            if ep_index != selected_ep_index {
                 continue;
             }
 
@@ -266,67 +268,49 @@ impl super::Shader {
                     }
                 };
 
-                if ep_index == selected_ep_index {
-                    log::debug!("Processing vertex argument: {}", arg_name);
-
-                    'member: for member in members.iter_mut() {
-                        let member_name = match member.name {
-                            Some(ref name) => name.as_str(),
-                            None => "?",
-                        };
-                        if let Some(ref binding) = member.binding {
-                            log::warn!(
-                                "Member '{}' already has binding: {:?}",
-                                member_name,
-                                binding
-                            );
-                            continue;
-                        }
-                        let binding = naga::Binding::Location {
-                            location: attribute_mappings.len() as u32,
-                            interpolation: None,
-                            sampling: None,
-                            blend_src: None,
-                            per_primitive: false,
-                        };
-                        for (buffer_index, vertex_fetch) in fetch_states.iter().enumerate() {
-                            for (attribute_index, &(at_name, _)) in
-                                vertex_fetch.layout.attributes.iter().enumerate()
-                            {
-                                if at_name == member_name {
-                                    log::debug!("Assigning location({}) for member '{}' to be using input {}:{}",
-                                        attribute_mappings.len(), member_name, buffer_index, attribute_index);
-                                    member.binding = Some(binding);
-                                    attribute_mappings.push(crate::VertexAttributeMapping {
-                                        buffer_index,
-                                        attribute_index,
-                                    });
-                                    continue 'member;
-                                }
+                log::debug!("Processing vertex argument: {}", arg_name);
+                'member: for member in members.iter_mut() {
+                    let member_name = match member.name {
+                        Some(ref name) => name.as_str(),
+                        None => "?",
+                    };
+                    if let Some(ref binding) = member.binding {
+                        log::warn!(
+                            "Member '{}' already has binding: {:?}",
+                            member_name,
+                            binding
+                        );
+                        continue;
+                    }
+                    let binding = naga::Binding::Location {
+                        location: attribute_mappings.len() as u32,
+                        interpolation: None,
+                        sampling: None,
+                        blend_src: None,
+                        per_primitive: false,
+                    };
+                    for (buffer_index, vertex_fetch) in fetch_states.iter().enumerate() {
+                        for (attribute_index, &(at_name, _)) in
+                            vertex_fetch.layout.attributes.iter().enumerate()
+                        {
+                            if at_name == member_name {
+                                log::debug!("Assigning location({}) for member '{}' to be using input {}:{}",
+                                    attribute_mappings.len(), member_name, buffer_index, attribute_index);
+                                member.binding = Some(binding);
+                                attribute_mappings.push(crate::VertexAttributeMapping {
+                                    buffer_index,
+                                    attribute_index,
+                                });
+                                continue 'member;
                             }
                         }
-                        assert_ne!(
-                            member.binding, None,
-                            "Field {} is not covered by the vertex fetch layouts!",
-                            member_name
-                        );
                     }
-                } else {
-                    // Just fill out the locations for the module to be valid
-                    for member in members.iter_mut() {
-                        if member.binding.is_none() {
-                            member.binding = Some(naga::Binding::Location {
-                                location,
-                                interpolation: None,
-                                sampling: None,
-                                blend_src: None,
-                                per_primitive: false,
-                            });
-                            location += 1;
-                        }
-                    }
+                    assert_ne!(
+                        member.binding, None,
+                        "Field {} is not covered by the vertex fetch layouts!",
+                        member_name
+                    );
                 }
-
                 module.types.replace(argument.ty, ty);
             }
         }
