@@ -53,27 +53,24 @@ struct RasterFrameParams {
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct RasterDrawParams {
     model: [f32; 16],
-    normal: [f32; 16],
+    normal_quat: [f32; 4],
     base_color_factor: [f32; 4],
     material: [f32; 4],
 }
 
 #[derive(blade_macros::ShaderData)]
-struct RasterFrameData {
-    frame: RasterFrameParams,
+struct RasterMainData {
+    frame_params: RasterFrameParams,
+    draw_params: RasterDrawParams,
+    vertices: gpu::BufferPiece,
     samp: gpu::Sampler,
-}
-
-#[derive(blade_macros::ShaderData)]
-struct RasterDrawData {
-    draw: RasterDrawParams,
     base_color_tex: gpu::TextureView,
     normal_tex: gpu::TextureView,
 }
 
 #[derive(blade_macros::ShaderData)]
 struct RasterSkyData {
-    frame: RasterFrameParams,
+    sky_params: RasterFrameParams,
     samp: gpu::Sampler,
     env_map: gpu::TextureView,
 }
@@ -91,17 +88,12 @@ impl RasterPipelines {
     ) -> gpu::RenderPipeline {
         shader.check_struct_size::<RasterFrameParams>();
         shader.check_struct_size::<RasterDrawParams>();
-        let frame_layout = <RasterFrameData as gpu::ShaderData>::layout();
-        let draw_layout = <RasterDrawData as gpu::ShaderData>::layout();
-        let vertex_layout = <Vertex as gpu::Vertex>::layout();
+        let main_layout = <RasterMainData as gpu::ShaderData>::layout();
         gpu.create_render_pipeline(gpu::RenderPipelineDesc {
             name: "raster",
-            data_layouts: &[&frame_layout, &draw_layout],
+            data_layouts: &[&main_layout],
             vertex: shader.at("raster_vs"),
-            vertex_fetches: &[gpu::VertexFetchState {
-                layout: &vertex_layout,
-                instanced: false,
-            }],
+            vertex_fetches: &[],
             primitive: gpu::PrimitiveState {
                 topology: gpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
@@ -166,7 +158,7 @@ pub struct Rasterizer {
     shaders: Shaders,
     pipelines: RasterPipelines,
     sampler_linear: gpu::Sampler,
-    debug: crate::render::DebugRender,
+    debug: Option<crate::render::DebugRender>,
     dummy: DummyResources,
     depth_texture: gpu::Texture,
     depth_view: gpu::TextureView,
@@ -184,17 +176,20 @@ impl Rasterizer {
         config: &crate::render::RenderConfig,
     ) -> Self {
         let pipelines = RasterPipelines::init(&shaders, config, gpu, shader_man).unwrap();
+        #[cfg(target_os = "android")]
+        let debug = None;
+        #[cfg(not(target_os = "android"))]
         let debug = {
             let sh_draw = shader_man[shaders.debug_draw].raw.as_ref().unwrap();
             let sh_blit = shader_man[shaders.debug_blit].raw.as_ref().unwrap();
-            crate::render::DebugRender::init(
+            Some(crate::render::DebugRender::init(
                 encoder,
                 gpu,
                 sh_draw,
                 sh_blit,
                 config.max_debug_lines,
                 config.surface_info,
-            )
+            ))
         };
         let dummy = DummyResources::new(encoder, gpu);
         let sampler_linear = gpu.create_sampler(gpu::SamplerDesc {
@@ -221,7 +216,9 @@ impl Rasterizer {
     }
 
     pub fn destroy(&mut self, gpu: &gpu::Context) {
-        self.debug.destroy(gpu);
+        if let Some(debug) = self.debug.as_mut() {
+            debug.destroy(gpu);
+        }
         self.dummy.destroy(gpu);
         gpu.destroy_texture_view(self.depth_view);
         gpu.destroy_texture(self.depth_texture);
@@ -304,25 +301,21 @@ impl Rasterizer {
         let env_map_enabled = environment_map.is_some();
         let frame_params = self.make_frame_params(camera, config, env_map_enabled);
         if let mut pc = pass.with(&self.pipelines.main) {
-            pc.bind(
-                0,
-                &RasterFrameData {
-                    frame: frame_params,
-                    samp: self.sampler_linear,
-                },
-            );
-
             for object in objects.iter() {
                 let model = &asset_hub.models[object.model];
                 let object_transform = mat4_transform(&object.transform);
                 let object_normal = object_transform.inverse().transpose();
 
-                pc.bind_vertex(0, model.vertex_buffer.at(0));
-
                 for geometry in model.geometries.iter() {
                     let geometry_transform = mat4_transform(&geometry.transform);
                     let world_transform = object_transform * geometry_transform;
                     let normal_transform = object_normal * geometry_transform.inverse().transpose();
+                    let normal_basis = glam::Mat3::from_cols(
+                        normal_transform.x_axis.truncate().normalize_or_zero(),
+                        normal_transform.y_axis.truncate().normalize_or_zero(),
+                        normal_transform.z_axis.truncate().normalize_or_zero(),
+                    );
+                    let normal_quat = glam::Quat::from_mat3(&normal_basis).normalize();
                     let material = &model.materials[geometry.material_index];
 
                     let (normal_tex, normal_scale) = match material.normal_texture {
@@ -338,14 +331,17 @@ impl Rasterizer {
                     };
 
                     pc.bind(
-                        1,
-                        &RasterDrawData {
-                            draw: RasterDrawParams {
+                        0,
+                        &RasterMainData {
+                            frame_params,
+                            draw_params: RasterDrawParams {
                                 model: world_transform.to_cols_array(),
-                                normal: normal_transform.to_cols_array(),
+                                normal_quat: normal_quat.to_array(),
                                 base_color_factor: material.base_color_factor,
                                 material: [normal_scale, 0.0, 0.0, 0.0],
                             },
+                            vertices: model.vertex_buffer.at(0),
+                            samp: self.sampler_linear,
                             base_color_tex,
                             normal_tex,
                         },
@@ -384,12 +380,14 @@ impl Rasterizer {
         camera: &crate::Camera,
         debug_lines: &[crate::DebugLine],
     ) {
+        let Some(debug) = self.debug.as_ref() else {
+            return;
+        };
         if debug_lines.is_empty() {
             return;
         }
         let camera_params = self.make_camera_params(camera);
-        self.debug
-            .render_lines(debug_lines, camera_params, self.depth_view, pass);
+        debug.render_lines(debug_lines, camera_params, self.depth_view, pass);
     }
 
     fn render_sky(
@@ -402,7 +400,7 @@ impl Rasterizer {
         pc.bind(
             0,
             &RasterSkyData {
-                frame: frame_params,
+                sky_params: frame_params,
                 samp: self.sampler_linear,
                 env_map,
             },
