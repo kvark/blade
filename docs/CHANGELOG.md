@@ -10,9 +10,10 @@ Changelog for *Blade* project
 
 - graphics
   - OpenXR / Android support (tested on Quest 3S)
-  - disable ray tracing initialization
+  - option to disable ray tracing initialization
   - separate `Capabilities` flag for binding arrays, including TLAS arrays
   - egl: use DMA-BUF sharing with different displays for presentation
+  - vk: uniform buffer fallback for buggy Qualcomm devices
 
 ## blade-graphics-0.7.1 (22 Feb 2025)
 

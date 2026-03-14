@@ -516,6 +516,7 @@ impl Engine {
     pub fn new(presentation: Presentation<'_>, config: &config::Engine) -> Self {
         log::info!("Initializing the engine");
 
+        #[allow(unreachable_code)]
         let xr = match presentation {
             #[cfg(not(target_os = "android"))]
             Presentation::Window(_) => None,
@@ -550,6 +551,7 @@ impl Engine {
                     TargetSurface::Window(gpu_surface),
                 )
             }
+            #[allow(unreachable_code)]
             Presentation::Xr(_) => {
                 let xr_surface = gpu_context
                     .create_xr_surface()
@@ -729,6 +731,7 @@ impl Engine {
                     self.gpu_context
                         .reconfigure_surface(surface, surface_config);
                 }
+                #[cfg(target_os = "android")]
                 _ => panic!("Engine::render is only available with TargetSurface::Window"),
             }
         }
@@ -863,6 +866,7 @@ impl Engine {
 
         let frame = match self.target_surface {
             TargetSurface::Window(ref mut surface) => surface.acquire_frame(),
+            #[cfg(target_os = "android")]
             _ => panic!("Engine::render is only available with TargetSurface::Window"),
         };
         command_encoder.init_texture(frame.texture());

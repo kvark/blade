@@ -15,10 +15,6 @@ impl super::Device {
         log::info!("Creating a descriptor pool for at most {} sets", max_sets);
         let mut descriptor_sizes = vec![
             vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
-                descriptor_count: max_sets * crate::limits::PLAIN_DATA_SIZE,
-            },
-            vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_BUFFER,
                 descriptor_count: max_sets,
             },
@@ -35,6 +31,17 @@ impl super::Device {
                 descriptor_count: max_sets,
             },
         ];
+        if self.inline_uniform_blocks {
+            descriptor_sizes.push(vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
+                descriptor_count: max_sets * crate::limits::PLAIN_DATA_SIZE,
+            });
+        } else {
+            descriptor_sizes.push(vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: max_sets,
+            });
+        }
         if self.ray_tracing.is_some() {
             descriptor_sizes.push(vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
@@ -47,11 +54,13 @@ impl super::Device {
             ..Default::default()
         };
 
-        let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
+        let mut descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
             .max_sets(max_sets)
             .flags(self.workarounds.extra_descriptor_pool_create_flags)
-            .pool_sizes(&descriptor_sizes)
-            .push_next(&mut inline_uniform_block_info);
+            .pool_sizes(&descriptor_sizes);
+        if self.inline_uniform_blocks {
+            descriptor_pool_info = descriptor_pool_info.push_next(&mut inline_uniform_block_info);
+        }
 
         unsafe {
             self.core

@@ -30,7 +30,6 @@ Required instance extensions:
 - VK_KHR_get_surface_capabilities2
 
 Required device extensions:
-- VK_EXT_inline_uniform_block
 - VK_KHR_descriptor_update_template
 - VK_KHR_timeline_semaphore
 - VK_KHR_dynamic_rendering

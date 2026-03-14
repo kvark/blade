@@ -9,6 +9,9 @@ mod db {
     pub mod intel {
         pub const VENDOR: u32 = 0x8086;
     }
+    pub mod qualcomm {
+        pub const VENDOR: u32 = 0x5143;
+    }
 }
 mod layer {
     use std::ffi::CStr;
@@ -17,7 +20,6 @@ mod layer {
 }
 
 const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
-    vk::EXT_INLINE_UNIFORM_BLOCK_NAME,
     vk::KHR_TIMELINE_SEMAPHORE_NAME,
     vk::KHR_DESCRIPTOR_UPDATE_TEMPLATE_NAME,
     vk::KHR_DYNAMIC_RENDERING_NAME,
@@ -55,6 +57,7 @@ struct AdapterCapabilities {
     binding_array: bool,
     ray_tracing: Option<RayTracingCapabilities>,
     buffer_device_address: bool,
+    inline_uniform_blocks: bool,
     buffer_marker: bool,
     shader_info: bool,
     full_screen_exclusive: bool,
@@ -174,17 +177,20 @@ unsafe fn inspect_adapter(
 
     let dual_source_blending = features2_khr.features.dual_src_blend != 0;
 
-    if inline_uniform_block_properties.max_inline_uniform_block_size
-        < crate::limits::PLAIN_DATA_SIZE
-        || inline_uniform_block_properties.max_descriptor_set_inline_uniform_blocks == 0
-        || inline_uniform_block_features.inline_uniform_block == 0
-    {
-        log::warn!(
-            "\tRejected for inline uniform blocks. Properties = {:?}, Features = {:?}",
-            inline_uniform_block_properties,
-            inline_uniform_block_features,
+    let has_inline_ub = supported_extensions.contains(&vk::EXT_INLINE_UNIFORM_BLOCK_NAME)
+        && inline_uniform_block_properties.max_inline_uniform_block_size
+            >= crate::limits::PLAIN_DATA_SIZE
+        && inline_uniform_block_properties.max_descriptor_set_inline_uniform_blocks > 0
+        && inline_uniform_block_features.inline_uniform_block != 0;
+    // Adreno 740 (Qualcomm) has a driver bug: inline uniform blocks combined
+    // with inter-stage varyings cause "Failed to link shaders" at pipeline creation.
+    let inline_uniform_blocks = has_inline_ub && properties.vendor_id != db::qualcomm::VENDOR;
+    if !inline_uniform_blocks {
+        log::info!(
+            "Inline uniform blocks disabled (supported={}, vendor=0x{:X}). Using UBO fallback.",
+            has_inline_ub,
+            properties.vendor_id,
         );
-        return None;
     }
 
     if timeline_semaphore_features.timeline_semaphore == 0 {
@@ -305,6 +311,7 @@ unsafe fn inspect_adapter(
         binding_array,
         ray_tracing,
         buffer_device_address,
+        inline_uniform_blocks,
         buffer_marker,
         shader_info,
         full_screen_exclusive,
@@ -539,6 +546,9 @@ impl super::Context {
             let family_infos = [family_info];
 
             let mut device_extensions = REQUIRED_DEVICE_EXTENSIONS.to_vec();
+            if capabilities.inline_uniform_blocks {
+                device_extensions.push(vk::EXT_INLINE_UNIFORM_BLOCK_NAME);
+            }
             if desc.presentation {
                 device_extensions.push(vk::KHR_SWAPCHAIN_NAME);
             }
@@ -603,9 +613,11 @@ impl super::Context {
             let mut device_create_info = vk::DeviceCreateInfo::default()
                 .queue_create_infos(&family_infos)
                 .enabled_extension_names(&str_pointers)
-                .push_next(&mut ext_inline_uniform_block)
                 .push_next(&mut khr_timeline_semaphore)
                 .push_next(&mut khr_dynamic_rendering);
+            if capabilities.inline_uniform_blocks {
+                device_create_info = device_create_info.push_next(&mut ext_inline_uniform_block);
+            }
 
             let mut ext_descriptor_indexing;
             if needs_descriptor_indexing {
@@ -703,6 +715,7 @@ impl super::Context {
                 None
             },
             buffer_device_address: capabilities.buffer_device_address,
+            inline_uniform_blocks: capabilities.inline_uniform_blocks,
             buffer_marker: if capabilities.buffer_marker && desc.validation {
                 Some(amd::buffer_marker::Device::new(
                     &instance.core,
@@ -926,6 +939,10 @@ impl super::Context {
             naga_flags,
             shader_debug_path,
             min_buffer_alignment,
+            min_uniform_buffer_offset_alignment: capabilities
+                .properties
+                .limits
+                .min_uniform_buffer_offset_alignment,
             sample_count_flags: capabilities
                 .properties
                 .limits
