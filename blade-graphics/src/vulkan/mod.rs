@@ -59,6 +59,7 @@ struct Device {
     dynamic_rendering: khr::dynamic_rendering::Device,
     ray_tracing: Option<RayTracingDevice>,
     buffer_device_address: bool,
+    inline_uniform_blocks: bool,
     buffer_marker: Option<ash::amd::buffer_marker::Device>,
     shader_info: Option<ash::amd::shader_info::Device>,
     full_screen_exclusive: Option<ash::ext::full_screen_exclusive::Device>,
@@ -250,6 +251,7 @@ pub struct Context {
     naga_flags: naga::back::spv::WriterFlags,
     shader_debug_path: Option<PathBuf>,
     min_buffer_alignment: u64,
+    min_uniform_buffer_offset_alignment: u64,
     sample_count_flags: vk::SampleCountFlags,
     dual_source_blending: bool,
     binding_array: bool,
@@ -346,9 +348,20 @@ struct PipelineLayout {
     descriptor_set_layouts: Vec<DescriptorSetLayout>,
 }
 
+#[derive(Debug)]
+struct ScratchBuffer {
+    raw: vk::Buffer,
+    memory_handle: usize,
+    mapped: *mut u8,
+    capacity: u64,
+    offset: u64,
+    alignment: u64,
+}
+
 pub struct PipelineContext<'a> {
     update_data: &'a mut [u8],
     template_offsets: &'a [u32],
+    scratch: Option<&'a mut ScratchBuffer>,
 }
 
 #[derive(Debug)]
@@ -376,6 +389,7 @@ struct CommandBuffer {
     descriptor_pool: descriptor::DescriptorPool,
     query_pool: vk::QueryPool,
     timed_pass_names: Vec<String>,
+    scratch: Option<ScratchBuffer>,
 }
 
 struct CrashHandler {
@@ -436,38 +450,6 @@ impl crate::traits::CommandDevice for Context {
     type SyncPoint = SyncPoint;
 
     fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
-        //TODO: these numbers are arbitrary, needs to be replaced by
-        // an abstraction from gpu-alloc, if possible.
-        const ROUGH_SET_COUNT: u32 = 60000;
-        let mut descriptor_sizes = vec![
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
-                descriptor_count: ROUGH_SET_COUNT * crate::limits::PLAIN_DATA_SIZE,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_BUFFER,
-                descriptor_count: ROUGH_SET_COUNT,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::SAMPLED_IMAGE,
-                descriptor_count: 2 * ROUGH_SET_COUNT,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::SAMPLER,
-                descriptor_count: ROUGH_SET_COUNT,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_IMAGE,
-                descriptor_count: ROUGH_SET_COUNT,
-            },
-        ];
-        if self.device.ray_tracing.is_some() {
-            descriptor_sizes.push(vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
-                descriptor_count: ROUGH_SET_COUNT,
-            });
-        }
-
         let pool_info = vk::CommandPoolCreateInfo {
             flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
             ..Default::default()
@@ -510,11 +492,30 @@ impl crate::traits::CommandDevice for Context {
                 } else {
                     vk::QueryPool::null()
                 };
+                let scratch = if !self.device.inline_uniform_blocks {
+                    const SCRATCH_SIZE: u64 = 1 << 20; // 1 MiB
+                    let buf = self.create_buffer(crate::BufferDesc {
+                        name: "_scratch",
+                        size: SCRATCH_SIZE,
+                        memory: crate::Memory::Shared,
+                    });
+                    Some(ScratchBuffer {
+                        raw: buf.raw,
+                        memory_handle: buf.memory_handle,
+                        mapped: buf.mapped_data,
+                        capacity: SCRATCH_SIZE,
+                        offset: 0,
+                        alignment: self.min_uniform_buffer_offset_alignment,
+                    })
+                } else {
+                    None
+                };
                 CommandBuffer {
                     raw,
                     descriptor_pool,
                     query_pool,
                     timed_pass_names: Vec::new(),
+                    scratch,
                 }
             })
             .collect();
@@ -562,6 +563,14 @@ impl crate::traits::CommandDevice for Context {
                         .core
                         .destroy_query_pool(cmd_buf.query_pool, None);
                 }
+            }
+            if let Some(ref scratch) = cmd_buf.scratch {
+                self.destroy_buffer(super::Buffer {
+                    raw: scratch.raw,
+                    memory_handle: scratch.memory_handle,
+                    mapped_data: scratch.mapped,
+                    external: None,
+                });
             }
         }
         unsafe {

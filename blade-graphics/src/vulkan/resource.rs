@@ -307,6 +307,9 @@ impl crate::traits::ResourceDevice for super::Context {
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             ..Default::default()
         };
+        if !self.device.inline_uniform_blocks {
+            vk_info.usage |= Buf::UNIFORM_BUFFER;
+        }
         if let Some(external_next) = external_next.as_mut() {
             vk_info = vk_info.push_next(external_next);
         }

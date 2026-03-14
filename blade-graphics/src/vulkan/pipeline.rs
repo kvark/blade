@@ -244,12 +244,23 @@ impl super::Context {
                     count,
                     vk::DescriptorBindingFlags::PARTIALLY_BOUND,
                 ),
-                crate::ShaderBinding::Plain { size } => (
-                    vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
-                    1,
-                    size,
-                    vk::DescriptorBindingFlags::empty(),
-                ),
+                crate::ShaderBinding::Plain { size } => {
+                    if self.device.inline_uniform_blocks {
+                        (
+                            vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
+                            1,
+                            size,
+                            vk::DescriptorBindingFlags::empty(),
+                        )
+                    } else {
+                        (
+                            vk::DescriptorType::UNIFORM_BUFFER,
+                            mem::size_of::<vk::DescriptorBufferInfo>(),
+                            1u32,
+                            vk::DescriptorBindingFlags::empty(),
+                        )
+                    }
+                }
             };
             if descriptor_type == vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT {
                 assert_eq!(
@@ -266,6 +277,18 @@ impl super::Context {
                     descriptor_count,
                     crate::limits::PLAIN_DATA_SIZE
                 );
+            }
+            // UBO fallback: ensure Plain size fits in the scratch buffer
+            if descriptor_type == vk::DescriptorType::UNIFORM_BUFFER {
+                if let crate::ShaderBinding::Plain { size } = binding {
+                    assert!(
+                        size <= crate::limits::PLAIN_DATA_SIZE,
+                        "UBO binding {} size {} exceeds blade limit {}",
+                        binding_index,
+                        size,
+                        crate::limits::PLAIN_DATA_SIZE
+                    );
+                }
             }
 
             vk_bindings.push(vk::DescriptorSetLayoutBinding {
