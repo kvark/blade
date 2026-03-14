@@ -26,6 +26,7 @@ impl Default for ControlledCamera {
                 },
                 fov_y: 0.0,
                 depth: 0.0,
+                fov: None,
             },
             fly_speed: 0.0,
         }

@@ -57,12 +57,24 @@ pub struct Vertex {
     pub tangent: u32,
 }
 
+/// Asymmetric field-of-view angles (in radians).
+/// All angles are positive: left/down are measured from center toward left/down.
+#[derive(Clone, Copy, Debug)]
+pub struct Fov {
+    pub left: f32,
+    pub right: f32,
+    pub up: f32,
+    pub down: f32,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Camera {
     pub pos: mint::Vector3<f32>,
     pub rot: mint::Quaternion<f32>,
     pub fov_y: f32,
     pub depth: f32,
+    /// Per-eye asymmetric FOV. When set, overrides `fov_y` for projection.
+    pub fov: Option<Fov>,
 }
 
 #[cfg(not(any(gles, target_arch = "wasm32")))]

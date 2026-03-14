@@ -9,8 +9,11 @@ edition = "2021"
 [dependencies]
 
 [target.'cfg(target_os = "android")'.dependencies]
+blade-asset = { version = "0.2", path = "../../blade-asset" }
 blade-engine = { version = "0.1", path = "../../blade-engine" }
 blade-graphics = { version = "0.7", path = "../../blade-graphics" }
+blade-render = { version = "0.4", path = "../../blade-render" }
+mint = "0.5"
 openxr = { workspace = true }
 log = "0.4"
 libc = "0.2.50"
