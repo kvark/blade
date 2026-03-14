@@ -66,6 +66,10 @@ fn random_gen(rng: ptr<function, RandomState>) -> f32 {
 const PI: f32 = 3.1415926;
 
 var env_weights: texture_2d<f32>;
+struct EnvSampleParams {
+    mip_count: u32,
+}
+var<uniform> params: EnvSampleParams;
 
 struct EnvImportantSample {
     pixel: vec2<i32>,
@@ -91,7 +95,7 @@ fn generate_environment_sample(
 ) -> EnvImportantSample {
     var es = EnvImportantSample();
     es.pdf = 1.0;
-    var mip = i32(textureNumLevels(env_weights));
+    var mip = i32(params.mip_count);
     var itc = vec2<i32>(0);
     // descend through the mip chain to find a concrete pixel
     while (mip != 0) {
@@ -129,7 +133,7 @@ fn generate_environment_sample(
 fn compute_environment_sample_pdf(pixel: vec2<i32>, dim: vec2<u32>) -> f32 {
     var itc = pixel;
     var pdf = 1.0 / compute_texel_solid_angle(itc, dim);
-    let mip_count = i32(textureNumLevels(env_weights));
+    let mip_count = i32(params.mip_count);
     for (var mip = 0; mip < mip_count; mip += 1) {
         let rem = itc & vec2<i32>(1);
         itc >>= vec2<u32>(1u);

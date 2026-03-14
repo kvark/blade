@@ -157,6 +157,16 @@ jobs:
         if: matrix.name != 'Linux'
         run: cargo test --test gpu_examples -- --ignored --nocapture
 
+      - name: Install EGL/GLES (Linux)
+        if: matrix.name == 'Linux'
+        run: sudo apt-get install -y libegl1-mesa-dev libgles2-mesa-dev
+
+      - name: Run GLES integration tests (Linux)
+        if: matrix.name == 'Linux'
+        run: cargo test --test gpu_examples -- --ignored --nocapture --test-threads=1
+        env:
+          RUSTFLAGS: "--cfg gles"
+
       - name: Upload snapshot artifacts
         if: failure()
         uses: actions/upload-artifact@v4
