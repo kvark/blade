@@ -167,12 +167,14 @@ impl Frame {
 struct BufferPart {
     raw: glow::Buffer,
     offset: u64,
+    data: *mut u8,
 }
 impl From<crate::BufferPiece> for BufferPart {
     fn from(piece: crate::BufferPiece) -> Self {
         Self {
             raw: piece.buffer.raw,
             offset: piece.offset,
+            data: piece.buffer.data,
         }
     }
 }

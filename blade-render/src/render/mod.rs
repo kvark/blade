@@ -1,14 +1,10 @@
 mod debug;
-mod dummy;
-mod env_map;
 
-use crate::CameraParams;
+use crate::{CameraParams, DummyResources, EnvironmentMap};
 use debug::{DebugEntry, DebugVariance};
 
 pub(crate) use debug::DebugRender;
 pub use debug::{DebugBlit, DebugLine, DebugPoint};
-pub use dummy::DummyResources;
-pub use env_map::EnvironmentMap;
 
 use std::{collections::HashMap, mem, num::NonZeroU32, path::Path, ptr};
 

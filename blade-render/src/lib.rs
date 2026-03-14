@@ -1,4 +1,3 @@
-#![cfg(not(any(gles, target_arch = "wasm32")))]
 #![allow(
     irrefutable_let_patterns,
     clippy::new_without_default,
@@ -14,19 +13,37 @@
     clippy::pattern_type_mismatch,
 )]
 
+mod dummy;
+mod env_map;
+pub use dummy::DummyResources;
+pub use env_map::EnvironmentMap;
+
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 mod asset_hub;
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub mod model;
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub mod raster;
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 mod render;
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub mod shader;
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub mod texture;
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub mod util;
 
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub use asset_hub::*;
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub use model::Model;
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub use raster::{RasterConfig, Rasterizer};
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub use render::*;
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub use shader::Shader;
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub use texture::Texture;
 
 // Has to match the `Vertex` in shaders
@@ -48,12 +65,14 @@ pub struct Camera {
     pub depth: f32,
 }
 
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub struct Object {
     pub model: blade_asset::Handle<Model>,
     pub transform: blade_graphics::Transform,
     pub prev_transform: blade_graphics::Transform,
 }
 
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 impl From<blade_asset::Handle<Model>> for Object {
     fn from(model: blade_asset::Handle<Model>) -> Self {
         Self {
@@ -64,6 +83,7 @@ impl From<blade_asset::Handle<Model>> for Object {
     }
 }
 
+#[cfg(not(any(gles, target_arch = "wasm32")))]
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 struct CameraParams {

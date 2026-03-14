@@ -844,7 +844,41 @@ impl super::Command {
                 ref dst,
                 bytes_per_row,
                 ref size,
-            } => unimplemented!(),
+            } => {
+                let format_desc = super::describe_texture_format(src.format);
+                let block_info = src.format.block_info();
+                let row_texels =
+                    bytes_per_row / block_info.size as u32 * block_info.dimensions.0 as u32;
+                gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
+                gl.pixel_store_i32(glow::PACK_ROW_LENGTH, row_texels as i32);
+                gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
+                gl.framebuffer_texture_2d(
+                    glow::READ_FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    src.target,
+                    Some(src.raw),
+                    src.mip_level as i32,
+                );
+                let dst_slice = std::slice::from_raw_parts_mut(
+                    dst.data.add(dst.offset as usize),
+                    (bytes_per_row * size.height) as usize,
+                );
+                gl.read_pixels(
+                    src.origin[0] as i32,
+                    src.origin[1] as i32,
+                    size.width as i32,
+                    size.height as i32,
+                    format_desc.external,
+                    format_desc.data_type,
+                    glow::PixelPackData::Slice(Some(dst_slice)),
+                );
+                gl.framebuffer_renderbuffer(
+                    glow::READ_FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    glow::RENDERBUFFER,
+                    None,
+                );
+            }
             Self::ResetFramebuffer => {
                 for &attachment in COLOR_ATTACHMENTS.iter() {
                     gl.framebuffer_renderbuffer(

@@ -8,6 +8,7 @@ use std::slice;
 mod bunnymark_example;
 #[path = "../examples/particle/particle.rs"]
 mod particle_system;
+#[cfg(not(gles))]
 #[path = "../examples/ray-query/example.rs"]
 mod ray_query_example;
 mod snapshot;
@@ -35,10 +36,17 @@ impl gpu::ShaderData for DispatchGlobals {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct EnvSampleParams {
+    mip_count: u32,
+}
+
 #[derive(blade_macros::ShaderData)]
 struct EnvSampleData {
     env_main: gpu::TextureView,
     env_weights: gpu::TextureView,
+    params: EnvSampleParams,
 }
 
 struct EnvMapSampler {
@@ -125,7 +133,9 @@ impl EnvMapSampler {
         command_encoder: &mut gpu::CommandEncoder,
         env_main: gpu::TextureView,
         env_weights: gpu::TextureView,
+        mip_count: u32,
     ) {
+        let params = EnvSampleParams { mip_count };
         command_encoder.init_texture(self.accum_texture);
         let mut pass = command_encoder.render(
             "accumulate",
@@ -144,6 +154,7 @@ impl EnvMapSampler {
                 &EnvSampleData {
                     env_main,
                     env_weights,
+                    params,
                 },
             );
             encoder.draw(0, 4, 0, 1);
@@ -154,6 +165,7 @@ impl EnvMapSampler {
                 &EnvSampleData {
                     env_main,
                     env_weights,
+                    params,
                 },
             );
             encoder.draw(0, self.sample_count, 0, 1);
@@ -254,7 +266,12 @@ fn env_map_gpu_test() {
     env_map.assign(dummy.white_view, dummy.size, &mut command_encoder, &context);
 
     let env_sampler = EnvMapSampler::new(dummy.size, &shader_sample, &context);
-    env_sampler.accumulate(&mut command_encoder, env_map.main_view, env_map.weight_view);
+    env_sampler.accumulate(
+        &mut command_encoder,
+        env_map.main_view,
+        env_map.weight_view,
+        env_map.weight_mips.len() as u32,
+    );
 
     let readback = context.create_buffer(gpu::BufferDesc {
         name: "env-map-readback",
@@ -326,6 +343,7 @@ fn snapshot_bunnymark() {
     target.destroy(&context);
 }
 
+#[cfg(not(gles))]
 #[test]
 #[ignore = "requires a working GPU context with ray tracing"]
 fn snapshot_ray_query() {

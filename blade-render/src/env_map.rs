@@ -17,7 +17,7 @@ struct EnvPreprocData {
 pub struct EnvironmentMap {
     pub main_view: blade_graphics::TextureView,
     pub size: blade_graphics::Extent,
-    pub weight_texture: blade_graphics::Texture,
+    pub weight_texture: Option<blade_graphics::Texture>,
     pub weight_view: blade_graphics::TextureView,
     pub weight_mips: Vec<blade_graphics::TextureView>,
     pub prepare_pipeline: blade_graphics::ComputePipeline,
@@ -47,7 +47,7 @@ impl EnvironmentMap {
         Self {
             main_view: dummy.white_view,
             size: blade_graphics::Extent::default(),
-            weight_texture: blade_graphics::Texture::default(),
+            weight_texture: None,
             weight_view: dummy.red_view,
             weight_mips: Vec::new(),
             prepare_pipeline,
@@ -72,8 +72,8 @@ impl EnvironmentMap {
     }
 
     pub fn destroy(&mut self, gpu: &blade_graphics::Context) {
-        if self.weight_texture != blade_graphics::Texture::default() {
-            gpu.destroy_texture(self.weight_texture);
+        if let Some(weight_texture) = self.weight_texture.take() {
+            gpu.destroy_texture(weight_texture);
             gpu.destroy_texture_view(self.weight_view);
         }
         for view in self.weight_mips.drain(..) {
@@ -103,7 +103,7 @@ impl EnvironmentMap {
             .trailing_zeros();
         let weight_extent = self.weight_size();
         let format = blade_graphics::TextureFormat::Rgba16Float;
-        self.weight_texture = gpu.create_texture(blade_graphics::TextureDesc {
+        self.weight_texture = Some(gpu.create_texture(blade_graphics::TextureDesc {
             name: "env-weight",
             format,
             size: weight_extent,
@@ -113,9 +113,10 @@ impl EnvironmentMap {
             usage: blade_graphics::TextureUsage::RESOURCE | blade_graphics::TextureUsage::STORAGE,
             sample_count: 1,
             external: None,
-        });
+        }));
+        let weight_texture = self.weight_texture.unwrap();
         self.weight_view = gpu.create_texture_view(
-            self.weight_texture,
+            weight_texture,
             blade_graphics::TextureViewDesc {
                 name: "env-weight",
                 format,
@@ -125,7 +126,7 @@ impl EnvironmentMap {
         );
         for base_mip_level in 0..mip_level_count {
             let view = gpu.create_texture_view(
-                self.weight_texture,
+                weight_texture,
                 blade_graphics::TextureViewDesc {
                     name: &format!("env-weight-mip{}", base_mip_level),
                     format,
@@ -140,7 +141,7 @@ impl EnvironmentMap {
             self.weight_mips.push(view);
         }
 
-        encoder.init_texture(self.weight_texture);
+        encoder.init_texture(weight_texture);
         for target_level in 0..mip_level_count {
             let groups = self
                 .prepare_pipeline
