@@ -230,7 +230,8 @@ fn generate_asteroid_mesh(
 const ASTEROID_COUNT: usize = 30;
 const ASTEROID_MESH_VARIANTS: usize = 8;
 const FIELD_RADIUS: f32 = 20.0;
-const COMFORT_RADIUS: f32 = 3.0;
+const COMFORT_RADIUS: f32 = 5.0;
+const MIN_MISS_DISTANCE: f32 = 2.0;
 const DESPAWN_RADIUS: f32 = 40.0;
 
 struct Asteroid {
@@ -312,15 +313,33 @@ impl AsteroidField {
         let scale_factor = 0.3 + hash_noise(seed, 1.0, 2.0, 3.0).abs() * 0.7;
         let _ = scale_factor; // scale applied via similarity in add_object_with_model
 
-        let velocity = [
-            hash_noise(seed, 4.0, 5.0, 6.0) * 0.5,
-            hash_noise(seed, 7.0, 8.0, 9.0) * 0.1,
-            hash_noise(seed, 10.0, 11.0, 12.0) * 0.5,
+        // Velocity aimed to pass near the player, not through them.
+        // Compute a perpendicular offset so the closest approach is MIN_MISS_DISTANCE..3x away.
+        let dist = (pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]).sqrt();
+        let toward_origin = [-pos[0] / dist, -pos[1] / dist, -pos[2] / dist];
+        // Pick an arbitrary perpendicular direction
+        let up = if toward_origin[1].abs() < 0.9 {
+            [0.0, 1.0, 0.0]
+        } else {
+            [1.0, 0.0, 0.0]
+        };
+        let perp1 = normalize(cross(toward_origin, up));
+        let perp2 = cross(toward_origin, perp1);
+        let miss =
+            MIN_MISS_DISTANCE + hash_noise(seed, 4.0, 5.0, 6.0).abs() * MIN_MISS_DISTANCE * 2.0;
+        let angle = hash_noise(seed, 7.0, 8.0, 9.0) * std::f32::consts::PI;
+        let offset = [
+            perp1[0] * angle.cos() * miss + perp2[0] * angle.sin() * miss,
+            perp1[1] * angle.cos() * miss + perp2[1] * angle.sin() * miss,
+            perp1[2] * angle.cos() * miss + perp2[2] * angle.sin() * miss,
         ];
+        let aim = normalize([offset[0] - pos[0], offset[1] - pos[1], offset[2] - pos[2]]);
+        let speed = 1.0 + hash_noise(seed, 10.0, 11.0, 12.0).abs() * 1.5;
+        let velocity = [aim[0] * speed, aim[1] * speed, aim[2] * speed];
         let angular_velocity = [
-            hash_noise(seed, 13.0, 14.0, 15.0) * 0.3,
-            hash_noise(seed, 16.0, 17.0, 18.0) * 0.3,
-            hash_noise(seed, 19.0, 20.0, 21.0) * 0.3,
+            hash_noise(seed, 30.0, 31.0, 32.0) * 0.3,
+            hash_noise(seed, 33.0, 34.0, 35.0) * 0.3,
+            hash_noise(seed, 36.0, 37.0, 38.0) * 0.3,
         ];
 
         let transform = blade_engine::Transform {
@@ -522,6 +541,28 @@ pub fn main() {
         },
     );
     mark!("XR mark: engine created");
+
+    // Configure space lighting: single sun, dark background, no ambient
+    engine.set_raster_config(blade_render::RasterConfig {
+        clear_color: gpu::TextureColor::OpaqueBlack,
+        light_dir: mint::Vector3 {
+            x: 0.4,
+            y: -0.7,
+            z: -0.6,
+        },
+        light_color: mint::Vector3 {
+            x: 4.0,
+            y: 3.8,
+            z: 3.5,
+        },
+        ambient_color: mint::Vector3 {
+            x: 0.02,
+            y: 0.02,
+            z: 0.03,
+        },
+        roughness: 0.7,
+        metallic: 0.0,
+    });
 
     // Create asteroid field with procedural geometry
     let mut asteroid_field = AsteroidField::new(&mut engine);

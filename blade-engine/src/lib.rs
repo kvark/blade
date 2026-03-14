@@ -708,6 +708,18 @@ impl Engine {
         }
     }
 
+    /// Override rasterizer lighting/material configuration.
+    /// Has no effect when the ray-tracer backend is active.
+    pub fn set_raster_config(&mut self, config: blade_render::RasterConfig) {
+        if let Renderer::Rasterizer {
+            ref mut raster_config,
+            ..
+        } = self.renderer
+        {
+            *raster_config = config;
+        }
+    }
+
     #[profiling::function]
     #[cfg(not(target_os = "android"))]
     pub fn render(
