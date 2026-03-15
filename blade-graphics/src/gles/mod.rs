@@ -43,7 +43,7 @@ pub struct Context {
 
 pub struct Surface {
     platform: platform::PlatformSurface,
-    renderbuf: glow::Renderbuffer,
+    offscreen_texture: glow::Texture,
     framebuf: glow::Framebuffer,
 }
 

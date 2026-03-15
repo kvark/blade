@@ -31,8 +31,9 @@ impl super::Surface {
                 extent: self.platform.extent,
             },
             texture: super::Texture {
-                inner: super::TextureInner::Renderbuffer {
-                    raw: self.renderbuf,
+                inner: super::TextureInner::Texture {
+                    raw: self.offscreen_texture,
+                    target: glow::TEXTURE_2D,
                 },
                 target_size: [size.width as u16, size.height as u16],
                 format: self.platform.info.format,
@@ -112,7 +113,7 @@ impl super::Context {
         Ok(unsafe {
             super::Surface {
                 platform,
-                renderbuf: self.platform.glow.create_renderbuffer().unwrap(),
+                offscreen_texture: self.platform.glow.create_texture().unwrap(),
                 framebuf: self.platform.glow.create_framebuffer().unwrap(),
             }
         })
@@ -126,21 +127,27 @@ impl super::Context {
         let gl = &self.platform.glow;
         //Note: this code can be shared with EGL
         unsafe {
-            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(surface.renderbuf));
-            gl.renderbuffer_storage(
-                glow::RENDERBUFFER,
-                format_desc.internal,
+            gl.bind_texture(glow::TEXTURE_2D, Some(surface.offscreen_texture));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                format_desc.internal as i32,
                 config.size.width as _,
                 config.size.height as _,
+                0,
+                format_desc.external,
+                format_desc.data_type,
+                glow::PixelUnpackData::Slice(None),
             );
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(surface.framebuf));
-            gl.framebuffer_renderbuffer(
+            gl.framebuffer_texture_2d(
                 glow::READ_FRAMEBUFFER,
                 glow::COLOR_ATTACHMENT0,
-                glow::RENDERBUFFER,
-                Some(surface.renderbuf),
+                glow::TEXTURE_2D,
+                Some(surface.offscreen_texture),
+                0,
             );
-            gl.bind_renderbuffer(glow::RENDERBUFFER, None);
+            gl.bind_texture(glow::TEXTURE_2D, None);
         }
         surface.platform.extent = config.size;
     }
