@@ -63,7 +63,7 @@ jobs:
         run: cargo test --workspace --all-features
 
       - name: Test GLES
-        if: matrix.name == 'Linux'
+        if: matrix.name == 'Linux' || matrix.name == 'Windows'
         run: cargo build --example bunnymark
         env:
           RUSTFLAGS: "--cfg gles"
@@ -164,6 +164,22 @@ jobs:
       - name: Run GLES integration tests (Linux)
         if: matrix.name == 'Linux'
         run: cargo test --test gpu_examples -- --ignored --nocapture --test-threads=1
+        env:
+          RUSTFLAGS: "--cfg gles"
+
+      - name: Install ANGLE (Windows)
+        if: matrix.name == 'Windows'
+        shell: bash
+        run: |
+          ANGLE_URL=$(curl -s https://api.github.com/repos/mmozeiko/build-angle/releases/latest \
+            | python -c "import sys,json; assets=json.load(sys.stdin)['assets']; print([a['browser_download_url'] for a in assets if 'x64' in a['name']][0])")
+          curl -L -o angle.zip "$ANGLE_URL"
+          7z x angle.zip -oangle
+          cp angle/angle-*/bin/*.dll .
+
+      - name: Run GLES integration tests (Windows/ANGLE)
+        if: matrix.name == 'Windows'
+        run: cargo test --test gpu_examples snapshot_bunnymark -- --ignored --nocapture
         env:
           RUSTFLAGS: "--cfg gles"
 
