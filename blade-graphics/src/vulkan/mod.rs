@@ -708,16 +708,21 @@ impl crate::traits::CommandDevice for Context {
                                 )
                         })
                         .collect::<Vec<_>>();
-                    xr_state
-                        .frame_stream
-                        .end(
-                            predicted_display_time,
-                            environment_blend_mode,
-                            &[&xr::CompositionLayerProjection::new()
-                                .space(&space)
-                                .views(&projection_views)],
-                        )
-                        .unwrap();
+                    match xr_state.frame_stream.end(
+                        predicted_display_time,
+                        environment_blend_mode,
+                        &[&xr::CompositionLayerProjection::new()
+                            .space(&space)
+                            .views(&projection_views)],
+                    ) {
+                        Ok(()) => {}
+                        Err(xr::sys::Result::ERROR_POSE_INVALID) => {
+                            // Tracking was lost between frame acquire and
+                            // present — transient, safe to ignore.
+                            log::warn!("XR frame end: pose invalid (tracking lost?)");
+                        }
+                        Err(e) => panic!("XR frame end failed: {e}"),
+                    }
                     xr_state.space = Some(space);
                 }
             }

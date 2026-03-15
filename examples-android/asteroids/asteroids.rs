@@ -223,11 +223,31 @@ fn generate_asteroid_mesh(
 
 // --- Asteroid field parameters ---
 
-const ASTEROID_COUNT: usize = 60;
-const FIELD_RADIUS: f32 = 20.0;
-const COMFORT_RADIUS: f32 = 5.0;
-const MIN_MISS_DISTANCE: f32 = 2.0;
-const DESPAWN_RADIUS: f32 = 40.0;
+const ASTEROID_COUNT: usize = 200;
+/// Half-width of the spawn slab perpendicular to the flow direction.
+const FIELD_HALF_WIDTH: f32 = 40.0;
+/// Half-height of the spawn slab.
+const FIELD_HALF_HEIGHT: f32 = 20.0;
+/// How far ahead of the player asteroids spawn.
+const SPAWN_DISTANCE: f32 = 120.0;
+/// How far behind the player asteroids are recycled.
+const DESPAWN_BEHIND: f32 = 30.0;
+/// Minimum distance from the player when spawning (initial spread).
+const MIN_SPAWN_DISTANCE: f32 = 15.0;
+/// Base speed of asteroid flow toward the player.
+const FLOW_SPEED: f32 = 4.0;
+/// Speed variation (+/- this fraction of FLOW_SPEED).
+const SPEED_VARIATION: f32 = 0.4;
+
+// --- Comet parameters ---
+const COMET_COUNT: usize = 8;
+const COMET_MIN_RADIUS: f32 = 200.0;
+const COMET_MAX_RADIUS: f32 = 600.0;
+const COMET_DESPAWN_RADIUS: f32 = 800.0;
+const COMET_SPEED: f32 = 3.0;
+const COMET_TAIL_SEGMENTS: usize = 4;
+const COMET_TAIL_LENGTH: f32 = 8.0;
+const COMET_NUCLEUS_RADIUS: f32 = 1.5;
 
 struct Asteroid {
     object_handle: blade_engine::ObjectHandle,
@@ -236,6 +256,8 @@ struct Asteroid {
 struct AsteroidField {
     asteroids: Vec<Asteroid>,
     model_handles: Vec<blade_asset::Handle<blade_render::Model>>,
+    /// The direction asteroids flow (toward the player). In XR, typically +Z (toward initial head).
+    flow_dir: [f32; 3],
     next_seed: u32,
 }
 
@@ -269,70 +291,62 @@ impl AsteroidField {
             model_handles.push(handle);
         }
 
+        // Flow direction: asteroids come toward the player along -Z (standard forward in RH).
+        // This gives the feeling of flying forward through a field.
+        let flow_dir = [0.0, 0.0, 1.0]; // asteroids move in +Z toward the player at origin
+
         let mut field = AsteroidField {
             asteroids: Vec::with_capacity(ASTEROID_COUNT),
             model_handles,
+            flow_dir,
             next_seed: 100,
         };
 
-        // Spawn initial asteroids spread across the field
+        // Spawn initial asteroids spread along the full depth of the field
         for _ in 0..ASTEROID_COUNT {
-            field.spawn_asteroid(engine, COMFORT_RADIUS);
+            field.spawn_asteroid(engine, true);
         }
 
         field
     }
 
-    fn pick_spawn_position(&mut self, min_radius: f32) -> [f32; 3] {
-        loop {
-            let seed = self.next_seed;
-            self.next_seed += 1;
-            let x = hash_noise(seed, 0.1, 0.2, 0.3) * FIELD_RADIUS;
-            let y = hash_noise(seed, 0.4, 0.5, 0.6) * FIELD_RADIUS * 0.4;
-            let z = hash_noise(seed, 0.7, 0.8, 0.9) * FIELD_RADIUS;
-            let dist = (x * x + y * y + z * z).sqrt();
-            if dist > min_radius {
-                return [x, y, z];
-            }
-        }
-    }
-
-    fn spawn_asteroid(&mut self, engine: &mut blade_engine::Engine, min_radius: f32) {
-        let pos = self.pick_spawn_position(min_radius);
+    /// Spawn an asteroid ahead of the player.
+    /// If `spread` is true, distribute along the full depth (for initial population).
+    /// If false, spawn at the far edge (for recycling).
+    fn spawn_asteroid(&mut self, engine: &mut blade_engine::Engine, spread: bool) {
         let seed = self.next_seed;
         self.next_seed += 1;
 
         let variant = (seed as usize) % self.model_handles.len();
-        let scale_factor = 0.3 + hash_noise(seed, 1.0, 2.0, 3.0).abs() * 0.7;
-        let _ = scale_factor; // scale applied via similarity in add_object_with_model
 
-        // Velocity aimed to pass near the player, not through them.
-        // Compute a perpendicular offset so the closest approach is MIN_MISS_DISTANCE..3x away.
-        let dist = (pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]).sqrt();
-        let toward_origin = [-pos[0] / dist, -pos[1] / dist, -pos[2] / dist];
-        // Pick an arbitrary perpendicular direction
-        let up = if toward_origin[1].abs() < 0.9 {
-            [0.0, 1.0, 0.0]
+        // Position: random XY within the slab, Z ahead of the player
+        let x = hash_noise(seed, 0.1, 0.2, 0.3) * FIELD_HALF_WIDTH;
+        let y = hash_noise(seed, 0.4, 0.5, 0.6) * FIELD_HALF_HEIGHT;
+        let z_depth = if spread {
+            // Distribute from MIN_SPAWN_DISTANCE to SPAWN_DISTANCE ahead
+            let t = hash_noise(seed, 0.7, 0.8, 0.9).abs();
+            -(MIN_SPAWN_DISTANCE + t * (SPAWN_DISTANCE - MIN_SPAWN_DISTANCE))
         } else {
-            [1.0, 0.0, 0.0]
+            // Spawn at the far edge with slight variation
+            -SPAWN_DISTANCE + hash_noise(seed, 0.7, 0.8, 0.9).abs() * 5.0
         };
-        let perp1 = normalize(cross(toward_origin, up));
-        let perp2 = cross(toward_origin, perp1);
-        let miss =
-            MIN_MISS_DISTANCE + hash_noise(seed, 4.0, 5.0, 6.0).abs() * MIN_MISS_DISTANCE * 2.0;
-        let angle = hash_noise(seed, 7.0, 8.0, 9.0) * std::f32::consts::PI;
-        let offset = [
-            perp1[0] * angle.cos() * miss + perp2[0] * angle.sin() * miss,
-            perp1[1] * angle.cos() * miss + perp2[1] * angle.sin() * miss,
-            perp1[2] * angle.cos() * miss + perp2[2] * angle.sin() * miss,
+
+        // Position in world space: flow_dir is +Z, so asteroids spawn at -Z (ahead)
+        // and move toward +Z (toward/past the player)
+        let pos = [x, y, z_depth];
+
+        // Velocity: flow direction with some variation
+        let speed = FLOW_SPEED * (1.0 + hash_noise(seed, 10.0, 11.0, 12.0) * SPEED_VARIATION);
+        let velocity = [
+            self.flow_dir[0] * speed + hash_noise(seed, 13.0, 14.0, 15.0) * 0.3,
+            self.flow_dir[1] * speed + hash_noise(seed, 16.0, 17.0, 18.0) * 0.2,
+            self.flow_dir[2] * speed + hash_noise(seed, 19.0, 20.0, 21.0) * 0.3,
         ];
-        let aim = normalize([offset[0] - pos[0], offset[1] - pos[1], offset[2] - pos[2]]);
-        let speed = 1.0 + hash_noise(seed, 10.0, 11.0, 12.0).abs() * 1.5;
-        let velocity = [aim[0] * speed, aim[1] * speed, aim[2] * speed];
+
         let angular_velocity = [
-            hash_noise(seed, 30.0, 31.0, 32.0) * 0.3,
-            hash_noise(seed, 33.0, 34.0, 35.0) * 0.3,
-            hash_noise(seed, 36.0, 37.0, 38.0) * 0.3,
+            hash_noise(seed, 30.0, 31.0, 32.0) * 0.5,
+            hash_noise(seed, 33.0, 34.0, 35.0) * 0.5,
+            hash_noise(seed, 36.0, 37.0, 38.0) * 0.5,
         ];
 
         let transform = blade_engine::Transform {
@@ -351,8 +365,7 @@ impl AsteroidField {
             blade_engine::DynamicInput::Full,
         );
 
-        // Add sphere collider for asteroid-asteroid collisions
-        engine.add_ball_collider(handle, 1.0, 0.5);
+        // No colliders — asteroids pass through each other and never get stuck.
 
         // Set initial velocity on the rigid body
         engine.set_velocity(
@@ -375,22 +388,241 @@ impl AsteroidField {
     }
 
     fn update(&mut self, engine: &mut blade_engine::Engine) {
-        // Recycle asteroids that have gone too far
+        // Recycle asteroids that have passed behind the player
         let mut i = 0;
         while i < self.asteroids.len() {
             let pos = engine.get_object_position(self.asteroids[i].object_handle);
-            let dist = (pos.x * pos.x + pos.y * pos.y + pos.z * pos.z).sqrt();
-            if dist > DESPAWN_RADIUS {
+            // Asteroid has passed the player and is far enough behind
+            let along_flow =
+                pos.x * self.flow_dir[0] + pos.y * self.flow_dir[1] + pos.z * self.flow_dir[2];
+            if along_flow > DESPAWN_BEHIND {
                 let asteroid = self.asteroids.swap_remove(i);
                 engine.remove_object(asteroid.object_handle);
-                // Respawn far from player so they don't pop in nearby
-                self.spawn_asteroid(engine, FIELD_RADIUS * 0.7);
-                // Don't increment i - swap_remove moved the last element here
+                // Respawn at the far edge ahead
+                self.spawn_asteroid(engine, false);
             } else {
                 i += 1;
             }
         }
     }
+}
+
+// --- Comet mesh generation ---
+
+/// Generate a comet model: bright nucleus + tapered tail made of cone segments.
+/// The tail extends along +Z (will be oriented by the engine's transform).
+fn generate_comet_model(
+    seed: u32,
+    engine: &mut blade_engine::Engine,
+) -> blade_asset::Handle<blade_render::Model> {
+    let mut geometries = Vec::new();
+
+    // Nucleus: bright sphere
+    {
+        let (verts, idxs) =
+            generate_asteroid_mesh(seed, COMET_NUCLEUS_RADIUS, 0.3, 2, [1.0, 1.0, 1.0]);
+        geometries.push(blade_render::ProceduralGeometry {
+            name: "comet_nucleus".to_string(),
+            vertices: verts,
+            indices: idxs,
+            base_color_factor: [0.9, 0.95, 1.0, 1.0],
+        });
+    }
+
+    // Tail: a series of cone frustum segments extending along +Z, getting wider and dimmer
+    let ring_verts = 8;
+    let tail_base_radius = COMET_NUCLEUS_RADIUS * 0.5;
+    let tail_end_radius = COMET_NUCLEUS_RADIUS * 3.0;
+    for seg in 0..COMET_TAIL_SEGMENTS {
+        let t0 = seg as f32 / COMET_TAIL_SEGMENTS as f32;
+        let t1 = (seg + 1) as f32 / COMET_TAIL_SEGMENTS as f32;
+        let z0 = t0 * COMET_TAIL_LENGTH;
+        let z1 = t1 * COMET_TAIL_LENGTH;
+        // Radius grows from narrow to wide
+        let r0 = tail_base_radius + t0 * (tail_end_radius - tail_base_radius);
+        let r1 = tail_base_radius + t1 * (tail_end_radius - tail_base_radius);
+        // Color fades from bright blue-white to dim
+        let brightness = 1.0 - t0 * 0.7;
+        let color = [0.5 * brightness, 0.7 * brightness, 1.0 * brightness, 1.0];
+
+        let mut verts = Vec::with_capacity(ring_verts * 2);
+        let mut idxs = Vec::new();
+
+        for i in 0..ring_verts {
+            let angle = (i as f32 / ring_verts as f32) * std::f32::consts::TAU;
+            let cos_a = angle.cos();
+            let sin_a = angle.sin();
+
+            // Near ring vertex
+            let pos0 = [cos_a * r0, sin_a * r0, z0];
+            let n0 = normalize([cos_a, sin_a, -0.3]);
+            verts.push(blade_render::Vertex {
+                position: pos0,
+                bitangent_sign: 1.0,
+                tex_coords: [0.0, 0.0],
+                normal: encode_normal(n0),
+                tangent: encode_normal([0.0, 0.0, 1.0]),
+            });
+
+            // Far ring vertex
+            let pos1 = [cos_a * r1, sin_a * r1, z1];
+            verts.push(blade_render::Vertex {
+                position: pos1,
+                bitangent_sign: 1.0,
+                tex_coords: [0.0, 0.0],
+                normal: encode_normal(n0),
+                tangent: encode_normal([0.0, 0.0, 1.0]),
+            });
+
+            // Two triangles forming a quad between this column and the next
+            let next = (i + 1) % ring_verts;
+            let a = (i * 2) as u32;
+            let b = (i * 2 + 1) as u32;
+            let c = (next * 2) as u32;
+            let d = (next * 2 + 1) as u32;
+            idxs.extend_from_slice(&[a, c, b, b, c, d]);
+        }
+
+        geometries.push(blade_render::ProceduralGeometry {
+            name: format!("comet_tail_{seg}"),
+            vertices: verts,
+            indices: idxs,
+            base_color_factor: color,
+        });
+    }
+
+    engine.create_model(&format!("comet_{seed}"), geometries)
+}
+
+struct Comet {
+    object_handle: blade_engine::ObjectHandle,
+}
+
+struct CometField {
+    comets: Vec<Comet>,
+    next_seed: u32,
+}
+
+impl CometField {
+    fn new(engine: &mut blade_engine::Engine) -> Self {
+        let mut field = CometField {
+            comets: Vec::with_capacity(COMET_COUNT),
+            next_seed: 50000,
+        };
+        for i in 0..COMET_COUNT {
+            field.spawn_comet_stratified(engine, i);
+        }
+        field
+    }
+
+    /// Spawn a comet in a stratified sky sector.
+    /// `sector` distributes comets evenly around the sky so they don't cluster.
+    fn spawn_comet_stratified(&mut self, engine: &mut blade_engine::Engine, sector: usize) {
+        let seed = self.next_seed;
+        self.next_seed += 1;
+
+        let model = generate_comet_model(seed, engine);
+
+        // Stratified placement: divide the sky into COMET_COUNT sectors.
+        // Each comet gets a base azimuth sector with jitter.
+        let sector_width = std::f32::consts::TAU / COMET_COUNT as f32;
+        let base_phi = sector as f32 * sector_width;
+        let phi = base_phi + hash_noise(seed, 40.0, 50.0, 60.0) * sector_width * 0.4;
+        // Elevation: spread between -60 and +60 degrees, jittered per comet
+        let base_elev = -1.0 + 2.0 * (sector as f32 + 0.5) / COMET_COUNT as f32;
+        let elev = (base_elev + hash_noise(seed, 70.0, 80.0, 90.0) * 0.3).clamp(-0.9, 0.9);
+        let cos_elev = (1.0 - elev * elev).sqrt();
+        let r = COMET_MIN_RADIUS
+            + hash_noise(seed, 100.0, 110.0, 120.0).abs() * (COMET_MAX_RADIUS - COMET_MIN_RADIUS);
+        let pos = [r * cos_elev * phi.cos(), r * elev, r * cos_elev * phi.sin()];
+
+        // Direction: use widely-spaced hash inputs to avoid correlation.
+        // Each comet gets a unique drift direction.
+        let dir_seed = seed.wrapping_mul(2654435761); // Knuth multiplicative hash
+        let vx = hash_noise(dir_seed, 200.0, 210.0, 220.0);
+        let vy = hash_noise(dir_seed, 230.0, 240.0, 250.0) * 0.3;
+        let vz = hash_noise(dir_seed, 260.0, 270.0, 280.0);
+        let dir = normalize([vx, vy, vz]);
+        let speed = COMET_SPEED * (0.5 + hash_noise(dir_seed, 290.0, 300.0, 310.0).abs());
+
+        // Orient the comet so its tail (+Z local) points opposite to velocity.
+        // We compute a quaternion that rotates +Z to -dir.
+        let tail_dir = [-dir[0], -dir[1], -dir[2]];
+        let orient = rotation_from_z_to(tail_dir);
+
+        let transform = blade_engine::Transform {
+            position: mint::Vector3 {
+                x: pos[0],
+                y: pos[1],
+                z: pos[2],
+            },
+            orientation: mint::Quaternion {
+                s: orient[3],
+                v: mint::Vector3 {
+                    x: orient[0],
+                    y: orient[1],
+                    z: orient[2],
+                },
+            },
+        };
+
+        let handle = engine.add_object_with_model(
+            "comet",
+            model,
+            transform,
+            blade_engine::DynamicInput::Full,
+        );
+
+        engine.set_velocity(
+            handle,
+            mint::Vector3 {
+                x: dir[0] * speed,
+                y: dir[1] * speed,
+                z: dir[2] * speed,
+            },
+            mint::Vector3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        );
+
+        self.comets.push(Comet {
+            object_handle: handle,
+        });
+    }
+
+    fn update(&mut self, engine: &mut blade_engine::Engine) {
+        let mut i = 0;
+        while i < self.comets.len() {
+            let pos = engine.get_object_position(self.comets[i].object_handle);
+            let dist = (pos.x * pos.x + pos.y * pos.y + pos.z * pos.z).sqrt();
+            if dist > COMET_DESPAWN_RADIUS {
+                let sector = i; // reuse the same sector slot for even distribution
+                let comet = self.comets.swap_remove(i);
+                engine.remove_object(comet.object_handle);
+                self.spawn_comet_stratified(engine, sector);
+            } else {
+                i += 1;
+            }
+        }
+    }
+}
+
+/// Compute quaternion [x, y, z, w] that rotates +Z to the given direction.
+fn rotation_from_z_to(dir: [f32; 3]) -> [f32; 4] {
+    let from = [0.0_f32, 0.0, 1.0];
+    let d = from[0] * dir[0] + from[1] * dir[1] + from[2] * dir[2];
+    if d > 0.9999 {
+        return [0.0, 0.0, 0.0, 1.0]; // identity
+    }
+    if d < -0.9999 {
+        return [0.0, 1.0, 0.0, 0.0]; // 180 around Y
+    }
+    let axis = normalize(cross(from, dir));
+    let half_angle = (d.clamp(-1.0, 1.0)).acos() * 0.5;
+    let s = half_angle.sin();
+    [axis[0] * s, axis[1] * s, axis[2] * s, half_angle.cos()]
 }
 
 // --- App state ---
@@ -406,16 +638,21 @@ enum Visibility {
     Focused,
 }
 
+struct GameState {
+    asteroid_field: AsteroidField,
+    comet_field: CometField,
+}
+
 enum AppState {
     Idle,
     Running {
         rendered_frames: u64,
-        asteroid_field: AsteroidField,
+        game: GameState,
         visibility: Visibility,
     },
 }
 
-fn setup_game(engine: &mut blade_engine::Engine) -> AsteroidField {
+fn setup_game(engine: &mut blade_engine::Engine) -> GameState {
     // Ensure zero gravity for space
     engine.set_gravity(0.0);
 
@@ -471,28 +708,12 @@ fn setup_game(engine: &mut blade_engine::Engine) -> AsteroidField {
         );
     }
 
-    // Head collider so asteroids bounce off the player
-    {
-        let (verts, idxs) = generate_asteroid_mesh(0, 0.01, 0.0, 0, [1.0, 1.0, 1.0]);
-        let head_model = engine.create_model(
-            "head_collider",
-            vec![blade_render::ProceduralGeometry {
-                name: "head_collider".to_string(),
-                vertices: verts,
-                indices: idxs,
-                base_color_factor: [0.0, 0.0, 0.0, 0.0],
-            }],
-        );
-        let head_handle = engine.add_object_with_model(
-            "head_collider",
-            head_model,
-            blade_engine::Transform::default(),
-            blade_engine::DynamicInput::Empty,
-        );
-        engine.add_ball_collider(head_handle, 1.0, 1.0);
+    let asteroid_field = AsteroidField::new(engine);
+    let comet_field = CometField::new(engine);
+    GameState {
+        asteroid_field,
+        comet_field,
     }
-
-    AsteroidField::new(engine)
 }
 
 fn prepare_shader_dir(app: &AndroidApp) -> PathBuf {
@@ -674,9 +895,9 @@ fn android_main(app: AndroidApp) {
                     AppState::Idle => (false, 0, 0),
                     AppState::Running {
                         rendered_frames,
-                        ref asteroid_field,
+                        ref game,
                         ..
-                    } => (true, rendered_frames, asteroid_field.asteroids.len()),
+                    } => (true, rendered_frames, game.asteroid_field.asteroids.len()),
                 };
                 let avg_ms = if frame_count_in_period > 0 {
                     frame_time_sum / frame_count_in_period as f64 * 1000.0
@@ -711,11 +932,11 @@ fn android_main(app: AndroidApp) {
                                 info!("XR state READY -> begin session");
                             }
                             mark!("XR mark: setting up game");
-                            let asteroid_field = setup_game(&mut engine);
+                            let game = setup_game(&mut engine);
                             mark!("XR mark: game setup done");
                             state = AppState::Running {
                                 rendered_frames: 0,
-                                asteroid_field,
+                                game,
                                 visibility: Visibility::Hidden,
                             };
                             mark!("XR mark: calling engine.begin_xr");
@@ -778,7 +999,7 @@ fn android_main(app: AndroidApp) {
             }
             AppState::Running {
                 ref mut rendered_frames,
-                ref mut asteroid_field,
+                ref mut game,
                 visibility,
             } => {
                 if visibility != Visibility::Focused {
@@ -790,7 +1011,8 @@ fn android_main(app: AndroidApp) {
                     continue;
                 }
                 frame_start = Instant::now();
-                asteroid_field.update(&mut engine);
+                game.asteroid_field.update(&mut engine);
+                game.comet_field.update(&mut engine);
                 engine.update(0.016);
                 if engine.render_xr() {
                     let dt = frame_start.elapsed().as_secs_f64();

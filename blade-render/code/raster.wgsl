@@ -172,7 +172,10 @@ fn raster_sky_vs(@builtin(vertex_index) vertex_id: u32) -> SkyOutput {
 
 @fragment
 fn raster_sky_fs(input: SkyOutput) -> @location(0) vec4<f32> {
-    let ndc = vec4<f32>(input.ndc, 1.0, 1.0);
+    // Use z=0 (near plane) instead of z=1 (far plane) to avoid precision
+    // issues: with far=1e9, inv_view_proj produces w≈1e-9 at z=1, causing
+    // inf/NaN after perspective divide on mobile GPUs.
+    let ndc = vec4<f32>(input.ndc, 0.0, 1.0);
     let world = sky_params.inv_view_proj * ndc;
     let world_pos = world.xyz / world.w;
     let dir = normalize(world_pos - sky_params.camera_pos.xyz);
@@ -185,7 +188,52 @@ fn raster_sky_fs(input: SkyOutput) -> @location(0) vec4<f32> {
         // Use ambient_color.w as a flag: values > 0.5 mean "space mode" (black sky)
         let space_mode = sky_params.ambient_color.w > 0.5;
         if (space_mode) {
-            color = vec3<f32>(0.0);
+            // Equal-area sky coordinates: (theta, dir.y) avoids polar bunching.
+            let theta = atan2(dir.z, dir.x) + 10.0;
+            let v = dir.y + 10.0;
+            // Layer 1: bright stars (sparse, colored)
+            {
+                let uv = vec2<f32>(theta, v) * 50.0;
+                let cell = floor(uv);
+                let local = fract(uv) - vec2<f32>(0.5);
+                var p3 = fract(vec3<f32>(cell.x, cell.y, cell.x) * vec3<f32>(0.1031, 0.1030, 0.0973));
+                p3 = p3 + vec3<f32>(dot(p3, vec3<f32>(p3.y + 33.33, p3.z + 33.33, p3.x + 33.33)));
+                let h = fract((p3.x + p3.y) * p3.z);
+                let h2 = fract((p3.y + p3.z) * p3.x);
+                let h3 = fract((p3.z + p3.x) * p3.y);
+                let star_pos = vec2<f32>(h - 0.5, h2 - 0.5) * 0.8;
+                let d = length(local - star_pos);
+                let falloff = clamp(1.0 - d / 0.08, 0.0, 1.0);
+                let b = falloff * falloff * 0.8 * step(0.92, h3);
+                // Star color: cool blue, warm white, or reddish based on hash
+                // Tints are saturated so they survive Reinhard tonemapping.
+                let temp = h * 3.0;
+                var tint = vec3<f32>(0.4, 0.55, 1.0); // blue
+                if (temp > 2.0) {
+                    tint = vec3<f32>(1.0, 0.4, 0.15);  // orange-red
+                } else if (temp > 1.0) {
+                    tint = vec3<f32>(1.0, 0.9, 0.7);   // warm yellow-white
+                }
+                color = color + tint * b;
+            }
+            // Layer 2: dim stars (dense, point-like)
+            {
+                let uv2 = vec2<f32>(theta, v) * 150.0;
+                let cell2 = floor(uv2);
+                let local2 = fract(uv2) - vec2<f32>(0.5);
+                var q3 = fract(vec3<f32>(cell2.x, cell2.y, cell2.x) * vec3<f32>(0.1031, 0.1030, 0.0973));
+                q3 = q3 + vec3<f32>(dot(q3, vec3<f32>(q3.y + 33.33, q3.z + 33.33, q3.x + 33.33)));
+                let g = fract((q3.x + q3.y) * q3.z);
+                let g2 = fract((q3.y + q3.z) * q3.x);
+                let g3 = fract((q3.z + q3.x) * q3.y);
+                let star_pos2 = vec2<f32>(g - 0.5, g2 - 0.5) * 0.8;
+                let d2 = length(local2 - star_pos2);
+                let falloff2 = clamp(1.0 - d2 / 0.06, 0.0, 1.0);
+                let b2 = falloff2 * falloff2 * 0.3 * step(0.94, g3);
+                // Subtle color for dim stars too
+                let tint2 = mix(vec3<f32>(0.5, 0.65, 1.0), vec3<f32>(1.0, 0.7, 0.5), g);
+                color = color + tint2 * b2;
+            }
         } else {
             let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
             let horizon = vec3<f32>(0.6, 0.7, 0.9);
