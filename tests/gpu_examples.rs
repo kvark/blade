@@ -1,5 +1,11 @@
 #![allow(irrefutable_let_patterns)]
 
+// nanorand uses RtlGenRandom but doesn't link advapi32 itself.
+// On Vulkan builds, other deps pull it in transitively; on GLES builds we must link it explicitly.
+#[cfg(all(gles, windows))]
+#[link(name = "advapi32")]
+extern "C" {}
+
 use blade_graphics as gpu;
 use blade_graphics::ShaderData;
 use std::slice;
