@@ -45,6 +45,7 @@ impl Game {
                 rot: glam::Quat::from_rotation_x(consts::PI * 0.0).into(),
                 fov_y: 1.0,
                 depth: 0.0,
+                fov: None,
             },
             fly_speed: 10.0,
         };

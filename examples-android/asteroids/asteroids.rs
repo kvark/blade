@@ -227,8 +227,7 @@ fn generate_asteroid_mesh(
 
 // --- Asteroid field parameters ---
 
-const ASTEROID_COUNT: usize = 30;
-const ASTEROID_MESH_VARIANTS: usize = 8;
+const ASTEROID_COUNT: usize = 60;
 const FIELD_RADIUS: f32 = 20.0;
 const COMFORT_RADIUS: f32 = 5.0;
 const MIN_MISS_DISTANCE: f32 = 2.0;
@@ -282,15 +281,15 @@ impl AsteroidField {
             next_seed: 100,
         };
 
-        // Spawn initial asteroids
+        // Spawn initial asteroids spread across the field
         for _ in 0..ASTEROID_COUNT {
-            field.spawn_asteroid(engine);
+            field.spawn_asteroid(engine, COMFORT_RADIUS);
         }
 
         field
     }
 
-    fn pick_spawn_position(&mut self) -> [f32; 3] {
+    fn pick_spawn_position(&mut self, min_radius: f32) -> [f32; 3] {
         loop {
             let seed = self.next_seed;
             self.next_seed += 1;
@@ -298,14 +297,14 @@ impl AsteroidField {
             let y = hash_noise(seed, 0.4, 0.5, 0.6) * FIELD_RADIUS * 0.4;
             let z = hash_noise(seed, 0.7, 0.8, 0.9) * FIELD_RADIUS;
             let dist = (x * x + y * y + z * z).sqrt();
-            if dist > COMFORT_RADIUS {
+            if dist > min_radius {
                 return [x, y, z];
             }
         }
     }
 
-    fn spawn_asteroid(&mut self, engine: &mut blade_engine::Engine) {
-        let pos = self.pick_spawn_position();
+    fn spawn_asteroid(&mut self, engine: &mut blade_engine::Engine, min_radius: f32) {
+        let pos = self.pick_spawn_position(min_radius);
         let seed = self.next_seed;
         self.next_seed += 1;
 
@@ -355,8 +354,11 @@ impl AsteroidField {
             "asteroid",
             self.model_handles[variant],
             transform,
-            blade_engine::DynamicInput::SetVelocity,
+            blade_engine::DynamicInput::Full,
         );
+
+        // Add sphere collider for asteroid-asteroid collisions
+        engine.add_ball_collider(handle, 1.0, 0.5);
 
         // Set initial velocity on the rigid body
         engine.set_velocity(
@@ -389,7 +391,8 @@ impl AsteroidField {
             if dist > DESPAWN_RADIUS {
                 let asteroid = self.asteroids.swap_remove(i);
                 engine.remove_object(asteroid.object_handle);
-                self.spawn_asteroid(engine);
+                // Respawn far from player so they don't pop in nearby
+                self.spawn_asteroid(engine, FIELD_RADIUS * 0.7);
                 // Don't increment i - swap_remove moved the last element here
             } else {
                 i += 1;
@@ -542,13 +545,60 @@ pub fn main() {
     );
     mark!("XR mark: engine created");
 
-    // Configure space lighting: single sun, dark background, no ambient
+    // Ensure zero gravity for space
+    engine.set_gravity(0.0);
+
+    // Generate procedural starfield environment map (Rgba8Unorm)
+    {
+        let env_w = 1024u32;
+        let env_h = 512u32;
+        let mut pixels = vec![[0u8; 4]; (env_w * env_h) as usize];
+        let star_count = 2000u32;
+        for i in 0..star_count {
+            let seed = i.wrapping_mul(2654435761);
+            let u = (seed.wrapping_mul(374761393) ^ (seed >> 11)) as f32 / u32::MAX as f32;
+            let v = (seed.wrapping_mul(1103515245).wrapping_add(12345) ^ (seed >> 13)) as f32
+                / u32::MAX as f32;
+            let brightness_hash =
+                (seed.wrapping_mul(1274126177) ^ (seed >> 16)) as f32 / u32::MAX as f32;
+            let color_hash = (seed.wrapping_mul(668265263) ^ (seed >> 15)) as f32 / u32::MAX as f32;
+
+            let px = (u * env_w as f32) as u32 % env_w;
+            let py = (v * env_h as f32) as u32 % env_h;
+            let idx = (py * env_w + px) as usize;
+
+            // Brightness in 0..255 range; bright stars will be near white
+            let brightness = 80.0 + brightness_hash * 175.0;
+            let to_u8 = |v: f32| (v.clamp(0.0, 255.0) + 0.5) as u8;
+            let (r, g, b) = if color_hash < 0.3 {
+                (
+                    to_u8(brightness),
+                    to_u8(brightness * 0.85),
+                    to_u8(brightness * 0.7),
+                )
+            } else if color_hash < 0.7 {
+                (to_u8(brightness), to_u8(brightness), to_u8(brightness))
+            } else {
+                (
+                    to_u8(brightness * 0.8),
+                    to_u8(brightness * 0.9),
+                    to_u8(brightness),
+                )
+            };
+            pixels[idx] = [r, g, b, 255];
+        }
+        engine.create_environment_map("starfield", env_w, env_h, &pixels);
+        mark!("XR mark: starfield env map created");
+    }
+
+    // Configure space lighting: sun from upper-left-behind the player
+    // This illuminates objects in front of the player
     engine.set_raster_config(blade_render::RasterConfig {
         clear_color: gpu::TextureColor::OpaqueBlack,
         light_dir: mint::Vector3 {
-            x: 0.4,
-            y: -0.7,
-            z: -0.6,
+            x: -0.5,
+            y: 0.7,
+            z: 0.5,
         },
         light_color: mint::Vector3 {
             x: 4.0,
@@ -564,6 +614,60 @@ pub fn main() {
         metallic: 0.0,
     });
 
+    // Place a large planet in the distance
+    {
+        let planet_radius = 30.0;
+        let (verts, idxs) = generate_asteroid_mesh(999, planet_radius, 0.02, 3, [1.0, 0.95, 1.0]);
+        let planet_model = engine.create_model(
+            "planet",
+            vec![blade_render::ProceduralGeometry {
+                name: "planet".to_string(),
+                vertices: verts,
+                indices: idxs,
+                base_color_factor: [0.3, 0.35, 0.5, 1.0],
+            }],
+        );
+        // In front of player (-Z is forward in OpenXR), slightly right and below
+        let planet_transform = blade_engine::Transform {
+            position: mint::Vector3 {
+                x: 30.0,
+                y: -20.0,
+                z: -80.0,
+            },
+            ..Default::default()
+        };
+        engine.add_object_with_model(
+            "planet",
+            planet_model,
+            planet_transform,
+            blade_engine::DynamicInput::Empty,
+        );
+        mark!("XR mark: planet placed");
+    }
+
+    // Create a fixed invisible collider at the player's head position
+    // so asteroids bounce off instead of flying through.
+    {
+        let (verts, idxs) = generate_asteroid_mesh(0, 0.01, 0.0, 0, [1.0, 1.0, 1.0]);
+        let head_model = engine.create_model(
+            "head_collider",
+            vec![blade_render::ProceduralGeometry {
+                name: "head_collider".to_string(),
+                vertices: verts,
+                indices: idxs,
+                base_color_factor: [0.0, 0.0, 0.0, 0.0],
+            }],
+        );
+        let head_handle = engine.add_object_with_model(
+            "head_collider",
+            head_model,
+            blade_engine::Transform::default(),
+            blade_engine::DynamicInput::Empty,
+        );
+        engine.add_ball_collider(head_handle, 0.3, 1.0);
+        mark!("XR mark: head collider placed");
+    }
+
     // Create asteroid field with procedural geometry
     let mut asteroid_field = AsteroidField::new(&mut engine);
     mark!(
@@ -575,6 +679,10 @@ pub fn main() {
     let should_exit = spawn_android_event_pump(xr_debug);
     let mut event_storage = xr::EventDataBuffer::new();
     let mut last_heartbeat = Instant::now();
+    let mut frame_start = Instant::now();
+    let mut frame_time_sum = 0.0f64;
+    let mut frame_time_max = 0.0f64;
+    let mut frame_count_in_period = 0u32;
     mark!("XR mark: app initialized; entering main loop");
 
     'main_loop: loop {
@@ -590,11 +698,23 @@ pub fn main() {
                         rendered_frames, ..
                     } => (true, *rendered_frames),
                 };
+                let avg_ms = if frame_count_in_period > 0 {
+                    frame_time_sum / frame_count_in_period as f64 * 1000.0
+                } else {
+                    0.0
+                };
                 info!(
-                    "XR heartbeat: session_running={}, rendered_frames={}",
-                    session_running, rendered_frames
+                    "XR heartbeat: running={}, frames={}, avg={:.1}ms, max={:.1}ms, asteroids={}",
+                    session_running,
+                    rendered_frames,
+                    avg_ms,
+                    frame_time_max * 1000.0,
+                    asteroid_field.asteroids.len(),
                 );
             }
+            frame_time_sum = 0.0;
+            frame_time_max = 0.0;
+            frame_count_in_period = 0;
             last_heartbeat = Instant::now();
         }
 
@@ -644,9 +764,16 @@ pub fn main() {
         match &mut state {
             AppState::Idle => std::thread::sleep(Duration::from_millis(100)),
             AppState::Running { rendered_frames } => {
+                frame_start = Instant::now();
                 asteroid_field.update(&mut engine);
                 engine.update(0.016);
                 if engine.render_xr() {
+                    let dt = frame_start.elapsed().as_secs_f64();
+                    frame_time_sum += dt;
+                    if dt > frame_time_max {
+                        frame_time_max = dt;
+                    }
+                    frame_count_in_period += 1;
                     *rendered_frames += 1;
                     if xr_debug && (*rendered_frames <= 5 || *rendered_frames % 120 == 0) {
                         info!("XR frame submitted: {}", *rendered_frames);

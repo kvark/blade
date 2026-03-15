@@ -390,6 +390,23 @@ impl Rasterizer {
         debug.render_lines(debug_lines, camera_params, self.depth_view, pass);
     }
 
+    /// Render just the sky background (env map or procedural fallback).
+    pub fn render_sky_only(
+        &self,
+        pass: &mut gpu::RenderCommandEncoder,
+        camera: &crate::Camera,
+        environment_map: Option<blade_asset::Handle<crate::Texture>>,
+        asset_hub: &AssetHub,
+        config: RasterConfig,
+    ) {
+        let env_map_enabled = environment_map.is_some();
+        let frame_params = self.make_frame_params(camera, config, env_map_enabled);
+        let env_map = environment_map
+            .map(|handle| asset_hub.textures[handle].view)
+            .unwrap_or(self.dummy.black_view);
+        self.render_sky(pass, frame_params, env_map);
+    }
+
     fn render_sky(
         &self,
         pass: &mut gpu::RenderCommandEncoder,
