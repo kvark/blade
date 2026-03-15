@@ -53,6 +53,13 @@ On Windows, the quotes aren't expected:
 set RUSTFLAGS=--cfg gles
 ```
 
+On native Linux with a DRM-capable GPU, the GLES backend uses a dual-context architecture for windowed presentation:
+1. A **main context** is created on a GBM (Generic Buffer Manager) display backed by the DRM render node (`/dev/dri/renderD128`). All GPU work (rendering, compute) happens here.
+2. A **presentation context** is created on the native Wayland/X11 display with a window surface for displaying frames.
+3. A GBM buffer object is allocated and exported as a DMA-BUF, then imported as an `EGLImage` on both contexts. The main context renders into this shared texture, and the presentation context blits from it to the window surface.
+
+This avoids the need for `EGL_KHR_surfaceless_context` to support window output, while keeping all rendering on a hardware-backed display. On CI or headless environments, the backend falls back to a surfaceless EGL display.
+
 ### WebGL2
 
 Following command will start a web server offering the `bunnymark` example:
