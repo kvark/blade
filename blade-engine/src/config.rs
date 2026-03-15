@@ -124,10 +124,16 @@ fn default_gui_enabled() -> bool {
     cfg!(debug_assertions)
 }
 
+fn default_cache_path() -> String {
+    "asset-cache".to_string()
+}
+
 #[derive(serde::Deserialize)]
 pub struct Engine {
     pub shader_path: String,
     pub data_path: String,
+    #[serde(default = "default_cache_path")]
+    pub cache_path: String,
     #[serde(default = "default_time_step")]
     pub time_step: f32,
     #[serde(default = "default_render_backend")]

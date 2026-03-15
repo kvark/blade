@@ -29,7 +29,6 @@ slab = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 openxr = { workspace = true }
-ndk-glue = "0.7"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 winit = { workspace = true }
