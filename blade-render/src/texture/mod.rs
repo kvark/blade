@@ -101,6 +101,73 @@ impl Baker {
     }
 }
 
+impl Baker {
+    /// Create a texture directly from RGBA u8 pixel data (4 bytes per pixel).
+    /// Uses `Rgba8Unorm` format which supports linear filtering on all GPUs.
+    pub fn create_texture(&self, name: &str, width: u32, height: u32, data: &[[u8; 4]]) -> Texture {
+        use blade_graphics as gpu;
+
+        assert_eq!(data.len(), (width * height) as usize);
+        let format = gpu::TextureFormat::Rgba8Unorm;
+        let extent = gpu::Extent {
+            width,
+            height,
+            depth: 1,
+        };
+        let texture = self.gpu_context.create_texture(gpu::TextureDesc {
+            name,
+            format,
+            size: extent,
+            array_layer_count: 1,
+            mip_level_count: 1,
+            dimension: gpu::TextureDimension::D2,
+            usage: gpu::TextureUsage::COPY | gpu::TextureUsage::RESOURCE,
+            sample_count: 1,
+            external: None,
+        });
+        let view = self.gpu_context.create_texture_view(
+            texture,
+            gpu::TextureViewDesc {
+                name,
+                format,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &Default::default(),
+            },
+        );
+
+        let byte_data = unsafe {
+            std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
+        };
+        let stage = self.gpu_context.create_buffer(gpu::BufferDesc {
+            name: &format!("{name}/stage"),
+            size: byte_data.len() as u64,
+            memory: gpu::Memory::Upload,
+        });
+        unsafe {
+            ptr::copy_nonoverlapping(byte_data.as_ptr(), stage.data(), byte_data.len());
+        }
+
+        let bytes_per_row = width * 4;
+        let mut pending_ops = self.pending_operations.lock().unwrap();
+        pending_ops
+            .initializations
+            .push(Initialization { dst: texture });
+        pending_ops.transfers.push(Transfer {
+            stage,
+            bytes_per_row,
+            dst: texture,
+            extent,
+            mip_level: 0,
+        });
+
+        Texture {
+            object: texture,
+            view,
+            extent,
+        }
+    }
+}
+
 impl blade_asset::Baker for Baker {
     type Meta = Meta;
     type Data<'a> = CookedImage<'a>;

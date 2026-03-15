@@ -1605,6 +1605,21 @@ impl Engine {
         ObjectHandle(raw_handle)
     }
 
+    /// Attach a sphere collider to an object for physics interactions.
+    pub fn add_ball_collider(&mut self, handle: ObjectHandle, radius: f32, restitution: f32) {
+        let object = &self.objects[handle.0];
+        let collider = rapier3d::geometry::ColliderBuilder::ball(radius)
+            .restitution(restitution)
+            .density(1.0)
+            .build();
+        let col_handle = self.physics.colliders.insert_with_parent(
+            collider,
+            object.rigid_body,
+            &mut self.physics.rigid_bodies,
+        );
+        self.objects[handle.0].colliders.push(col_handle);
+    }
+
     /// Set the linear and angular velocity of an object.
     pub fn set_velocity(
         &mut self,
@@ -1800,6 +1815,23 @@ impl Engine {
             self.environment_map = Some(handle);
             self.load_tasks.push(task.clone());
         }
+    }
+
+    /// Create an environment map from raw RGBA u8 pixel data and set it as active.
+    pub fn create_environment_map(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        data: &[[u8; 4]],
+    ) {
+        let texture = self
+            .asset_hub
+            .textures
+            .baker
+            .create_texture(name, width, height, data);
+        let handle = self.asset_hub.textures.insert(texture);
+        self.environment_map = Some(handle);
     }
 
     pub fn set_gravity(&mut self, force: f32) {
