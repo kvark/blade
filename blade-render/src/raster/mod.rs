@@ -371,13 +371,10 @@ impl Rasterizer {
             }
         }
 
-        // Skip sky entirely when space_sky is set — clear color provides black background.
-        if !config.space_sky {
-            let env_map = environment_map
-                .map(|handle| asset_hub.textures[handle].view)
-                .unwrap_or(self.dummy.black_view);
-            self.render_sky(pass, frame_params, env_map);
-        }
+        let env_map = environment_map
+            .map(|handle| asset_hub.textures[handle].view)
+            .unwrap_or(self.dummy.black_view);
+        self.render_sky(pass, frame_params, env_map);
     }
 
     pub fn render_debug_lines(

@@ -13,6 +13,27 @@ mod particle_system;
 mod ray_query_example;
 mod snapshot;
 
+// --- Sky snapshot test structs ---
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct SkyFrameParams {
+    view_proj: [f32; 16],
+    inv_view_proj: [f32; 16],
+    camera_pos: [f32; 4],
+    light_dir: [f32; 4],
+    light_color: [f32; 4],
+    ambient_color: [f32; 4],
+    material: [f32; 4],
+}
+
+#[derive(blade_macros::ShaderData)]
+struct SkyTestData {
+    sky_params: SkyFrameParams,
+    samp: gpu::Sampler,
+    env_map: gpu::TextureView,
+}
+
 #[derive(Clone, Copy)]
 struct DispatchGlobals {
     input: gpu::BufferPiece,
@@ -454,6 +475,152 @@ fn snapshot_particle() {
     snapshot::check("particle", &pixels, size);
 
     particle_system.destroy(&context);
+    context.destroy_command_encoder(&mut command_encoder);
+    target.destroy(&context);
+}
+
+#[test]
+#[ignore = "requires a working GPU context"]
+fn snapshot_space_sky() {
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    let size = gpu::Extent {
+        width: 400,
+        height: 300,
+        depth: 1,
+    };
+    let format = gpu::TextureFormat::Rgba8Unorm;
+
+    // Create offscreen target
+    let target = snapshot::OffscreenTarget::new(&context, size, format);
+
+    // Create a dummy 1x1 black texture for the env_map binding
+    let dummy_tex = context.create_texture(gpu::TextureDesc {
+        name: "sky-test-dummy",
+        format: gpu::TextureFormat::Rgba8Unorm,
+        size: gpu::Extent {
+            width: 1,
+            height: 1,
+            depth: 1,
+        },
+        array_layer_count: 1,
+        mip_level_count: 1,
+        dimension: gpu::TextureDimension::D2,
+        usage: gpu::TextureUsage::COPY | gpu::TextureUsage::RESOURCE,
+        sample_count: 1,
+        external: None,
+    });
+    let dummy_view = context.create_texture_view(
+        dummy_tex,
+        gpu::TextureViewDesc {
+            name: "sky-test-dummy",
+            format: gpu::TextureFormat::Rgba8Unorm,
+            dimension: gpu::ViewDimension::D2,
+            subresources: &gpu::TextureSubresources::default(),
+        },
+    );
+    let sampler = context.create_sampler(gpu::SamplerDesc {
+        name: "sky-test",
+        address_modes: [gpu::AddressMode::Repeat; 3],
+        mag_filter: gpu::FilterMode::Linear,
+        min_filter: gpu::FilterMode::Linear,
+        mipmap_filter: gpu::FilterMode::Linear,
+        ..Default::default()
+    });
+
+    // Compile the raster shader and create sky pipeline (no depth attachment)
+    let shader = context.create_shader(gpu::ShaderDesc {
+        source: include_str!("../blade-render/code/raster.wgsl"),
+    });
+    let sky_layout = <SkyTestData as gpu::ShaderData>::layout();
+    let mut sky_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
+        name: "sky-test",
+        data_layouts: &[&sky_layout],
+        vertex: shader.at("raster_sky_vs"),
+        vertex_fetches: &[],
+        primitive: gpu::PrimitiveState {
+            topology: gpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        fragment: Some(shader.at("raster_sky_fs")),
+        color_targets: &[format.into()],
+        multisample_state: gpu::MultisampleState::default(),
+    });
+
+    // Build camera: look along +Z from origin
+    let aspect = size.width as f32 / size.height as f32;
+    let fov_y: f32 = 1.0; // ~57 degrees
+    let near = 0.01f32;
+    let far = 100.0f32;
+    let proj = glam::Mat4::perspective_rh(fov_y, aspect, near, far);
+    let view = glam::Mat4::IDENTITY; // camera at origin, looking along -Z in RH
+    let view_proj = proj * view;
+    let inv_view_proj = view_proj.inverse();
+
+    let frame_params = SkyFrameParams {
+        view_proj: view_proj.to_cols_array(),
+        inv_view_proj: inv_view_proj.to_cols_array(),
+        camera_pos: [0.0, 0.0, 0.0, 1.0],
+        light_dir: [0.0, -1.0, 0.0, 0.0],
+        light_color: [1.0, 1.0, 1.0, 0.0],
+        ambient_color: [0.0, 0.0, 0.0, 1.0], // w=1.0 -> space_sky mode
+        material: [0.4, 0.0, 0.0, 0.0],      // material.z=0 -> env_enabled=false
+    };
+
+    // Render
+    let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "sky-test",
+        buffer_count: 1,
+    });
+    command_encoder.start();
+    command_encoder.init_texture(target.texture);
+    command_encoder.init_texture(dummy_tex);
+
+    if let mut pass = command_encoder.render(
+        "sky-test",
+        gpu::RenderTargetSet {
+            colors: &[gpu::RenderTarget {
+                view: target.view,
+                init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
+                finish_op: gpu::FinishOp::Store,
+            }],
+            depth_stencil: None,
+        },
+    ) {
+        if let mut pc = pass.with(&sky_pipeline) {
+            pc.bind(
+                0,
+                &SkyTestData {
+                    sky_params: frame_params,
+                    samp: sampler,
+                    env_map: dummy_view,
+                },
+            );
+            pc.draw(0, 3, 0, 1);
+        }
+    }
+
+    let pixels = target.read_pixels(&context, &mut command_encoder);
+
+    // Check that we have non-black pixels (stars/dots should be visible)
+    let non_black_count = pixels
+        .chunks(4)
+        .filter(|px| px[0] > 10 || px[1] > 10 || px[2] > 10)
+        .count();
+    let total_pixels = (size.width * size.height) as usize;
+    println!(
+        "space_sky: {non_black_count}/{total_pixels} non-black pixels ({:.1}%)",
+        non_black_count as f64 / total_pixels as f64 * 100.0
+    );
+
+    // Save the image for visual inspection
+    snapshot::check("space-sky", &pixels, size);
+
+    // Cleanup
+    context.destroy_render_pipeline(&mut sky_pipeline);
+    context.destroy_sampler(sampler);
+    context.destroy_texture_view(dummy_view);
+    context.destroy_texture(dummy_tex);
     context.destroy_command_encoder(&mut command_encoder);
     target.destroy(&context);
 }
