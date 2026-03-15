@@ -56,6 +56,7 @@ impl Game {
             &blade_engine::config::Engine {
                 shader_path: "blade-render/code".to_string(),
                 data_path: data_path.as_os_str().to_string_lossy().into_owned(),
+                cache_path: "asset-cache".to_string(),
                 time_step: 0.01,
                 render_backend: blade_engine::config::RenderBackend::Rasterizer,
                 gui_enabled: cfg!(debug_assertions),

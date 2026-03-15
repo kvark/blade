@@ -182,10 +182,16 @@ fn raster_sky_fs(input: SkyOutput) -> @location(0) vec4<f32> {
         let uv = map_equirect_dir_to_uv(dir);
         color = textureSampleLevel(env_map, samp, uv, 0.0).xyz;
     } else {
-        let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
-        let horizon = vec3<f32>(0.6, 0.7, 0.9);
-        let zenith = vec3<f32>(0.2, 0.35, 0.6);
-        color = mix(horizon, zenith, t);
+        // Use ambient_color.w as a flag: values > 0.5 mean "space mode" (black sky)
+        let space_mode = sky_params.ambient_color.w > 0.5;
+        if (space_mode) {
+            color = vec3<f32>(0.0);
+        } else {
+            let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+            let horizon = vec3<f32>(0.6, 0.7, 0.9);
+            let zenith = vec3<f32>(0.2, 0.35, 0.6);
+            color = mix(horizon, zenith, t);
+        }
     }
     let mapped = color / (color + vec3<f32>(1.0));
     let gamma = pow(mapped, vec3<f32>(1.0 / 2.2));

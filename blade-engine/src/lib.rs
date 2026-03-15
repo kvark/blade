@@ -500,16 +500,8 @@ impl Engine {
         load_tasks.is_empty()
     }
 
-    #[cfg(target_os = "android")]
-    fn asset_cache_path() -> PathBuf {
-        ndk_glue::native_activity()
-            .internal_data_path()
-            .join("asset-cache")
-    }
-
-    #[cfg(not(target_os = "android"))]
-    fn asset_cache_path() -> PathBuf {
-        PathBuf::from("asset-cache")
+    fn asset_cache_path(config: &config::Engine) -> PathBuf {
+        PathBuf::from(&config.cache_path)
     }
 
     #[profiling::function]
@@ -579,7 +571,7 @@ impl Engine {
             .map(|i| choir.add_worker(&format!("Worker-{}", i)))
             .collect();
 
-        let asset_cache_path = Self::asset_cache_path();
+        let asset_cache_path = Self::asset_cache_path(config);
         let asset_hub = blade_render::AssetHub::new(&asset_cache_path, &choir, &gpu_context);
         let (shaders, shader_task) = blade_render::Shaders::load(
             config.shader_path.as_ref(),

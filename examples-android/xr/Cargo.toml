@@ -42,6 +42,13 @@ keystore_password = "android"
 key_alias = "androiddebugkey"
 key_password = "android"
 
+[package.metadata.android.application]
+label = "Blade XR"
+
+[[package.metadata.android.application.meta_data]]
+name = "com.oculus.vr.focusaware"
+value = "true"
+
 [package.metadata.android.application.activity]
 label = "Blade XR"
 theme = "@android:style/Theme.Black.NoTitleBar.Fullscreen"

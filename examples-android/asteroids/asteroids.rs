@@ -6,14 +6,10 @@ use std::{
     io::Read,
     path::Path,
     path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread,
     time::{Duration, Instant},
 };
 
+use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use blade_graphics as gpu;
 use log::info;
 use openxr as xr;
@@ -235,8 +231,6 @@ const DESPAWN_RADIUS: f32 = 40.0;
 
 struct Asteroid {
     object_handle: blade_engine::ObjectHandle,
-    velocity: [f32; 3],
-    angular_velocity: [f32; 3],
 }
 
 struct AsteroidField {
@@ -377,8 +371,6 @@ impl AsteroidField {
 
         self.asteroids.push(Asteroid {
             object_handle: handle,
-            velocity,
-            angular_velocity,
         });
     }
 
@@ -403,28 +395,119 @@ impl AsteroidField {
 
 // --- App state ---
 
-#[derive(Default)]
+/// XR session visibility from the app's perspective.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Visibility {
+    /// Session is synchronized but not visible (e.g. full overlay).
+    Hidden,
+    /// Session content is visible but app lacks input focus (e.g. Quest menu overlay).
+    Visible,
+    /// Session is fully focused — normal gameplay.
+    Focused,
+}
+
 enum AppState {
-    #[default]
     Idle,
     Running {
         rendered_frames: u64,
+        asteroid_field: AsteroidField,
+        visibility: Visibility,
     },
 }
 
-fn prepare_shader_dir() -> PathBuf {
-    let shader_dir = ndk_glue::native_activity()
+fn setup_game(engine: &mut blade_engine::Engine) -> AsteroidField {
+    // Ensure zero gravity for space
+    engine.set_gravity(0.0);
+
+    // Configure space lighting — no env map needed, space_sky + OpaqueBlack clear gives black sky
+    engine.set_raster_config(blade_render::RasterConfig {
+        clear_color: blade_graphics::TextureColor::OpaqueBlack,
+        light_dir: mint::Vector3 {
+            x: -0.5,
+            y: 0.7,
+            z: 0.5,
+        },
+        light_color: mint::Vector3 {
+            x: 4.0,
+            y: 3.8,
+            z: 3.5,
+        },
+        ambient_color: mint::Vector3 {
+            x: 0.02,
+            y: 0.02,
+            z: 0.03,
+        },
+        roughness: 0.7,
+        metallic: 0.0,
+        space_sky: true,
+    });
+
+    // Place a large planet in the distance
+    {
+        let planet_radius = 30.0;
+        let (verts, idxs) = generate_asteroid_mesh(999, planet_radius, 0.02, 3, [1.0, 0.95, 1.0]);
+        let planet_model = engine.create_model(
+            "planet",
+            vec![blade_render::ProceduralGeometry {
+                name: "planet".to_string(),
+                vertices: verts,
+                indices: idxs,
+                base_color_factor: [0.3, 0.35, 0.5, 1.0],
+            }],
+        );
+        let planet_transform = blade_engine::Transform {
+            position: mint::Vector3 {
+                x: 30.0,
+                y: -20.0,
+                z: -80.0,
+            },
+            ..Default::default()
+        };
+        engine.add_object_with_model(
+            "planet",
+            planet_model,
+            planet_transform,
+            blade_engine::DynamicInput::Empty,
+        );
+    }
+
+    // Head collider so asteroids bounce off the player
+    {
+        let (verts, idxs) = generate_asteroid_mesh(0, 0.01, 0.0, 0, [1.0, 1.0, 1.0]);
+        let head_model = engine.create_model(
+            "head_collider",
+            vec![blade_render::ProceduralGeometry {
+                name: "head_collider".to_string(),
+                vertices: verts,
+                indices: idxs,
+                base_color_factor: [0.0, 0.0, 0.0, 0.0],
+            }],
+        );
+        let head_handle = engine.add_object_with_model(
+            "head_collider",
+            head_model,
+            blade_engine::Transform::default(),
+            blade_engine::DynamicInput::Empty,
+        );
+        engine.add_ball_collider(head_handle, 1.0, 1.0);
+    }
+
+    AsteroidField::new(engine)
+}
+
+fn prepare_shader_dir(app: &AndroidApp) -> PathBuf {
+    let internal_path = app
         .internal_data_path()
-        .join("blade-render")
-        .join("code");
+        .expect("No internal data path available");
+    let shader_dir = internal_path.join("blade-render").join("code");
     fs::create_dir_all(&shader_dir).unwrap();
-    copy_assets_to_dir("", &shader_dir);
+    copy_assets_to_dir(app, "", &shader_dir);
 
     shader_dir
 }
 
-fn copy_assets_to_dir(asset_dir_name: &str, output_dir: &Path) {
-    let asset_manager = ndk_glue::native_activity().asset_manager();
+fn copy_assets_to_dir(app: &AndroidApp, asset_dir_name: &str, output_dir: &Path) {
+    let asset_manager = app.asset_manager();
     let dir_name = CString::new(asset_dir_name).unwrap();
     let mut asset_dir = asset_manager
         .open_dir(&dir_name)
@@ -445,7 +528,7 @@ fn copy_assets_to_dir(asset_dir_name: &str, output_dir: &Path) {
         let mut asset = asset_manager
             .open(&asset_path_c)
             .unwrap_or_else(|| panic!("Unable to open asset '{asset_path}'"));
-        let mut contents = Vec::with_capacity(asset.get_length());
+        let mut contents = Vec::with_capacity(asset.length());
         asset.read_to_end(&mut contents).unwrap();
         fs::write(output_dir.join(file_name.as_ref()), contents).unwrap();
         copied += 1;
@@ -456,25 +539,8 @@ fn copy_assets_to_dir(asset_dir_name: &str, output_dir: &Path) {
     );
 }
 
-fn spawn_android_event_pump(xr_debug: bool) -> Arc<AtomicBool> {
-    let should_exit = Arc::new(AtomicBool::new(false));
-    let should_exit_thread = Arc::clone(&should_exit);
-    thread::spawn(move || {
-        while let Some(event) = ndk_glue::poll_events() {
-            if xr_debug {
-                info!("Android event: {:?}", event);
-            }
-            if matches!(event, ndk_glue::Event::Destroy) {
-                should_exit_thread.store(true, Ordering::Relaxed);
-                break;
-            }
-        }
-    });
-    should_exit
-}
-
-#[ndk_glue::main]
-pub fn main() {
+#[no_mangle]
+fn android_main(app: AndroidApp) {
     let xr_debug = std::env::var_os("BLADE_XR_DEBUG").is_some();
 
     macro_rules! mark {
@@ -528,8 +594,12 @@ pub fn main() {
         .system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)
         .unwrap();
     mark!("XR mark: OpenXR system acquired");
-    let shader_dir = prepare_shader_dir();
+    let shader_dir = prepare_shader_dir(&app);
     mark!("XR mark: shader dir prepared");
+    let internal_path = app
+        .internal_data_path()
+        .expect("No internal data path available");
+    let cache_path = internal_path.join("asset-cache");
     let mut engine = blade_engine::Engine::new(
         blade_engine::Presentation::Xr(gpu::XrDesc {
             instance: xr_instance.clone(),
@@ -538,6 +608,7 @@ pub fn main() {
         &blade_engine::config::Engine {
             shader_path: shader_dir.to_string_lossy().into_owned(),
             data_path: String::new(),
+            cache_path: cache_path.to_string_lossy().into_owned(),
             time_step: 0.01,
             render_backend: blade_engine::config::RenderBackend::Rasterizer,
             gui_enabled: false,
@@ -545,158 +616,67 @@ pub fn main() {
     );
     mark!("XR mark: engine created");
 
-    // Ensure zero gravity for space
-    engine.set_gravity(0.0);
-
-    // Generate procedural starfield environment map (Rgba8Unorm)
-    {
-        let env_w = 1024u32;
-        let env_h = 512u32;
-        let mut pixels = vec![[0u8; 4]; (env_w * env_h) as usize];
-        let star_count = 2000u32;
-        for i in 0..star_count {
-            let seed = i.wrapping_mul(2654435761);
-            let u = (seed.wrapping_mul(374761393) ^ (seed >> 11)) as f32 / u32::MAX as f32;
-            let v = (seed.wrapping_mul(1103515245).wrapping_add(12345) ^ (seed >> 13)) as f32
-                / u32::MAX as f32;
-            let brightness_hash =
-                (seed.wrapping_mul(1274126177) ^ (seed >> 16)) as f32 / u32::MAX as f32;
-            let color_hash = (seed.wrapping_mul(668265263) ^ (seed >> 15)) as f32 / u32::MAX as f32;
-
-            let px = (u * env_w as f32) as u32 % env_w;
-            let py = (v * env_h as f32) as u32 % env_h;
-            let idx = (py * env_w + px) as usize;
-
-            // Brightness in 0..255 range; bright stars will be near white
-            let brightness = 80.0 + brightness_hash * 175.0;
-            let to_u8 = |v: f32| (v.clamp(0.0, 255.0) + 0.5) as u8;
-            let (r, g, b) = if color_hash < 0.3 {
-                (
-                    to_u8(brightness),
-                    to_u8(brightness * 0.85),
-                    to_u8(brightness * 0.7),
-                )
-            } else if color_hash < 0.7 {
-                (to_u8(brightness), to_u8(brightness), to_u8(brightness))
-            } else {
-                (
-                    to_u8(brightness * 0.8),
-                    to_u8(brightness * 0.9),
-                    to_u8(brightness),
-                )
-            };
-            pixels[idx] = [r, g, b, 255];
-        }
-        engine.create_environment_map("starfield", env_w, env_h, &pixels);
-        mark!("XR mark: starfield env map created");
-    }
-
-    // Configure space lighting: sun from upper-left-behind the player
-    // This illuminates objects in front of the player
-    engine.set_raster_config(blade_render::RasterConfig {
-        clear_color: gpu::TextureColor::OpaqueBlack,
-        light_dir: mint::Vector3 {
-            x: -0.5,
-            y: 0.7,
-            z: 0.5,
-        },
-        light_color: mint::Vector3 {
-            x: 4.0,
-            y: 3.8,
-            z: 3.5,
-        },
-        ambient_color: mint::Vector3 {
-            x: 0.02,
-            y: 0.02,
-            z: 0.03,
-        },
-        roughness: 0.7,
-        metallic: 0.0,
-    });
-
-    // Place a large planet in the distance
-    {
-        let planet_radius = 30.0;
-        let (verts, idxs) = generate_asteroid_mesh(999, planet_radius, 0.02, 3, [1.0, 0.95, 1.0]);
-        let planet_model = engine.create_model(
-            "planet",
-            vec![blade_render::ProceduralGeometry {
-                name: "planet".to_string(),
-                vertices: verts,
-                indices: idxs,
-                base_color_factor: [0.3, 0.35, 0.5, 1.0],
-            }],
-        );
-        // In front of player (-Z is forward in OpenXR), slightly right and below
-        let planet_transform = blade_engine::Transform {
-            position: mint::Vector3 {
-                x: 30.0,
-                y: -20.0,
-                z: -80.0,
-            },
-            ..Default::default()
-        };
-        engine.add_object_with_model(
-            "planet",
-            planet_model,
-            planet_transform,
-            blade_engine::DynamicInput::Empty,
-        );
-        mark!("XR mark: planet placed");
-    }
-
-    // Create a fixed invisible collider at the player's head position
-    // so asteroids bounce off instead of flying through.
-    {
-        let (verts, idxs) = generate_asteroid_mesh(0, 0.01, 0.0, 0, [1.0, 1.0, 1.0]);
-        let head_model = engine.create_model(
-            "head_collider",
-            vec![blade_render::ProceduralGeometry {
-                name: "head_collider".to_string(),
-                vertices: verts,
-                indices: idxs,
-                base_color_factor: [0.0, 0.0, 0.0, 0.0],
-            }],
-        );
-        let head_handle = engine.add_object_with_model(
-            "head_collider",
-            head_model,
-            blade_engine::Transform::default(),
-            blade_engine::DynamicInput::Empty,
-        );
-        engine.add_ball_collider(head_handle, 0.3, 1.0);
-        mark!("XR mark: head collider placed");
-    }
-
-    // Create asteroid field with procedural geometry
-    let mut asteroid_field = AsteroidField::new(&mut engine);
-    mark!(
-        "XR mark: asteroid field created ({} asteroids)",
-        asteroid_field.asteroids.len()
-    );
-
     let mut state = AppState::Idle;
-    let should_exit = spawn_android_event_pump(xr_debug);
+    let mut resumed = false;
+    let mut destroy_requested = false;
     let mut event_storage = xr::EventDataBuffer::new();
     let mut last_heartbeat = Instant::now();
-    let mut frame_start = Instant::now();
+    let mut frame_start;
     let mut frame_time_sum = 0.0f64;
     let mut frame_time_max = 0.0f64;
     let mut frame_count_in_period = 0u32;
     mark!("XR mark: app initialized; entering main loop");
 
     'main_loop: loop {
-        if should_exit.load(Ordering::Relaxed) {
+        // Poll Android events. When not resumed and session not running,
+        // use a longer timeout to avoid busy-waiting (hello_xr pattern).
+        // android-activity handles input queue lifecycle internally,
+        // preventing ANR from blocked main thread callbacks.
+        let session_running = matches!(state, AppState::Running { .. });
+        let timeout = if !resumed && !session_running {
+            Some(Duration::from_millis(250))
+        } else {
+            Some(Duration::ZERO)
+        };
+        app.poll_events(timeout, |event| {
+            match event {
+                PollEvent::Main(main_event) => {
+                    if xr_debug {
+                        info!("Android event: {:?}", main_event);
+                    }
+                    match main_event {
+                        MainEvent::Resume { .. } => resumed = true,
+                        MainEvent::Pause => resumed = false,
+                        MainEvent::Destroy => destroy_requested = true,
+                        MainEvent::InputAvailable => {
+                            // Drain input events to keep Android responsive.
+                            if let Ok(mut iter) = app.input_events_iter() {
+                                loop {
+                                    if !iter.next(|_event| InputStatus::Unhandled) {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        });
+        if destroy_requested {
             break 'main_loop;
         }
 
         if last_heartbeat.elapsed() >= Duration::from_secs(1) {
             if xr_debug {
-                let (session_running, rendered_frames) = match &state {
-                    AppState::Idle => (false, 0),
+                let (session_running, rendered_frames, asteroid_count) = match state {
+                    AppState::Idle => (false, 0, 0),
                     AppState::Running {
-                        rendered_frames, ..
-                    } => (true, *rendered_frames),
+                        rendered_frames,
+                        ref asteroid_field,
+                        ..
+                    } => (true, rendered_frames, asteroid_field.asteroids.len()),
                 };
                 let avg_ms = if frame_count_in_period > 0 {
                     frame_time_sum / frame_count_in_period as f64 * 1000.0
@@ -709,7 +689,7 @@ pub fn main() {
                     rendered_frames,
                     avg_ms,
                     frame_time_max * 1000.0,
-                    asteroid_field.asteroids.len(),
+                    asteroid_count,
                 );
             }
             frame_time_sum = 0.0;
@@ -730,10 +710,41 @@ pub fn main() {
                             if xr_debug {
                                 info!("XR state READY -> begin session");
                             }
-                            state = AppState::Running { rendered_frames: 0 };
+                            mark!("XR mark: setting up game");
+                            let asteroid_field = setup_game(&mut engine);
+                            mark!("XR mark: game setup done");
+                            state = AppState::Running {
+                                rendered_frames: 0,
+                                asteroid_field,
+                                visibility: Visibility::Hidden,
+                            };
                             mark!("XR mark: calling engine.begin_xr");
                             engine.begin_xr();
                             mark!("XR mark: engine.begin_xr returned");
+                        }
+                        xr::SessionState::FOCUSED => {
+                            if let AppState::Running {
+                                ref mut visibility, ..
+                            } = state
+                            {
+                                *visibility = Visibility::Focused;
+                            }
+                        }
+                        xr::SessionState::VISIBLE => {
+                            if let AppState::Running {
+                                ref mut visibility, ..
+                            } = state
+                            {
+                                *visibility = Visibility::Visible;
+                            }
+                        }
+                        xr::SessionState::SYNCHRONIZED => {
+                            if let AppState::Running {
+                                ref mut visibility, ..
+                            } = state
+                            {
+                                *visibility = Visibility::Hidden;
+                            }
                         }
                         xr::SessionState::STOPPING => {
                             if xr_debug {
@@ -761,9 +772,23 @@ pub fn main() {
             }
         }
 
-        match &mut state {
-            AppState::Idle => std::thread::sleep(Duration::from_millis(100)),
-            AppState::Running { rendered_frames } => {
+        match state {
+            AppState::Idle => {
+                // Session not running — throttle handled by poll_events timeout above.
+            }
+            AppState::Running {
+                ref mut rendered_frames,
+                ref mut asteroid_field,
+                visibility,
+            } => {
+                if visibility != Visibility::Focused {
+                    // Not focused (menu overlay or app hidden).
+                    // Submit frames to keep the runtime happy, but skip physics.
+                    if !engine.render_xr() {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    continue;
+                }
                 frame_start = Instant::now();
                 asteroid_field.update(&mut engine);
                 engine.update(0.016);

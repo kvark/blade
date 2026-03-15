@@ -10,6 +10,8 @@ pub struct RasterConfig {
     pub ambient_color: mint::Vector3<f32>,
     pub roughness: f32,
     pub metallic: f32,
+    /// When true, the sky fallback renders pure black instead of a blue gradient.
+    pub space_sky: bool,
 }
 
 impl Default for RasterConfig {
@@ -33,6 +35,7 @@ impl Default for RasterConfig {
             },
             roughness: 0.4,
             metallic: 0.0,
+            space_sky: false,
         }
     }
 }
@@ -368,10 +371,13 @@ impl Rasterizer {
             }
         }
 
-        let env_map = environment_map
-            .map(|handle| asset_hub.textures[handle].view)
-            .unwrap_or(self.dummy.black_view);
-        self.render_sky(pass, frame_params, env_map);
+        // Skip sky entirely when space_sky is set — clear color provides black background.
+        if !config.space_sky {
+            let env_map = environment_map
+                .map(|handle| asset_hub.textures[handle].view)
+                .unwrap_or(self.dummy.black_view);
+            self.render_sky(pass, frame_params, env_map);
+        }
     }
 
     pub fn render_debug_lines(
@@ -514,7 +520,7 @@ impl Rasterizer {
             },
             ambient_color: {
                 let c = config.ambient_color;
-                [c.x, c.y, c.z, 0.0]
+                [c.x, c.y, c.z, config.space_sky as u32 as f32]
             },
             material: [
                 config.roughness,

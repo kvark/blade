@@ -16,10 +16,7 @@ blade-render = { version = "0.4", path = "../../blade-render" }
 mint = "0.5"
 openxr = { workspace = true }
 log = "0.4"
-libc = "0.2.50"
-libloading = "0.8"
-ndk-glue = "0.7"
-ndk-context = "0.1"
+android-activity = { version = "0.6", features = ["native-activity"] }
 android_logger = "0.14"
 
 [lib]
@@ -43,8 +40,16 @@ keystore_password = "android"
 key_alias = "androiddebugkey"
 key_password = "android"
 
+[package.metadata.android.application]
+label = "Blade Asteroids"
+
+[[package.metadata.android.application.meta_data]]
+name = "com.oculus.vr.focusaware"
+value = "true"
+
 [package.metadata.android.application.activity]
 label = "Blade Asteroids"
+exported = true
 theme = "@android:style/Theme.Black.NoTitleBar.Fullscreen"
 config_changes = "density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
 launch_mode = "singleTask"
