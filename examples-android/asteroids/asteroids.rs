@@ -625,6 +625,411 @@ fn rotation_from_z_to(dir: [f32; 3]) -> [f32; 4] {
     [axis[0] * s, axis[1] * s, axis[2] * s, half_angle.cos()]
 }
 
+// --- Laser beam mesh ---
+
+/// Generate a thin hexagonal prism along -Z (aim direction) for laser rendering.
+fn generate_laser_mesh(
+    length: f32,
+    radius: f32,
+    color: [f32; 4],
+) -> (Vec<blade_render::Vertex>, Vec<u32>) {
+    let sides = 6;
+    let mut vertices = Vec::with_capacity(sides * 4);
+    let mut indices = Vec::with_capacity(sides * 6);
+    for i in 0..sides {
+        let angle0 = (i as f32 / sides as f32) * std::f32::consts::TAU;
+        let angle1 = ((i + 1) as f32 / sides as f32) * std::f32::consts::TAU;
+        let (c0, s0) = (angle0.cos(), angle0.sin());
+        let (c1, s1) = (angle1.cos(), angle1.sin());
+        let n = normalize([(c0 + c1) * 0.5, (s0 + s1) * 0.5, 0.0]);
+        let en = encode_normal(n);
+        let base = vertices.len() as u32;
+        // Near end (z=0) and far end (z=-length)
+        for &(cx, sx, z) in &[
+            (c0, s0, 0.0f32),
+            (c1, s1, 0.0),
+            (c0, s0, -length),
+            (c1, s1, -length),
+        ] {
+            vertices.push(blade_render::Vertex {
+                position: [cx * radius, sx * radius, z],
+                bitangent_sign: 1.0,
+                tex_coords: [0.0, 0.0],
+                normal: en,
+                tangent: encode_normal([0.0, 0.0, 1.0]),
+            });
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);
+    }
+    let _ = color; // color is applied via base_color_factor on the model
+    (vertices, indices)
+}
+
+// --- XR Input ---
+
+const LASER_LENGTH: f32 = 200.0;
+const LASER_HIT_RADIUS: f32 = 1.5;
+const LASER_REDDENING_DURATION: f32 = 1.0;
+const LASER_BEAM_RADIUS: f32 = 0.015;
+
+struct HandState {
+    trigger_pressed: bool,
+    aim_pose: Option<xr::Posef>,
+}
+
+struct LaserHit {
+    object_handle: blade_engine::ObjectHandle,
+    timer: f32,
+}
+
+struct XrInput {
+    action_set: xr::ActionSet,
+    trigger_action: xr::Action<f32>,
+    aim_action: xr::Action<xr::Posef>,
+    left_aim_space: xr::Space,
+    right_aim_space: xr::Space,
+    hand_paths: [xr::Path; 2],
+    hands: [HandState; 2],
+    laser_hits: Vec<LaserHit>,
+    laser_model: blade_asset::Handle<blade_render::Model>,
+    aim_model: blade_asset::Handle<blade_render::Model>,
+    laser_objects: [Option<blade_engine::ObjectHandle>; 2],
+    laser_firing: [bool; 2],
+}
+
+impl XrInput {
+    fn new(
+        instance: &xr::Instance,
+        session: &xr::Session<xr::Vulkan>,
+        engine: &mut blade_engine::Engine,
+    ) -> Self {
+        let action_set = instance
+            .create_action_set("gameplay", "Gameplay", 0)
+            .unwrap();
+
+        let trigger_action = action_set
+            .create_action::<f32>(
+                "trigger",
+                "Trigger",
+                &[
+                    instance.string_to_path("/user/hand/left").unwrap(),
+                    instance.string_to_path("/user/hand/right").unwrap(),
+                ],
+            )
+            .unwrap();
+
+        let aim_action = action_set
+            .create_action::<xr::Posef>(
+                "aim_pose",
+                "Aim Pose",
+                &[
+                    instance.string_to_path("/user/hand/left").unwrap(),
+                    instance.string_to_path("/user/hand/right").unwrap(),
+                ],
+            )
+            .unwrap();
+
+        // Suggest bindings for multiple controller profiles
+        let left_trigger_path = instance
+            .string_to_path("/user/hand/left/input/trigger/value")
+            .unwrap();
+        let right_trigger_path = instance
+            .string_to_path("/user/hand/right/input/trigger/value")
+            .unwrap();
+        let left_aim_path = instance
+            .string_to_path("/user/hand/left/input/aim/pose")
+            .unwrap();
+        let right_aim_path = instance
+            .string_to_path("/user/hand/right/input/aim/pose")
+            .unwrap();
+
+        let trigger_aim_bindings = [
+            xr::Binding::new(&trigger_action, left_trigger_path),
+            xr::Binding::new(&trigger_action, right_trigger_path),
+            xr::Binding::new(&aim_action, left_aim_path),
+            xr::Binding::new(&aim_action, right_aim_path),
+        ];
+
+        // Try multiple interaction profiles for broad device compatibility
+        let profiles = [
+            "/interaction_profiles/oculus/touch_controller",
+            "/interaction_profiles/meta/touch_controller_plus",
+        ];
+        for profile_path in profiles {
+            if let Ok(profile) = instance.string_to_path(profile_path) {
+                match instance.suggest_interaction_profile_bindings(profile, &trigger_aim_bindings)
+                {
+                    Ok(()) => info!("Bound input profile: {profile_path}"),
+                    Err(e) => info!("Failed to bind {profile_path}: {e}"),
+                }
+            }
+        }
+
+        // Also bind KHR simple controller (uses select/click instead of trigger)
+        if let (Ok(profile), Ok(left_select), Ok(right_select)) = (
+            instance.string_to_path("/interaction_profiles/khr/simple_controller"),
+            instance.string_to_path("/user/hand/left/input/select/click"),
+            instance.string_to_path("/user/hand/right/input/select/click"),
+        ) {
+            let simple_bindings = [
+                xr::Binding::new(&trigger_action, left_select),
+                xr::Binding::new(&trigger_action, right_select),
+                xr::Binding::new(&aim_action, left_aim_path),
+                xr::Binding::new(&aim_action, right_aim_path),
+            ];
+            match instance.suggest_interaction_profile_bindings(profile, &simple_bindings) {
+                Ok(()) => info!("Bound KHR simple controller profile"),
+                Err(e) => info!("Failed to bind KHR simple: {e}"),
+            }
+        }
+
+        session.attach_action_sets(&[&action_set]).unwrap();
+
+        let left_hand = instance.string_to_path("/user/hand/left").unwrap();
+        let right_hand = instance.string_to_path("/user/hand/right").unwrap();
+
+        let left_aim_space = aim_action
+            .create_space(session.clone(), left_hand, xr::Posef::IDENTITY)
+            .unwrap();
+        let right_aim_space = aim_action
+            .create_space(session.clone(), right_hand, xr::Posef::IDENTITY)
+            .unwrap();
+
+        // Create laser beam models
+        let (laser_verts, laser_idxs) =
+            generate_laser_mesh(LASER_LENGTH, LASER_BEAM_RADIUS, [0.0, 1.0, 0.0, 1.0]);
+        let laser_model = engine.create_model(
+            "laser_beam",
+            vec![blade_render::ProceduralGeometry {
+                name: "laser_beam".to_string(),
+                vertices: laser_verts,
+                indices: laser_idxs,
+                base_color_factor: [0.2, 1.0, 0.2, 1.0],
+            }],
+        );
+        let (aim_verts, aim_idxs) =
+            generate_laser_mesh(3.0, LASER_BEAM_RADIUS * 0.5, [0.1, 0.3, 0.6, 1.0]);
+        let aim_model = engine.create_model(
+            "aim_line",
+            vec![blade_render::ProceduralGeometry {
+                name: "aim_line".to_string(),
+                vertices: aim_verts,
+                indices: aim_idxs,
+                base_color_factor: [0.1, 0.3, 0.6, 1.0],
+            }],
+        );
+
+        XrInput {
+            action_set,
+            trigger_action,
+            aim_action,
+            left_aim_space,
+            right_aim_space,
+            hand_paths: [left_hand, right_hand],
+            hands: [
+                HandState {
+                    trigger_pressed: false,
+                    aim_pose: None,
+                },
+                HandState {
+                    trigger_pressed: false,
+                    aim_pose: None,
+                },
+            ],
+            laser_hits: Vec::new(),
+            laser_model,
+            aim_model,
+            laser_objects: [None, None],
+            laser_firing: [false, false],
+        }
+    }
+
+    fn sync(
+        &mut self,
+        engine: &mut blade_engine::Engine,
+        session: &xr::Session<xr::Vulkan>,
+        frame_count: u64,
+    ) {
+        if let Err(e) = session.sync_actions(&[xr::ActiveActionSet::new(&self.action_set)]) {
+            if frame_count <= 5 || frame_count % 300 == 0 {
+                info!("sync_actions failed: {e}");
+            }
+            return;
+        }
+
+        let aim_spaces = [&self.left_aim_space, &self.right_aim_space];
+        for (i, aim_space) in aim_spaces.iter().enumerate() {
+            let trigger_state = self.trigger_action.state(session, self.hand_paths[i]).ok();
+            self.hands[i].trigger_pressed = trigger_state
+                .map(|s| s.current_state > 0.5)
+                .unwrap_or(false);
+
+            self.hands[i].aim_pose = engine.xr_locate_space(aim_space);
+
+            if frame_count <= 5 || frame_count % 300 == 0 {
+                let trigger_val = trigger_state.map(|s| s.current_state).unwrap_or(-1.0);
+                let has_pose = self.hands[i].aim_pose.is_some();
+                info!("Hand {i}: trigger={trigger_val:.2}, pose={has_pose}",);
+            }
+        }
+    }
+
+    fn update(
+        &mut self,
+        engine: &mut blade_engine::Engine,
+        asteroid_field: &mut AsteroidField,
+        dt: f32,
+    ) {
+        // Update existing hit timers; remove stale hits (asteroid may have been recycled)
+        let mut i = 0;
+        while i < self.laser_hits.len() {
+            let still_exists = asteroid_field
+                .asteroids
+                .iter()
+                .any(|a| a.object_handle == self.laser_hits[i].object_handle);
+            if !still_exists {
+                self.laser_hits.swap_remove(i);
+                continue;
+            }
+            self.laser_hits[i].timer += dt;
+            if self.laser_hits[i].timer >= LASER_REDDENING_DURATION {
+                // Destroy the asteroid
+                let hit = self.laser_hits.swap_remove(i);
+                if let Some(idx) = asteroid_field
+                    .asteroids
+                    .iter()
+                    .position(|a| a.object_handle == hit.object_handle)
+                {
+                    let asteroid = asteroid_field.asteroids.swap_remove(idx);
+                    engine.remove_object(asteroid.object_handle);
+                    asteroid_field.spawn_asteroid(engine, false);
+                }
+            } else {
+                i += 1;
+            }
+        }
+
+        // Check for new laser hits from each hand
+        for hand in &self.hands {
+            if !hand.trigger_pressed {
+                continue;
+            }
+            let pose = match hand.aim_pose {
+                Some(p) => p,
+                None => continue,
+            };
+
+            // Ray origin and direction from aim pose
+            let origin = [pose.position.x, pose.position.y, pose.position.z];
+            let q = pose.orientation;
+            // Aim pose forward is -Z in the pose's local space
+            let dir = quat_rotate([q.x, q.y, q.z, q.w], [0.0, 0.0, -1.0]);
+
+            // Test against all asteroids (simple sphere test)
+            let mut closest_t = LASER_LENGTH;
+            let mut closest_idx = None;
+            for (idx, asteroid) in asteroid_field.asteroids.iter().enumerate() {
+                // Skip already-hit asteroids
+                if self
+                    .laser_hits
+                    .iter()
+                    .any(|h| h.object_handle == asteroid.object_handle)
+                {
+                    continue;
+                }
+                let pos = engine.get_object_position(asteroid.object_handle);
+                let to_asteroid = [pos.x - origin[0], pos.y - origin[1], pos.z - origin[2]];
+                let along =
+                    to_asteroid[0] * dir[0] + to_asteroid[1] * dir[1] + to_asteroid[2] * dir[2];
+                if along < 0.0 || along > closest_t {
+                    continue;
+                }
+                let perp_sq = (to_asteroid[0] - dir[0] * along).powi(2)
+                    + (to_asteroid[1] - dir[1] * along).powi(2)
+                    + (to_asteroid[2] - dir[2] * along).powi(2);
+                if perp_sq < LASER_HIT_RADIUS * LASER_HIT_RADIUS {
+                    closest_t = along;
+                    closest_idx = Some(idx);
+                }
+            }
+
+            if let Some(idx) = closest_idx {
+                let handle = asteroid_field.asteroids[idx].object_handle;
+                self.laser_hits.push(LaserHit {
+                    object_handle: handle,
+                    timer: 0.0,
+                });
+            }
+        }
+    }
+
+    fn pose_to_transform(p: &xr::Posef) -> blade_engine::Transform {
+        blade_engine::Transform {
+            position: mint::Vector3 {
+                x: p.position.x,
+                y: p.position.y,
+                z: p.position.z,
+            },
+            orientation: mint::Quaternion {
+                s: p.orientation.w,
+                v: mint::Vector3 {
+                    x: p.orientation.x,
+                    y: p.orientation.y,
+                    z: p.orientation.z,
+                },
+            },
+        }
+    }
+
+    fn update_laser_objects(&mut self, engine: &mut blade_engine::Engine) {
+        for (i, hand) in self.hands.iter().enumerate() {
+            let firing = hand.trigger_pressed;
+            let has_pose = hand.aim_pose.is_some();
+
+            // Remove if pose lost or model needs to change (trigger state changed)
+            if let Some(handle) = self.laser_objects[i] {
+                if !has_pose || firing != self.laser_firing[i] {
+                    engine.remove_object(handle);
+                    self.laser_objects[i] = None;
+                }
+            }
+
+            if let Some(pose) = hand.aim_pose {
+                let transform = Self::pose_to_transform(&pose);
+                if let Some(handle) = self.laser_objects[i] {
+                    engine.teleport_object(handle, transform);
+                } else {
+                    let model = if firing {
+                        self.laser_model
+                    } else {
+                        self.aim_model
+                    };
+                    let handle = engine.add_object_with_model(
+                        "laser",
+                        model,
+                        transform,
+                        blade_engine::DynamicInput::Full,
+                    );
+                    self.laser_objects[i] = Some(handle);
+                    self.laser_firing[i] = firing;
+                }
+            }
+        }
+    }
+}
+
+/// Rotate a vector by a quaternion [x, y, z, w].
+fn quat_rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+    let qv = [q[0], q[1], q[2]];
+    let uv = cross(qv, v);
+    let uuv = cross(qv, uv);
+    [
+        v[0] + 2.0 * (q[3] * uv[0] + uuv[0]),
+        v[1] + 2.0 * (q[3] * uv[1] + uuv[1]),
+        v[2] + 2.0 * (q[3] * uv[2] + uuv[2]),
+    ]
+}
+
 // --- App state ---
 
 /// XR session visibility from the app's perspective.
@@ -795,6 +1200,10 @@ fn android_main(app: AndroidApp) {
     let mut enabled_extensions = xr::ExtensionSet::default();
     enabled_extensions.khr_vulkan_enable2 = true;
     enabled_extensions.khr_android_create_instance = true;
+    if available_extensions.meta_touch_controller_plus {
+        enabled_extensions.meta_touch_controller_plus = true;
+        info!("Enabling XR_META_touch_controller_plus");
+    }
 
     let xr_instance = entry
         .create_instance(
@@ -838,6 +1247,7 @@ fn android_main(app: AndroidApp) {
     mark!("XR mark: engine created");
 
     let mut state = AppState::Idle;
+    let mut xr_input: Option<XrInput> = None;
     let mut resumed = false;
     let mut destroy_requested = false;
     let mut event_storage = xr::EventDataBuffer::new();
@@ -933,6 +1343,10 @@ fn android_main(app: AndroidApp) {
                             }
                             mark!("XR mark: setting up game");
                             let game = setup_game(&mut engine);
+                            if xr_input.is_none() {
+                                let session = engine.xr_session().expect("XR session required");
+                                xr_input = Some(XrInput::new(&xr_instance, &session, &mut engine));
+                            }
                             mark!("XR mark: game setup done");
                             state = AppState::Running {
                                 rendered_frames: 0,
@@ -970,6 +1384,14 @@ fn android_main(app: AndroidApp) {
                         xr::SessionState::STOPPING => {
                             if xr_debug {
                                 info!("XR state STOPPING -> end session");
+                            }
+                            // Clean up laser objects before ending
+                            if let Some(ref mut input) = xr_input {
+                                for obj in input.laser_objects.iter_mut() {
+                                    if let Some(handle) = obj.take() {
+                                        engine.remove_object(handle);
+                                    }
+                                }
                             }
                             engine.end_xr();
                             state = AppState::Idle;
@@ -1011,6 +1433,11 @@ fn android_main(app: AndroidApp) {
                     continue;
                 }
                 frame_start = Instant::now();
+                if let (Some(ref mut input), Some(session)) = (&mut xr_input, engine.xr_session()) {
+                    input.sync(&mut engine, &session, *rendered_frames);
+                    input.update(&mut engine, &mut game.asteroid_field, 0.016);
+                    input.update_laser_objects(&mut engine);
+                }
                 game.asteroid_field.update(&mut engine);
                 game.comet_field.update(&mut engine);
                 engine.update(0.016);

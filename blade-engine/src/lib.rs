@@ -412,6 +412,7 @@ pub struct Engine {
     selected_collider: Option<rapier3d::geometry::ColliderHandle>,
     render_objects: Vec<blade_render::Object>,
     debug: blade_render::DebugConfig,
+    extra_debug_lines: Vec<blade_render::DebugLine>,
     track_hot_reloads: bool,
     workers: Vec<choir::WorkerHandle>,
     choir: Arc<choir::Choir>,
@@ -654,6 +655,7 @@ impl Engine {
             selected_collider: None,
             render_objects: Vec::new(),
             debug: blade_render::DebugConfig::default(),
+            extra_debug_lines: Vec::new(),
             track_hot_reloads: false,
             workers,
             choir,
@@ -1168,11 +1170,17 @@ impl Engine {
                                 raster_config,
                             );
                         }
+                        inner.render_debug_lines(
+                            &mut pass,
+                            &render_camera,
+                            &self.extra_debug_lines,
+                        );
                     }
                 }
             }
         }
 
+        self.extra_debug_lines.clear();
         command_encoder.present(frame);
         self.pacer.end_frame(&self.gpu_context);
         profiling::finish_frame!();
@@ -1210,6 +1218,23 @@ impl Engine {
             .expect("XR session is unavailable")
             .end()
             .unwrap();
+    }
+
+    /// Get the XR session handle for creating action sets, actions, and action spaces.
+    #[cfg(target_os = "android")]
+    pub fn xr_session(&self) -> Option<openxr::Session<openxr::Vulkan>> {
+        self.gpu_context.xr_session()
+    }
+
+    /// Locate an action space (e.g. controller aim) relative to the XR reference space.
+    #[cfg(target_os = "android")]
+    pub fn xr_locate_space(&self, action_space: &openxr::Space) -> Option<openxr::Posef> {
+        self.gpu_context.xr_locate_space(action_space)
+    }
+
+    /// Add debug lines to be rendered this frame (consumed after rendering).
+    pub fn add_debug_lines(&mut self, lines: &[blade_render::DebugLine]) {
+        self.extra_debug_lines.extend_from_slice(lines);
     }
 
     #[profiling::function]
