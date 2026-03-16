@@ -232,6 +232,23 @@ impl Context {
             .as_ref()
             .map(|xr| xr.lock().unwrap().session.clone())
     }
+
+    /// Locate an action space (e.g. controller aim) relative to the XR reference space
+    /// at the last predicted display time.
+    pub fn xr_locate_space(&self, action_space: &xr::Space) -> Option<xr::Posef> {
+        let xr = self.xr.as_ref()?.lock().unwrap();
+        let time = xr.predicted_display_time?;
+        let ref_space = xr.space.as_ref()?;
+        let location = action_space.locate(ref_space, time).ok()?;
+        let flags = location.location_flags;
+        if flags.contains(
+            xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::ORIENTATION_VALID,
+        ) {
+            Some(location.pose)
+        } else {
+            None
+        }
+    }
 }
 
 fn map_timeout(millis: u32) -> u64 {
@@ -667,7 +684,6 @@ impl crate::traits::CommandDevice for Context {
                     let space = xr_state.space.take().expect("XR space is not initialized");
                     let predicted_display_time = xr_state
                         .predicted_display_time
-                        .take()
                         .expect("XR frame timing is not initialized");
                     let rect = xr::Rect2Di {
                         offset: xr::Offset2Di { x: 0, y: 0 },
