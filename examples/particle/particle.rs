@@ -73,7 +73,10 @@ struct DrawData {
 impl System {
     pub fn new(context: &gpu::Context, desc: SystemDesc, sample_count: u32) -> Self {
         let source = std::fs::read_to_string("examples/particle/particle.wgsl").unwrap();
-        let shader = context.create_shader(gpu::ShaderDesc { source: &source });
+        let shader = context.create_shader(gpu::ShaderDesc {
+            source: &source,
+            naga_module: None,
+        });
         let particle_size = shader.get_struct_size("Particle");
 
         let main_layout = <MainData as gpu::ShaderData>::layout();

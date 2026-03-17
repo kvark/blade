@@ -231,6 +231,7 @@ fn dispatch_gpu_test() {
 
     let shader = context.create_shader(gpu::ShaderDesc {
         source: include_str!("shaders/dispatch.wgsl"),
+        naga_module: None,
     });
     let global_layout = DispatchGlobals::layout();
     let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
@@ -277,9 +278,11 @@ fn env_map_gpu_test() {
 
     let shader_prepare = context.create_shader(gpu::ShaderDesc {
         source: include_str!("../blade-render/code/env-prepare.wgsl"),
+        naga_module: None,
     });
     let shader_sample = context.create_shader(gpu::ShaderDesc {
         source: include_str!("shaders/env_map_sample.wgsl"),
+        naga_module: None,
     });
 
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
@@ -536,6 +539,7 @@ fn snapshot_space_sky() {
     // Compile the raster shader and create sky pipeline (no depth attachment)
     let shader = context.create_shader(gpu::ShaderDesc {
         source: include_str!("../blade-render/code/raster.wgsl"),
+        naga_module: None,
     });
     let sky_layout = <SkyTestData as gpu::ShaderData>::layout();
     let mut sky_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {

@@ -91,6 +91,7 @@ impl Example {
 
         let shader = context.create_shader(gpu::ShaderDesc {
             source: include_str!("xr.wgsl"),
+            naga_module: None,
         });
         let data_layout = <Params as gpu::ShaderData>::layout();
         let pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {

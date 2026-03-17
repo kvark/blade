@@ -167,6 +167,7 @@ impl GuiPainter {
     pub fn new(info: blade_graphics::SurfaceInfo, context: &blade_graphics::Context) -> Self {
         let shader = context.create_shader(blade_graphics::ShaderDesc {
             source: SHADER_SOURCE,
+            naga_module: None,
         });
         let globals_layout = <Globals as blade_graphics::ShaderData>::layout();
         let locals_layout = <Locals as blade_graphics::ShaderData>::layout();

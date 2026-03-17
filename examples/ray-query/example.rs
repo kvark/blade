@@ -67,7 +67,10 @@ impl Example {
         );
 
         let source = std::fs::read_to_string("examples/ray-query/shader.wgsl").unwrap();
-        let shader = context.create_shader(gpu::ShaderDesc { source: &source });
+        let shader = context.create_shader(gpu::ShaderDesc {
+            source: &source,
+            naga_module: None,
+        });
         let rt_layout = <ShaderData as gpu::ShaderData>::layout();
         let draw_layout = <DrawData as gpu::ShaderData>::layout();
         let rt_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {

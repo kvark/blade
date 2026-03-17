@@ -68,6 +68,7 @@ impl Example {
         let shader_source = std::fs::read_to_string("examples/bunnymark/shader.wgsl").unwrap();
         let shader = context.create_shader(gpu::ShaderDesc {
             source: &shader_source,
+            naga_module: None,
         });
 
         let pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
