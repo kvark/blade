@@ -151,7 +151,10 @@ impl blade_asset::Baker for Baker {
         let source = str::from_utf8(cooked.data).unwrap();
         let raw = self
             .gpu_context
-            .try_create_shader(blade_graphics::ShaderDesc { source });
+            .try_create_shader(blade_graphics::ShaderDesc {
+                source,
+                naga_module: None,
+            });
         if let Err(e) = raw {
             let _ = fs::write(FAILURE_DUMP_NAME, source);
             log::warn!("Shader compilation failed: {e:?}, source dumped as '{FAILURE_DUMP_NAME}'.")

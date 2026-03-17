@@ -13,15 +13,11 @@ impl From<naga::ShaderStage> for super::ShaderVisibility {
 }
 
 impl super::Context {
-    pub fn try_create_shader(
+    fn validate_module(
         &self,
-        desc: super::ShaderDesc,
-    ) -> Result<super::Shader, &'static str> {
-        let module = naga::front::wgsl::parse_str(desc.source).map_err(|e| {
-            eprintln!("{}", e.emit_to_string_with_path(desc.source, ""));
-            "compilation failed"
-        })?;
-
+        module: &naga::Module,
+        source: &str,
+    ) -> Result<naga::valid::ModuleInfo, &'static str> {
         let device_caps = self.capabilities();
 
         // Bindings are set up at pipeline creation, ignore here
@@ -43,14 +39,27 @@ impl super::Context {
             naga::valid::Capabilities::DUAL_SOURCE_BLENDING,
             device_caps.dual_source_blending,
         );
-        let info = naga::valid::Validator::new(flags, caps)
-            .validate(&module)
+        naga::valid::Validator::new(flags, caps)
+            .validate(module)
             .map_err(|e| {
-                crate::util::emit_annotated_error(&e, "", desc.source);
+                crate::util::emit_annotated_error(&e, "", source);
                 crate::util::print_err(&e);
                 "validation failed"
-            })?;
+            })
+    }
 
+    pub fn try_create_shader(
+        &self,
+        desc: super::ShaderDesc,
+    ) -> Result<super::Shader, &'static str> {
+        let module = match desc.naga_module {
+            Some(module) => module,
+            None => naga::front::wgsl::parse_str(desc.source).map_err(|e| {
+                eprintln!("{}", e.emit_to_string_with_path(desc.source, ""));
+                "compilation failed"
+            })?,
+        };
+        let info = self.validate_module(&module, desc.source)?;
         Ok(super::Shader {
             module,
             info,

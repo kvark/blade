@@ -744,7 +744,12 @@ pub struct VertexFetchState<'a> {
 }
 
 pub struct ShaderDesc<'a> {
+    /// WGSL source code. Used for parsing when `naga_module` is `None`,
+    /// or as debug info (SPIR-V source maps, shader dumps) when a module is provided.
     pub source: &'a str,
+    /// Optional pre-built Naga IR module. When provided, `source` is skipped
+    /// for parsing and only used as debug info (if non-empty).
+    pub naga_module: Option<naga::Module>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
