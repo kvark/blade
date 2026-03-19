@@ -2,8 +2,6 @@
 
 use blade_graphics as gpu;
 
-mod particle;
-
 struct Example {
     command_encoder: gpu::CommandEncoder,
     prev_sync_point: Option<gpu::SyncPoint>,
@@ -11,7 +9,9 @@ struct Example {
     surface: gpu::Surface,
     gui_painter: blade_egui::GuiPainter,
 
-    particle_system: particle::System,
+    particle_pipeline: blade_particle::ParticlePipeline,
+    particle_system: blade_particle::ParticleSystem,
+    time: f32,
 
     sample_count: u32,
     msaa_texture: Option<gpu::Texture>,
@@ -137,31 +137,51 @@ impl Example {
             .unwrap();
 
         let gui_painter = blade_egui::GuiPainter::new(surface_info, &context);
-        let particle_system = particle::System::new(
-            &context,
-            particle::SystemDesc {
-                name: "particle system",
-                capacity: 100_000,
-                draw_format: surface_info.format,
-            },
-            sample_count,
-        );
 
-        let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        let particle_pipeline = blade_particle::ParticlePipeline::new(
+            &context,
+            blade_particle::PipelineDesc {
+                name: "particle",
+                draw_format: surface_info.format,
+                sample_count,
+            },
+        );
+        let effect = blade_particle::ParticleEffect {
+            capacity: 100_000,
+            emitter: blade_particle::Emitter {
+                rate: 6400.0,
+                burst_count: 0,
+                shape: blade_particle::EmitterShape::Point,
+                cone_angle: 0.5,
+            },
+            particle: blade_particle::ParticleConfig {
+                life: [1.0, 5.0],
+                speed: [50.0, 250.0],
+                scale: [1.0, 15.0],
+                color: blade_particle::ColorConfig::Palette(vec![
+                    [255, 100, 50, 255],
+                    [50, 200, 255, 255],
+                    [255, 220, 60, 255],
+                    [100, 255, 120, 255],
+                ]),
+            },
+        };
+        let particle_system = particle_pipeline.create_system(&context, "particle system", &effect);
+
+        let command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
         });
-        command_encoder.start();
-        particle_system.reset(&mut command_encoder);
-        let sync_point = context.submit(&mut command_encoder);
 
         Self {
             command_encoder,
-            prev_sync_point: Some(sync_point),
+            prev_sync_point: None,
             context,
             surface,
             gui_painter,
+            particle_pipeline,
             particle_system,
+            time: 0.0,
             sample_count,
             msaa_texture: None,
             msaa_view: None,
@@ -177,6 +197,7 @@ impl Example {
             .destroy_command_encoder(&mut self.command_encoder);
         self.gui_painter.destroy(&self.context);
         self.particle_system.destroy(&self.context);
+        self.particle_pipeline.destroy(&self.context);
         self.context.destroy_surface(&mut self.surface);
 
         if let Some(msaa_view) = self.msaa_view.take() {
@@ -184,6 +205,23 @@ impl Example {
         }
         if let Some(msaa_texture) = self.msaa_texture.take() {
             self.context.destroy_texture(msaa_texture);
+        }
+    }
+
+    fn make_camera(&self, size: (u32, u32)) -> blade_particle::CameraParams {
+        // Top-down orthographic-like view: camera at +Y looking down -Y.
+        // fov is chosen so the visible area matches ~1000 units at the origin.
+        let distance = 1000.0;
+        let fov_y = 2.0 * (500.0_f32 / distance).atan();
+        let aspect = size.0 as f32 / size.1 as f32;
+        let fov_x = 2.0 * ((fov_y * 0.5).tan() * aspect).atan();
+        blade_particle::CameraParams {
+            position: [0.0, 0.0, distance],
+            depth: distance * 2.0,
+            // Identity quaternion — camera looks along -Z, toward the origin
+            orientation: [0.0, 0.0, 0.0, 1.0],
+            fov: [fov_x, fov_y],
+            target_size: [size.0, size.1],
         }
     }
 
@@ -208,7 +246,21 @@ impl Example {
 
         self.gui_painter
             .update_textures(&mut self.command_encoder, gui_textures, &self.context);
-        self.particle_system.update(&mut self.command_encoder);
+
+        // Orbit the emitter and rotate its axis
+        self.time += 0.01;
+        let orbit_radius = 60.0;
+        self.particle_system.origin = [
+            orbit_radius * self.time.cos(),
+            orbit_radius * self.time.sin(),
+            0.0,
+        ];
+        let spray_angle = self.time * 3.0;
+        self.particle_system.axis = [spray_angle.cos(), spray_angle.sin(), 0.0];
+        self.particle_system
+            .update(&self.particle_pipeline, &mut self.command_encoder, 0.01);
+
+        let camera = self.make_camera(screen_desc.physical_size);
 
         if self.sample_count <= 1 && !self.export_image {
             if let mut pass = self.command_encoder.render(
@@ -223,7 +275,7 @@ impl Example {
                 },
             ) {
                 self.particle_system
-                    .draw(&mut pass, screen_desc.physical_size);
+                    .draw(&self.particle_pipeline, &mut pass, &camera);
                 self.gui_painter
                     .paint(&mut pass, gui_primitives, screen_desc, &self.context);
             }
@@ -244,7 +296,7 @@ impl Example {
                 },
             ) {
                 self.particle_system
-                    .draw(&mut pass, screen_desc.physical_size);
+                    .draw(&self.particle_pipeline, &mut pass, &camera);
             }
             if let mut pass = self.command_encoder.render(
                 "draw ui",
@@ -274,7 +326,14 @@ impl Example {
 
     fn add_gui(&mut self, ui: &mut egui::Ui) {
         ui.heading("Particle System");
-        self.particle_system.add_gui(ui);
+        let p = &mut self.particle_system.effect.particle;
+        ui.add(egui::Slider::new(&mut p.life[1], 0.1..=20.0).text("life"));
+        ui.add(egui::Slider::new(&mut p.speed[1], 1.0..=500.0).text("speed"));
+        ui.add(egui::Slider::new(&mut p.scale[1], 0.1..=70.0).text("scale"));
+        ui.add(
+            egui::Slider::new(&mut self.particle_system.effect.emitter.rate, 0.0..=20000.0)
+                .text("rate"),
+        );
 
         ui.add_space(5.0);
         ui.heading("Rendering Settings");
@@ -295,22 +354,22 @@ impl Example {
                             self.context.wait_for(&sp, !0);
                         }
 
-                        let old_params = self.particle_system.params;
+                        let old_effect = self.particle_system.effect.clone();
                         self.particle_system.destroy(&self.context);
-                        self.particle_system = particle::System::new(
+                        self.particle_pipeline.destroy(&self.context);
+                        self.particle_pipeline = blade_particle::ParticlePipeline::new(
                             &self.context,
-                            particle::SystemDesc {
-                                name: "particle system",
-                                capacity: 100_000,
+                            blade_particle::PipelineDesc {
+                                name: "particle",
                                 draw_format: self.surface.info().format,
+                                sample_count: self.sample_count,
                             },
-                            self.sample_count,
                         );
-                        self.particle_system.params = old_params;
-                        self.command_encoder.start();
-                        self.particle_system.reset(&mut self.command_encoder);
-                        let sp = self.context.submit(&mut self.command_encoder);
-                        self.context.wait_for(&sp, !0);
+                        self.particle_system = self.particle_pipeline.create_system(
+                            &self.context,
+                            "particle system",
+                            &old_effect,
+                        );
 
                         if let Some(msaa_view) = self.msaa_view.take() {
                             self.context.destroy_texture_view(msaa_view);

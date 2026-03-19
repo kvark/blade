@@ -878,6 +878,7 @@ impl XrInput {
         &mut self,
         engine: &mut blade_engine::Engine,
         asteroid_field: &mut AsteroidField,
+        explosion_ps: usize,
         dt: f32,
     ) {
         // Update existing hit timers; remove stale hits (asteroid may have been recycled)
@@ -901,6 +902,8 @@ impl XrInput {
                     .position(|a| a.object_handle == hit.object_handle)
                 {
                     let asteroid = asteroid_field.asteroids.swap_remove(idx);
+                    let pos = engine.get_object_position(asteroid.object_handle);
+                    engine.particle_burst(explosion_ps, 80, [pos.x, pos.y, pos.z]);
                     engine.remove_object(asteroid.object_handle);
                     asteroid_field.spawn_asteroid(engine, false);
                 }
@@ -1046,6 +1049,7 @@ enum Visibility {
 struct GameState {
     asteroid_field: AsteroidField,
     comet_field: CometField,
+    explosion_ps: usize,
 }
 
 enum AppState {
@@ -1115,9 +1119,32 @@ fn setup_game(engine: &mut blade_engine::Engine) -> GameState {
 
     let asteroid_field = AsteroidField::new(engine);
     let comet_field = CometField::new(engine);
+
+    let explosion_effect = blade_particle::ParticleEffect {
+        capacity: 2000,
+        emitter: blade_particle::Emitter {
+            rate: 0.0,
+            burst_count: 0,
+            shape: blade_particle::EmitterShape::Sphere { radius: 0.3 },
+            cone_angle: std::f32::consts::PI,
+        },
+        particle: blade_particle::ParticleConfig {
+            life: [0.3, 1.0],
+            speed: [3.0, 12.0],
+            scale: [0.03, 0.1],
+            color: blade_particle::ColorConfig::Palette(vec![
+                [255, 200, 50, 255],
+                [255, 120, 20, 255],
+                [200, 60, 10, 255],
+            ]),
+        },
+    };
+    let explosion_ps = engine.create_particle_system("explosions", &explosion_effect);
+
     GameState {
         asteroid_field,
         comet_field,
+        explosion_ps,
     }
 }
 
@@ -1435,7 +1462,12 @@ fn android_main(app: AndroidApp) {
                 frame_start = Instant::now();
                 if let (Some(ref mut input), Some(session)) = (&mut xr_input, engine.xr_session()) {
                     input.sync(&mut engine, &session, *rendered_frames);
-                    input.update(&mut engine, &mut game.asteroid_field, 0.016);
+                    input.update(
+                        &mut engine,
+                        &mut game.asteroid_field,
+                        game.explosion_ps,
+                        0.016,
+                    );
                     input.update_laser_objects(&mut engine);
                 }
                 game.asteroid_field.update(&mut engine);

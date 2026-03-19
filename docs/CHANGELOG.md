@@ -1,12 +1,14 @@
 Changelog for *Blade* project
 
+## blade-particle-0.1 (TBD)
+
 ## blade-engine-0.1 (TBD)
 
 - moved the engine from "blade" itself, reserving it for future use
 - choice between ray-tracing and rasterization rendering pipelines
 - first-class XR support
 
-## blade-graphicis-0.8 (TBD)
+## blade-graphics-0.8 (TBD)
 
 - graphics
   - OpenXR / Android support (tested on Quest 3S)

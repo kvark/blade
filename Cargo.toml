@@ -7,6 +7,7 @@ members = [
     "blade-graphics",
     "blade-helpers",
     "blade-macros",
+    "blade-particle",
     "blade-render",
     "blade-util",
     "run-wasm",
@@ -57,6 +58,7 @@ blade-helpers = { path = "blade-helpers" }
 blade-egui = { path = "blade-egui" }
 blade-asset = { path = "blade-asset" }
 blade-engine = { path = "blade-engine" }
+blade-particle = { path = "blade-particle" }
 blade-render = { path = "blade-render" }
 blade-macros = { path = "blade-macros" }
 bytemuck = { workspace = true }

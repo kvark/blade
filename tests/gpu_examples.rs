@@ -12,8 +12,6 @@ use std::slice;
 
 #[path = "../examples/bunnymark/example.rs"]
 mod bunnymark_example;
-#[path = "../examples/particle/particle.rs"]
-mod particle_system;
 #[cfg(not(gles))]
 #[path = "../examples/ray-query/example.rs"]
 mod ray_query_example;
@@ -444,26 +442,51 @@ fn snapshot_particle() {
     let format = gpu::TextureFormat::Rgba8Unorm;
 
     let target = snapshot::OffscreenTarget::new(&context, size, format);
-    let mut particle_system = particle_system::System::new(
+    let mut pipeline = blade_particle::ParticlePipeline::new(
         &context,
-        particle_system::SystemDesc {
+        blade_particle::PipelineDesc {
             name: "snapshot particle",
-            capacity: 10_000,
             draw_format: format,
+            sample_count: 1,
         },
-        1, // no MSAA for testing
     );
+    let effect = blade_particle::ParticleEffect {
+        capacity: 10_000,
+        emitter: blade_particle::Emitter {
+            rate: 6400.0,
+            burst_count: 0,
+            shape: blade_particle::EmitterShape::Point,
+            cone_angle: std::f32::consts::PI,
+        },
+        particle: blade_particle::ParticleConfig {
+            life: [1.0, 5.0],
+            speed: [50.0, 250.0],
+            scale: [1.0, 15.0],
+            color: blade_particle::ColorConfig::Solid([255, 255, 255, 255]),
+        },
+    };
+    let mut particle_system = pipeline.create_system(&context, "snapshot particle", &effect);
 
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "snapshot-particle",
         buffer_count: 1,
     });
     command_encoder.start();
-    particle_system.reset(&mut command_encoder);
     // Run several update cycles to emit and move particles
     for _ in 0..20 {
-        particle_system.update(&mut command_encoder);
+        particle_system.update(&pipeline, &mut command_encoder, 0.01);
     }
+
+    let camera = blade_particle::CameraParams {
+        position: [0.0, 0.0, 1000.0],
+        depth: 2000.0,
+        orientation: [0.0, 0.0, 0.0, 1.0],
+        fov: [
+            2.0 * (500.0_f32 / 1000.0 * size.width as f32 / size.height as f32).atan(),
+            2.0 * (500.0_f32 / 1000.0).atan(),
+        ],
+        target_size: [size.width, size.height],
+    };
 
     command_encoder.init_texture(target.texture);
     if let mut pass = command_encoder.render(
@@ -477,13 +500,14 @@ fn snapshot_particle() {
             depth_stencil: None,
         },
     ) {
-        particle_system.draw(&mut pass, (size.width, size.height));
+        particle_system.draw(&pipeline, &mut pass, &camera);
     }
 
     let pixels = target.read_pixels(&context, &mut command_encoder);
     snapshot::check("particle", &pixels, size);
 
     particle_system.destroy(&context);
+    pipeline.destroy(&context);
     context.destroy_command_encoder(&mut command_encoder);
     target.destroy(&context);
 }

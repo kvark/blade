@@ -12,6 +12,7 @@ blade-asset = { version = "0.2", path = "../blade-asset" }
 blade-egui = { version = "0.7", path = "../blade-egui" }
 blade-graphics = { version = "0.7", path = "../blade-graphics" }
 blade-helpers = { version = "0.1", path = "../blade-helpers" }
+blade-particle = { version = "0.1", path = "../blade-particle" }
 blade-render = { version = "0.4", path = "../blade-render" }
 base64 = { workspace = true }
 choir = { workspace = true }
