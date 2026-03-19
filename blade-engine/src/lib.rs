@@ -20,6 +20,8 @@ use std::{ops, path::PathBuf, sync::Arc};
 pub mod config;
 mod trimesh;
 
+pub use blade_particle;
+
 const ZERO_V3: mint::Vector3<f32> = mint::Vector3 {
     x: 0.0,
     y: 0.0,
@@ -413,6 +415,9 @@ pub struct Engine {
     render_objects: Vec<blade_render::Object>,
     debug: blade_render::DebugConfig,
     extra_debug_lines: Vec<blade_render::DebugLine>,
+    particle_pipeline: Option<blade_particle::ParticlePipeline>,
+    particle_systems: slab::Slab<blade_particle::ParticleSystem>,
+    surface_info: gpu::SurfaceInfo,
     track_hot_reloads: bool,
     workers: Vec<choir::WorkerHandle>,
     choir: Arc<choir::Choir>,
@@ -656,6 +661,9 @@ impl Engine {
             render_objects: Vec::new(),
             debug: blade_render::DebugConfig::default(),
             extra_debug_lines: Vec::new(),
+            particle_pipeline: None,
+            particle_systems: slab::Slab::new(),
+            surface_info,
             track_hot_reloads: false,
             workers,
             choir,
@@ -688,6 +696,12 @@ impl Engine {
             Renderer::Rasterizer { ref mut inner, .. } => {
                 inner.destroy(&self.gpu_context);
             }
+        }
+        for mut ps in self.particle_systems.drain() {
+            ps.destroy(&self.gpu_context);
+        }
+        if let Some(mut pp) = self.particle_pipeline.take() {
+            pp.destroy(&self.gpu_context);
         }
         self.asset_hub.destroy();
     }
@@ -1050,6 +1064,13 @@ impl Engine {
             );
         }
 
+        // Update particle systems (compute passes)
+        if let Some(ref pipeline) = self.particle_pipeline {
+            for (_, system) in self.particle_systems.iter_mut() {
+                system.update(pipeline, command_encoder, 0.016);
+            }
+        }
+
         command_encoder.init_texture(frame.texture());
 
         match self.renderer {
@@ -1175,6 +1196,23 @@ impl Engine {
                             &render_camera,
                             &self.extra_debug_lines,
                         );
+                        // Draw particle systems
+                        if let Some(ref pipeline) = self.particle_pipeline {
+                            let fov_x = 2.0
+                                * ((render_camera.fov_y * 0.5).tan() * target_size.width as f32
+                                    / target_size.height as f32)
+                                    .atan();
+                            let particle_camera = blade_particle::CameraParams {
+                                position: render_camera.pos.into(),
+                                depth: render_camera.depth,
+                                orientation: render_camera.rot.into(),
+                                fov: [fov_x, render_camera.fov_y],
+                                target_size: [target_size.width, target_size.height],
+                            };
+                            for (_, system) in self.particle_systems.iter() {
+                                system.draw(pipeline, &mut pass, &particle_camera);
+                            }
+                        }
                     }
                 }
             }
@@ -1235,6 +1273,50 @@ impl Engine {
     /// Add debug lines to be rendered this frame (consumed after rendering).
     pub fn add_debug_lines(&mut self, lines: &[blade_render::DebugLine]) {
         self.extra_debug_lines.extend_from_slice(lines);
+    }
+
+    /// Create a particle system from an effect definition.
+    /// Returns a handle that can be used to trigger bursts or remove the system.
+    pub fn create_particle_system(
+        &mut self,
+        name: &str,
+        effect: &blade_particle::ParticleEffect,
+    ) -> usize {
+        let pipeline = self.particle_pipeline.get_or_insert_with(|| {
+            blade_particle::ParticlePipeline::new(
+                &self.gpu_context,
+                blade_particle::PipelineDesc {
+                    name: "particles",
+                    draw_format: self.surface_info.format,
+                    sample_count: 1,
+                },
+            )
+        });
+        let system = pipeline.create_system(&self.gpu_context, name, effect);
+        self.particle_systems.insert(system)
+    }
+
+    /// Trigger a burst of particles at a world position.
+    pub fn particle_burst(&mut self, handle: usize, count: u32, position: [f32; 3]) {
+        if let Some(system) = self.particle_systems.get_mut(handle) {
+            system.burst(count, position);
+        }
+    }
+
+    /// Remove a particle system and free its GPU resources.
+    pub fn remove_particle_system(&mut self, handle: usize) {
+        if self.particle_systems.contains(handle) {
+            let mut system = self.particle_systems.remove(handle);
+            system.destroy(&self.gpu_context);
+        }
+    }
+
+    /// Get a mutable reference to a particle system.
+    pub fn particle_system_mut(
+        &mut self,
+        handle: usize,
+    ) -> Option<&mut blade_particle::ParticleSystem> {
+        self.particle_systems.get_mut(handle)
     }
 
     #[profiling::function]
