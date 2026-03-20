@@ -39,6 +39,10 @@ impl super::Context {
             naga::valid::Capabilities::DUAL_SOURCE_BLENDING,
             device_caps.dual_source_blending,
         );
+        caps.set(
+            naga::valid::Capabilities::COOPERATIVE_MATRIX,
+            device_caps.cooperative_matrix,
+        );
         naga::valid::Validator::new(flags, caps)
             .validate(module)
             .map_err(|e| {
