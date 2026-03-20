@@ -534,7 +534,9 @@ impl Context {
                 .filter(|&count| device.supportsTextureSampleCount(count as _))
                 .sum(),
             dual_source_blending: true,
-            cooperative_matrix: false,
+            cooperative_matrix: device.supportsFamily(metal::MTLGPUFamily::Apple7)
+                || device.supportsFamily(metal::MTLGPUFamily::Mac2)
+                || device.supportsFamily(metal::MTLGPUFamily::Metal3),
         }
     }
 

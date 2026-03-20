@@ -290,10 +290,7 @@ unsafe fn inspect_adapter(
         })
     };
 
-    let cooperative_matrix = if !desc.cooperative_matrix {
-        log::info!("Cooperative matrix disabled by configuration");
-        false
-    } else if !supported_extensions.contains(&vk::KHR_COOPERATIVE_MATRIX_NAME) {
+    let cooperative_matrix = if !supported_extensions.contains(&vk::KHR_COOPERATIVE_MATRIX_NAME) {
         log::info!("No cooperative matrix extension support");
         false
     } else if cooperative_matrix_features.cooperative_matrix == vk::FALSE {

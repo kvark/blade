@@ -14,6 +14,7 @@ Changelog for *Blade* project
   - OpenXR / Android support (tested on Quest 3S)
   - option to disable ray tracing initialization
   - separate `Capabilities` flag for binding arrays, including TLAS arrays
+  - cooperative matrix operations support (auto-detected via `Capabilities`)
   - egl: use DMA-BUF sharing with different displays for presentation
   - vk: uniform buffer fallback for buggy Qualcomm devices
 
