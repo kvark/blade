@@ -135,8 +135,8 @@ pub struct ContextDesc {
     pub capture: bool,
     /// Enable GAPI overlay.
     pub overlay: bool,
-    /// Force selection of a specific Device ID, unless 0.
-    pub device_id: u32,
+    /// Force selection of a specific Device ID.
+    pub device_id: Option<u32>,
 }
 
 #[derive(Debug)]

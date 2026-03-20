@@ -446,7 +446,7 @@ impl Context {
         if desc.overlay {
             std::env::set_var("MTL_HUD_ENABLED", "1");
         }
-        if desc.device_id != 0 {
+        if desc.device_id.is_some() {
             log::warn!("Unable to filter devices by ID");
         }
 
