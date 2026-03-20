@@ -528,9 +528,7 @@ impl Engine {
             ray_tracing: matches!(config.render_backend, config::RenderBackend::RayTracer),
             validation: cfg!(debug_assertions),
             timing: true,
-            capture: false,
-            overlay: false,
-            device_id: 0,
+            ..Default::default()
         };
         let gpu_context = Arc::new(unsafe { gpu::Context::init(context_desc).unwrap() });
 

@@ -271,6 +271,7 @@ pub struct Context {
     min_uniform_buffer_offset_alignment: u64,
     sample_count_flags: vk::SampleCountFlags,
     dual_source_blending: bool,
+    cooperative_matrix: bool,
     binding_array: bool,
     instance: Instance,
     entry: ash::Entry,

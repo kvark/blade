@@ -55,13 +55,9 @@ impl winit::application::ApplicationHandler for App {
         let context = unsafe {
             gpu::Context::init(gpu::ContextDesc {
                 presentation: true,
-                xr: None,
-                ray_tracing: false,
                 validation: cfg!(debug_assertions),
-                timing: false,
-                capture: false,
                 overlay: true,
-                device_id: 0,
+                ..Default::default()
             })
             .unwrap()
         };

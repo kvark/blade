@@ -64,6 +64,7 @@ struct AdapterCapabilities {
     external_memory: bool,
     timing: bool,
     dual_source_blending: bool,
+    cooperative_matrix: bool,
     bugs: SystemBugs,
 }
 
@@ -163,6 +164,8 @@ unsafe fn inspect_adapter(
     let mut acceleration_structure_features =
         vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
     let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
+    let mut cooperative_matrix_features = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default();
+    let mut vulkan_memory_model_features = vk::PhysicalDeviceVulkanMemoryModelFeatures::default();
     let mut features2_khr = vk::PhysicalDeviceFeatures2::default()
         .push_next(&mut inline_uniform_block_features)
         .push_next(&mut timeline_semaphore_features)
@@ -170,7 +173,9 @@ unsafe fn inspect_adapter(
         .push_next(&mut descriptor_indexing_features)
         .push_next(&mut buffer_device_address_features)
         .push_next(&mut acceleration_structure_features)
-        .push_next(&mut ray_query_features);
+        .push_next(&mut ray_query_features)
+        .push_next(&mut cooperative_matrix_features)
+        .push_next(&mut vulkan_memory_model_features);
     instance
         .get_physical_device_properties2
         .get_physical_device_features2(phd, &mut features2_khr);
@@ -285,6 +290,29 @@ unsafe fn inspect_adapter(
         })
     };
 
+    let cooperative_matrix = if !desc.cooperative_matrix {
+        log::info!("Cooperative matrix disabled by configuration");
+        false
+    } else if !supported_extensions.contains(&vk::KHR_COOPERATIVE_MATRIX_NAME) {
+        log::info!("No cooperative matrix extension support");
+        false
+    } else if cooperative_matrix_features.cooperative_matrix == vk::FALSE {
+        log::info!(
+            "No cooperative matrix feature support. Features = {:?}",
+            cooperative_matrix_features
+        );
+        false
+    } else if vulkan_memory_model_features.vulkan_memory_model == vk::FALSE {
+        log::info!(
+            "No Vulkan memory model support (required for cooperative matrix). Features = {:?}",
+            vulkan_memory_model_features
+        );
+        false
+    } else {
+        log::info!("Cooperative matrix is supported");
+        true
+    };
+
     let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
     let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
@@ -318,6 +346,7 @@ unsafe fn inspect_adapter(
         external_memory,
         timing,
         dual_source_blending,
+        cooperative_matrix,
         bugs,
     })
 }
@@ -592,6 +621,12 @@ impl super::Context {
                     vk::KHR_EXTERNAL_MEMORY_FD_NAME
                 });
             }
+            if capabilities.cooperative_matrix {
+                device_extensions.push(vk::KHR_COOPERATIVE_MATRIX_NAME);
+                if capabilities.api_version < vk::API_VERSION_1_2 {
+                    device_extensions.push(vk::KHR_VULKAN_MEMORY_MODEL_NAME);
+                }
+            }
 
             let str_pointers = device_extensions
                 .iter()
@@ -653,6 +688,22 @@ impl super::Context {
                 device_create_info = device_create_info
                     .push_next(&mut khr_acceleration_structure)
                     .push_next(&mut khr_ray_query);
+            }
+
+            let mut khr_cooperative_matrix;
+            let mut vulkan_memory_model;
+            if capabilities.cooperative_matrix {
+                khr_cooperative_matrix = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR {
+                    cooperative_matrix: vk::TRUE,
+                    ..Default::default()
+                };
+                vulkan_memory_model = vk::PhysicalDeviceVulkanMemoryModelFeatures {
+                    vulkan_memory_model: vk::TRUE,
+                    ..Default::default()
+                };
+                device_create_info = device_create_info
+                    .push_next(&mut khr_cooperative_matrix)
+                    .push_next(&mut vulkan_memory_model);
             }
 
             let mut core_features = vk::PhysicalDeviceFeatures::default();
@@ -952,6 +1003,7 @@ impl super::Context {
                     .limits
                     .framebuffer_depth_sample_counts,
             dual_source_blending: capabilities.dual_source_blending,
+            cooperative_matrix: capabilities.cooperative_matrix,
             binding_array: capabilities.binding_array,
             instance,
             entry,
@@ -980,6 +1032,7 @@ impl super::Context {
             },
             sample_count_mask: self.sample_count_flags.as_raw(),
             dual_source_blending: self.dual_source_blending,
+            cooperative_matrix: self.cooperative_matrix,
         }
     }
 
