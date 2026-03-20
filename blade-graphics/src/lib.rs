@@ -126,8 +126,6 @@ pub struct ContextDesc {
     pub xr: Option<XrDesc>,
     /// Enable ray tracing support (acceleration structures and ray queries).
     pub ray_tracing: bool,
-    /// Enable cooperative matrix operations support.
-    pub cooperative_matrix: bool,
     /// Enable validation of the GAPI, shaders,
     /// and insert crash markers into command buffers.
     pub validation: bool,
