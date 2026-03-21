@@ -18,6 +18,7 @@ base64 = { workspace = true }
 choir = { workspace = true }
 colorsys = "0.6"
 egui = { workspace = true }
+glam = { workspace = true }
 gltf = { workspace = true }
 log = { workspace = true }
 mint = { workspace = true, features = ["serde"] }

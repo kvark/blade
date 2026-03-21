@@ -143,6 +143,7 @@ impl Example {
             blade_particle::PipelineDesc {
                 name: "particle",
                 draw_format: surface_info.format,
+                depth_format: None,
                 sample_count,
             },
         );
@@ -209,19 +210,21 @@ impl Example {
     }
 
     fn make_camera(&self, size: (u32, u32)) -> blade_particle::CameraParams {
-        // Top-down orthographic-like view: camera at +Y looking down -Y.
-        // fov is chosen so the visible area matches ~1000 units at the origin.
-        let distance = 1000.0;
+        // Camera at +Z looking toward origin along -Z.
+        let distance = 1000.0_f32;
         let fov_y = 2.0 * (500.0_f32 / distance).atan();
-        let aspect = size.0 as f32 / size.1 as f32;
-        let fov_x = 2.0 * ((fov_y * 0.5).tan() * aspect).atan();
+        let aspect = size.0 as f32 / size.1.max(1) as f32;
+        let near = 0.01_f32;
+        let far = distance * 2.0;
+        let pos = glam::Vec3::new(0.0, 0.0, distance);
+        let view = glam::Mat4::look_at_rh(pos, glam::Vec3::ZERO, glam::Vec3::Y);
+        let proj = glam::Mat4::perspective_rh(fov_y, aspect, near, far);
+        let view_proj = proj * view;
+        // Camera looks along -Z, so right=+X, up=+Y (identity orientation)
         blade_particle::CameraParams {
-            position: [0.0, 0.0, distance],
-            depth: distance * 2.0,
-            // Identity quaternion — camera looks along -Z, toward the origin
-            orientation: [0.0, 0.0, 0.0, 1.0],
-            fov: [fov_x, fov_y],
-            target_size: [size.0, size.1],
+            view_proj: view_proj.to_cols_array(),
+            camera_right: [1.0, 0.0, 0.0, 0.0],
+            camera_up: [0.0, 1.0, 0.0, 0.0],
         }
     }
 
@@ -362,6 +365,7 @@ impl Example {
                             blade_particle::PipelineDesc {
                                 name: "particle",
                                 draw_format: self.surface.info().format,
+                                depth_format: None,
                                 sample_count: self.sample_count,
                             },
                         );

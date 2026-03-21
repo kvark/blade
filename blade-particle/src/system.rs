@@ -51,6 +51,7 @@ struct DrawData {
 pub struct PipelineDesc<'a> {
     pub name: &'a str,
     pub draw_format: gpu::TextureFormat,
+    pub depth_format: Option<gpu::TextureFormat>,
     pub sample_count: u32,
 }
 
@@ -109,7 +110,13 @@ impl ParticlePipeline {
                 blend: Some(gpu::BlendState::ALPHA_BLENDING),
                 write_mask: gpu::ColorWrites::default(),
             }],
-            depth_stencil: None,
+            depth_stencil: desc.depth_format.map(|format| gpu::DepthStencilState {
+                format,
+                depth_write_enabled: false,
+                depth_compare: gpu::CompareFunction::LessEqual,
+                stencil: gpu::StencilState::default(),
+                bias: gpu::DepthBiasState::default(),
+            }),
             multisample_state: gpu::MultisampleState {
                 sample_count: desc.sample_count,
                 ..Default::default()

@@ -183,6 +183,15 @@ impl Default for JointDesc {
     }
 }
 
+/// A contact event between two physics objects.
+#[derive(Clone, Debug)]
+pub struct ContactEvent {
+    pub object_a: ObjectHandle,
+    pub object_b: ObjectHandle,
+    /// World-space contact point (average of contact manifold points).
+    pub position: mint::Vector3<f32>,
+}
+
 const MAX_DEPTH: f32 = 1e9;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
@@ -415,6 +424,7 @@ pub struct Engine {
     render_objects: Vec<blade_render::Object>,
     debug: blade_render::DebugConfig,
     extra_debug_lines: Vec<blade_render::DebugLine>,
+    contact_events: Vec<ContactEvent>,
     particle_pipeline: Option<blade_particle::ParticlePipeline>,
     particle_systems: slab::Slab<blade_particle::ParticleSystem>,
     surface_info: gpu::SurfaceInfo,
@@ -659,6 +669,7 @@ impl Engine {
             render_objects: Vec::new(),
             debug: blade_render::DebugConfig::default(),
             extra_debug_lines: Vec::new(),
+            contact_events: Vec::new(),
             particle_pipeline: None,
             particle_systems: slab::Slab::new(),
             surface_info,
@@ -712,6 +723,62 @@ impl Engine {
             self.physics.step();
             self.time_ahead -= self.physics.integration_params.dt;
         }
+        // Collect contact events from the narrow phase
+        self.contact_events.clear();
+        for pair in self.physics.narrow_phase.contact_pairs() {
+            if !pair.has_any_active_contact {
+                continue;
+            }
+            // Map collider → rigid body → ObjectHandle via user_data
+            let (rb_a, object_a) = match self.physics.colliders.get(pair.collider1) {
+                Some(c) => match c.parent().and_then(|rb| self.physics.rigid_bodies.get(rb)) {
+                    Some(rb) => (rb, ObjectHandle(rb.user_data as usize)),
+                    None => continue,
+                },
+                None => continue,
+            };
+            let object_b = match self.physics.colliders.get(pair.collider2) {
+                Some(c) => match c.parent().and_then(|rb| self.physics.rigid_bodies.get(rb)) {
+                    Some(rb) => ObjectHandle(rb.user_data as usize),
+                    None => continue,
+                },
+                None => continue,
+            };
+            // Average contact point position in world space.
+            // local_p1 is in collider1's rigid body local frame.
+            let rb_pos_a = *rb_a.position();
+            let mut avg_pos = nalgebra::Vector3::zeros();
+            let mut count = 0u32;
+            for manifold in pair.manifolds.iter() {
+                for pt in manifold.contacts() {
+                    let local_pt = match manifold.subshape_pos1 {
+                        Some(iso) => iso.transform_point(&pt.local_p1),
+                        None => pt.local_p1,
+                    };
+                    let world_pt = rb_pos_a.transform_point(&local_pt);
+                    avg_pos += world_pt.coords;
+                    count += 1;
+                }
+            }
+            if count == 0 {
+                continue;
+            }
+            avg_pos /= count as f32;
+            self.contact_events.push(ContactEvent {
+                object_a,
+                object_b,
+                position: mint::Vector3 {
+                    x: avg_pos.x,
+                    y: avg_pos.y,
+                    z: avg_pos.z,
+                },
+            });
+        }
+    }
+
+    /// Drain contact events from the last physics update.
+    pub fn drain_contacts(&mut self) -> impl Iterator<Item = ContactEvent> + '_ {
+        self.contact_events.drain(..)
     }
 
     /// Override rasterizer lighting/material configuration.
@@ -1196,17 +1263,8 @@ impl Engine {
                         );
                         // Draw particle systems
                         if let Some(ref pipeline) = self.particle_pipeline {
-                            let fov_x = 2.0
-                                * ((render_camera.fov_y * 0.5).tan() * target_size.width as f32
-                                    / target_size.height as f32)
-                                    .atan();
-                            let particle_camera = blade_particle::CameraParams {
-                                position: render_camera.pos.into(),
-                                depth: render_camera.depth,
-                                orientation: render_camera.rot.into(),
-                                fov: [fov_x, render_camera.fov_y],
-                                target_size: [target_size.width, target_size.height],
-                            };
+                            let particle_camera =
+                                Self::make_particle_camera(&render_camera, target_size);
                             for (_, system) in self.particle_systems.iter() {
                                 system.draw(pipeline, &mut pass, &particle_camera);
                             }
@@ -1273,6 +1331,48 @@ impl Engine {
         self.extra_debug_lines.extend_from_slice(lines);
     }
 
+    fn make_particle_camera(
+        camera: &blade_render::Camera,
+        target_size: gpu::Extent,
+    ) -> blade_particle::CameraParams {
+        let pos = glam::Vec3::from(camera.pos);
+        let rot = glam::Quat::from(camera.rot);
+        let view = glam::Mat4::from_rotation_translation(rot, pos).inverse();
+        let near = 0.01f32;
+        let far = camera.depth;
+        let proj = if let Some(fov) = camera.fov {
+            let left = -fov.left.tan() * near;
+            let right = fov.right.tan() * near;
+            let bottom = -fov.down.tan() * near;
+            let top = fov.up.tan() * near;
+            let w = right - left;
+            let h = top - bottom;
+            glam::Mat4::from_cols(
+                glam::Vec4::new(2.0 * near / w, 0.0, 0.0, 0.0),
+                glam::Vec4::new(0.0, 2.0 * near / h, 0.0, 0.0),
+                glam::Vec4::new(
+                    (right + left) / w,
+                    (top + bottom) / h,
+                    far / (near - far),
+                    -1.0,
+                ),
+                glam::Vec4::new(0.0, 0.0, far * near / (near - far), 0.0),
+            )
+        } else {
+            let aspect = target_size.width as f32 / target_size.height.max(1) as f32;
+            glam::Mat4::perspective_rh(camera.fov_y, aspect, near, far)
+        };
+        let view_proj = proj * view;
+        // Camera right and up in world space for billboarding
+        let right = rot * glam::Vec3::X;
+        let up = rot * glam::Vec3::Y;
+        blade_particle::CameraParams {
+            view_proj: view_proj.to_cols_array(),
+            camera_right: [right.x, right.y, right.z, 0.0],
+            camera_up: [up.x, up.y, up.z, 0.0],
+        }
+    }
+
     /// Create a particle system from an effect definition.
     /// Returns a handle that can be used to trigger bursts or remove the system.
     pub fn create_particle_system(
@@ -1286,6 +1386,7 @@ impl Engine {
                 blade_particle::PipelineDesc {
                     name: "particles",
                     draw_format: self.surface_info.format,
+                    depth_format: Some(gpu::TextureFormat::Depth32Float),
                     sample_count: 1,
                 },
             )
@@ -1658,6 +1759,7 @@ impl Engine {
             colliders,
             visuals,
         });
+        self.physics.rigid_bodies[rb_handle].user_data = raw_handle as u128;
         ObjectHandle(raw_handle)
     }
 
@@ -1699,6 +1801,8 @@ impl Engine {
             colliders: Vec::new(),
             visuals: vec![visual],
         });
+        // Store ObjectHandle index in rigid body user_data for fast lookup in contacts
+        self.physics.rigid_bodies[rb_handle].user_data = raw_handle as u128;
         ObjectHandle(raw_handle)
     }
 
@@ -1709,6 +1813,31 @@ impl Engine {
             .restitution(restitution)
             .density(1.0)
             .build();
+        let col_handle = self.physics.colliders.insert_with_parent(
+            collider,
+            object.rigid_body,
+            &mut self.physics.rigid_bodies,
+        );
+        self.objects[handle.0].colliders.push(col_handle);
+    }
+
+    /// Attach a convex hull collider from a set of points.
+    pub fn add_convex_hull_collider(
+        &mut self,
+        handle: ObjectHandle,
+        points: &[[f32; 3]],
+        restitution: f32,
+    ) {
+        let na_points: Vec<_> = points
+            .iter()
+            .map(|p| nalgebra::Point3::new(p[0], p[1], p[2]))
+            .collect();
+        let collider = rapier3d::geometry::ColliderBuilder::convex_hull(&na_points)
+            .unwrap_or_else(|| rapier3d::geometry::ColliderBuilder::ball(1.0))
+            .restitution(restitution)
+            .density(1.0)
+            .build();
+        let object = &self.objects[handle.0];
         let col_handle = self.physics.colliders.insert_with_parent(
             collider,
             object.rigid_body,
@@ -1732,6 +1861,13 @@ impl Engine {
             .unwrap();
         body.set_linvel(linear.into(), true);
         body.set_angvel(angular.into(), true);
+    }
+
+    /// Get the linear and angular velocity of an object.
+    pub fn get_velocity(&self, handle: ObjectHandle) -> (mint::Vector3<f32>, mint::Vector3<f32>) {
+        let object = &self.objects[handle.0];
+        let body = &self.physics.rigid_bodies[object.rigid_body];
+        ((*body.linvel()).into(), (*body.angvel()).into())
     }
 
     /// Get the position of an object.

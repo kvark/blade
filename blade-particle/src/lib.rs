@@ -91,9 +91,10 @@ impl ParticleEffect {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct CameraParams {
-    pub position: [f32; 3],
-    pub depth: f32,
-    pub orientation: [f32; 4],
-    pub fov: [f32; 2],
-    pub target_size: [u32; 2],
+    /// Column-major 4x4 view-projection matrix.
+    pub view_proj: [f32; 16],
+    /// Camera right vector in world space (for billboard X offset).
+    pub camera_right: [f32; 4],
+    /// Camera up vector in world space (for billboard Y offset).
+    pub camera_up: [f32; 4],
 }

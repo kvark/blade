@@ -447,6 +447,7 @@ fn snapshot_particle() {
         blade_particle::PipelineDesc {
             name: "snapshot particle",
             draw_format: format,
+            depth_format: None,
             sample_count: 1,
         },
     );
@@ -477,15 +478,21 @@ fn snapshot_particle() {
         particle_system.update(&pipeline, &mut command_encoder, 0.01);
     }
 
-    let camera = blade_particle::CameraParams {
-        position: [0.0, 0.0, 1000.0],
-        depth: 2000.0,
-        orientation: [0.0, 0.0, 0.0, 1.0],
-        fov: [
-            2.0 * (500.0_f32 / 1000.0 * size.width as f32 / size.height as f32).atan(),
-            2.0 * (500.0_f32 / 1000.0).atan(),
-        ],
-        target_size: [size.width, size.height],
+    let camera = {
+        let distance = 1000.0_f32;
+        let fov_y = 2.0 * (500.0_f32 / distance).atan();
+        let aspect = size.width as f32 / size.height.max(1) as f32;
+        let near = 0.01_f32;
+        let far = distance * 2.0;
+        let pos = glam::Vec3::new(0.0, 0.0, distance);
+        let view = glam::Mat4::look_at_rh(pos, glam::Vec3::ZERO, glam::Vec3::Y);
+        let proj = glam::Mat4::perspective_rh(fov_y, aspect, near, far);
+        let view_proj = proj * view;
+        blade_particle::CameraParams {
+            view_proj: view_proj.to_cols_array(),
+            camera_right: [1.0, 0.0, 0.0, 0.0],
+            camera_up: [0.0, 1.0, 0.0, 0.0],
+        }
     };
 
     command_encoder.init_texture(target.texture);
