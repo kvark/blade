@@ -1,7 +1,7 @@
 use ash::vk::Handle as _;
 use ash::{amd, ext, khr, vk};
 use naga::back::spv;
-use std::{ffi, fs, sync::Mutex};
+use std::{ffi, sync::Mutex};
 
 use crate::NotSupportedError;
 
@@ -9,8 +9,17 @@ mod db {
     pub mod intel {
         pub const VENDOR: u32 = 0x8086;
     }
+    pub mod nvidia {
+        pub const VENDOR: u32 = 0x10DE;
+    }
     pub mod qualcomm {
         pub const VENDOR: u32 = 0x5143;
+    }
+    pub mod pci_class {
+        /// VGA compatible controller
+        pub const VGA: &str = "0x0300";
+        /// 3D controller (e.g. NVIDIA dGPU in PRIME configurations)
+        pub const DISPLAY_3D: &str = "0x0302";
     }
 }
 mod layer {
@@ -41,8 +50,6 @@ struct RayTracingCapabilities {
 
 #[derive(Debug)]
 struct SystemBugs {
-    /// https://gitlab.freedesktop.org/mesa/mesa/-/issues/4688
-    intel_unable_to_present: bool,
     /// https://github.com/kvark/blade/issues/117
     intel_fix_descriptor_pool_leak: bool,
 }
@@ -68,11 +75,87 @@ struct AdapterCapabilities {
     bugs: SystemBugs,
 }
 
-// See https://github.com/canonical/nvidia-prime/blob/587c5012be9dddcc17ab4d958f10a24fa3342b4d/prime-select#L56
-fn is_nvidia_prime_forced() -> bool {
-    match fs::read_to_string("/etc/prime-discrete") {
-        Ok(contents) => contents == "on\n",
-        Err(_) => false,
+/// Display server on the current Linux system.
+/// Used to determine which GPU can present in PRIME configurations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisplayServer {
+    X11,
+    Wayland,
+    Other,
+}
+
+/// Detect the active display server from environment variables.
+fn detect_display_server() -> DisplayServer {
+    // WAYLAND_DISPLAY is set by Wayland compositors for native clients
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return DisplayServer::Wayland;
+    }
+    // DISPLAY is set by X11
+    if std::env::var_os("DISPLAY").is_some() {
+        return DisplayServer::X11;
+    }
+    DisplayServer::Other
+}
+
+/// Read GPU vendor IDs from sysfs for all PCI display devices.
+///
+/// Scans `/sys/bus/pci/devices/*/class` for VGA controllers and
+/// 3D controllers, then reads their vendor IDs.
+/// Returns a deduplicated list of vendor IDs.
+fn detect_gpu_vendors() -> Vec<u32> {
+    let mut vendors = Vec::new();
+    let entries = match std::fs::read_dir("/sys/bus/pci/devices") {
+        Ok(entries) => entries,
+        Err(_) => return vendors,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let class = match std::fs::read_to_string(path.join("class")) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let class = class.trim();
+        let is_gpu =
+            class.starts_with(db::pci_class::VGA) || class.starts_with(db::pci_class::DISPLAY_3D);
+        if !is_gpu {
+            continue;
+        }
+        let vendor = match std::fs::read_to_string(path.join("vendor")) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Ok(id) = u32::from_str_radix(vendor.trim().trim_start_matches("0x"), 16) {
+            if !vendors.contains(&id) {
+                vendors.push(id);
+            }
+        }
+    }
+    vendors
+}
+
+/// Check if a physical device cannot present in the current multi-GPU configuration.
+///
+/// On Linux systems with both Intel and NVIDIA GPUs (PRIME topology):
+/// - X11: Intel iGPU cannot present (Mesa bug <https://gitlab.freedesktop.org/mesa/mesa/-/issues/4688>)
+/// - Wayland: NVIDIA dGPU cannot present (surface owned by compositor's GPU)
+///
+/// Returns `true` if the device must be rejected for presentation.
+fn is_presentation_broken(
+    vendor_id: u32,
+    gpu_vendors: &[u32],
+    display_server: DisplayServer,
+) -> bool {
+    let has_intel = gpu_vendors.contains(&db::intel::VENDOR);
+    let has_nvidia = gpu_vendors.contains(&db::nvidia::VENDOR);
+    if !has_intel || !has_nvidia {
+        return false;
+    }
+    match (display_server, vendor_id) {
+        // Intel cannot present on X11 when NVIDIA is also present
+        (DisplayServer::X11, db::intel::VENDOR) => true,
+        // NVIDIA cannot present on Wayland when Intel is also present
+        (DisplayServer::Wayland, db::nvidia::VENDOR) => true,
+        _ => false,
     }
 }
 
@@ -81,6 +164,8 @@ unsafe fn inspect_adapter(
     instance: &super::Instance,
     driver_api_version: u32,
     desc: &crate::ContextDesc,
+    gpu_vendors: &[u32],
+    display_server: DisplayServer,
 ) -> Option<AdapterCapabilities> {
     let mut inline_uniform_block_properties =
         vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
@@ -141,17 +226,19 @@ unsafe fn inspect_adapter(
     }
 
     let bugs = SystemBugs {
-        //Note: this is somewhat broad across X11/Wayland and different drivers.
-        // It could be narrower, but at the end of the day if the user forced Prime
-        // for GLX it should be safe to assume they want it for Vulkan as well.
-        intel_unable_to_present: is_nvidia_prime_forced()
-            && properties.vendor_id == db::intel::VENDOR,
         intel_fix_descriptor_pool_leak: cfg!(windows) && properties.vendor_id == db::intel::VENDOR,
     };
 
     let queue_family_index = 0; //TODO
-    if desc.presentation && bugs.intel_unable_to_present {
-        log::warn!("Rejecting Intel for not presenting when Nvidia is present (on Linux)");
+    if desc.presentation
+        && is_presentation_broken(properties.vendor_id, gpu_vendors, display_server)
+    {
+        log::warn!(
+            "Rejecting adapter {:?} (vendor 0x{:X}): cannot present on {:?} in Intel+NVIDIA PRIME configuration",
+            name,
+            properties.vendor_id,
+            display_server,
+        );
         return None;
     }
 
@@ -536,6 +623,19 @@ impl super::Context {
                 core: core_instance,
             };
 
+        // Detect GPU vendors from sysfs to identify PRIME multi-GPU topologies
+        // before touching Vulkan device enumeration.
+        let gpu_vendors = detect_gpu_vendors();
+        let display_server = detect_display_server();
+        log::info!(
+            "PCI GPU vendors: {:?}, display server: {:?}",
+            gpu_vendors
+                .iter()
+                .map(|v| format!("0x{v:04X}"))
+                .collect::<Vec<_>>(),
+            display_server,
+        );
+
         let (physical_device, capabilities) = if let Some(ref xr_desc) = desc.xr {
             let xr_physical_device = unsafe {
                 xr_desc
@@ -544,9 +644,17 @@ impl super::Context {
                     .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?
             };
             let physical_device = vk::PhysicalDevice::from_raw(xr_physical_device as _);
-            let capabilities =
-                unsafe { inspect_adapter(physical_device, &instance, driver_api_version, &desc) }
-                    .ok_or(NotSupportedError::NoSupportedDeviceFound)?;
+            let capabilities = unsafe {
+                inspect_adapter(
+                    physical_device,
+                    &instance,
+                    driver_api_version,
+                    &desc,
+                    &gpu_vendors,
+                    display_server,
+                )
+            }
+            .ok_or(NotSupportedError::NoSupportedDeviceFound)?;
             (physical_device, capabilities)
         } else {
             instance
@@ -555,8 +663,15 @@ impl super::Context {
                 .map_err(super::PlatformError::Init)?
                 .into_iter()
                 .find_map(|phd| {
-                    inspect_adapter(phd, &instance, driver_api_version, &desc)
-                        .map(|caps| (phd, caps))
+                    inspect_adapter(
+                        phd,
+                        &instance,
+                        driver_api_version,
+                        &desc,
+                        &gpu_vendors,
+                        display_server,
+                    )
+                    .map(|caps| (phd, caps))
                 })
                 .ok_or(NotSupportedError::NoSupportedDeviceFound)?
         };
