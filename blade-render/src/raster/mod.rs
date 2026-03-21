@@ -340,7 +340,12 @@ impl Rasterizer {
                             draw_params: RasterDrawParams {
                                 model: world_transform.to_cols_array(),
                                 normal_quat: normal_quat.to_array(),
-                                base_color_factor: material.base_color_factor,
+                                base_color_factor: [
+                                    material.base_color_factor[0] * object.color_tint[0],
+                                    material.base_color_factor[1] * object.color_tint[1],
+                                    material.base_color_factor[2] * object.color_tint[2],
+                                    material.base_color_factor[3] * object.color_tint[3],
+                                ],
                                 material: [normal_scale, 0.0, 0.0, 0.0],
                             },
                             vertices: model.vertex_buffer.at(0),

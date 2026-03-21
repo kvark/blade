@@ -17,7 +17,6 @@ const SPEED_VARIATION: f32 = 0.4;
 const MAX_HEALTH: f32 = 1.0;
 pub const LASER_DAMAGE: f32 = 0.016;
 const HEALTH_REGEN: f32 = 0.2;
-const DAMAGE_STAGES: usize = 5;
 
 // --- Asteroid sizes ---
 pub const SIZE_RADII: [f32; 3] = [0.5, 1.0, 2.0];
@@ -35,16 +34,14 @@ const COMET_NUCLEUS_RADIUS: f32 = 3.0;
 
 pub struct Asteroid {
     pub object_handle: blade_engine::ObjectHandle,
-    variant: usize,
     pub size_class: usize,
     pub health: f32,
-    color_stage: usize,
 }
 
 pub struct AsteroidField {
     pub asteroids: Vec<Asteroid>,
-    /// model_handles[size_class][variant][color_stage]
-    model_handles: Vec<Vec<Vec<blade_asset::Handle<blade_render::Model>>>>,
+    /// model_handles[size_class][variant]
+    model_handles: Vec<Vec<blade_asset::Handle<blade_render::Model>>>,
     flow_dir: [f32; 3],
     next_seed: u32,
 }
@@ -52,16 +49,16 @@ pub struct AsteroidField {
 impl AsteroidField {
     pub fn new(engine: &mut blade_engine::Engine) -> Self {
         let variant_params: &[(f32, [f32; 3], [f32; 4])] = &[
-            (0.35, [1.0, 1.0, 1.0], [0.45, 0.40, 0.35, 1.0]),
-            (0.50, [1.4, 0.7, 1.0], [0.50, 0.45, 0.38, 1.0]),
-            (0.45, [1.0, 0.5, 1.2], [0.40, 0.38, 0.35, 1.0]),
-            (0.60, [1.0, 1.0, 1.0], [0.35, 0.32, 0.30, 1.0]),
-            (0.30, [0.8, 1.3, 0.9], [0.55, 0.50, 0.42, 1.0]),
-            (0.55, [1.3, 0.8, 1.3], [0.42, 0.38, 0.32, 1.0]),
-            (0.40, [1.1, 1.1, 0.6], [0.48, 0.44, 0.38, 1.0]),
-            (0.65, [0.9, 0.9, 1.4], [0.38, 0.35, 0.30, 1.0]),
+            // (roughness, axis_scales, base_color)
+            (0.35, [1.0, 1.0, 1.0], [0.50, 0.45, 0.40, 1.0]), // warm gray
+            (0.50, [1.4, 0.7, 1.0], [0.60, 0.35, 0.25, 1.0]), // rusty orange
+            (0.45, [1.0, 0.5, 1.2], [0.30, 0.35, 0.45, 1.0]), // blue-gray
+            (0.60, [1.0, 1.0, 1.0], [0.25, 0.22, 0.20, 1.0]), // dark charcoal
+            (0.30, [0.8, 1.3, 0.9], [0.55, 0.55, 0.40, 1.0]), // sandy yellow
+            (0.55, [1.3, 0.8, 1.3], [0.45, 0.30, 0.35, 1.0]), // reddish brown
+            (0.40, [1.1, 1.1, 0.6], [0.35, 0.40, 0.30, 1.0]), // olive green
+            (0.65, [0.9, 0.9, 1.4], [0.55, 0.50, 0.55, 1.0]), // pale purple-gray
         ];
-        let hot_color: [f32; 4] = [0.9, 0.15, 0.05, 1.0];
         let mut model_handles = Vec::new();
         for (sc, &radius) in SIZE_RADII.iter().enumerate() {
             let mut variants = Vec::new();
@@ -69,27 +66,16 @@ impl AsteroidField {
                 let seed = (sc * 100 + i * 7 + 42) as u32;
                 let (vertices, indices) =
                     mesh::generate_asteroid_mesh(seed, radius, roughness, 2, axis_scales);
-                let mut stages = Vec::new();
-                for stage in 0..DAMAGE_STAGES {
-                    let t = stage as f32 / (DAMAGE_STAGES - 1) as f32;
-                    let staged_color = [
-                        color[0] + (hot_color[0] - color[0]) * t,
-                        color[1] + (hot_color[1] - color[1]) * t,
-                        color[2] + (hot_color[2] - color[2]) * t,
-                        1.0,
-                    ];
-                    let handle = engine.create_model(
-                        &format!("asteroid_s{sc}_v{i}_t{stage}"),
-                        vec![blade_render::ProceduralGeometry {
-                            name: format!("asteroid_s{sc}_v{i}_t{stage}"),
-                            vertices: vertices.clone(),
-                            indices: indices.clone(),
-                            base_color_factor: staged_color,
-                        }],
-                    );
-                    stages.push(handle);
-                }
-                variants.push(stages);
+                let handle = engine.create_model(
+                    &format!("asteroid_s{sc}_v{i}"),
+                    vec![blade_render::ProceduralGeometry {
+                        name: format!("asteroid_s{sc}_v{i}"),
+                        vertices,
+                        indices,
+                        base_color_factor: color,
+                    }],
+                );
+                variants.push(handle);
             }
             model_handles.push(variants);
         }
@@ -222,7 +208,6 @@ impl AsteroidField {
         velocity: [f32; 3],
         angular_velocity: [f32; 3],
     ) {
-        let color_stage = 0;
         let axis = mesh::normalize(angular_velocity);
         let angle = mesh::hash_noise(self.next_seed.wrapping_add(999), 80.0, 81.0, 82.0)
             * std::f32::consts::TAU;
@@ -246,7 +231,7 @@ impl AsteroidField {
 
         let handle = engine.add_object_with_model(
             "asteroid",
-            self.model_handles[size_class][variant][color_stage],
+            self.model_handles[size_class][variant],
             transform,
             blade_engine::DynamicInput::Full,
         );
@@ -269,10 +254,8 @@ impl AsteroidField {
 
         self.asteroids.push(Asteroid {
             object_handle: handle,
-            variant,
             size_class,
             health: MAX_HEALTH,
-            color_stage,
         });
     }
 
@@ -327,26 +310,12 @@ impl AsteroidField {
                 continue;
             }
 
-            // Update color stage based on damage
+            // Tint toward red based on damage
             let damage = 1.0 - a.health / MAX_HEALTH;
-            let new_stage = (damage * (DAMAGE_STAGES - 1) as f32) as usize;
-            let new_stage = new_stage.min(DAMAGE_STAGES - 1);
-            if new_stage != a.color_stage {
-                let transform = engine
-                    .get_object_transform(a.object_handle, blade_engine::Prediction::LastKnown);
-                let (linvel, angvel) = engine.get_velocity(a.object_handle);
-                engine.remove_object(a.object_handle);
-                let new_handle = engine.add_object_with_model(
-                    "asteroid",
-                    self.model_handles[a.size_class][a.variant][new_stage],
-                    transform,
-                    blade_engine::DynamicInput::Full,
-                );
-                engine.add_ball_collider(new_handle, SIZE_RADII[a.size_class], 0.5);
-                engine.set_velocity(new_handle, linvel, angvel);
-                a.object_handle = new_handle;
-                a.color_stage = new_stage;
-            }
+            engine.set_color_tint(
+                a.object_handle,
+                [1.0, 1.0 - damage * 0.7, 1.0 - damage * 0.8, 1.0],
+            );
             i += 1;
         }
     }
@@ -539,22 +508,45 @@ pub fn setup_game(engine: &mut blade_engine::Engine) -> GameState {
         space_sky: true,
     });
 
-    // Planet
+    // Gas giant with rings in the distance.
+    // The asteroids around us are conceptually part of the outermost ring.
     {
-        let planet_radius = 30.0;
-        let planet_model = mesh::generate_planet_model(engine, planet_radius);
-        let planet_transform = blade_engine::Transform {
-            position: mint::Vector3 {
-                x: 30.0,
-                y: -20.0,
-                z: -80.0,
-            },
-            ..Default::default()
+        let planet_radius = 120.0;
+        let planet_pos = mint::Vector3 {
+            x: 200.0,
+            y: -150.0,
+            z: -600.0,
         };
+
+        // Tilt ~25° so the rings are clearly visible
+        let tilt_angle: f32 = 0.44;
+        let half = tilt_angle * 0.5;
+        let ring_orient = mint::Quaternion {
+            s: half.cos(),
+            v: mint::Vector3 {
+                x: half.sin(),
+                y: 0.0,
+                z: 0.0,
+            },
+        };
+
+        let (planet_model, ring_model) = mesh::generate_ringed_planet(engine, planet_radius);
         engine.add_object_with_model(
             "planet",
             planet_model,
-            planet_transform,
+            blade_engine::Transform {
+                position: planet_pos,
+                ..Default::default()
+            },
+            blade_engine::DynamicInput::Empty,
+        );
+        engine.add_object_with_model(
+            "planet_rings",
+            ring_model,
+            blade_engine::Transform {
+                position: planet_pos,
+                orientation: ring_orient,
+            },
             blade_engine::DynamicInput::Empty,
         );
     }

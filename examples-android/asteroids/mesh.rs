@@ -318,6 +318,107 @@ pub fn generate_planet_model(
     engine.create_model("planet", geometries)
 }
 
+/// Generate a flat annular ring (disc with a hole) in the XZ plane.
+/// Returns vertices and indices for a single ring band.
+fn generate_ring_band(
+    inner_radius: f32,
+    outer_radius: f32,
+    segments: usize,
+    color: [f32; 4],
+) -> blade_render::ProceduralGeometry {
+    let up = [0.0f32, 1.0, 0.0];
+    let en = encode_normal(up);
+    let mut vertices = Vec::with_capacity(segments * 2);
+    let mut indices = Vec::with_capacity(segments * 6);
+
+    for i in 0..=segments {
+        let angle = (i as f32 / segments as f32) * std::f32::consts::TAU;
+        let c = angle.cos();
+        let s = angle.sin();
+        // Inner vertex
+        vertices.push(blade_render::Vertex {
+            position: [c * inner_radius, 0.0, s * inner_radius],
+            bitangent_sign: 1.0,
+            tex_coords: [0.0, 0.0],
+            normal: en,
+            tangent: encode_normal([1.0, 0.0, 0.0]),
+        });
+        // Outer vertex
+        vertices.push(blade_render::Vertex {
+            position: [c * outer_radius, 0.0, s * outer_radius],
+            bitangent_sign: 1.0,
+            tex_coords: [0.0, 0.0],
+            normal: en,
+            tangent: encode_normal([1.0, 0.0, 0.0]),
+        });
+    }
+
+    for i in 0..segments {
+        let base = (i * 2) as u32;
+        // Two triangles per quad (inner-outer pair)
+        indices.extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);
+    }
+
+    blade_render::ProceduralGeometry {
+        name: "ring_band".to_string(),
+        vertices,
+        indices,
+        base_color_factor: color,
+    }
+}
+
+/// Generate a planet with rings (Saturn-like gas giant).
+pub fn generate_ringed_planet(
+    engine: &mut blade_engine::Engine,
+    planet_radius: f32,
+) -> (
+    blade_asset::Handle<blade_render::Model>,
+    blade_asset::Handle<blade_render::Model>,
+) {
+    let planet_model = generate_planet_model(engine, planet_radius);
+
+    // Generate ring system as a separate model (so it can be placed at the same position)
+    let segments = 64;
+    let gap = planet_radius * 0.05; // small gap between bands
+
+    // Ring bands with gaps — Saturn-inspired
+    let ring_bands = vec![
+        // C ring (inner, dim)
+        generate_ring_band(
+            planet_radius * 1.2,
+            planet_radius * 1.5,
+            segments,
+            [0.35, 0.30, 0.25, 1.0],
+        ),
+        // B ring (main, brightest)
+        generate_ring_band(
+            planet_radius * 1.5 + gap,
+            planet_radius * 2.0,
+            segments,
+            [0.55, 0.48, 0.38, 1.0],
+        ),
+        // Cassini division (gap)
+        // A ring (outer, medium)
+        generate_ring_band(
+            planet_radius * 2.1,
+            planet_radius * 2.5,
+            segments,
+            [0.45, 0.40, 0.32, 1.0],
+        ),
+        // F ring (thin outer)
+        generate_ring_band(
+            planet_radius * 2.6,
+            planet_radius * 2.7,
+            segments,
+            [0.30, 0.28, 0.25, 1.0],
+        ),
+    ];
+
+    let ring_model = engine.create_model("planet_rings", ring_bands);
+
+    (planet_model, ring_model)
+}
+
 /// Generate a comet model (nucleus only — tail is a particle trail).
 pub fn generate_comet_model(
     seed: u32,

@@ -21,8 +21,7 @@ use game::{AsteroidField, GameState, LASER_DAMAGE, SIZE_RADII};
 
 // --- XR Input ---
 
-const LASER_LENGTH: f32 = 200.0;
-const LASER_HIT_RADIUS: f32 = 1.5;
+const LASER_LENGTH: f32 = 60.0;
 const LASER_BEAM_RADIUS: f32 = 0.015;
 
 struct HandState {
@@ -240,21 +239,25 @@ impl XrInput {
                 let to_asteroid = [pos.x - origin[0], pos.y - origin[1], pos.z - origin[2]];
                 let along =
                     to_asteroid[0] * dir[0] + to_asteroid[1] * dir[1] + to_asteroid[2] * dir[2];
-                if along < 0.0 || along > closest_t {
-                    continue;
-                }
-                let hit_radius = SIZE_RADII[asteroid.size_class] * LASER_HIT_RADIUS;
+                let hit_radius = SIZE_RADII[asteroid.size_class];
                 let perp_sq = (to_asteroid[0] - dir[0] * along).powi(2)
                     + (to_asteroid[1] - dir[1] * along).powi(2)
                     + (to_asteroid[2] - dir[2] * along).powi(2);
-                if perp_sq < hit_radius * hit_radius {
-                    closest_t = along;
-                    closest_idx = Some(idx);
+                if perp_sq >= hit_radius * hit_radius {
+                    continue;
                 }
+                // Ray enters the sphere at t = along - sqrt(r² - perp²)
+                let t_enter = along - (hit_radius * hit_radius - perp_sq).sqrt();
+                if t_enter < 0.0 || t_enter > closest_t {
+                    continue;
+                }
+                closest_t = t_enter;
+                closest_idx = Some(idx);
             }
 
             if let Some(idx) = closest_idx {
                 asteroid_field.asteroids[idx].health -= LASER_DAMAGE;
+                // Hit point is where the ray enters the sphere (near side)
                 let hit_point = [
                     origin[0] + dir[0] * closest_t,
                     origin[1] + dir[1] * closest_t,

@@ -82,6 +82,9 @@ pub struct Object {
     pub model: blade_asset::Handle<Model>,
     pub transform: blade_graphics::Transform,
     pub prev_transform: blade_graphics::Transform,
+    /// Per-object color tint multiplied with the material's base_color_factor.
+    /// Default: [1.0, 1.0, 1.0, 1.0] (no tint).
+    pub color_tint: [f32; 4],
 }
 
 #[cfg(not(any(gles, target_arch = "wasm32")))]
@@ -91,6 +94,7 @@ impl From<blade_asset::Handle<Model>> for Object {
             model,
             transform: blade_graphics::IDENTITY_TRANSFORM,
             prev_transform: blade_graphics::IDENTITY_TRANSFORM,
+            color_tint: [1.0; 4],
         }
     }
 }

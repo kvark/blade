@@ -341,6 +341,7 @@ impl Example {
                 model,
                 transform: config_object.transform,
                 prev_transform: config_object.transform,
+                color_tint: [1.0; 4],
             });
             self.object_extras.push(ObjectExtra {
                 path: PathBuf::from(config_object.path),
@@ -787,6 +788,7 @@ impl Example {
             model,
             transform,
             prev_transform: transform,
+            color_tint: [1.0; 4],
         });
         self.object_extras.push(ObjectExtra {
             path: file_path.to_owned(),
