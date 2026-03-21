@@ -17,6 +17,7 @@ Changelog for *Blade* project
   - cooperative matrix operations support (auto-detected via `Capabilities`)
   - egl: use DMA-BUF sharing with different displays for presentation
   - vk: uniform buffer fallback for buggy Qualcomm devices
+  - vk: reject GPUs that cannot present in Intel+NVIDIA PRIME configurations
 
 ## blade-graphics-0.7.1 (22 Feb 2025)
 
