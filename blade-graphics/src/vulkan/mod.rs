@@ -15,12 +15,6 @@ mod surface;
 const QUERY_POOL_SIZE: usize = crate::limits::PASS_COUNT + 1;
 const MAX_XR_EYES: usize = 2;
 
-#[derive(Debug)]
-pub enum PlatformError {
-    Loading(ash::LoadingError),
-    Init(vk::Result),
-}
-
 struct Instance {
     core: ash::Instance,
     _debug_utils: ash::ext::debug_utils::Instance,
@@ -396,8 +390,9 @@ pub struct ComputePipeline {
     wg_size: [u32; 3],
 }
 
-impl ComputePipeline {
-    pub fn get_workgroup_size(&self) -> [u32; 3] {
+#[hidden_trait::expose]
+impl crate::traits::ComputePipelineBase for ComputePipeline {
+    fn get_workgroup_size(&self) -> [u32; 3] {
         self.wg_size
     }
 }

@@ -17,8 +17,6 @@ pub struct PlatformFrame {
     extent: crate::Extent,
 }
 
-pub type PlatformError = ();
-
 impl super::Surface {
     pub fn info(&self) -> crate::SurfaceInfo {
         self.platform.info

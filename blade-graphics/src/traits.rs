@@ -27,8 +27,12 @@ pub trait ResourceDevice {
     fn destroy_acceleration_structure(&self, acceleration_structure: Self::AccelerationStructure);
 }
 
+pub trait ComputePipelineBase {
+    fn get_workgroup_size(&self) -> [u32; 3];
+}
+
 pub trait ShaderDevice {
-    type ComputePipeline: Send + Sync;
+    type ComputePipeline: Send + Sync + ComputePipelineBase;
     type RenderPipeline: Send + Sync;
 
     fn create_compute_pipeline(&self, desc: super::ComputePipelineDesc) -> Self::ComputePipeline;

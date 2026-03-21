@@ -14,8 +14,6 @@ mod surface;
 
 const MAX_TIMESTAMPS: usize = crate::limits::PASS_COUNT * 2;
 
-pub type PlatformError = ();
-
 pub struct Surface {
     view: Option<objc2::rc::Retained<objc2::runtime::NSObject>>,
     render_layer: Retained<objc2_quartz_core::CAMetalLayer>,
@@ -253,8 +251,9 @@ pub struct ComputePipeline {
 
 unsafe impl Send for ComputePipeline {}
 unsafe impl Sync for ComputePipeline {}
-impl ComputePipeline {
-    pub fn get_workgroup_size(&self) -> [u32; 3] {
+#[hidden_trait::expose]
+impl crate::traits::ComputePipelineBase for ComputePipeline {
+    fn get_workgroup_size(&self) -> [u32; 3] {
         [
             self.wg_size.width as u32,
             self.wg_size.height as u32,

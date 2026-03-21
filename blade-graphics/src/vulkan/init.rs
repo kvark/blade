@@ -446,7 +446,7 @@ impl super::Context {
             Ok(entry) => entry,
             Err(err) => {
                 log::error!("Missing Vulkan entry points: {:?}", err);
-                return Err(super::PlatformError::Loading(err).into());
+                return Err(crate::PlatformError::loading(err).into());
             }
         };
         let driver_api_version = match entry.try_enumerate_instance_version() {
@@ -455,7 +455,7 @@ impl super::Context {
             Ok(None) => return Err(NotSupportedError::NoSupportedDeviceFound),
             Err(err) => {
                 log::error!("try_enumerate_instance_version: {:?}", err);
-                return Err(super::PlatformError::Init(err).into());
+                return Err(crate::PlatformError::init(err).into());
             }
         };
 
@@ -480,7 +480,7 @@ impl super::Context {
             Ok(layers) => layers,
             Err(err) => {
                 log::error!("enumerate_instance_layer_properties: {:?}", err);
-                return Err(super::PlatformError::Init(err).into());
+                return Err(crate::PlatformError::init(err).into());
             }
         };
         let supported_layer_names = supported_layers
@@ -509,7 +509,7 @@ impl super::Context {
                 Ok(extensions) => extensions,
                 Err(err) => {
                     log::error!("enumerate_instance_extension_properties: {:?}", err);
-                    return Err(super::PlatformError::Init(err).into());
+                    return Err(crate::PlatformError::init(err).into());
                 }
             };
         let supported_instance_extensions = supported_instance_extension_properties
@@ -591,7 +591,7 @@ impl super::Context {
                             &create_info as *const _ as *const _,
                         )
                         .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?
-                        .map_err(|raw| super::PlatformError::Init(vk::Result::from_raw(raw)))?
+                        .map_err(|raw| crate::PlatformError::init(vk::Result::from_raw(raw)))?
                 };
                 unsafe {
                     ash::Instance::load(
@@ -601,7 +601,7 @@ impl super::Context {
                 }
             } else {
                 unsafe { entry.create_instance(&create_info, None) }
-                    .map_err(super::PlatformError::Init)?
+                    .map_err(|e| crate::PlatformError::init(e))?
             }
         };
 
@@ -663,7 +663,7 @@ impl super::Context {
             instance
                 .core
                 .enumerate_physical_devices()
-                .map_err(super::PlatformError::Init)?
+                .map_err(|e| crate::PlatformError::init(e))?
                 .into_iter()
                 .find_map(|phd| {
                     inspect_adapter(
@@ -849,7 +849,7 @@ impl super::Context {
                             &device_create_info as *const _ as *const _,
                         )
                         .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?
-                        .map_err(|raw| super::PlatformError::Init(vk::Result::from_raw(raw)))?
+                        .map_err(|raw| crate::PlatformError::init(vk::Result::from_raw(raw)))?
                 };
                 unsafe {
                     ash::Device::load(
@@ -861,7 +861,7 @@ impl super::Context {
                 instance
                     .core
                     .create_device(physical_device, &device_create_info, None)
-                    .map_err(super::PlatformError::Init)?
+                    .map_err(|e| crate::PlatformError::init(e))?
             }
         };
 
@@ -1183,7 +1183,7 @@ impl super::Context {
             .map(|h| h.flags)
             .collect();
         // Now mem_properties2 borrow is released, we can access budget_properties
-        drop(mem_properties2);
+        let _ = mem_properties2;
 
         let mut total_budget = 0u64;
         let mut total_usage = 0u64;

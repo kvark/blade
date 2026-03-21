@@ -90,6 +90,27 @@ pub const CANVAS_ID: &str = "blade";
 
 use std::{fmt, num::NonZeroU32};
 
+/// Error from the underlying graphics platform during initialization.
+#[derive(Debug)]
+pub struct PlatformError(String);
+
+impl PlatformError {
+    pub(crate) fn loading(err: impl fmt::Debug) -> Self {
+        Self(format!("failed to load: {:?}", err))
+    }
+    pub(crate) fn init(err: impl fmt::Debug) -> Self {
+        Self(format!("failed to initialize: {:?}", err))
+    }
+}
+
+impl fmt::Display for PlatformError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for PlatformError {}
+
 #[cfg(not(any(
     vulkan,
     windows,
@@ -149,7 +170,7 @@ pub enum NotSupportedError {
 impl fmt::Display for NotSupportedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Platform(e) => write!(f, "platform error: {:?}", e),
+            Self::Platform(e) => write!(f, "platform error: {}", e),
             Self::NoSupportedDeviceFound => f.write_str("no supported device found"),
             Self::PlatformNotSupported => f.write_str("platform not supported"),
         }
