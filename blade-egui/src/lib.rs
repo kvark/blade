@@ -221,7 +221,7 @@ impl GuiPainter {
         let valid_pos = self
             .textures_to_delete
             .iter()
-            .position(|&(_, ref sp)| !context.wait_for(sp, 0))
+            .position(|&(_, ref sp)| !context.wait_for(sp, 0).unwrap_or(true))
             .unwrap_or_default();
         for (texture, _) in self.textures_to_delete.drain(..valid_pos) {
             context.destroy_texture_view(texture.view);

@@ -109,7 +109,7 @@ impl winit::application::ApplicationHandler for App {
                 let sync_point = context.submit(command_encoder);
 
                 if let Some(sp) = self.prev_sync_point.take() {
-                    context.wait_for(&sp, !0);
+                    let _ = context.wait_for(&sp, !0);
                 }
                 self.prev_sync_point = Some(sync_point);
             }
@@ -138,7 +138,7 @@ fn main() {
 
     let context = app.context.as_ref().unwrap();
     if let Some(sp) = app.prev_sync_point.take() {
-        context.wait_for(&sp, !0);
+        let _ = context.wait_for(&sp, !0);
     }
     if let Some(example) = app.example.take() {
         example.deinit(context);

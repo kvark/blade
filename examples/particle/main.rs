@@ -28,7 +28,7 @@ impl Example {
         let surface_info = self.surface.info();
 
         if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(&sp, !0);
+            let _ = self.context.wait_for(&sp, !0);
         }
 
         if let Some(msaa_view) = self.msaa_view.take() {
@@ -192,7 +192,7 @@ impl Example {
 
     fn destroy(&mut self) {
         if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(&sp, !0);
+            let _ = self.context.wait_for(&sp, !0);
         }
         self.context
             .destroy_command_encoder(&mut self.command_encoder);
@@ -322,7 +322,7 @@ impl Example {
         self.gui_painter.after_submit(&sync_point);
 
         if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(&sp, !0);
+            let _ = self.context.wait_for(&sp, !0);
         }
         self.prev_sync_point = Some(sync_point);
     }
@@ -354,7 +354,7 @@ impl Example {
                         .changed()
                     {
                         if let Some(sp) = self.prev_sync_point.take() {
-                            self.context.wait_for(&sp, !0);
+                            let _ = self.context.wait_for(&sp, !0);
                         }
 
                         let old_effect = self.particle_system.effect.clone();

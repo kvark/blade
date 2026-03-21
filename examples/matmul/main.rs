@@ -128,7 +128,7 @@ fn main() {
         pe.dispatch([M / TILE, N / TILE, 1]);
     }
     let sp = context.submit(&mut encoder);
-    context.wait_for(&sp, !0);
+    let _ = context.wait_for(&sp, !0);
 
     // Read back results
     let result =

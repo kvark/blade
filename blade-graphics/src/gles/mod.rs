@@ -61,6 +61,10 @@ impl Buffer {
     pub fn data(&self) -> *mut u8 {
         self.data
     }
+
+    pub fn size(&self) -> u64 {
+        self.size
+    }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
@@ -457,6 +461,10 @@ impl Context {
     pub fn device_information(&self) -> &crate::DeviceInformation {
         &self.device_information
     }
+
+    pub fn memory_stats(&self) -> crate::MemoryStats {
+        crate::MemoryStats::default()
+    }
 }
 
 #[hidden_trait::expose]
@@ -559,7 +567,7 @@ impl crate::traits::CommandDevice for Context {
         SyncPoint { fence }
     }
 
-    fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
+    fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<bool, crate::DeviceError> {
         use glow::HasContext as _;
 
         let gl = self.lock();
@@ -574,8 +582,10 @@ impl crate::traits::CommandDevice for Context {
         let status =
             unsafe { gl.client_wait_sync(sp.fence, glow::SYNC_FLUSH_COMMANDS_BIT, timeout_ns_i32) };
         match status {
-            glow::ALREADY_SIGNALED | glow::CONDITION_SATISFIED => true,
-            _ => false,
+            glow::ALREADY_SIGNALED | glow::CONDITION_SATISFIED => Ok(true),
+            glow::TIMEOUT_EXPIRED => Ok(false),
+            glow::WAIT_FAILED => Err(crate::DeviceError::DeviceLost),
+            _ => Ok(false),
         }
     }
 }

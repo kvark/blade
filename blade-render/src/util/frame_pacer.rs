@@ -30,7 +30,7 @@ impl FramePacer {
     #[profiling::function]
     pub fn wait_for_previous_frame(&mut self, context: &blade_graphics::Context) {
         if let Some(sp) = self.prev_sync_point.take() {
-            context.wait_for(&sp, !0);
+            let _ = context.wait_for(&sp, !0);
         }
         for buffer in self.prev_resources.buffers.drain(..) {
             context.destroy_buffer(buffer);

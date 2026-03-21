@@ -201,7 +201,7 @@ impl Example {
         }
         let sync_point = context.submit(&mut command_encoder);
 
-        context.wait_for(&sync_point, !0);
+        let _ = context.wait_for(&sync_point, !0);
         context.destroy_command_encoder(&mut command_encoder);
         context.destroy_buffer(vertex_buf);
         context.destroy_buffer(index_buf);

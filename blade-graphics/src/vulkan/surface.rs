@@ -61,7 +61,17 @@ impl super::Surface {
                     xr_views: [super::XrView::default(); super::MAX_XR_EYES],
                 }
             }
-            Err(other) => panic!("Aquire image error {}", other),
+            Err(other) => {
+                log::error!("Acquire image error: {}", other);
+                super::Frame {
+                    internal: self.frames[0],
+                    swapchain: self.swapchain,
+                    image_index: None,
+                    xr_swapchain: 0,
+                    xr_view_count: 0,
+                    xr_views: [super::XrView::default(); super::MAX_XR_EYES],
+                }
+            }
         }
     }
 }
