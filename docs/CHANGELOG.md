@@ -15,9 +15,19 @@ Changelog for *Blade* project
   - option to disable ray tracing initialization
   - separate `Capabilities` flag for binding arrays, including TLAS arrays
   - cooperative matrix operations support (auto-detected via `Capabilities`)
+  - `wait_for` now returns `Result<bool, DeviceError>` instead of `bool`,
+    distinguishing timeout from device-lost errors
+  - `memory_stats()` API for querying VRAM budget/usage (via `VK_EXT_memory_budget`)
+  - `Buffer::size()` accessor on all backends
+  - `PlatformError` is now a unified opaque type across all backends
+  - `ComputePipelineBase` trait exposes `get_workgroup_size()` for generic code
+  - `NotSupportedError`, `DeviceError`, and `PlatformError` implement `Display` + `Error`
+  - vk: set `MUTABLE_FORMAT` on depth+stencil textures for flexible view creation
+  - vk: graceful handling of surface acquire errors instead of panicking
+  - vk: reject GPUs that cannot present in Intel+NVIDIA PRIME configurations
   - egl: use DMA-BUF sharing with different displays for presentation
   - vk: uniform buffer fallback for buggy Qualcomm devices
-  - vk: reject GPUs that cannot present in Intel+NVIDIA PRIME configurations
+  - debug bounds check on `BufferPiece::data()`
 
 ## blade-graphics-0.7.1 (22 Feb 2025)
 

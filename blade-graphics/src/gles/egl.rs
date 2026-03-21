@@ -97,12 +97,6 @@ const GBM_BO_USE_LINEAR: u32 = 1 << 4;
 type GlEglImageTargetTexture2dOesFun =
     unsafe extern "system" fn(target: u32, image: *mut ffi::c_void);
 
-#[derive(Debug)]
-pub enum PlatformError {
-    Loading(egl::LoadError<libloading::Error>),
-    Init(egl::Error),
-}
-
 #[derive(Clone, Copy, Debug)]
 enum SrgbFrameBufferKind {
     /// No support for SRGB surface
@@ -279,7 +273,7 @@ impl super::Context {
             } else {
                 egl::DynamicInstance::<egl::EGL1_4>::load_required()
             };
-            egl_result.map_err(PlatformError::Loading)?
+            egl_result.map_err(crate::PlatformError::loading)?
         };
 
         let client_extensions = match egl.query_string(None, egl::EXTENSIONS) {
@@ -828,7 +822,7 @@ impl super::Context {
                     &[egl::ATTRIB_NONE],
                 )
             }
-            .map_err(PlatformError::Init)?,
+            .map_err(crate::PlatformError::init)?,
             Rdh::Xlib(handle) => unsafe {
                 let display_ptr = match handle.display {
                     Some(d) => d.as_ptr(),
@@ -836,7 +830,7 @@ impl super::Context {
                 };
                 egl1_5.get_platform_display(EGL_PLATFORM_X11_KHR, display_ptr, &[egl::ATTRIB_NONE])
             }
-            .map_err(PlatformError::Init)?,
+            .map_err(crate::PlatformError::init)?,
             _ => {
                 return Err(crate::NotSupportedError::NoSupportedDeviceFound);
             }
@@ -845,7 +839,7 @@ impl super::Context {
         // Load a separate EGL instance for the presentation context so it
         // has its own library handle (EglContext takes ownership).
         let pres_egl_instance = unsafe { egl::DynamicInstance::<egl::EGL1_4>::load_required() }
-            .map_err(PlatformError::Loading)?;
+            .map_err(crate::PlatformError::loading)?;
 
         let desc = crate::ContextDesc {
             presentation: true,
@@ -914,7 +908,7 @@ impl super::Context {
                         "Failed to create window surface on presentation display: {:?}",
                         e
                     );
-                    PlatformError::Init(e)
+                    crate::PlatformError::init(e)
                 })?
         };
 
@@ -1367,7 +1361,9 @@ impl EglContext {
         egl: EglInstance,
         display: egl::Display,
     ) -> Result<Self, crate::NotSupportedError> {
-        let version = egl.initialize(display).map_err(PlatformError::Init)?;
+        let version = egl
+            .initialize(display)
+            .map_err(crate::PlatformError::init)?;
         let vendor = egl.query_string(Some(display), egl::VENDOR).unwrap();
         let display_extensions = egl
             .query_string(Some(display), egl::EXTENSIONS)
@@ -1438,7 +1434,7 @@ impl EglContext {
             Ok(context) => context,
             Err(e) => {
                 log::warn!("unable to create GLES 3.x context: {:?}", e);
-                return Err(PlatformError::Init(e).into());
+                return Err(crate::PlatformError::init(e).into());
             }
         };
 
@@ -1454,7 +1450,7 @@ impl EglContext {
                     .map(Some)
                     .map_err(|e| {
                         log::warn!("Error in create_pbuffer_surface: {:?}", e);
-                        PlatformError::Init(e)
+                        crate::PlatformError::init(e)
                     })?
             };
 
