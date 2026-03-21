@@ -47,5 +47,5 @@ cargo apk build --manifest-path examples-android/xr/Cargo.toml --release && adb 
 ```
 Same for asteroids:
 ```bash
- cargo apk build --manifest-path examples-android/asteroids/Cargo.toml --release && adb shell am force-stop rust.asteroids && adb install -r target/release/apk/asteroids.apk && adb logcat -c && adb shell am start -n rust.asteroids/android.app.NativeActivity &&  adb logcat -v time | grep -E "blade-asteroids|RustStdoutStderr|mark:|render pipeline|AdrenoVK-0"
+cargo apk build --manifest-path examples-android/asteroids/Cargo.toml --release && adb shell am force-stop rust.asteroids && adb install -r target/release/apk/asteroids.apk && adb logcat -c && adb shell am start -n rust.asteroids/android.app.NativeActivity &&  adb logcat -v time | grep -E "blade-asteroids|RustStdoutStderr|mark:|render pipeline|AdrenoVK-0"
 ```

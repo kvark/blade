@@ -159,11 +159,9 @@ fn update(@builtin(global_invocation_id) global_id: vec3<u32>) {
 var<storage,read> draw_particles: array<Particle>;
 
 struct CameraParams {
-    position: vec3<f32>,
-    depth: f32,
-    orientation: vec4<f32>,
-    fov: vec2<f32>,
-    target_size: vec2<u32>,
+    view_proj: mat4x4<f32>,
+    camera_right: vec4<f32>,
+    camera_up: vec4<f32>,
 }
 var<uniform> camera: CameraParams;
 
@@ -171,14 +169,6 @@ struct VertexOutput {
     @builtin(position) proj_pos: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) uv: vec2<f32>,
-}
-
-fn qinv(q: vec4<f32>) -> vec4<f32> {
-    return vec4<f32>(-q.xyz, q.w);
-}
-
-fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
-    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
 }
 
 @vertex
@@ -196,22 +186,15 @@ fn draw_vs(
         return out;
     }
 
-    // Billboard: offset in camera-local XY
+    // Billboard: offset particle position in world space along camera axes
     let zero_one = vec2<f32>(vec2<u32>(vertex_index & 1u, vertex_index >> 1u));
-    let local_offset = (2.0 * zero_one - vec2<f32>(1.0)) * particle.scale;
+    let offset = 2.0 * zero_one - vec2<f32>(1.0);
+    let world_pos = particle.pos
+        + camera.camera_right.xyz * (offset.x * particle.scale)
+        + camera.camera_up.xyz * (offset.y * particle.scale);
 
-    let world_dir = particle.pos - camera.position;
-    let local_dir = qrot(qinv(camera.orientation), world_dir);
-
-    if (local_dir.z >= 0.0) {
-        out.proj_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
-        out.color = vec4<f32>(0.0);
-        out.uv = vec2<f32>(0.0);
-        return out;
-    }
-
-    let ndc = (local_dir.xy + local_offset) / (-local_dir.z * tan(0.5 * camera.fov));
-    out.proj_pos = vec4<f32>(ndc * vec2<f32>(1.0, -1.0), 0.0, 1.0);
+    // Project to clip space
+    out.proj_pos = camera.view_proj * vec4<f32>(world_pos, 1.0);
 
     // Unpack base color and apply lifetime fade
     let base_color = unpack4x8unorm(particle.color);
