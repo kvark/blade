@@ -247,7 +247,7 @@ impl Rasterizer {
         }
 
         log::info!("Hot reloading raster shaders");
-        gpu.wait_for(sync_point, !0);
+        let _ = gpu.wait_for(sync_point, !0);
         for task in tasks {
             let _ = task.join();
         }

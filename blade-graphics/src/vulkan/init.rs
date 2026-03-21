@@ -72,6 +72,7 @@ struct AdapterCapabilities {
     timing: bool,
     dual_source_blending: bool,
     cooperative_matrix: bool,
+    memory_budget: bool,
     bugs: SystemBugs,
 }
 
@@ -402,6 +403,7 @@ unsafe fn inspect_adapter(
     let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
     let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
+    let memory_budget = supported_extensions.contains(&vk::EXT_MEMORY_BUDGET_NAME);
 
     let device_information = crate::DeviceInformation {
         is_software_emulated: properties.device_type == vk::PhysicalDeviceType::CPU,
@@ -433,6 +435,7 @@ unsafe fn inspect_adapter(
         timing,
         dual_source_blending,
         cooperative_matrix,
+        memory_budget,
         bugs,
     })
 }
@@ -740,6 +743,9 @@ impl super::Context {
                 if capabilities.api_version < vk::API_VERSION_1_2 {
                     device_extensions.push(vk::KHR_VULKAN_MEMORY_MODEL_NAME);
                 }
+            }
+            if capabilities.memory_budget {
+                device_extensions.push(vk::EXT_MEMORY_BUDGET_NAME);
             }
 
             let str_pointers = device_extensions
@@ -1119,6 +1125,7 @@ impl super::Context {
             dual_source_blending: capabilities.dual_source_blending,
             cooperative_matrix: capabilities.cooperative_matrix,
             binding_array: capabilities.binding_array,
+            memory_budget: capabilities.memory_budget,
             instance,
             entry,
             xr,
@@ -1152,6 +1159,45 @@ impl super::Context {
 
     pub fn device_information(&self) -> &crate::DeviceInformation {
         &self.device.device_information
+    }
+
+    pub fn memory_stats(&self) -> crate::MemoryStats {
+        if !self.memory_budget {
+            return crate::MemoryStats::default();
+        }
+
+        let mut budget_properties = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+        let mut mem_properties2 =
+            vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget_properties);
+
+        unsafe {
+            self.instance
+                .get_physical_device_properties2
+                .get_physical_device_memory_properties2(self.physical_device, &mut mem_properties2);
+        }
+
+        // Copy what we need before accessing budget_properties
+        let heap_count = mem_properties2.memory_properties.memory_heap_count as usize;
+        let heap_flags: Vec<_> = mem_properties2.memory_properties.memory_heaps[..heap_count]
+            .iter()
+            .map(|h| h.flags)
+            .collect();
+        // Now mem_properties2 borrow is released, we can access budget_properties
+        drop(mem_properties2);
+
+        let mut total_budget = 0u64;
+        let mut total_usage = 0u64;
+        for (i, flags) in heap_flags.iter().enumerate() {
+            if flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL) {
+                total_budget += budget_properties.heap_budget[i];
+                total_usage += budget_properties.heap_usage[i];
+            }
+        }
+
+        crate::MemoryStats {
+            budget: total_budget,
+            usage: total_usage,
+        }
     }
 }
 

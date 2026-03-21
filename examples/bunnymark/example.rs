@@ -182,7 +182,7 @@ impl Example {
             transfer.copy_buffer_to_texture(upload_buffer.into(), 4, texture.into(), extent);
         }
         let sync_point = context.submit(&mut command_encoder);
-        context.wait_for(&sync_point, !0);
+        let _ = context.wait_for(&sync_point, !0);
 
         context.destroy_command_encoder(&mut command_encoder);
         context.destroy_buffer(upload_buffer);

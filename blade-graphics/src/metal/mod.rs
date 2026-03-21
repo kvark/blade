@@ -90,6 +90,11 @@ impl Buffer {
         use metal::MTLBuffer as _;
         self.as_ref().contents().as_ptr() as *mut u8
     }
+
+    pub fn size(&self) -> u64 {
+        use metal::MTLResource as _;
+        self.as_ref().allocatedSize() as u64
+    }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
@@ -549,6 +554,15 @@ impl Context {
     pub fn metal_device(&self) -> Retained<ProtocolObject<dyn metal::MTLDevice>> {
         self.device.lock().unwrap().clone()
     }
+
+    pub fn memory_stats(&self) -> crate::MemoryStats {
+        use metal::MTLDevice as _;
+        let device = self.device.lock().unwrap();
+        crate::MemoryStats {
+            budget: device.recommendedMaxWorkingSetSize() as u64,
+            usage: device.currentAllocatedSize() as u64,
+        }
+    }
 }
 
 #[hidden_trait::expose]
@@ -609,15 +623,17 @@ impl crate::traits::CommandDevice for Context {
         SyncPoint { cmd_buf }
     }
 
-    fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
+    fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<bool, crate::DeviceError> {
         use metal::MTLCommandBuffer as _;
         let start = time::Instant::now();
         loop {
-            if let metal::MTLCommandBufferStatus::Completed = sp.cmd_buf.status() {
-                return true;
+            match sp.cmd_buf.status() {
+                metal::MTLCommandBufferStatus::Completed => return Ok(true),
+                metal::MTLCommandBufferStatus::Error => return Err(crate::DeviceError::DeviceLost),
+                _ => {}
             }
             if start.elapsed().as_millis() >= timeout_ms as u128 {
-                return false;
+                return Ok(false);
             }
             thread::sleep(time::Duration::from_millis(1));
         }

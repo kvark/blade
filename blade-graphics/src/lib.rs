@@ -146,10 +146,53 @@ pub enum NotSupportedError {
     PlatformNotSupported,
 }
 
+impl fmt::Display for NotSupportedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Platform(e) => write!(f, "platform error: {:?}", e),
+            Self::NoSupportedDeviceFound => f.write_str("no supported device found"),
+            Self::PlatformNotSupported => f.write_str("platform not supported"),
+        }
+    }
+}
+
+impl std::error::Error for NotSupportedError {}
+
 impl From<PlatformError> for NotSupportedError {
     fn from(error: PlatformError) -> Self {
         Self::Platform(error)
     }
+}
+
+/// Error indicating a GPU device failure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeviceError {
+    /// The GPU device has been lost and can no longer be used.
+    DeviceLost,
+    /// The GPU ran out of memory.
+    OutOfMemory,
+}
+
+impl fmt::Display for DeviceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DeviceLost => f.write_str("device lost"),
+            Self::OutOfMemory => f.write_str("out of memory"),
+        }
+    }
+}
+
+impl std::error::Error for DeviceError {}
+
+/// GPU memory usage statistics.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MemoryStats {
+    /// Total memory budget across all device-local heaps (bytes).
+    /// Zero if the backend doesn't support memory budget queries.
+    pub budget: u64,
+    /// Current memory usage across all device-local heaps (bytes).
+    /// Zero if the backend doesn't support memory budget queries.
+    pub usage: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -258,6 +301,12 @@ impl BufferPiece {
     pub fn data(&self) -> *mut u8 {
         let base = self.buffer.data();
         assert!(!base.is_null());
+        debug_assert!(
+            self.offset <= self.buffer.size(),
+            "BufferPiece offset {} exceeds buffer size {}",
+            self.offset,
+            self.buffer.size(),
+        );
         unsafe { base.offset(self.offset as isize) }
     }
 }

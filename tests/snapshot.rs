@@ -66,7 +66,7 @@ impl OffscreenTarget {
         }
         let sync_point = context.submit(encoder);
         assert!(
-            context.wait_for(&sync_point, 5000),
+            context.wait_for(&sync_point, 5000).unwrap(),
             "GPU timed out during snapshot readback"
         );
         let byte_count = (self.size.width * self.size.height * 4) as usize;

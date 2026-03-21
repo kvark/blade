@@ -346,6 +346,7 @@ impl crate::traits::ResourceDevice for super::Context {
             raw,
             memory_handle: allocation.handle,
             mapped_data: allocation.data,
+            size: desc.size,
             external: fetch_external_source(&self.device, allocation),
         }
     }
@@ -370,6 +371,13 @@ impl crate::traits::ResourceDevice for super::Context {
             && desc.size.width == desc.size.height
         {
             create_flags |= vk::ImageCreateFlags::CUBE_COMPATIBLE;
+        }
+        // Enable mutable format for multi-aspect textures (e.g. depth+stencil)
+        // so that views can select individual aspects with compatible formats.
+        if desc.format.aspects().contains(crate::TexelAspects::DEPTH)
+            && desc.format.aspects().contains(crate::TexelAspects::STENCIL)
+        {
+            create_flags |= vk::ImageCreateFlags::MUTABLE_FORMAT;
         }
 
         let mut external_next = desc.external.map(|e| vk::ExternalMemoryImageCreateInfo {

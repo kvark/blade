@@ -257,7 +257,7 @@ fn dispatch_gpu_test() {
     }
 
     let sync_point = context.submit(&mut command_encoder);
-    assert!(context.wait_for(&sync_point, 2000));
+    assert!(context.wait_for(&sync_point, 2000).unwrap());
 
     let actual = unsafe { slice::from_raw_parts(output.data() as *const u32, 4) };
     let expected = [3, 5, 7, 9];
@@ -320,7 +320,7 @@ fn env_map_gpu_test() {
     }
 
     let sync_point = context.submit(&mut command_encoder);
-    assert!(context.wait_for(&sync_point, 2000));
+    assert!(context.wait_for(&sync_point, 2000).unwrap());
 
     let actual = unsafe { slice::from_raw_parts(readback.data(), 8) };
     assert!(

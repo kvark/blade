@@ -58,7 +58,7 @@ impl BufferBelt {
         let index_maybe = self
             .buffers
             .iter()
-            .position(|(rb, sp)| size <= rb.size && gpu.wait_for(sp, 0));
+            .position(|(rb, sp)| size <= rb.size && gpu.wait_for(sp, 0).unwrap_or(false));
         if let Some(index) = index_maybe {
             let (rb, _) = self.buffers.remove(index);
             let piece = rb.raw.into();

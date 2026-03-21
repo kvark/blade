@@ -273,6 +273,7 @@ pub struct Context {
     dual_source_blending: bool,
     cooperative_matrix: bool,
     binding_array: bool,
+    memory_budget: bool,
     instance: Instance,
     entry: ash::Entry,
     xr: Option<Mutex<XrSessionState>>,
@@ -283,6 +284,7 @@ pub struct Buffer {
     raw: vk::Buffer,
     memory_handle: usize,
     mapped_data: *mut u8,
+    size: u64,
     external: Option<crate::ExternalMemorySource>,
 }
 
@@ -292,6 +294,7 @@ impl Default for Buffer {
             raw: vk::Buffer::null(),
             memory_handle: !0,
             mapped_data: ptr::null_mut(),
+            size: 0,
             external: None,
         }
     }
@@ -300,6 +303,10 @@ impl Default for Buffer {
 impl Buffer {
     pub fn data(&self) -> *mut u8 {
         self.mapped_data
+    }
+
+    pub fn size(&self) -> u64 {
+        self.size
     }
 }
 
@@ -587,6 +594,7 @@ impl crate::traits::CommandDevice for Context {
                     raw: scratch.raw,
                     memory_handle: scratch.memory_handle,
                     mapped_data: scratch.mapped,
+                    size: 0,
                     external: None,
                 });
             }
@@ -748,7 +756,7 @@ impl crate::traits::CommandDevice for Context {
         SyncPoint { progress }
     }
 
-    fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> bool {
+    fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<bool, crate::DeviceError> {
         //Note: technically we could get away without locking the queue,
         // but also this isn't time-sensitive, so it's fine.
         let timeline_semaphore = self.queue.lock().unwrap().timeline_semaphore;
@@ -758,11 +766,20 @@ impl crate::traits::CommandDevice for Context {
             .semaphores(&semaphores)
             .values(&semaphore_values);
         let timeout_ns = map_timeout(timeout_ms);
-        unsafe {
+        match unsafe {
             self.device
                 .timeline_semaphore
                 .wait_semaphores(&wait_info, timeout_ns)
-                .is_ok()
+        } {
+            Ok(()) => Ok(true),
+            Err(vk::Result::TIMEOUT) => Ok(false),
+            Err(vk::Result::ERROR_DEVICE_LOST) => Err(crate::DeviceError::DeviceLost),
+            Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY)
+            | Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => Err(crate::DeviceError::OutOfMemory),
+            Err(other) => {
+                log::error!("Unexpected wait_semaphores error: {:?}", other);
+                Err(crate::DeviceError::DeviceLost)
+            }
         }
     }
 }
