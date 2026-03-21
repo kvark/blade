@@ -352,6 +352,7 @@ struct Object {
     prev_isometry: nalgebra::Isometry3<f32>,
     colliders: Vec<rapier3d::geometry::ColliderHandle>,
     visuals: Vec<Visual>,
+    color_tint: [f32; 4],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -499,6 +500,7 @@ impl Engine {
                         z: mp.column(2).into(),
                     },
                     model: visual.model,
+                    color_tint: object.color_tint,
                 });
             }
             object.prev_isometry = isometry;
@@ -1331,6 +1333,7 @@ impl Engine {
         self.extra_debug_lines.extend_from_slice(lines);
     }
 
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     fn make_particle_camera(
         camera: &blade_render::Camera,
         target_size: gpu::Extent,
@@ -1758,6 +1761,7 @@ impl Engine {
             prev_isometry: nalgebra::Isometry3::default(),
             colliders,
             visuals,
+            color_tint: [1.0; 4],
         });
         self.physics.rigid_bodies[rb_handle].user_data = raw_handle as u128;
         ObjectHandle(raw_handle)
@@ -1800,6 +1804,7 @@ impl Engine {
             prev_isometry: nalgebra::Isometry3::default(),
             colliders: Vec::new(),
             visuals: vec![visual],
+            color_tint: [1.0; 4],
         });
         // Store ObjectHandle index in rigid body user_data for fast lookup in contacts
         self.physics.rigid_bodies[rb_handle].user_data = raw_handle as u128;
@@ -2011,6 +2016,12 @@ impl Engine {
         body.set_linvel(Default::default(), false);
         body.set_angvel(Default::default(), false);
         body.set_position(transform.into_isometry(), true);
+    }
+
+    /// Set a per-object color tint that multiplies the model's material colors.
+    /// Default is [1, 1, 1, 1] (no tint).
+    pub fn set_color_tint(&mut self, handle: ObjectHandle, tint: [f32; 4]) {
+        self.objects[handle.0].color_tint = tint;
     }
 
     pub fn set_joint_motor(
