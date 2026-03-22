@@ -625,11 +625,10 @@ impl Example {
                 self.debug_blit = if let Some(view) = blit_view {
                     let mut db = match self.debug_blit.take() {
                         Some(db) => db,
-                        None => {
-                            let mut db = blade_render::DebugBlit::default();
-                            db.target_size = [min_size, min_size];
-                            db
-                        }
+                        None => blade_render::DebugBlit {
+                            target_size: [min_size, min_size],
+                            ..Default::default()
+                        },
                     };
                     db.input = view;
                     let style = ui.style();
@@ -734,11 +733,9 @@ impl Example {
 
                     tc.rotation = glam::Quat::from_euler(glam::EulerRot::default(), a1, a2, a3);
                     let transform = tc.to_blade();
-                    if object.transform != transform {
-                        if tc.is_inversible() {
-                            object.transform = transform;
-                            self.have_objects_changed = true;
-                        }
+                    if object.transform != transform && tc.is_inversible() {
+                        object.transform = transform;
+                        self.have_objects_changed = true;
                     }
                 });
         }
@@ -915,7 +912,7 @@ impl winit::application::ApplicationHandler for App {
                 example.is_point_selected = false;
             }
             winit::event::WindowEvent::CursorMoved { position, .. } => {
-                if let Some(_) = self.drag_start {
+                if self.drag_start.is_some() {
                     let prev = glam::Quat::from(example.camera.inner.rot);
                     let rotation_local = glam::Quat::from_rotation_x(
                         (self.last_mouse_pos[1] as f32 - position.y as f32) * drag_speed,

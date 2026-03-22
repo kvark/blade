@@ -458,12 +458,11 @@ impl winit::application::ApplicationHandler for App {
                         ..
                     },
                 ..
-            } => match key_code {
-                winit::keyboard::KeyCode::Escape => {
+            } => {
+                if key_code == winit::keyboard::KeyCode::Escape {
                     event_loop.exit();
                 }
-                _ => {}
-            },
+            }
             winit::event::WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
@@ -497,7 +496,7 @@ impl winit::application::ApplicationHandler for App {
                 let control_flow = if let Some(repaint_after_instant) =
                     std::time::Instant::now().checked_add(repaint_delay)
                 {
-                    winit::event_loop::ControlFlow::WaitUntil(repaint_after_instant.into())
+                    winit::event_loop::ControlFlow::WaitUntil(repaint_after_instant)
                 } else {
                     winit::event_loop::ControlFlow::Wait
                 };

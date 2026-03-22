@@ -37,7 +37,7 @@ fn parse_wgsl() {
                 }
             };
             let shader_raw = match path.extension() {
-                Some(ostr) if &*ostr == "wgsl" => {
+                Some(ostr) if ostr == "wgsl" => {
                     println!("Validating {:?}", path);
                     fs::read(&path).unwrap_or_default()
                 }
@@ -45,7 +45,16 @@ fn parse_wgsl() {
             };
 
             let cooker = blade_asset::Cooker::new(&example, Default::default());
-            let text_out = blade_render::shader::parse_shader(&shader_raw, &cooker, &expansions);
+            let mut text_out =
+                blade_render::shader::parse_shader(&shader_raw, &cooker, &expansions);
+
+            // Substitute cooperative matrix template placeholders with defaults
+            // so the shader parses as valid WGSL.
+            text_out = text_out
+                .replace("ENABLE_F16", "")
+                .replace("COOP_MAT", "coop_mat8x8")
+                .replace("INPUT_SCALAR", "f32")
+                .replace("TILE_SIZE", "8u");
 
             let module = match wgsl::parse_str(&text_out) {
                 Ok(module) => module,

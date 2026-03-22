@@ -56,7 +56,8 @@ impl OffscreenTarget {
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> Vec<u8> {
-        if let mut transfer = encoder.transfer("snapshot-readback") {
+        {
+            let mut transfer = encoder.transfer("snapshot-readback");
             transfer.copy_texture_to_buffer(
                 self.texture.into(),
                 self.readback.into(),

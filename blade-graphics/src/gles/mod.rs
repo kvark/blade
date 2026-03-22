@@ -453,7 +453,8 @@ impl Context {
             ray_query: crate::ShaderVisibility::empty(),
             sample_count_mask: 0x1 | 0x4, //TODO: accurate info
             dual_source_blending: false,
-            cooperative_matrix: false,
+            shader_float16: false,
+            cooperative_matrix: crate::CooperativeMatrix::default(),
         }
     }
 

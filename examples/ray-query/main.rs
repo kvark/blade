@@ -87,12 +87,11 @@ impl winit::application::ApplicationHandler for App {
                         ..
                     },
                 ..
-            } => match key_code {
-                winit::keyboard::KeyCode::Escape => {
+            } => {
+                if key_code == winit::keyboard::KeyCode::Escape {
                     event_loop.exit();
                 }
-                _ => {}
-            },
+            }
             winit::event::WindowEvent::RedrawRequested => {
                 let example = self.example.as_mut().unwrap();
                 let context = self.context.as_ref().unwrap();

@@ -40,8 +40,12 @@ impl super::Context {
             device_caps.dual_source_blending,
         );
         caps.set(
+            naga::valid::Capabilities::SHADER_FLOAT16,
+            device_caps.shader_float16,
+        );
+        caps.set(
             naga::valid::Capabilities::COOPERATIVE_MATRIX,
-            device_caps.cooperative_matrix,
+            device_caps.cooperative_matrix.is_supported(),
         );
         naga::valid::Validator::new(flags, caps)
             .validate(module)

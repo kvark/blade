@@ -10,6 +10,7 @@ use blade_graphics as gpu;
 use blade_graphics::ShaderData;
 use std::slice;
 
+#[allow(dead_code)]
 #[path = "../examples/bunnymark/example.rs"]
 mod bunnymark_example;
 #[cfg(not(gles))]
