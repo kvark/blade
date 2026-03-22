@@ -538,9 +538,19 @@ impl Context {
                 .filter(|&count| device.supportsTextureSampleCount(count as _))
                 .sum(),
             dual_source_blending: true,
-            cooperative_matrix: device.supportsFamily(metal::MTLGPUFamily::Apple7)
+            // Metal Shading Language supports half-precision floats on all supported devices.
+            shader_float16: true,
+            cooperative_matrix: if device.supportsFamily(metal::MTLGPUFamily::Apple7)
                 || device.supportsFamily(metal::MTLGPUFamily::Mac2)
-                || device.supportsFamily(metal::MTLGPUFamily::Metal3),
+                || device.supportsFamily(metal::MTLGPUFamily::Metal3)
+            {
+                crate::CooperativeMatrix {
+                    f32_tile: 8,
+                    f16_tile: 0,
+                }
+            } else {
+                crate::CooperativeMatrix::default()
+            },
         }
     }
 

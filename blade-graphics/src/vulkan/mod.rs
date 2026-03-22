@@ -19,6 +19,7 @@ struct Instance {
     core: ash::Instance,
     _debug_utils: ash::ext::debug_utils::Instance,
     get_physical_device_properties2: khr::get_physical_device_properties2::Instance,
+    cooperative_matrix: khr::cooperative_matrix::Instance,
     get_surface_capabilities2: Option<khr::get_surface_capabilities2::Instance>,
     surface: Option<khr::surface::Instance>,
 }
@@ -265,7 +266,8 @@ pub struct Context {
     min_uniform_buffer_offset_alignment: u64,
     sample_count_flags: vk::SampleCountFlags,
     dual_source_blending: bool,
-    cooperative_matrix: bool,
+    shader_float16: bool,
+    cooperative_matrix: crate::CooperativeMatrix,
     binding_array: bool,
     memory_budget: bool,
     instance: Instance,

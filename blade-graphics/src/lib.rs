@@ -169,8 +169,8 @@ pub enum NotSupportedError {
 
 impl fmt::Display for NotSupportedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Platform(e) => write!(f, "platform error: {}", e),
+        match *self {
+            Self::Platform(ref e) => write!(f, "platform error: {}", e),
             Self::NoSupportedDeviceFound => f.write_str("no supported device found"),
             Self::PlatformNotSupported => f.write_str("platform not supported"),
         }
@@ -196,7 +196,7 @@ pub enum DeviceError {
 
 impl fmt::Display for DeviceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
+        match *self {
             Self::DeviceLost => f.write_str("device lost"),
             Self::OutOfMemory => f.write_str("out of memory"),
         }
@@ -216,6 +216,25 @@ pub struct MemoryStats {
     pub usage: u64,
 }
 
+/// Cooperative matrix support information.
+///
+/// Each field is a tile size (8 or 16), or 0 if that configuration
+/// is not supported. Naga supports square tiles only (8×8 and 16×16).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CooperativeMatrix {
+    /// Tile size for all-f32 operations.
+    pub f32_tile: u32,
+    /// Tile size for f16-input, f32-accumulator operations.
+    pub f16_tile: u32,
+}
+
+impl CooperativeMatrix {
+    /// Returns true if any cooperative matrix configuration is supported.
+    pub fn is_supported(&self) -> bool {
+        self.f32_tile > 0 || self.f16_tile > 0
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Capabilities {
     /// Support binding arrays of handles.
@@ -226,8 +245,10 @@ pub struct Capabilities {
     pub sample_count_mask: u32,
     /// Support for dual-source blending.
     pub dual_source_blending: bool,
-    /// Support for cooperative matrix operations.
-    pub cooperative_matrix: bool,
+    /// Support for 16-bit floating-point types in shaders.
+    pub shader_float16: bool,
+    /// Cooperative matrix support.
+    pub cooperative_matrix: CooperativeMatrix,
 }
 
 #[derive(Clone, Debug, Default)]

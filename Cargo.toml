@@ -69,6 +69,7 @@ egui-winit = { version = "0.33", default-features = false, features = [
 ] }
 transform-gizmo-egui = "0.8"
 env_logger = "0.11"
+half = { version = "2", features = ["bytemuck"] }
 num_cpus = { workspace = true }
 glam = { workspace = true }
 log = { workspace = true }

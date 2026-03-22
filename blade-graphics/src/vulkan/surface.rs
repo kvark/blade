@@ -198,7 +198,7 @@ impl super::Context {
                 window.window_handle().unwrap().as_raw(),
                 None,
             )
-            .map_err(|e| crate::PlatformError::init(e))?
+            .map_err(crate::PlatformError::init)?
         };
 
         let khr_surface = self

@@ -215,12 +215,12 @@ impl ParticleSystem {
             EmitterShape::Sphere { radius } => radius,
         };
 
-        let (colors, color_count) = match &self.effect.particle.color {
+        let (colors, color_count) = match self.effect.particle.color {
             ColorConfig::Solid(c) => {
-                let packed = pack_color(*c);
+                let packed = pack_color(c);
                 ([packed, packed, packed, packed], 1u32)
             }
-            ColorConfig::Palette(palette) => {
+            ColorConfig::Palette(ref palette) => {
                 let mut colors = [0u32; 4];
                 let count = palette.len().min(4);
                 for i in 0..count {
@@ -267,7 +267,7 @@ impl ParticleSystem {
             let mut pc = pass.with(&pipeline.reset_pipeline);
             pc.bind(0, &self.main_data());
             let group_size = pipeline.reset_pipeline.get_workgroup_size();
-            let group_count = (self.capacity as u32 + group_size[0] - 1) / group_size[0];
+            let group_count = (self.capacity as u32).div_ceil(group_size[0]);
             pc.dispatch([group_count, 1, 1]);
             self.needs_reset = false;
         }
@@ -298,7 +298,7 @@ impl ParticleSystem {
                 self.emit_accumulator -= emit_count as f32;
                 let params = self.make_emit_params(emit_count, self.origin);
                 let wg_size = pipeline.emit_pipeline.get_workgroup_size()[0];
-                let groups = (emit_count + wg_size - 1) / wg_size;
+                let groups = emit_count.div_ceil(wg_size);
                 let mut pass = encoder.compute("particle emit continuous");
                 let mut pc = pass.with(&pipeline.emit_pipeline);
                 pc.bind(0, &main_data);
@@ -317,7 +317,7 @@ impl ParticleSystem {
         for burst in bursts {
             let params = self.make_emit_params(burst.count, burst.position);
             let wg_size = pipeline.emit_pipeline.get_workgroup_size()[0];
-            let groups = (burst.count + wg_size - 1) / wg_size;
+            let groups = burst.count.div_ceil(wg_size);
             let mut pass = encoder.compute("particle emit burst");
             let mut pc = pass.with(&pipeline.emit_pipeline);
             pc.bind(0, &main_data);

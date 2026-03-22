@@ -159,8 +159,7 @@ impl Example {
         }
         context.sync_buffer(vertex_buf);
 
-        let mut bunnies = Vec::new();
-        bunnies.push(Sprite {
+        let bunnies = vec![Sprite {
             data: SpriteData {
                 locals: Locals {
                     position: [-100.0, 100.0],
@@ -170,7 +169,7 @@ impl Example {
                 },
             },
             vertex_buf: vertex_buf.into(),
-        });
+        }];
 
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "init",

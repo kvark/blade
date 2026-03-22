@@ -71,7 +71,8 @@ struct AdapterCapabilities {
     external_memory: bool,
     timing: bool,
     dual_source_blending: bool,
-    cooperative_matrix: bool,
+    shader_float16: bool,
+    cooperative_matrix: crate::CooperativeMatrix,
     memory_budget: bool,
     bugs: SystemBugs,
 }
@@ -256,6 +257,8 @@ unsafe fn inspect_adapter(
     let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
     let mut cooperative_matrix_features = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default();
     let mut vulkan_memory_model_features = vk::PhysicalDeviceVulkanMemoryModelFeatures::default();
+    let mut float16_int8_features = vk::PhysicalDeviceShaderFloat16Int8Features::default();
+    let mut storage_16bit_features = vk::PhysicalDevice16BitStorageFeatures::default();
     let mut features2_khr = vk::PhysicalDeviceFeatures2::default()
         .push_next(&mut inline_uniform_block_features)
         .push_next(&mut timeline_semaphore_features)
@@ -265,12 +268,15 @@ unsafe fn inspect_adapter(
         .push_next(&mut acceleration_structure_features)
         .push_next(&mut ray_query_features)
         .push_next(&mut cooperative_matrix_features)
-        .push_next(&mut vulkan_memory_model_features);
+        .push_next(&mut vulkan_memory_model_features)
+        .push_next(&mut float16_int8_features)
+        .push_next(&mut storage_16bit_features);
     instance
         .get_physical_device_properties2
         .get_physical_device_features2(phd, &mut features2_khr);
 
     let dual_source_blending = features2_khr.features.dual_src_blend != 0;
+    let shader_float16 = float16_int8_features.shader_float16 != 0;
 
     let has_inline_ub = supported_extensions.contains(&vk::EXT_INLINE_UNIFORM_BLOCK_NAME)
         && inline_uniform_block_properties.max_inline_uniform_block_size
@@ -382,23 +388,67 @@ unsafe fn inspect_adapter(
 
     let cooperative_matrix = if !supported_extensions.contains(&vk::KHR_COOPERATIVE_MATRIX_NAME) {
         log::info!("No cooperative matrix extension support");
-        false
+        crate::CooperativeMatrix::default()
     } else if cooperative_matrix_features.cooperative_matrix == vk::FALSE {
         log::info!(
             "No cooperative matrix feature support. Features = {:?}",
             cooperative_matrix_features
         );
-        false
+        crate::CooperativeMatrix::default()
     } else if vulkan_memory_model_features.vulkan_memory_model == vk::FALSE {
         log::info!(
             "No Vulkan memory model support (required for cooperative matrix). Features = {:?}",
             vulkan_memory_model_features
         );
-        false
+        crate::CooperativeMatrix::default()
     } else {
-        log::info!("Cooperative matrix is supported");
-        true
+        // Query supported cooperative matrix configurations and find
+        // square float configurations (Naga supports 8x8 and 16x16).
+        let coop_props = instance
+            .cooperative_matrix
+            .get_physical_device_cooperative_matrix_properties(phd)
+            .unwrap_or_default();
+        let find_tile = |a_type, b_type, c_type, result_type| {
+            [8u32, 16].into_iter().find(|&size| {
+                coop_props.iter().any(|p| {
+                    p.m_size == size
+                        && p.n_size == size
+                        && p.k_size == size
+                        && p.a_type == a_type
+                        && p.b_type == b_type
+                        && p.c_type == c_type
+                        && p.result_type == result_type
+                        && p.scope == vk::ScopeKHR::SUBGROUP
+                })
+            })
+        };
+        let f32t = vk::ComponentTypeKHR::FLOAT32;
+        let f16t = vk::ComponentTypeKHR::FLOAT16;
+        let f32_tile = find_tile(f32t, f32t, f32t, f32t).unwrap_or(0);
+        let f16_tile = if float16_int8_features.shader_float16 != 0
+            && storage_16bit_features.storage_buffer16_bit_access != 0
+        {
+            find_tile(f16t, f16t, f32t, f32t).unwrap_or(0)
+        } else {
+            0
+        };
+        let cm = crate::CooperativeMatrix { f32_tile, f16_tile };
+        if cm.is_supported() {
+            log::info!(
+                "Cooperative matrix: f32 tile={}, f16 tile={}",
+                cm.f32_tile,
+                cm.f16_tile,
+            );
+        } else {
+            log::info!(
+                "Cooperative matrix extension present but no usable config. Properties: {:?}",
+                coop_props
+            );
+        }
+        cm
     };
+    // Auto-enable shader_float16 when cooperative matrix has f16 support.
+    let shader_float16 = shader_float16 || cooperative_matrix.f16_tile > 0;
 
     let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
@@ -434,6 +484,7 @@ unsafe fn inspect_adapter(
         external_memory,
         timing,
         dual_source_blending,
+        shader_float16,
         cooperative_matrix,
         memory_budget,
         bugs,
@@ -601,7 +652,7 @@ impl super::Context {
                 }
             } else {
                 unsafe { entry.create_instance(&create_info, None) }
-                    .map_err(|e| crate::PlatformError::init(e))?
+                    .map_err(crate::PlatformError::init)?
             }
         };
 
@@ -610,6 +661,7 @@ impl super::Context {
                 _debug_utils: ext::debug_utils::Instance::new(&entry, &core_instance),
                 get_physical_device_properties2:
                     khr::get_physical_device_properties2::Instance::new(&entry, &core_instance),
+                cooperative_matrix: khr::cooperative_matrix::Instance::new(&entry, &core_instance),
                 get_surface_capabilities2: if desc.presentation {
                     Some(khr::get_surface_capabilities2::Instance::new(
                         &entry,
@@ -663,7 +715,7 @@ impl super::Context {
             instance
                 .core
                 .enumerate_physical_devices()
-                .map_err(|e| crate::PlatformError::init(e))?
+                .map_err(crate::PlatformError::init)?
                 .into_iter()
                 .find_map(|phd| {
                     inspect_adapter(
@@ -738,7 +790,7 @@ impl super::Context {
                     vk::KHR_EXTERNAL_MEMORY_FD_NAME
                 });
             }
-            if capabilities.cooperative_matrix {
+            if capabilities.cooperative_matrix.is_supported() {
                 device_extensions.push(vk::KHR_COOPERATIVE_MATRIX_NAME);
                 if capabilities.api_version < vk::API_VERSION_1_2 {
                     device_extensions.push(vk::KHR_VULKAN_MEMORY_MODEL_NAME);
@@ -810,9 +862,27 @@ impl super::Context {
                     .push_next(&mut khr_ray_query);
             }
 
+            let mut khr_float16_int8;
+            let mut storage_16bit;
+            if capabilities.shader_float16 {
+                khr_float16_int8 = vk::PhysicalDeviceShaderFloat16Int8Features {
+                    shader_float16: vk::TRUE,
+                    ..Default::default()
+                };
+                device_create_info = device_create_info.push_next(&mut khr_float16_int8);
+            }
+            if capabilities.cooperative_matrix.f16_tile > 0 {
+                storage_16bit = vk::PhysicalDevice16BitStorageFeatures {
+                    storage_buffer16_bit_access: vk::TRUE,
+                    uniform_and_storage_buffer16_bit_access: vk::TRUE,
+                    ..Default::default()
+                };
+                device_create_info = device_create_info.push_next(&mut storage_16bit);
+            }
+
             let mut khr_cooperative_matrix;
             let mut vulkan_memory_model;
-            if capabilities.cooperative_matrix {
+            if capabilities.cooperative_matrix.is_supported() {
                 khr_cooperative_matrix = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR {
                     cooperative_matrix: vk::TRUE,
                     ..Default::default()
@@ -861,7 +931,7 @@ impl super::Context {
                 instance
                     .core
                     .create_device(physical_device, &device_create_info, None)
-                    .map_err(|e| crate::PlatformError::init(e))?
+                    .map_err(crate::PlatformError::init)?
             }
         };
 
@@ -1123,6 +1193,7 @@ impl super::Context {
                     .limits
                     .framebuffer_depth_sample_counts,
             dual_source_blending: capabilities.dual_source_blending,
+            shader_float16: capabilities.shader_float16,
             cooperative_matrix: capabilities.cooperative_matrix,
             binding_array: capabilities.binding_array,
             memory_budget: capabilities.memory_budget,
@@ -1153,6 +1224,7 @@ impl super::Context {
             },
             sample_count_mask: self.sample_count_flags.as_raw(),
             dual_source_blending: self.dual_source_blending,
+            shader_float16: self.shader_float16,
             cooperative_matrix: self.cooperative_matrix,
         }
     }
