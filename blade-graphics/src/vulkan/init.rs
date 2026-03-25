@@ -5,6 +5,39 @@ use std::{ffi, sync::Mutex};
 
 use crate::NotSupportedError;
 
+// TODO: Remove once `ash` includes VK_KHR_unified_image_layouts bindings.
+// See https://registry.khronos.org/vulkan/specs/latest/man/html/VK_KHR_unified_image_layouts.html
+mod unified_image_layouts {
+    use ash::vk;
+    use std::ffi;
+
+    pub const NAME: &ffi::CStr = c"VK_KHR_unified_image_layouts";
+    const STRUCTURE_TYPE: i32 = 1000466000;
+
+    #[repr(C)]
+    pub struct PhysicalDeviceFeatures {
+        pub s_type: vk::StructureType,
+        pub p_next: *mut ffi::c_void,
+        pub unified_image_layouts: vk::Bool32,
+        pub unified_image_layouts_video: vk::Bool32,
+    }
+    impl Default for PhysicalDeviceFeatures {
+        fn default() -> Self {
+            Self {
+                s_type: vk::StructureType::from_raw(STRUCTURE_TYPE),
+                p_next: std::ptr::null_mut(),
+                unified_image_layouts: vk::FALSE,
+                unified_image_layouts_video: vk::FALSE,
+            }
+        }
+    }
+    unsafe impl vk::TaggedStructure for PhysicalDeviceFeatures {
+        const STRUCTURE_TYPE: vk::StructureType = vk::StructureType::from_raw(STRUCTURE_TYPE);
+    }
+    unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for PhysicalDeviceFeatures {}
+    unsafe impl vk::ExtendsDeviceCreateInfo for PhysicalDeviceFeatures {}
+}
+
 mod db {
     pub mod intel {
         pub const VENDOR: u32 = 0x8086;
@@ -73,6 +106,7 @@ struct AdapterCapabilities {
     dual_source_blending: bool,
     shader_float16: bool,
     cooperative_matrix: crate::CooperativeMatrix,
+    unified_image_layouts: bool,
     memory_budget: bool,
     bugs: SystemBugs,
 }
@@ -263,6 +297,8 @@ fn inspect_adapter(
     let mut vulkan_memory_model_features = vk::PhysicalDeviceVulkanMemoryModelFeatures::default();
     let mut float16_int8_features = vk::PhysicalDeviceShaderFloat16Int8Features::default();
     let mut storage_16bit_features = vk::PhysicalDevice16BitStorageFeatures::default();
+    let mut unified_image_layouts_features =
+        unified_image_layouts::PhysicalDeviceFeatures::default();
     let mut features2_khr = vk::PhysicalDeviceFeatures2::default()
         .push_next(&mut inline_uniform_block_features)
         .push_next(&mut timeline_semaphore_features)
@@ -274,7 +310,8 @@ fn inspect_adapter(
         .push_next(&mut cooperative_matrix_features)
         .push_next(&mut vulkan_memory_model_features)
         .push_next(&mut float16_int8_features)
-        .push_next(&mut storage_16bit_features);
+        .push_next(&mut storage_16bit_features)
+        .push_next(&mut unified_image_layouts_features);
     unsafe {
         instance
             .get_physical_device_properties2
@@ -499,6 +536,8 @@ fn inspect_adapter(
         dual_source_blending,
         shader_float16,
         cooperative_matrix,
+        unified_image_layouts: supported_extensions.contains(&unified_image_layouts::NAME)
+            && unified_image_layouts_features.unified_image_layouts == vk::TRUE,
         memory_budget,
         bugs,
     })
@@ -808,6 +847,10 @@ impl super::Context {
             if capabilities.memory_budget {
                 device_extensions.push(vk::EXT_MEMORY_BUDGET_NAME);
             }
+            if capabilities.unified_image_layouts {
+                // TODO: Replace with ash constant once available.
+                device_extensions.push(unified_image_layouts::NAME);
+            }
 
             let str_pointers = device_extensions
                 .iter()
@@ -903,6 +946,16 @@ impl super::Context {
                 device_create_info = device_create_info
                     .push_next(&mut khr_cooperative_matrix)
                     .push_next(&mut vulkan_memory_model);
+            }
+
+            // TODO: Replace with ash typed struct once available.
+            let mut khr_unified_image_layouts;
+            if capabilities.unified_image_layouts {
+                khr_unified_image_layouts = unified_image_layouts::PhysicalDeviceFeatures {
+                    unified_image_layouts: vk::TRUE,
+                    ..Default::default()
+                };
+                device_create_info = device_create_info.push_next(&mut khr_unified_image_layouts);
             }
 
             let mut core_features = vk::PhysicalDeviceFeatures::default();
