@@ -62,9 +62,9 @@ jobs:
         if: matrix.full
         run: cargo test --workspace --all-features
 
-      - name: Test GLES
+      - name: Check GLES
         if: matrix.name == 'Linux' || matrix.name == 'Windows'
-        run: cargo build --example bunnymark
+        run: cargo check --workspace
         env:
           RUSTFLAGS: "--cfg gles"
 
@@ -109,6 +109,11 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets
+
+      - name: Run clippy (GLES)
+        run: cargo clippy --workspace
+        env:
+          RUSTFLAGS: "--cfg gles"
 
   gpu-test:
     name: GPU Tests (${{ matrix.name }})
