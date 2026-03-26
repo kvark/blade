@@ -391,6 +391,8 @@ impl crate::traits::ResourceDevice for super::Context {
     }
 
     fn destroy_acceleration_structure(&self, acceleration_structure: super::AccelerationStructure) {
+        // Associated objects (BLAS references) are released automatically by
+        // the ObjC runtime when the acceleration structure is deallocated.
         let _ = unsafe { Retained::from_raw(acceleration_structure.raw) };
     }
 }

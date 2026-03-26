@@ -6,6 +6,9 @@ use objc2_metal::{
 };
 use std::{marker::PhantomData, mem, ptr::NonNull, slice, time::Duration};
 
+/// Key for the ObjC associated object that stores BLAS references on a TLAS.
+static ASSOCIATED_BLAS_KEY: u8 = 0;
+
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let slot = ctx.targets[index as usize] as _;
@@ -89,15 +92,71 @@ impl crate::ShaderBindable for crate::AccelerationStructure {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let slot = ctx.targets[index as usize] as _;
         let value = Some(self.as_ref());
+        // Metal requires useResource for the TLAS and all referenced BLAS,
+        // otherwise the GPU may not have them resident in memory.
+        // The BLAS pointers are stored as an ObjC associated object (NSData)
+        // on the TLAS, set during build_top_level.
+        let tlas_resource: &objc2::runtime::ProtocolObject<dyn metal::MTLResource> =
+            unsafe { &*(self.raw as *const _) };
+        let (blas_ptr, blas_count) = unsafe {
+            let data = objc2::ffi::objc_getAssociatedObject(
+                self.raw as *const objc2::runtime::AnyObject,
+                &ASSOCIATED_BLAS_KEY as *const _ as *const std::ffi::c_void,
+            );
+            if data.is_null() {
+                (NonNull::dangling(), 0)
+            } else {
+                let data: &objc2_foundation::NSData = &*(data as *const _);
+                let bytes = data.as_bytes_unchecked();
+                let len = bytes.len() / mem::size_of::<*mut ()>();
+                (NonNull::new_unchecked(bytes.as_ptr() as *mut _), len)
+            }
+        };
         unsafe {
             if let Some(encoder) = ctx.vs_encoder {
+                let stages = metal::MTLRenderStages::Vertex;
                 encoder.setVertexAccelerationStructure_atBufferIndex(value, slot);
+                encoder.useResource_usage_stages(
+                    tlas_resource,
+                    metal::MTLResourceUsage::Read,
+                    stages,
+                );
+                if blas_count != 0 {
+                    encoder.useResources_count_usage_stages(
+                        blas_ptr,
+                        blas_count,
+                        metal::MTLResourceUsage::Read,
+                        stages,
+                    );
+                }
             }
             if let Some(encoder) = ctx.fs_encoder {
+                let stages = metal::MTLRenderStages::Fragment;
                 encoder.setFragmentAccelerationStructure_atBufferIndex(value, slot);
+                encoder.useResource_usage_stages(
+                    tlas_resource,
+                    metal::MTLResourceUsage::Read,
+                    stages,
+                );
+                if blas_count != 0 {
+                    encoder.useResources_count_usage_stages(
+                        blas_ptr,
+                        blas_count,
+                        metal::MTLResourceUsage::Read,
+                        stages,
+                    );
+                }
             }
             if let Some(encoder) = ctx.cs_encoder {
                 encoder.setAccelerationStructure_atBufferIndex(value, slot);
+                encoder.useResource_usage(tlas_resource, metal::MTLResourceUsage::Read);
+                if blas_count != 0 {
+                    encoder.useResources_count_usage(
+                        blas_ptr,
+                        blas_count,
+                        metal::MTLResourceUsage::Read,
+                    );
+                }
             }
         }
     }
@@ -552,6 +611,24 @@ impl crate::traits::AccelerationStructureEncoder
                 scratch_data.buffer.as_ref(),
                 scratch_data.offset as usize,
             );
+
+        // Store BLAS pointers as an associated object on the TLAS so that
+        // `useResources` can be called automatically on bind.
+        let blas_ptrs: Vec<*mut _> = bottom_level.iter().map(|blas| blas.raw).collect();
+        let data = objc2_foundation::NSData::with_bytes(unsafe {
+            std::slice::from_raw_parts(
+                blas_ptrs.as_ptr() as *const u8,
+                blas_ptrs.len() * std::mem::size_of::<*mut ()>(),
+            )
+        });
+        unsafe {
+            objc2::ffi::objc_setAssociatedObject(
+                acceleration_structure.raw as *mut objc2::runtime::AnyObject,
+                &ASSOCIATED_BLAS_KEY as *const _ as *const std::ffi::c_void,
+                objc2::rc::Retained::as_ptr(&data) as *mut objc2::runtime::AnyObject,
+                objc2::ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+            );
+        }
     }
 }
 
