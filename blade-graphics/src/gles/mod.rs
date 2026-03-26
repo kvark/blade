@@ -206,6 +206,7 @@ impl From<crate::TexturePiece> for TexturePart {
 }
 
 #[derive(Clone, Debug)]
+#[allow(unused)]
 struct ImageBinding {
     raw: glow::Texture,
     mip_level: u32,
@@ -215,6 +216,7 @@ struct ImageBinding {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(unused)]
 enum ColorType {
     Float,
     Uint,
@@ -222,6 +224,7 @@ enum ColorType {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 enum Command {
     Draw {
         topology: u32,
@@ -550,7 +553,7 @@ impl crate::traits::CommandDevice for Context {
             };
             for command in encoder.commands.iter() {
                 log::trace!("{:?}", command);
-                unsafe { command.execute(&*gl, &ec) };
+                unsafe { command.execute(&gl, &ec) };
             }
             unsafe {
                 gl.delete_framebuffer(ec.framebuf);
@@ -684,28 +687,30 @@ fn map_compare_func(fun: crate::CompareFunction) -> u32 {
 }
 
 unsafe fn present_blit(gl: &glow::Context, source: glow::Framebuffer, size: crate::Extent) {
-    use glow::HasContext as _;
+    unsafe {
+        use glow::HasContext as _;
 
-    gl.disable(glow::SCISSOR_TEST);
-    gl.color_mask(true, true, true, true);
-    gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
-    gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(source));
-    // Note: the Y-flipping here. GL's presentation is not flipped,
-    // but main rendering is. Therefore, we Y-flip the output positions
-    // in the shader, and also this blit.
-    // Note2: we could avoid doing both and get correct rendering for the main window
-    // but then other render targets would be screwed.
-    gl.blit_framebuffer(
-        0,
-        size.height as i32,
-        size.width as i32,
-        0,
-        0,
-        0,
-        size.width as i32,
-        size.height as i32,
-        glow::COLOR_BUFFER_BIT,
-        glow::NEAREST,
-    );
-    gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+        gl.disable(glow::SCISSOR_TEST);
+        gl.color_mask(true, true, true, true);
+        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
+        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(source));
+        // Note: the Y-flipping here. GL's presentation is not flipped,
+        // but main rendering is. Therefore, we Y-flip the output positions
+        // in the shader, and also this blit.
+        // Note2: we could avoid doing both and get correct rendering for the main window
+        // but then other render targets would be screwed.
+        gl.blit_framebuffer(
+            0,
+            size.height as i32,
+            size.width as i32,
+            0,
+            0,
+            0,
+            size.width as i32,
+            size.height as i32,
+            glow::COLOR_BUFFER_BIT,
+            glow::NEAREST,
+        );
+        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+    }
 }

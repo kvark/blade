@@ -612,7 +612,7 @@ impl blade_asset::Baker for Baker {
         match extension {
             #[cfg(feature = "asset")]
             "gltf" | "glb" => {
-                use base64::engine::{general_purpose::URL_SAFE as ENCODING_ENGINE, Engine as _};
+                use base64::engine::{Engine as _, general_purpose::URL_SAFE as ENCODING_ENGINE};
 
                 let gltf::Gltf { document, mut blob } = gltf::Gltf::from_slice(source).unwrap();
                 // extract buffers

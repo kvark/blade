@@ -260,16 +260,15 @@ impl Example {
                 }],
                 depth_stencil: None,
             },
-        ) {
-            if let mut pc = pass.with(&self.draw_pipeline) {
-                pc.bind(
-                    0,
-                    &DrawData {
-                        input: self.target_view,
-                    },
-                );
-                pc.draw(0, 3, 0, 1);
-            }
+        ) && let mut pc = pass.with(&self.draw_pipeline)
+        {
+            pc.bind(
+                0,
+                &DrawData {
+                    input: self.target_view,
+                },
+            );
+            pc.draw(0, 3, 0, 1);
         }
     }
 

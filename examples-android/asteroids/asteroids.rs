@@ -384,7 +384,7 @@ fn copy_assets_to_dir(app: &AndroidApp, asset_dir_name: &str, output_dir: &Path)
     );
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
     let xr_debug = std::env::var_os("BLADE_XR_DEBUG").is_some();
 
@@ -640,7 +640,9 @@ fn android_main(app: AndroidApp) {
                     continue;
                 }
                 frame_start = Instant::now();
-                if let (Some(ref mut input), Some(session)) = (&mut xr_input, engine.xr_session()) {
+                if let (Some(ref mut input), Some(session)) =
+                    (xr_input.as_mut(), engine.xr_session())
+                {
                     input.sync(&mut engine, &session, *rendered_frames);
                     input.update(&mut engine, &mut game.asteroid_field, game.laser_hit_ps);
                     input.update_laser_objects(&mut engine);

@@ -31,9 +31,11 @@ impl winit::application::ApplicationHandler for App {
             .unwrap()
         };
         let capabilities = context.capabilities();
-        assert!(capabilities
-            .ray_query
-            .contains(gpu::ShaderVisibility::COMPUTE));
+        assert!(
+            capabilities
+                .ray_query
+                .contains(gpu::ShaderVisibility::COMPUTE)
+        );
 
         let window_size = window.inner_size();
         let screen_size = gpu::Extent {

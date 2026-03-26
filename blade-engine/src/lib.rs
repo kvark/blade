@@ -1025,22 +1025,21 @@ impl Engine {
                             finish_op: gpu::FinishOp::Store,
                         }),
                     },
-                ) {
-                    if can_render {
-                        inner.render(
-                            &mut pass,
-                            &render_camera,
-                            &self.render_objects,
-                            &self.asset_hub,
-                            self.environment_map,
-                            *raster_config,
-                        );
-                    }
+                ) && can_render
+                {
+                    inner.render(
+                        &mut pass,
+                        &render_camera,
+                        &self.render_objects,
+                        &self.asset_hub,
+                        self.environment_map,
+                        *raster_config,
+                    );
                 }
 
                 // GUI is a dev-only overlay, so a separate pass keeps the raster path simpler.
-                if self.gui_painter.is_some() {
-                    if let mut pass = command_encoder.render(
+                if self.gui_painter.is_some()
+                    && let mut pass = command_encoder.render(
                         "gui",
                         gpu::RenderTargetSet {
                             colors: &[gpu::RenderTarget {
@@ -1050,20 +1049,15 @@ impl Engine {
                             }],
                             depth_stencil: None,
                         },
-                    ) {
-                        inner.render_debug_lines(&mut pass, &render_camera, &debug_lines);
-                        let screen_desc = blade_egui::ScreenDescriptor {
-                            physical_size: (physical_size.width, physical_size.height),
-                            scale_factor,
-                        };
-                        if let Some(ref mut painter) = self.gui_painter {
-                            painter.paint(
-                                &mut pass,
-                                gui_primitives,
-                                &screen_desc,
-                                &self.gpu_context,
-                            );
-                        }
+                    )
+                {
+                    inner.render_debug_lines(&mut pass, &render_camera, &debug_lines);
+                    let screen_desc = blade_egui::ScreenDescriptor {
+                        physical_size: (physical_size.width, physical_size.height),
+                        scale_factor,
+                    };
+                    if let Some(ref mut painter) = self.gui_painter {
+                        painter.paint(&mut pass, gui_primitives, &screen_desc, &self.gpu_context);
                     }
                 }
             }
@@ -1426,11 +1420,11 @@ impl Engine {
         use blade_helpers::ExposeHud as _;
 
         let mut selection = blade_render::SelectionInfo::default();
-        if self.debug.mouse_pos.is_some() {
-            if let Renderer::RayTracer { ref mut inner, .. } = self.renderer {
-                selection = inner.read_debug_selection_info();
-                self.selected_object_handle = self.find_object(selection.custom_index);
-            }
+        if self.debug.mouse_pos.is_some()
+            && let Renderer::RayTracer { ref mut inner, .. } = self.renderer
+        {
+            selection = inner.read_debug_selection_info();
+            self.selected_object_handle = self.find_object(selection.custom_index);
         }
 
         ui.checkbox(&mut self.track_hot_reloads, "Hot reloading");

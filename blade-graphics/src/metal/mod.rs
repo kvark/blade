@@ -445,10 +445,12 @@ fn map_vertex_format(
 impl Context {
     pub unsafe fn init(desc: super::ContextDesc) -> Result<Self, super::NotSupportedError> {
         if desc.validation {
-            std::env::set_var("METAL_DEVICE_WRAPPER_TYPE", "1");
+            // Safety: called before any threads that read env vars are spawned
+            unsafe { std::env::set_var("METAL_DEVICE_WRAPPER_TYPE", "1") };
         }
         if desc.overlay {
-            std::env::set_var("MTL_HUD_ENABLED", "1");
+            // Safety: called before any threads that read env vars are spawned
+            unsafe { std::env::set_var("MTL_HUD_ENABLED", "1") };
         }
         if desc.device_id.is_some() {
             log::warn!("Unable to filter devices by ID");

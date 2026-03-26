@@ -1,7 +1,7 @@
 [package]
 name = "blade-asset"
-version = "0.2.0"
-edition = "2021"
+version = "0.2.1"
+edition = "2024"
 description = "Asset manager for Blade"
 keywords = ["asset"]
 license = "MIT"

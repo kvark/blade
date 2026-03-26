@@ -2,21 +2,21 @@
 name = "blade-android-asteroids"
 version = "0.1.0"
 publish = false
-edition = "2021"
+edition = "2024"
 
 [features]
 
 [dependencies]
 
 [target.'cfg(target_os = "android")'.dependencies]
-blade-asset = { version = "0.2", path = "../../blade-asset" }
-blade-engine = { version = "0.1", path = "../../blade-engine" }
-blade-particle = { version = "0.1", path = "../../blade-particle" }
-blade-graphics = { version = "0.7", path = "../../blade-graphics" }
-blade-render = { version = "0.4", path = "../../blade-render" }
-mint = "0.5"
+blade-asset = { workspace = true }
+blade-engine = { workspace = true }
+blade-particle = { workspace = true }
+blade-graphics = { workspace = true }
+blade-render = { workspace = true }
+mint = { workspace = true }
 openxr = { workspace = true }
-log = "0.4"
+log = { workspace = true }
 android-activity = { version = "0.6", features = ["native-activity"] }
 android_logger = "0.14"
 

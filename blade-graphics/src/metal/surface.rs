@@ -1,5 +1,5 @@
-use objc2::rc::Retained;
 use objc2::ClassType;
+use objc2::rc::Retained;
 use objc2_core_foundation::CGSize;
 use objc2_quartz_core::CAMetalLayer;
 

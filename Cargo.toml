@@ -17,6 +17,15 @@ members = [
 exclude = []
 
 [workspace.dependencies]
+blade-graphics = { path = "blade-graphics", version = "0.8" }
+blade-util = { path = "blade-util", version = "0.4" }
+blade-egui = { path = "blade-egui", version = "0.8" }
+blade-particle = { path = "blade-particle", version = "0.1" }
+blade-macros = { path = "blade-macros", version = "0.3" }
+blade-helpers = { path = "blade-helpers", version = "0.1" }
+blade-asset = { path = "blade-asset", version = "0.2.1" }
+blade-render = { path = "blade-render", version = "0.5" }
+blade-engine = { path = "blade-engine", version = "0.1" }
 base64 = "0.21"
 bitflags = "2"
 bytemuck = { version = "1", features = ["derive"] }
@@ -41,7 +50,7 @@ num_cpus = "1"
 name = "blade"
 description = "Sharp and simple graphics library"
 version = "0.3.0"
-edition = "2021"
+edition = "2024"
 rust-version = "1.88"
 keywords = ["graphics"]
 license = "MIT"
@@ -53,14 +62,14 @@ readme = "docs/README.md"
 [dependencies]
 
 [dev-dependencies]
-blade-graphics = { path = "blade-graphics" }
-blade-helpers = { path = "blade-helpers" }
-blade-egui = { path = "blade-egui" }
-blade-asset = { path = "blade-asset" }
-blade-engine = { path = "blade-engine" }
-blade-particle = { path = "blade-particle" }
-blade-render = { path = "blade-render" }
-blade-macros = { path = "blade-macros" }
+blade-graphics.workspace = true
+blade-helpers.workspace = true
+blade-egui.workspace = true
+blade-asset.workspace = true
+blade-engine.workspace = true
+blade-particle.workspace = true
+blade-render.workspace = true
+blade-macros.workspace = true
 bytemuck = { workspace = true }
 choir = { workspace = true }
 egui = { workspace = true }

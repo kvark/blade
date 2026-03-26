@@ -126,10 +126,10 @@ fn detect_gpu_vendors() -> Vec<u32> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        if let Ok(id) = u32::from_str_radix(vendor.trim().trim_start_matches("0x"), 16) {
-            if !vendors.contains(&id) {
-                vendors.push(id);
-            }
+        if let Ok(id) = u32::from_str_radix(vendor.trim().trim_start_matches("0x"), 16)
+            && !vendors.contains(&id)
+        {
+            vendors.push(id);
         }
     }
     vendors
@@ -161,7 +161,7 @@ fn is_presentation_broken(
     }
 }
 
-unsafe fn inspect_adapter(
+fn inspect_adapter(
     phd: vk::PhysicalDevice,
     instance: &super::Instance,
     driver_api_version: u32,
@@ -188,19 +188,21 @@ unsafe fn inspect_adapter(
         .push_next(&mut acceleration_structure_properties)
         .push_next(&mut portability_subset_properties)
         .push_next(&mut driver_properties);
-    instance
-        .get_physical_device_properties2
-        .get_physical_device_properties2(phd, &mut properties2_khr);
+    unsafe {
+        instance
+            .get_physical_device_properties2
+            .get_physical_device_properties2(phd, &mut properties2_khr);
+    }
 
     let properties = properties2_khr.properties;
-    let name = ffi::CStr::from_ptr(properties.device_name.as_ptr());
+    let name = unsafe { ffi::CStr::from_ptr(properties.device_name.as_ptr()) };
     log::info!("Adapter: {:?}", name);
 
-    if let Some(device_id) = desc.device_id {
-        if device_id != properties.device_id {
-            log::info!("Rejected device ID 0x{:X}", properties.device_id);
-            return None;
-        }
+    if let Some(device_id) = desc.device_id
+        && device_id != properties.device_id
+    {
+        log::info!("Rejected device ID 0x{:X}", properties.device_id);
+        return None;
     }
 
     let api_version = properties.api_version.min(driver_api_version);
@@ -209,13 +211,15 @@ unsafe fn inspect_adapter(
         return None;
     }
 
-    let supported_extension_properties = instance
-        .core
-        .enumerate_device_extension_properties(phd)
-        .unwrap();
+    let supported_extension_properties = unsafe {
+        instance
+            .core
+            .enumerate_device_extension_properties(phd)
+            .unwrap()
+    };
     let supported_extensions = supported_extension_properties
         .iter()
-        .map(|ext_prop| ffi::CStr::from_ptr(ext_prop.extension_name.as_ptr()))
+        .map(|ext_prop| unsafe { ffi::CStr::from_ptr(ext_prop.extension_name.as_ptr()) })
         .collect::<Vec<_>>();
     for extension in REQUIRED_DEVICE_EXTENSIONS {
         if !supported_extensions.contains(extension) {
@@ -271,9 +275,11 @@ unsafe fn inspect_adapter(
         .push_next(&mut vulkan_memory_model_features)
         .push_next(&mut float16_int8_features)
         .push_next(&mut storage_16bit_features);
-    instance
-        .get_physical_device_properties2
-        .get_physical_device_features2(phd, &mut features2_khr);
+    unsafe {
+        instance
+            .get_physical_device_properties2
+            .get_physical_device_features2(phd, &mut features2_khr)
+    };
 
     let dual_source_blending = features2_khr.features.dual_src_blend != 0;
     let shader_float16 = float16_int8_features.shader_float16 != 0;
@@ -367,8 +373,11 @@ unsafe fn inspect_adapter(
     } else if acceleration_structure_properties.max_geometry_count == 0
         || acceleration_structure_features.acceleration_structure == vk::FALSE
     {
-        log::info!("No ray tracing because of the acceleration structure. Properties = {:?}. Features = {:?}",
-            acceleration_structure_properties, acceleration_structure_features);
+        log::info!(
+            "No ray tracing because of the acceleration structure. Properties = {:?}. Features = {:?}",
+            acceleration_structure_properties,
+            acceleration_structure_features
+        );
         None
     } else if ray_query_features.ray_query == vk::FALSE {
         log::info!(
@@ -404,10 +413,12 @@ unsafe fn inspect_adapter(
     } else {
         // Query supported cooperative matrix configurations and find
         // square float configurations (Naga supports 8x8 and 16x16).
-        let coop_props = instance
-            .cooperative_matrix
-            .get_physical_device_cooperative_matrix_properties(phd)
-            .unwrap_or_default();
+        let coop_props = unsafe {
+            instance
+                .cooperative_matrix
+                .get_physical_device_cooperative_matrix_properties(phd)
+                .unwrap_or_default()
+        };
         let find_tile = |a_type, b_type, c_type, result_type| {
             [8u32, 16].into_iter().find(|&size| {
                 coop_props.iter().any(|p| {
@@ -455,17 +466,19 @@ unsafe fn inspect_adapter(
     let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
     let memory_budget = supported_extensions.contains(&vk::EXT_MEMORY_BUDGET_NAME);
 
-    let device_information = crate::DeviceInformation {
-        is_software_emulated: properties.device_type == vk::PhysicalDeviceType::CPU,
-        device_name: ffi::CStr::from_ptr(properties.device_name.as_ptr())
-            .to_string_lossy()
-            .to_string(),
-        driver_name: ffi::CStr::from_ptr(driver_properties.driver_name.as_ptr())
-            .to_string_lossy()
-            .to_string(),
-        driver_info: ffi::CStr::from_ptr(driver_properties.driver_info.as_ptr())
-            .to_string_lossy()
-            .to_string(),
+    let device_information = unsafe {
+        crate::DeviceInformation {
+            is_software_emulated: properties.device_type == vk::PhysicalDeviceType::CPU,
+            device_name: ffi::CStr::from_ptr(properties.device_name.as_ptr())
+                .to_string_lossy()
+                .to_string(),
+            driver_name: ffi::CStr::from_ptr(driver_properties.driver_name.as_ptr())
+                .to_string_lossy()
+                .to_string(),
+            driver_info: ffi::CStr::from_ptr(driver_properties.driver_info.as_ptr())
+                .to_string_lossy()
+                .to_string(),
+        }
     };
 
     Some(AdapterCapabilities {
@@ -493,14 +506,14 @@ unsafe fn inspect_adapter(
 
 impl super::Context {
     pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, NotSupportedError> {
-        let entry = match ash::Entry::load() {
+        let entry = match unsafe { ash::Entry::load() } {
             Ok(entry) => entry,
             Err(err) => {
                 log::error!("Missing Vulkan entry points: {:?}", err);
                 return Err(crate::PlatformError::loading(err).into());
             }
         };
-        let driver_api_version = match entry.try_enumerate_instance_version() {
+        let driver_api_version = match unsafe { entry.try_enumerate_instance_version() } {
             // Vulkan 1.1+
             Ok(Some(version)) => version,
             Ok(None) => return Err(NotSupportedError::NoSupportedDeviceFound),
@@ -527,7 +540,7 @@ impl super::Context {
             }
         }
 
-        let supported_layers = match entry.enumerate_instance_layer_properties() {
+        let supported_layers = match unsafe { entry.enumerate_instance_layer_properties() } {
             Ok(layers) => layers,
             Err(err) => {
                 log::error!("enumerate_instance_layer_properties: {:?}", err);
@@ -536,7 +549,7 @@ impl super::Context {
         };
         let supported_layer_names = supported_layers
             .iter()
-            .map(|properties| ffi::CStr::from_ptr(properties.layer_name.as_ptr()))
+            .map(|properties| unsafe { ffi::CStr::from_ptr(properties.layer_name.as_ptr()) })
             .collect::<Vec<_>>();
 
         let mut layers: Vec<&'static ffi::CStr> = Vec::new();
@@ -556,7 +569,7 @@ impl super::Context {
         }
 
         let supported_instance_extension_properties =
-            match entry.enumerate_instance_extension_properties(None) {
+            match unsafe { entry.enumerate_instance_extension_properties(None) } {
                 Ok(extensions) => extensions,
                 Err(err) => {
                     log::error!("enumerate_instance_extension_properties: {:?}", err);
@@ -565,7 +578,7 @@ impl super::Context {
             };
         let supported_instance_extensions = supported_instance_extension_properties
             .iter()
-            .map(|ext_prop| ffi::CStr::from_ptr(ext_prop.extension_name.as_ptr()))
+            .map(|ext_prop| unsafe { ffi::CStr::from_ptr(ext_prop.extension_name.as_ptr()) })
             .collect::<Vec<_>>();
 
         let core_instance = {
@@ -632,7 +645,7 @@ impl super::Context {
                 .enabled_extension_names(extension_strings);
             if let Some(ref xr_desc) = desc.xr {
                 let get_instance_proc_addr: openxr::sys::platform::VkGetInstanceProcAddr =
-                    std::mem::transmute(entry.static_fn().get_instance_proc_addr);
+                    unsafe { std::mem::transmute(entry.static_fn().get_instance_proc_addr) };
                 let raw_instance = unsafe {
                     xr_desc
                         .instance
@@ -699,22 +712,18 @@ impl super::Context {
                     .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?
             };
             let physical_device = vk::PhysicalDevice::from_raw(xr_physical_device as _);
-            let capabilities = unsafe {
-                inspect_adapter(
-                    physical_device,
-                    &instance,
-                    driver_api_version,
-                    &desc,
-                    &gpu_vendors,
-                    display_server,
-                )
-            }
+            let capabilities = inspect_adapter(
+                physical_device,
+                &instance,
+                driver_api_version,
+                &desc,
+                &gpu_vendors,
+                display_server,
+            )
             .ok_or(NotSupportedError::NoSupportedDeviceFound)?;
             (physical_device, capabilities)
         } else {
-            instance
-                .core
-                .enumerate_physical_devices()
+            unsafe { instance.core.enumerate_physical_devices() }
                 .map_err(crate::PlatformError::init)?
                 .into_iter()
                 .find_map(|phd| {
@@ -908,9 +917,9 @@ impl super::Context {
 
             if let Some(ref xr_desc) = desc.xr {
                 let get_instance_proc_addr: openxr::sys::platform::VkGetInstanceProcAddr =
-                    std::mem::transmute(entry.static_fn().get_instance_proc_addr);
-                let raw_device = unsafe {
-                    xr_desc
+                    unsafe { std::mem::transmute(entry.static_fn().get_instance_proc_addr) };
+                unsafe {
+                    let raw_device = xr_desc
                         .instance
                         .create_vulkan_device(
                             xr_desc.system_id,
@@ -919,19 +928,19 @@ impl super::Context {
                             &device_create_info as *const _ as *const _,
                         )
                         .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?
-                        .map_err(|raw| crate::PlatformError::init(vk::Result::from_raw(raw)))?
-                };
-                unsafe {
+                        .map_err(|raw| crate::PlatformError::init(vk::Result::from_raw(raw)))?;
                     ash::Device::load(
                         instance.core.fp_v1_0(),
                         vk::Device::from_raw(raw_device as _),
                     )
                 }
             } else {
-                instance
-                    .core
-                    .create_device(physical_device, &device_create_info, None)
-                    .map_err(crate::PlatformError::init)?
+                unsafe {
+                    instance
+                        .core
+                        .create_device(physical_device, &device_create_info, None)
+                        .map_err(crate::PlatformError::init)?
+                }
             }
         };
 
@@ -1024,9 +1033,11 @@ impl super::Context {
         };
 
         let memory_manager = {
-            let mem_properties = instance
-                .core
-                .get_physical_device_memory_properties(physical_device);
+            let mem_properties = unsafe {
+                instance
+                    .core
+                    .get_physical_device_memory_properties(physical_device)
+            };
             let memory_types =
                 &mem_properties.memory_types[..mem_properties.memory_type_count as usize];
             let limits = &capabilities.properties.limits;
@@ -1089,9 +1100,11 @@ impl super::Context {
             }
         };
 
-        let queue = device
-            .core
-            .get_device_queue(capabilities.queue_family_index, 0);
+        let queue = unsafe {
+            device
+                .core
+                .get_device_queue(capabilities.queue_family_index, 0)
+        };
         let last_progress = 0;
         let mut timeline_info = vk::SemaphoreTypeCreateInfo {
             semaphore_type: vk::SemaphoreType::TIMELINE,
@@ -1100,10 +1113,12 @@ impl super::Context {
         };
         let timeline_semaphore_create_info =
             vk::SemaphoreCreateInfo::default().push_next(&mut timeline_info);
-        let timeline_semaphore = device
-            .core
-            .create_semaphore(&timeline_semaphore_create_info, None)
-            .unwrap();
+        let timeline_semaphore = unsafe {
+            device
+                .core
+                .create_semaphore(&timeline_semaphore_create_info, None)
+                .unwrap()
+        };
 
         let mut naga_flags = spv::WriterFlags::FORCE_POINT_SIZE;
         let shader_debug_path = if desc.validation || desc.capture {
@@ -1124,10 +1139,11 @@ impl super::Context {
                 queue_family_index: capabilities.queue_family_index,
                 queue_index: 0,
             };
-            match xr_desc
-                .instance
-                .create_session::<openxr::Vulkan>(xr_desc.system_id, &session_info)
-            {
+            match unsafe {
+                xr_desc
+                    .instance
+                    .create_session::<openxr::Vulkan>(xr_desc.system_id, &session_info)
+            } {
                 Ok((session, frame_wait, frame_stream)) => {
                     let view_type = openxr::ViewConfigurationType::PRIMARY_STEREO;
                     let environment_blend_mode = xr_desc

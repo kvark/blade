@@ -38,7 +38,8 @@ pub fn emit_annotated_error<E: Error>(ann_err: &naga::WithSpan<E>, filename: &st
             .collect(),
     );
 
-    term::emit(&mut writer.lock(), &config, &files, &diagnostic).expect("cannot write error");
+    term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)
+        .expect("cannot write error");
 }
 
 impl super::TextureFormat {

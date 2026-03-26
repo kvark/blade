@@ -80,7 +80,11 @@ impl crate::traits::ResourceDevice for super::Context {
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             #[cfg(not(target_arch = "wasm32"))]
             if !desc.name.is_empty() && gl.supports_debug() {
-                gl.object_label(glow::BUFFER, std::mem::transmute(raw), Some(desc.name));
+                gl.object_label(
+                    glow::BUFFER,
+                    std::mem::transmute::<glow::NativeBuffer, u32>(raw),
+                    Some(desc.name),
+                );
             }
         }
         super::Buffer {
@@ -152,7 +156,7 @@ impl crate::traits::ResourceDevice for super::Context {
                 if !desc.name.is_empty() && gl.supports_debug() {
                     gl.object_label(
                         glow::RENDERBUFFER,
-                        std::mem::transmute(raw),
+                        std::mem::transmute::<glow::NativeRenderbuffer, u32>(raw),
                         Some(desc.name),
                     );
                 }
@@ -180,12 +184,10 @@ impl crate::traits::ResourceDevice for super::Context {
                         } else {
                             glow::TEXTURE_2D_MULTISAMPLE_ARRAY
                         }
+                    } else if desc.sample_count <= 1 {
+                        glow::TEXTURE_2D
                     } else {
-                        if desc.sample_count <= 1 {
-                            glow::TEXTURE_2D
-                        } else {
-                            glow::TEXTURE_2D_MULTISAMPLE
-                        }
+                        glow::TEXTURE_2D_MULTISAMPLE
                     }
                 }
                 crate::TextureDimension::D3 => {
@@ -248,7 +250,11 @@ impl crate::traits::ResourceDevice for super::Context {
                 gl.bind_texture(target, None);
                 #[cfg(not(target_arch = "wasm32"))]
                 if !desc.name.is_empty() && gl.supports_debug() {
-                    gl.object_label(glow::TEXTURE, std::mem::transmute(raw), Some(desc.name));
+                    gl.object_label(
+                        glow::TEXTURE,
+                        std::mem::transmute::<glow::NativeTexture, u32>(raw),
+                        Some(desc.name),
+                    );
                 }
             }
 
@@ -342,7 +348,11 @@ impl crate::traits::ResourceDevice for super::Context {
 
             #[cfg(not(target_arch = "wasm32"))]
             if !desc.name.is_empty() && gl.supports_debug() {
-                gl.object_label(glow::SAMPLER, std::mem::transmute(raw), Some(desc.name));
+                gl.object_label(
+                    glow::SAMPLER,
+                    std::mem::transmute::<glow::NativeSampler, u32>(raw),
+                    Some(desc.name),
+                );
             }
         }
         super::Sampler { raw }
