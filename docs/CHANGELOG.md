@@ -27,6 +27,7 @@ Changelog for *Blade* project
   - vk: reject GPUs that cannot present in Intel+NVIDIA PRIME configurations
   - egl: use DMA-BUF sharing with different displays for presentation
   - vk: uniform buffer fallback for buggy Qualcomm devices
+  - metal: fix lifetimes of acceleration structures
   - debug bounds check on `BufferPiece::data()`
 
 ## blade-graphics-0.7.1 (22 Feb 2025)

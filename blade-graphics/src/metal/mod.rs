@@ -568,7 +568,7 @@ impl Context {
         use metal::MTLDevice as _;
         let device = self.device.lock().unwrap();
         crate::MemoryStats {
-            budget: device.recommendedMaxWorkingSetSize() as u64,
+            budget: device.recommendedMaxWorkingSetSize(),
             usage: device.currentAllocatedSize() as u64,
         }
     }
