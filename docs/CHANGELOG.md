@@ -1,16 +1,12 @@
 Changelog for *Blade* project
 
-## blade-particle-0.1 (TBD)
+## blade-graphics-0.8, blade-util-0.3, blade-egui-0.7, blade-particle-0.1, blade-asset-0.2.1, blade-engine-0.1 (26 Mar 2026)
 
-## blade-engine-0.1 (TBD)
-
-- moved the engine from "blade" itself, reserving it for future use
-- choice between ray-tracing and rasterization rendering pipelines
-- first-class XR support
-
-## blade-graphics-0.8 (TBD)
-
-- graphics
+- examples:
+  - moved some of the old example code into GPU tests
+  - new "info" example to show supported GPUs
+  - new Asteroids XR example 
+- graphics:
   - OpenXR / Android support (tested on Quest 3S)
   - option to disable ray tracing initialization
   - separate `Capabilities` flag for binding arrays, including TLAS arrays
@@ -19,6 +15,7 @@ Changelog for *Blade* project
     distinguishing timeout from device-lost errors
   - `memory_stats()` API for querying VRAM budget/usage (via `VK_EXT_memory_budget`)
   - `Buffer::size()` accessor on all backends
+    - debug bounds check on `BufferPiece::data()`
   - `PlatformError` is now a unified opaque type across all backends
   - `ComputePipelineBase` trait exposes `get_workgroup_size()` for generic code
   - `NotSupportedError`, `DeviceError`, and `PlatformError` implement `Display` + `Error`
@@ -28,13 +25,20 @@ Changelog for *Blade* project
   - egl: use DMA-BUF sharing with different displays for presentation
   - vk: uniform buffer fallback for buggy Qualcomm devices
   - metal: fix lifetimes of acceleration structures
-  - debug bounds check on `BufferPiece::data()`
+- particle:
+  - new crate forged from the original particle example
+- asset:
+  - support procedural assets
+- engine:
+  - moved the engine from "blade" itself, reserving it for future use
+  - choice between ray-tracing and rasterization rendering pipelines
+  - first-class XR support
 
-## blade-graphics-0.7.1 (22 Feb 2025)
+## blade-graphics-0.7.1 (22 Feb 2026)
 
 - vk: make us compatible with Mesa's LavaPipe
 
-## blade-egui-0.7 (21 Feb 2025)
+## blade-egui-0.7 (21 Feb 2026)
 
 - update to egui-0.33 and blade-graphics-0.7
 
