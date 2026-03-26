@@ -22,7 +22,7 @@ blade-util = { path = "blade-util", version = "0.4" }
 blade-egui = { path = "blade-egui", version = "0.8" }
 blade-particle = { path = "blade-particle", version = "0.1" }
 blade-macros = { path = "blade-macros", version = "0.3" }
-blade-helpers = { path = "blade-helpers", version = "0.1" }
+blade-helpers = { path = "blade-helpers", version = "0.2" }
 blade-asset = { path = "blade-asset", version = "0.2.1" }
 blade-render = { path = "blade-render", version = "0.5" }
 blade-engine = { path = "blade-engine", version = "0.1" }
