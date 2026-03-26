@@ -279,16 +279,16 @@ impl super::Context {
                 );
             }
             // UBO fallback: ensure Plain size fits in the scratch buffer
-            if descriptor_type == vk::DescriptorType::UNIFORM_BUFFER {
-                if let crate::ShaderBinding::Plain { size } = binding {
-                    assert!(
-                        size <= crate::limits::PLAIN_DATA_SIZE,
-                        "UBO binding {} size {} exceeds blade limit {}",
-                        binding_index,
-                        size,
-                        crate::limits::PLAIN_DATA_SIZE
-                    );
-                }
+            if descriptor_type == vk::DescriptorType::UNIFORM_BUFFER
+                && let crate::ShaderBinding::Plain { size } = binding
+            {
+                assert!(
+                    size <= crate::limits::PLAIN_DATA_SIZE,
+                    "UBO binding {} size {} exceeds blade limit {}",
+                    binding_index,
+                    size,
+                    crate::limits::PLAIN_DATA_SIZE
+                );
             }
 
             vk_bindings.push(vk::DescriptorSetLayoutBinding {
@@ -431,18 +431,17 @@ impl crate::traits::ShaderDevice for super::Context {
 
         unsafe { self.device.core.destroy_shader_module(cs.vk_module, None) };
 
-        if let Some(ref ext) = self.device.shader_info {
-            if let Ok(statistics) =
+        if let Some(ref ext) = self.device.shader_info
+            && let Ok(statistics) =
                 unsafe { ext.get_shader_info_statistics(raw, vk::ShaderStageFlags::COMPUTE) }
-            {
-                let ru = &statistics.resource_usage;
-                log::info!(
-                    "Compute pipeline '{}' uses: {} VGPRs, {} SGPRs",
-                    desc.name,
-                    ru.num_used_vgprs,
-                    ru.num_used_sgprs,
-                );
-            }
+        {
+            let ru = &statistics.resource_usage;
+            log::info!(
+                "Compute pipeline '{}' uses: {} VGPRs, {} SGPRs",
+                desc.name,
+                ru.num_used_vgprs,
+                ru.num_used_sgprs,
+            );
         }
 
         if !desc.name.is_empty() {

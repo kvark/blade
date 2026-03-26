@@ -1,7 +1,7 @@
 [package]
 name = "blade-graphics"
-version = "0.7.1"
-edition = "2021"
+version = "0.8.0"
+edition = "2024"
 description = "Graphics abstraction for Blade"
 keywords = ["graphics"]
 license = "MIT"
@@ -14,7 +14,7 @@ repository = "https://github.com/kvark/blade"
 [dependencies]
 bitflags = { workspace = true }
 bytemuck = { workspace = true }
-codespan-reporting = "0.12"
+codespan-reporting = "0.13"
 hidden-trait = "0.1"
 log = { workspace = true }
 mint = { workspace = true }

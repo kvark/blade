@@ -311,8 +311,13 @@ impl super::Shader {
                             vertex_fetch.layout.attributes.iter().enumerate()
                         {
                             if at_name == member_name {
-                                log::debug!("Assigning location({}) for member '{}' to be using input {}:{}",
-                                    attribute_mappings.len(), member_name, buffer_index, attribute_index);
+                                log::debug!(
+                                    "Assigning location({}) for member '{}' to be using input {}:{}",
+                                    attribute_mappings.len(),
+                                    member_name,
+                                    buffer_index,
+                                    attribute_index
+                                );
                                 member.binding = Some(binding);
                                 attribute_mappings.push(crate::VertexAttributeMapping {
                                     buffer_index,

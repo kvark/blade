@@ -11,18 +11,22 @@ impl super::Surface {
     }
 
     unsafe fn deinit_swapchain(&mut self, raw_device: &ash::Device) {
-        let _ = raw_device.device_wait_idle();
-        self.device
-            .destroy_swapchain(mem::take(&mut self.swapchain.raw), None);
+        unsafe {
+            let _ = raw_device.device_wait_idle();
+            self.device
+                .destroy_swapchain(mem::take(&mut self.swapchain.raw), None);
+        }
         for frame in self.frames.drain(..) {
             for view in frame.xr_views {
                 if view != vk::ImageView::null() {
-                    raw_device.destroy_image_view(view, None);
+                    unsafe { raw_device.destroy_image_view(view, None) };
                 }
             }
-            raw_device.destroy_image_view(frame.view, None);
-            raw_device.destroy_semaphore(frame.acquire_semaphore, None);
-            raw_device.destroy_semaphore(frame.present_semaphore, None);
+            unsafe {
+                raw_device.destroy_image_view(frame.view, None);
+                raw_device.destroy_semaphore(frame.acquire_semaphore, None);
+                raw_device.destroy_semaphore(frame.present_semaphore, None);
+            }
         }
     }
 

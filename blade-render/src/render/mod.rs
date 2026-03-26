@@ -663,9 +663,11 @@ impl RayTracer {
         config: &RenderConfig,
     ) -> Self {
         let capabilities = gpu.capabilities();
-        assert!(capabilities
-            .ray_query
-            .contains(blade_graphics::ShaderVisibility::COMPUTE));
+        assert!(
+            capabilities
+                .ray_query
+                .contains(blade_graphics::ShaderVisibility::COMPUTE)
+        );
 
         let sp = ShaderPipelines::init(&shaders, config, gpu, shader_man).unwrap();
         let debug = {
@@ -787,42 +789,41 @@ impl RayTracer {
             let _ = task.join();
         }
 
-        if self.shaders.fill_gbuf != old.fill_gbuf {
-            if let Ok(ref shader) = asset_hub.shaders[self.shaders.fill_gbuf].raw {
-                self.fill_pipeline = ShaderPipelines::create_gbuf_fill(shader, gpu);
-            }
+        if self.shaders.fill_gbuf != old.fill_gbuf
+            && let Ok(ref shader) = asset_hub.shaders[self.shaders.fill_gbuf].raw
+        {
+            self.fill_pipeline = ShaderPipelines::create_gbuf_fill(shader, gpu);
         }
-        if self.shaders.ray_trace != old.ray_trace {
-            if let Ok(ref shader) = asset_hub.shaders[self.shaders.ray_trace].raw {
-                assert_eq!(
-                    shader.get_struct_size("StoredReservoir"),
-                    self.reservoir_size
-                );
-                self.main_pipeline = ShaderPipelines::create_ray_trace(shader, gpu);
-            }
+        if self.shaders.ray_trace != old.ray_trace
+            && let Ok(ref shader) = asset_hub.shaders[self.shaders.ray_trace].raw
+        {
+            assert_eq!(
+                shader.get_struct_size("StoredReservoir"),
+                self.reservoir_size
+            );
+            self.main_pipeline = ShaderPipelines::create_ray_trace(shader, gpu);
         }
-        if self.shaders.a_trous != old.a_trous {
-            if let Ok(ref shader) = asset_hub.shaders[self.shaders.a_trous].raw {
-                self.blur.temporal_accum_pipeline =
-                    ShaderPipelines::create_temporal_accum(shader, gpu);
-                self.blur.a_trous_pipeline = ShaderPipelines::create_a_trous(shader, gpu);
-            }
+        if self.shaders.a_trous != old.a_trous
+            && let Ok(ref shader) = asset_hub.shaders[self.shaders.a_trous].raw
+        {
+            self.blur.temporal_accum_pipeline = ShaderPipelines::create_temporal_accum(shader, gpu);
+            self.blur.a_trous_pipeline = ShaderPipelines::create_a_trous(shader, gpu);
         }
-        if self.shaders.post_proc != old.post_proc {
-            if let Ok(ref shader) = asset_hub.shaders[self.shaders.post_proc].raw {
-                self.post_proc_pipeline =
-                    ShaderPipelines::create_post_proc(shader, self.surface_info, gpu);
-            }
+        if self.shaders.post_proc != old.post_proc
+            && let Ok(ref shader) = asset_hub.shaders[self.shaders.post_proc].raw
+        {
+            self.post_proc_pipeline =
+                ShaderPipelines::create_post_proc(shader, self.surface_info, gpu);
         }
-        if self.shaders.debug_draw != old.debug_draw {
-            if let Ok(ref shader) = asset_hub.shaders[self.shaders.debug_draw].raw {
-                self.debug.recreate_draw_pipeline(shader, gpu);
-            }
+        if self.shaders.debug_draw != old.debug_draw
+            && let Ok(ref shader) = asset_hub.shaders[self.shaders.debug_draw].raw
+        {
+            self.debug.recreate_draw_pipeline(shader, gpu);
         }
-        if self.shaders.debug_blit != old.debug_blit {
-            if let Ok(ref shader) = asset_hub.shaders[self.shaders.debug_blit].raw {
-                self.debug.recreate_blit_pipeline(shader, gpu);
-            }
+        if self.shaders.debug_blit != old.debug_blit
+            && let Ok(ref shader) = asset_hub.shaders[self.shaders.debug_blit].raw
+        {
+            self.debug.recreate_blit_pipeline(shader, gpu);
         }
 
         true

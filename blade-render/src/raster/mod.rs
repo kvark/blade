@@ -252,11 +252,11 @@ impl Rasterizer {
             let _ = task.join();
         }
 
-        if self.shaders.raster != old.raster {
-            if let Ok(ref shader) = asset_hub.shaders[self.shaders.raster].raw {
-                self.pipelines.main = RasterPipelines::create_main(shader, self.surface_info, gpu);
-                self.pipelines.sky = RasterPipelines::create_sky(shader, self.surface_info, gpu);
-            }
+        if self.shaders.raster != old.raster
+            && let Ok(ref shader) = asset_hub.shaders[self.shaders.raster].raw
+        {
+            self.pipelines.main = RasterPipelines::create_main(shader, self.surface_info, gpu);
+            self.pipelines.sky = RasterPipelines::create_sky(shader, self.surface_info, gpu);
         }
 
         true

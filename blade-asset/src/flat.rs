@@ -30,10 +30,10 @@ macro_rules! impl_basic {
             const ALIGNMENT: usize = mem::align_of::<Self>();
             const FIXED_SIZE: Option<NonZeroUsize> = NonZeroUsize::new(mem::size_of::<Self>());
             unsafe fn write(&self, ptr: *mut u8) {
-                ptr::write(ptr as *mut Self, *self);
+                unsafe { ptr::write(ptr as *mut Self, *self) };
             }
             unsafe fn read(ptr: *const u8) -> Self {
-                ptr::read(ptr as *const Self)
+                unsafe { ptr::read(ptr as *const Self) }
             }
         }
     };
@@ -70,21 +70,23 @@ impl<T: Flat> Flat for Vec<T> {
         })
     }
     unsafe fn write(&self, ptr: *mut u8) {
-        ptr::write(ptr as *mut usize, self.len());
+        unsafe {
+            ptr::write(ptr as *mut usize, self.len());
+        }
         let mut offset = mem::size_of::<usize>();
         for item in self.iter() {
             offset = round_up(offset, T::ALIGNMENT);
-            item.write(ptr.add(offset));
+            unsafe { item.write(ptr.add(offset)) };
             offset += item.size();
         }
     }
     unsafe fn read(ptr: *const u8) -> Self {
-        let counter = ptr::read(ptr as *const usize);
+        let counter = unsafe { ptr::read(ptr as *const usize) };
         let mut offset = mem::size_of::<usize>();
         (0..counter)
             .map(|_| {
                 offset = round_up(offset, T::ALIGNMENT);
-                let value = T::read(ptr.add(offset));
+                let value = unsafe { T::read(ptr.add(offset)) };
                 offset += value.size();
                 value
             })
@@ -96,10 +98,12 @@ impl<T: bytemuck::Pod, const C: usize> Flat for [T; C] {
     const ALIGNMENT: usize = mem::align_of::<T>();
     const FIXED_SIZE: Option<NonZeroUsize> = NonZeroUsize::new(mem::size_of::<Self>());
     unsafe fn write(&self, ptr: *mut u8) {
-        ptr::copy_nonoverlapping(self.as_ptr(), ptr as *mut T, C);
+        unsafe {
+            ptr::copy_nonoverlapping(self.as_ptr(), ptr as *mut T, C);
+        }
     }
     unsafe fn read(ptr: *const u8) -> Self {
-        ptr::read(ptr as *const Self)
+        unsafe { ptr::read(ptr as *const Self) }
     }
 }
 
@@ -111,17 +115,21 @@ impl<T: bytemuck::Pod> Flat for &[T] {
         round_up(mem::size_of::<usize>(), mem::align_of::<T>()) + elem_size * self.len()
     }
     unsafe fn write(&self, ptr: *mut u8) {
-        ptr::write(ptr as *mut usize, self.len());
+        unsafe {
+            ptr::write(ptr as *mut usize, self.len());
+        }
         if !self.is_empty() {
             let offset = round_up(mem::size_of::<usize>(), mem::align_of::<T>());
-            ptr::copy_nonoverlapping(self.as_ptr(), ptr.add(offset) as *mut T, self.len());
+            unsafe {
+                ptr::copy_nonoverlapping(self.as_ptr(), ptr.add(offset) as *mut T, self.len());
+            }
         }
     }
     unsafe fn read(ptr: *const u8) -> Self {
-        let counter = ptr::read(ptr as *const usize);
+        let counter = unsafe { ptr::read(ptr as *const usize) };
         if counter != 0 {
             let offset = round_up(mem::size_of::<usize>(), mem::align_of::<T>());
-            slice::from_raw_parts(ptr.add(offset) as *const T, counter)
+            unsafe { slice::from_raw_parts(ptr.add(offset) as *const T, counter) }
         } else {
             &[]
         }
@@ -135,9 +143,9 @@ impl<'a, T: bytemuck::Pod> Flat for Cow<'a, [T]> {
         self.as_ref().size()
     }
     unsafe fn write(&self, ptr: *mut u8) {
-        self.as_ref().write(ptr)
+        unsafe { self.as_ref().write(ptr) }
     }
     unsafe fn read(ptr: *const u8) -> Self {
-        Cow::Borrowed(<&'a [T] as Flat>::read(ptr))
+        Cow::Borrowed(unsafe { <&'a [T] as Flat>::read(ptr) })
     }
 }

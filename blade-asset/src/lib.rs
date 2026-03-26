@@ -25,7 +25,7 @@ use std::{
 mod arena;
 mod flat;
 
-pub use flat::{round_up, Flat};
+pub use flat::{Flat, round_up};
 
 type Version = u32;
 
@@ -339,7 +339,7 @@ impl<B: Baker> AssetManager<B> {
     }
 
     fn make_target_path(&self, base_path: &Path, file_name: &Path, meta: &B::Meta) -> PathBuf {
-        use base64::engine::{general_purpose::URL_SAFE as ENCODING_ENGINE, Engine as _};
+        use base64::engine::{Engine as _, general_purpose::URL_SAFE as ENCODING_ENGINE};
         // The name hash includes the parent path and the metadata.
         let mut hasher = DefaultHasher::new();
         base_path.hash(&mut hasher);
@@ -399,7 +399,7 @@ impl<B: Baker> AssetManager<B> {
                     });
                     file.write_all(&[0; 8]).unwrap(); // write zero hash first
                     file.write_all(&[0; 8]).unwrap(); // write zero data offset
-                                                      // write down the dependencies
+                    // write down the dependencies
                     file.write_all(&inner.dependencies.len().to_le_bytes())
                         .unwrap();
                     for dep in inner.dependencies.iter() {
@@ -628,10 +628,10 @@ impl<B: Baker> AssetManager<B> {
 
     pub fn list_running_tasks(&self, list: &mut Vec<choir::RunningTask>) {
         self.slots.for_each(|_, slot| {
-            if let Some(ref task) = slot.load_task {
-                if !task.is_done() {
-                    list.push(task.clone());
-                }
+            if let Some(ref task) = slot.load_task
+                && !task.is_done()
+            {
+                list.push(task.clone());
             }
         });
     }

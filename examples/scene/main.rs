@@ -425,12 +425,12 @@ impl Example {
 
         self.asset_hub.flush(command_encoder, &mut temp.buffers);
 
-        if let Some(ref task) = self.scene_load_task {
-            if task.is_done() {
-                log::info!("Scene is loaded");
-                self.scene_load_task = None;
-                self.have_objects_changed = true;
-            }
+        if let Some(ref task) = self.scene_load_task
+            && task.is_done()
+        {
+            log::info!("Scene is loaded");
+            self.scene_load_task = None;
+            self.have_objects_changed = true;
         }
 
         if self.scene_load_task.is_none() && self.have_objects_changed {
@@ -556,7 +556,7 @@ impl Example {
 
     #[profiling::function]
     fn populate_view(&mut self, ui: &mut egui::Ui) {
-        use blade_helpers::{populate_debug_selection, ExposeHud as _};
+        use blade_helpers::{ExposeHud as _, populate_debug_selection};
         use strum::IntoEnumIterator as _;
 
         if self.scene_load_task.is_some() {

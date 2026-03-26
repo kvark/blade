@@ -69,7 +69,7 @@ impl TriMesh {
 }
 
 pub fn load(path: &str) -> TriMesh {
-    use base64::engine::{general_purpose::URL_SAFE as ENCODING_ENGINE, Engine as _};
+    use base64::engine::{Engine as _, general_purpose::URL_SAFE as ENCODING_ENGINE};
 
     let gltf::Gltf { document, mut blob } = gltf::Gltf::open(path).unwrap();
     // extract buffers

@@ -13,6 +13,8 @@
     clippy::vec_init_then_push,
     // This is the land of unsafe.
     clippy::missing_safety_doc,
+    // Let me decide when it's too many.
+    clippy::too_many_arguments,
 )]
 #![warn(
     trivial_numeric_casts,
@@ -23,7 +25,7 @@
     clippy::pattern_type_mismatch,
 )]
 
-pub use naga::{back::PipelineConstants, StorageAccess, VectorSize};
+pub use naga::{StorageAccess, VectorSize, back::PipelineConstants};
 pub type Transform = mint::RowMatrix3x4<f32>;
 
 pub const IDENTITY_TRANSFORM: Transform = mint::RowMatrix3x4 {

@@ -1,19 +1,19 @@
 [package]
 name = "blade-engine"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/kvark/blade"
 description = "Blade engine layer"
 
 [dependencies]
-blade-asset = { version = "0.2", path = "../blade-asset" }
-blade-egui = { version = "0.7", path = "../blade-egui" }
-blade-graphics = { version = "0.7", path = "../blade-graphics" }
-blade-helpers = { version = "0.1", path = "../blade-helpers" }
-blade-particle = { version = "0.1", path = "../blade-particle" }
-blade-render = { version = "0.4", path = "../blade-render" }
+blade-asset = { workspace = true }
+blade-egui = { workspace = true }
+blade-graphics = { workspace = true }
+blade-helpers = { workspace = true }
+blade-particle = { workspace = true }
+blade-render = { workspace = true }
 base64 = { workspace = true }
 choir = { workspace = true }
 colorsys = "0.6"

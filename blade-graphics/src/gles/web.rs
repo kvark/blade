@@ -81,11 +81,13 @@ impl super::Context {
                 glow.get_parameter_i32(glow::UNIFORM_BUFFER_OFFSET_ALIGNMENT) as u32
             },
         };
-        let device_information = crate::DeviceInformation {
-            is_software_emulated: false,
-            device_name: glow.get_parameter_string(glow::VENDOR),
-            driver_name: glow.get_parameter_string(glow::RENDERER),
-            driver_info: glow.get_parameter_string(glow::VERSION),
+        let device_information = unsafe {
+            crate::DeviceInformation {
+                is_software_emulated: false,
+                device_name: glow.get_parameter_string(glow::VENDOR),
+                driver_name: glow.get_parameter_string(glow::RENDERER),
+                driver_info: glow.get_parameter_string(glow::VERSION),
+            }
         };
 
         Ok(super::Context {

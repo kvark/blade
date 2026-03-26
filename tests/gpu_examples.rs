@@ -4,7 +4,7 @@
 // On Vulkan builds, other deps pull it in transitively; on GLES builds we must link it explicitly.
 #[cfg(all(gles, windows))]
 #[link(name = "advapi32")]
-extern "C" {}
+unsafe extern "C" {}
 
 use blade_graphics as gpu;
 use blade_graphics::ShaderData;
@@ -244,17 +244,17 @@ fn dispatch_gpu_test() {
         buffer_count: 1,
     });
     command_encoder.start();
-    if let mut compute = command_encoder.compute("dispatch") {
-        if let mut pass = compute.with(&pipeline) {
-            pass.bind(
-                0,
-                &DispatchGlobals {
-                    input: input.into(),
-                    output: output.into(),
-                },
-            );
-            pass.dispatch([1, 1, 1]);
-        }
+    if let mut compute = command_encoder.compute("dispatch")
+        && let mut pass = compute.with(&pipeline)
+    {
+        pass.bind(
+            0,
+            &DispatchGlobals {
+                input: input.into(),
+                output: output.into(),
+            },
+        );
+        pass.dispatch([1, 1, 1]);
     }
 
     let sync_point = context.submit(&mut command_encoder);
@@ -628,18 +628,17 @@ fn snapshot_space_sky() {
             }],
             depth_stencil: None,
         },
-    ) {
-        if let mut pc = pass.with(&sky_pipeline) {
-            pc.bind(
-                0,
-                &SkyTestData {
-                    sky_params: frame_params,
-                    samp: sampler,
-                    env_map: dummy_view,
-                },
-            );
-            pc.draw(0, 3, 0, 1);
-        }
+    ) && let mut pc = pass.with(&sky_pipeline)
+    {
+        pc.bind(
+            0,
+            &SkyTestData {
+                sky_params: frame_params,
+                samp: sampler,
+                env_map: dummy_view,
+            },
+        );
+        pc.draw(0, 3, 0, 1);
     }
 
     let pixels = target.read_pixels(&context, &mut command_encoder);

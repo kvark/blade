@@ -5,7 +5,7 @@ mod hud;
 
 pub use blade_render::Camera;
 pub use camera::ControlledCamera;
-pub use hud::{populate_debug_selection, ExposeHud};
+pub use hud::{ExposeHud, populate_debug_selection};
 
 pub fn default_ray_config() -> blade_render::RayConfig {
     blade_render::RayConfig {

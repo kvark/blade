@@ -9,7 +9,7 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
             return Err(syn::Error::new(
                 item_struct.struct_token.span,
                 "Structure fields must be named",
-            ))
+            ));
         }
     };
 
@@ -24,7 +24,7 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
                 return Err(syn::Error::new(
                     item_struct.struct_token.span,
                     "Unsupported generic parameters",
-                ))
+                ));
             }
         }
     }

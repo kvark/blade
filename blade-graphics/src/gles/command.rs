@@ -75,8 +75,9 @@ impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::Buf
 impl crate::ShaderBindable for super::AccelerationStructure {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         for _ in ctx.targets[index as usize].iter() {
-            unimplemented!()
+            //TODO
         }
+        unimplemented!()
     }
 }
 impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable
@@ -106,7 +107,7 @@ impl super::CommandEncoder {
         }
     }
 
-    fn pass<P>(&mut self, kind: super::PassKind) -> super::PassEncoder<P> {
+    fn pass<P>(&mut self, kind: super::PassKind) -> super::PassEncoder<'_, P> {
         super::PassEncoder {
             commands: &mut self.commands,
             plain_data: &mut self.plain_data,
@@ -159,16 +160,16 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn transfer(&mut self, label: &str) -> super::PassEncoder<()> {
+    pub fn transfer(&mut self, label: &str) -> super::PassEncoder<'_, ()> {
         self.begin_pass(label);
         self.pass(super::PassKind::Transfer)
     }
 
-    pub fn acceleration_structure(&mut self, _label: &str) -> super::PassEncoder<()> {
+    pub fn acceleration_structure(&mut self, _label: &str) -> super::PassEncoder<'_, ()> {
         unimplemented!()
     }
 
-    pub fn compute(&mut self, label: &str) -> super::PassEncoder<super::ComputePipeline> {
+    pub fn compute(&mut self, label: &str) -> super::PassEncoder<'_, super::ComputePipeline> {
         self.begin_pass(label);
         self.pass(super::PassKind::Compute)
     }
@@ -177,7 +178,7 @@ impl super::CommandEncoder {
         &mut self,
         label: &str,
         targets: crate::RenderTargetSet,
-    ) -> super::PassEncoder<super::RenderPipeline> {
+    ) -> super::PassEncoder<'_, super::RenderPipeline> {
         self.begin_pass(label);
 
         let mut target_size = [0u16; 2];
@@ -242,21 +243,21 @@ impl super::CommandEncoder {
                 });
             }
         }
-        if let Some(ref rt) = targets.depth_stencil {
-            if let crate::InitOp::Clear(color) = rt.init_op {
-                self.commands.push(super::Command::ClearDepthStencil {
-                    depth: if rt.view.aspects.contains(crate::TexelAspects::DEPTH) {
-                        Some(color.depth_clear_value())
-                    } else {
-                        None
-                    },
-                    stencil: if rt.view.aspects.contains(crate::TexelAspects::STENCIL) {
-                        Some(color.stencil_clear_value())
-                    } else {
-                        None
-                    },
-                });
-            }
+        if let Some(ref rt) = targets.depth_stencil
+            && let crate::InitOp::Clear(color) = rt.init_op
+        {
+            self.commands.push(super::Command::ClearDepthStencil {
+                depth: if rt.view.aspects.contains(crate::TexelAspects::DEPTH) {
+                    Some(color.depth_clear_value())
+                } else {
+                    None
+                },
+                stencil: if rt.view.aspects.contains(crate::TexelAspects::STENCIL) {
+                    Some(color.stencil_clear_value())
+                } else {
+                    None
+                },
+            });
         }
 
         let mut pass = self.pass(super::PassKind::Render);
@@ -317,7 +318,7 @@ impl crate::traits::RenderEncoder for super::PassEncoder<'_, super::RenderPipeli
             .push(super::Command::SetViewport(viewport.clone()));
     }
 
-    fn set_stencil_reference(&mut self, reference: u32) {
+    fn set_stencil_reference(&mut self, _reference: u32) {
         unimplemented!()
     }
 }
@@ -481,7 +482,7 @@ impl crate::traits::RenderEncoder for super::PipelineEncoder<'_> {
             .push(super::Command::SetViewport(viewport.clone()));
     }
 
-    fn set_stencil_reference(&mut self, reference: u32) {
+    fn set_stencil_reference(&mut self, _reference: u32) {
         unimplemented!()
     }
 }
@@ -496,15 +497,17 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
             buffer: vertex_buf.buffer.raw,
         });
         for (i, info) in self.vertex_attributes.iter().enumerate() {
-            self.commands.push(super::Command::SetVertexAttribute {
-                index: i as u32,
-                format: info.attrib.format,
-                offset: (vertex_buf.offset + info.attrib.offset as u64)
-                    .try_into()
-                    .unwrap(),
-                stride: info.stride,
-                instanced: info.instanced,
-            });
+            if info.buffer_index == index {
+                self.commands.push(super::Command::SetVertexAttribute {
+                    index: i as u32,
+                    format: info.attrib.format,
+                    offset: (vertex_buf.offset + info.attrib.offset as u64)
+                        .try_into()
+                        .unwrap(),
+                    stride: info.stride,
+                    instanced: info.instanced,
+                });
+            }
         }
     }
 
@@ -623,587 +626,595 @@ const CUBEMAP_FACES: [u32; 6] = [
 
 impl super::Command {
     pub(super) unsafe fn execute(&self, gl: &glow::Context, ec: &super::ExecutionContext) {
-        use glow::HasContext as _;
-        match *self {
-            Self::Draw {
-                topology,
-                start_vertex,
-                vertex_count,
-                instance_count,
-            } => {
-                if instance_count == 1 {
-                    gl.draw_arrays(topology, start_vertex as i32, vertex_count as i32);
-                } else {
-                    gl.draw_arrays_instanced(
+        unsafe {
+            use glow::HasContext as _;
+            match *self {
+                Self::Draw {
+                    topology,
+                    start_vertex,
+                    vertex_count,
+                    instance_count,
+                } => {
+                    if instance_count == 1 {
+                        gl.draw_arrays(topology, start_vertex as i32, vertex_count as i32);
+                    } else {
+                        gl.draw_arrays_instanced(
+                            topology,
+                            start_vertex as i32,
+                            vertex_count as i32,
+                            instance_count as i32,
+                        );
+                    }
+                }
+                Self::DrawIndexed {
+                    topology,
+                    ref index_buf,
+                    index_type,
+                    index_count,
+                    base_vertex,
+                    instance_count,
+                } => {
+                    gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(index_buf.raw));
+                    match (base_vertex, instance_count) {
+                        (0, 1) => gl.draw_elements(
+                            topology,
+                            index_count as i32,
+                            index_type,
+                            index_buf.offset as i32,
+                        ),
+                        (0, _) => gl.draw_elements_instanced(
+                            topology,
+                            index_count as i32,
+                            index_type,
+                            index_buf.offset as i32,
+                            instance_count as i32,
+                        ),
+                        (_, 1) => gl.draw_elements_base_vertex(
+                            topology,
+                            index_count as i32,
+                            index_type,
+                            index_buf.offset as i32,
+                            base_vertex,
+                        ),
+                        (_, _) => gl.draw_elements_instanced_base_vertex(
+                            topology,
+                            index_count as _,
+                            index_type,
+                            index_buf.offset as i32,
+                            instance_count as i32,
+                            base_vertex,
+                        ),
+                    };
+                }
+                Self::DrawIndirect {
+                    topology,
+                    ref indirect_buf,
+                } => {
+                    gl.bind_buffer(glow::DRAW_INDIRECT_BUFFER, Some(indirect_buf.raw));
+                    gl.draw_arrays_indirect_offset(topology, indirect_buf.offset as i32);
+                }
+                Self::DrawIndexedIndirect {
+                    topology,
+                    raw_index_buf,
+                    index_type,
+                    ref indirect_buf,
+                } => {
+                    gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(raw_index_buf));
+                    gl.bind_buffer(glow::DRAW_INDIRECT_BUFFER, Some(indirect_buf.raw));
+                    gl.draw_elements_indirect_offset(
                         topology,
-                        start_vertex as i32,
-                        vertex_count as i32,
-                        instance_count as i32,
+                        index_type,
+                        indirect_buf.offset as i32,
                     );
                 }
-            }
-            Self::DrawIndexed {
-                topology,
-                ref index_buf,
-                index_type,
-                index_count,
-                base_vertex,
-                instance_count,
-            } => {
-                gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(index_buf.raw));
-                match (base_vertex, instance_count) {
-                    (0, 1) => gl.draw_elements(
-                        topology,
-                        index_count as i32,
-                        index_type,
-                        index_buf.offset as i32,
-                    ),
-                    (0, _) => gl.draw_elements_instanced(
-                        topology,
-                        index_count as i32,
-                        index_type,
-                        index_buf.offset as i32,
-                        instance_count as i32,
-                    ),
-                    (_, 1) => gl.draw_elements_base_vertex(
-                        topology,
-                        index_count as i32,
-                        index_type,
-                        index_buf.offset as i32,
-                        base_vertex,
-                    ),
-                    (_, _) => gl.draw_elements_instanced_base_vertex(
-                        topology,
-                        index_count as _,
-                        index_type,
-                        index_buf.offset as i32,
-                        instance_count as i32,
-                        base_vertex,
-                    ),
-                };
-            }
-            Self::DrawIndirect {
-                topology,
-                ref indirect_buf,
-            } => {
-                gl.bind_buffer(glow::DRAW_INDIRECT_BUFFER, Some(indirect_buf.raw));
-                gl.draw_arrays_indirect_offset(topology, indirect_buf.offset as i32);
-            }
-            Self::DrawIndexedIndirect {
-                topology,
-                raw_index_buf,
-                index_type,
-                ref indirect_buf,
-            } => {
-                gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(raw_index_buf));
-                gl.bind_buffer(glow::DRAW_INDIRECT_BUFFER, Some(indirect_buf.raw));
-                gl.draw_elements_indirect_offset(topology, index_type, indirect_buf.offset as i32);
-            }
-            Self::Dispatch(groups) => {
-                gl.dispatch_compute(groups[0], groups[1], groups[2]);
-            }
-            Self::DispatchIndirect { ref indirect_buf } => {
-                gl.bind_buffer(glow::DISPATCH_INDIRECT_BUFFER, Some(indirect_buf.raw));
-                gl.dispatch_compute_indirect(indirect_buf.offset as i32);
-            }
-            Self::FillBuffer {
-                dst: ref _dst,
-                size: _size,
-                value: _value,
-            } => unimplemented!(),
-            Self::CopyBufferToBuffer {
-                ref src,
-                ref dst,
-                size,
-            } => {
-                gl.bind_buffer(glow::COPY_READ_BUFFER, Some(src.raw));
-                gl.bind_buffer(glow::COPY_WRITE_BUFFER, Some(dst.raw));
-                gl.copy_buffer_sub_data(
-                    glow::COPY_READ_BUFFER,
-                    glow::COPY_WRITE_BUFFER,
-                    src.offset as _,
-                    dst.offset as _,
-                    size as _,
-                );
-            }
-            Self::CopyTextureToTexture {
-                ref src,
-                ref dst,
-                ref size,
-            } => {
-                gl.bind_texture(dst.target, Some(dst.raw));
-                gl.framebuffer_texture_2d(
-                    glow::READ_FRAMEBUFFER,
-                    glow::COLOR_ATTACHMENT0,
-                    src.target,
-                    Some(src.raw),
-                    src.mip_level as i32,
-                );
-                gl.bind_texture(dst.target, Some(dst.raw));
-                gl.copy_tex_sub_image_2d(
-                    dst.target,
-                    dst.mip_level as i32,
-                    dst.origin[0] as i32,
-                    dst.origin[1] as i32,
-                    src.origin[0] as i32,
-                    src.origin[1] as i32,
-                    size.width as i32,
-                    size.height as i32,
-                );
-                gl.framebuffer_renderbuffer(
-                    glow::READ_FRAMEBUFFER,
-                    glow::COLOR_ATTACHMENT0,
-                    glow::RENDERBUFFER,
-                    None,
-                );
-            }
-            Self::CopyBufferToTexture {
-                ref src,
-                ref dst,
-                bytes_per_row,
-                ref size,
-            } => {
-                let format_desc = super::describe_texture_format(dst.format);
-                let block_info = dst.format.block_info();
-                let row_texels =
-                    bytes_per_row / block_info.size as u32 * block_info.dimensions.0 as u32;
-                gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-                gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, row_texels as i32);
-                gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(src.raw));
-                gl.bind_texture(dst.target, Some(dst.raw));
-                let unpack_data = glow::PixelUnpackData::BufferOffset(src.offset as u32);
-                match dst.target {
-                    glow::TEXTURE_3D => gl.tex_sub_image_3d(
-                        dst.target,
-                        dst.mip_level as i32,
-                        dst.origin[0] as i32,
-                        dst.origin[1] as i32,
-                        dst.origin[2] as i32,
-                        size.width as i32,
-                        size.height as i32,
-                        size.depth as i32,
-                        format_desc.external,
-                        format_desc.data_type,
-                        unpack_data,
-                    ),
-                    glow::TEXTURE_2D_ARRAY => gl.tex_sub_image_3d(
-                        dst.target,
-                        dst.mip_level as i32,
-                        dst.origin[0] as i32,
-                        dst.origin[1] as i32,
-                        dst.origin[2] as i32,
-                        size.width as i32,
-                        size.height as i32,
-                        size.depth as i32,
-                        format_desc.external,
-                        format_desc.data_type,
-                        unpack_data,
-                    ),
-                    glow::TEXTURE_2D => gl.tex_sub_image_2d(
-                        dst.target,
-                        dst.mip_level as i32,
-                        dst.origin[0] as i32,
-                        dst.origin[1] as i32,
-                        size.width as i32,
-                        size.height as i32,
-                        format_desc.external,
-                        format_desc.data_type,
-                        unpack_data,
-                    ),
-                    glow::TEXTURE_CUBE_MAP => gl.tex_sub_image_2d(
-                        CUBEMAP_FACES[dst.array_layer as usize],
-                        dst.mip_level as i32,
-                        dst.origin[0] as i32,
-                        dst.origin[1] as i32,
-                        size.width as i32,
-                        size.height as i32,
-                        format_desc.external,
-                        format_desc.data_type,
-                        unpack_data,
-                    ),
-                    //Note: not sure if this is correct!
-                    glow::TEXTURE_CUBE_MAP_ARRAY => gl.tex_sub_image_3d(
-                        dst.target,
-                        dst.mip_level as i32,
-                        dst.origin[0] as i32,
-                        dst.origin[1] as i32,
-                        dst.origin[2] as i32,
-                        size.width as i32,
-                        size.height as i32,
-                        size.depth as i32,
-                        format_desc.external,
-                        format_desc.data_type,
-                        unpack_data,
-                    ),
-                    _ => unreachable!(),
+                Self::Dispatch(groups) => {
+                    gl.dispatch_compute(groups[0], groups[1], groups[2]);
                 }
-                gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
-            }
-            Self::CopyTextureToBuffer {
-                ref src,
-                ref dst,
-                bytes_per_row,
-                ref size,
-            } => {
-                let format_desc = super::describe_texture_format(src.format);
-                let block_info = src.format.block_info();
-                let row_texels =
-                    bytes_per_row / block_info.size as u32 * block_info.dimensions.0 as u32;
-                gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
-                gl.pixel_store_i32(glow::PACK_ROW_LENGTH, row_texels as i32);
-                gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
-                gl.framebuffer_texture_2d(
-                    glow::READ_FRAMEBUFFER,
-                    glow::COLOR_ATTACHMENT0,
-                    src.target,
-                    Some(src.raw),
-                    src.mip_level as i32,
-                );
-                let dst_slice = std::slice::from_raw_parts_mut(
-                    dst.data.add(dst.offset as usize),
-                    (bytes_per_row * size.height) as usize,
-                );
-                gl.read_pixels(
-                    src.origin[0] as i32,
-                    src.origin[1] as i32,
-                    size.width as i32,
-                    size.height as i32,
-                    format_desc.external,
-                    format_desc.data_type,
-                    glow::PixelPackData::Slice(Some(dst_slice)),
-                );
-                gl.framebuffer_renderbuffer(
-                    glow::READ_FRAMEBUFFER,
-                    glow::COLOR_ATTACHMENT0,
-                    glow::RENDERBUFFER,
-                    None,
-                );
-            }
-            Self::ResetFramebuffer => {
-                for &attachment in COLOR_ATTACHMENTS.iter() {
+                Self::DispatchIndirect { ref indirect_buf } => {
+                    gl.bind_buffer(glow::DISPATCH_INDIRECT_BUFFER, Some(indirect_buf.raw));
+                    gl.dispatch_compute_indirect(indirect_buf.offset as i32);
+                }
+                Self::FillBuffer {
+                    dst: ref _dst,
+                    size: _size,
+                    value: _value,
+                } => unimplemented!(),
+                Self::CopyBufferToBuffer {
+                    ref src,
+                    ref dst,
+                    size,
+                } => {
+                    gl.bind_buffer(glow::COPY_READ_BUFFER, Some(src.raw));
+                    gl.bind_buffer(glow::COPY_WRITE_BUFFER, Some(dst.raw));
+                    gl.copy_buffer_sub_data(
+                        glow::COPY_READ_BUFFER,
+                        glow::COPY_WRITE_BUFFER,
+                        src.offset as _,
+                        dst.offset as _,
+                        size as _,
+                    );
+                }
+                Self::CopyTextureToTexture {
+                    ref src,
+                    ref dst,
+                    ref size,
+                } => {
+                    gl.bind_texture(dst.target, Some(dst.raw));
+                    gl.framebuffer_texture_2d(
+                        glow::READ_FRAMEBUFFER,
+                        glow::COLOR_ATTACHMENT0,
+                        src.target,
+                        Some(src.raw),
+                        src.mip_level as i32,
+                    );
+                    gl.bind_texture(dst.target, Some(dst.raw));
+                    gl.copy_tex_sub_image_2d(
+                        dst.target,
+                        dst.mip_level as i32,
+                        dst.origin[0] as i32,
+                        dst.origin[1] as i32,
+                        src.origin[0] as i32,
+                        src.origin[1] as i32,
+                        size.width as i32,
+                        size.height as i32,
+                    );
                     gl.framebuffer_renderbuffer(
-                        glow::DRAW_FRAMEBUFFER,
-                        attachment,
+                        glow::READ_FRAMEBUFFER,
+                        glow::COLOR_ATTACHMENT0,
                         glow::RENDERBUFFER,
                         None,
                     );
                 }
-                gl.framebuffer_renderbuffer(
-                    glow::DRAW_FRAMEBUFFER,
-                    glow::DEPTH_STENCIL_ATTACHMENT,
-                    glow::RENDERBUFFER,
-                    None,
-                );
-            }
-
-            Self::BlitFramebuffer { from, to } => {
-                /*
-                    TODO: Framebuffers could be re-used instead of being created on the fly.
-                          Currently deleted down below
-                */
-                let framebuf_from = gl.create_framebuffer().unwrap();
-                let framebuf_to = gl.create_framebuffer().unwrap();
-
-                gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(framebuf_from));
-                match from.inner {
-                    super::TextureInner::Renderbuffer { raw } => {
-                        gl.framebuffer_renderbuffer(
-                            glow::READ_FRAMEBUFFER,
-                            glow::COLOR_ATTACHMENT0, // NOTE: Assuming color attachment
-                            glow::RENDERBUFFER,
-                            Some(raw),
-                        );
+                Self::CopyBufferToTexture {
+                    ref src,
+                    ref dst,
+                    bytes_per_row,
+                    ref size,
+                } => {
+                    let format_desc = super::describe_texture_format(dst.format);
+                    let block_info = dst.format.block_info();
+                    let row_texels =
+                        bytes_per_row / block_info.size as u32 * block_info.dimensions.0 as u32;
+                    gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+                    gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, row_texels as i32);
+                    gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(src.raw));
+                    gl.bind_texture(dst.target, Some(dst.raw));
+                    let unpack_data = glow::PixelUnpackData::BufferOffset(src.offset as u32);
+                    match dst.target {
+                        glow::TEXTURE_3D => gl.tex_sub_image_3d(
+                            dst.target,
+                            dst.mip_level as i32,
+                            dst.origin[0] as i32,
+                            dst.origin[1] as i32,
+                            dst.origin[2] as i32,
+                            size.width as i32,
+                            size.height as i32,
+                            size.depth as i32,
+                            format_desc.external,
+                            format_desc.data_type,
+                            unpack_data,
+                        ),
+                        glow::TEXTURE_2D_ARRAY => gl.tex_sub_image_3d(
+                            dst.target,
+                            dst.mip_level as i32,
+                            dst.origin[0] as i32,
+                            dst.origin[1] as i32,
+                            dst.origin[2] as i32,
+                            size.width as i32,
+                            size.height as i32,
+                            size.depth as i32,
+                            format_desc.external,
+                            format_desc.data_type,
+                            unpack_data,
+                        ),
+                        glow::TEXTURE_2D => gl.tex_sub_image_2d(
+                            dst.target,
+                            dst.mip_level as i32,
+                            dst.origin[0] as i32,
+                            dst.origin[1] as i32,
+                            size.width as i32,
+                            size.height as i32,
+                            format_desc.external,
+                            format_desc.data_type,
+                            unpack_data,
+                        ),
+                        glow::TEXTURE_CUBE_MAP => gl.tex_sub_image_2d(
+                            CUBEMAP_FACES[dst.array_layer as usize],
+                            dst.mip_level as i32,
+                            dst.origin[0] as i32,
+                            dst.origin[1] as i32,
+                            size.width as i32,
+                            size.height as i32,
+                            format_desc.external,
+                            format_desc.data_type,
+                            unpack_data,
+                        ),
+                        //Note: not sure if this is correct!
+                        glow::TEXTURE_CUBE_MAP_ARRAY => gl.tex_sub_image_3d(
+                            dst.target,
+                            dst.mip_level as i32,
+                            dst.origin[0] as i32,
+                            dst.origin[1] as i32,
+                            dst.origin[2] as i32,
+                            size.width as i32,
+                            size.height as i32,
+                            size.depth as i32,
+                            format_desc.external,
+                            format_desc.data_type,
+                            unpack_data,
+                        ),
+                        _ => unreachable!(),
                     }
-                    super::TextureInner::Texture { raw, target } => {
-                        gl.framebuffer_texture_2d(
-                            glow::READ_FRAMEBUFFER,
-                            glow::COLOR_ATTACHMENT0,
-                            target,
-                            Some(raw),
-                            0,
-                        );
-                    }
+                    gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
                 }
-
-                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(framebuf_to));
-                match to.inner {
-                    super::TextureInner::Renderbuffer { raw } => {
+                Self::CopyTextureToBuffer {
+                    ref src,
+                    ref dst,
+                    bytes_per_row,
+                    ref size,
+                } => {
+                    let format_desc = super::describe_texture_format(src.format);
+                    let block_info = src.format.block_info();
+                    let row_texels =
+                        bytes_per_row / block_info.size as u32 * block_info.dimensions.0 as u32;
+                    gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
+                    gl.pixel_store_i32(glow::PACK_ROW_LENGTH, row_texels as i32);
+                    gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
+                    gl.framebuffer_texture_2d(
+                        glow::READ_FRAMEBUFFER,
+                        glow::COLOR_ATTACHMENT0,
+                        src.target,
+                        Some(src.raw),
+                        src.mip_level as i32,
+                    );
+                    let dst_slice = std::slice::from_raw_parts_mut(
+                        dst.data.add(dst.offset as usize),
+                        (bytes_per_row * size.height) as usize,
+                    );
+                    gl.read_pixels(
+                        src.origin[0] as i32,
+                        src.origin[1] as i32,
+                        size.width as i32,
+                        size.height as i32,
+                        format_desc.external,
+                        format_desc.data_type,
+                        glow::PixelPackData::Slice(Some(dst_slice)),
+                    );
+                    gl.framebuffer_renderbuffer(
+                        glow::READ_FRAMEBUFFER,
+                        glow::COLOR_ATTACHMENT0,
+                        glow::RENDERBUFFER,
+                        None,
+                    );
+                }
+                Self::ResetFramebuffer => {
+                    for &attachment in COLOR_ATTACHMENTS.iter() {
                         gl.framebuffer_renderbuffer(
                             glow::DRAW_FRAMEBUFFER,
-                            glow::COLOR_ATTACHMENT0, // NOTE: Assuming color attachment
+                            attachment,
                             glow::RENDERBUFFER,
-                            Some(raw),
+                            None,
                         );
                     }
-                    super::TextureInner::Texture { raw, target } => {
-                        gl.framebuffer_texture_2d(
-                            glow::DRAW_FRAMEBUFFER,
-                            glow::COLOR_ATTACHMENT0,
-                            target,
-                            Some(raw),
-                            0,
-                        );
-                    }
-                }
-
-                debug_assert_eq!(
-                    gl.check_framebuffer_status(glow::DRAW_FRAMEBUFFER),
-                    glow::FRAMEBUFFER_COMPLETE,
-                    "DRAW_FRAMEBUFFER is not complete"
-                );
-
-                gl.blit_framebuffer(
-                    0,
-                    0,
-                    from.target_size[0] as _,
-                    from.target_size[1] as _,
-                    0,
-                    0,
-                    to.target_size[0] as _,
-                    to.target_size[1] as _,
-                    glow::COLOR_BUFFER_BIT, // NOTE: Assuming color
-                    glow::NEAREST,
-                );
-
-                gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
-                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
-
-                gl.delete_framebuffer(framebuf_from);
-                gl.delete_framebuffer(framebuf_to);
-            }
-
-            Self::BindAttachment {
-                attachment,
-                ref view,
-            } => match view.inner {
-                super::TextureInner::Renderbuffer { raw } => {
-                    gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(ec.framebuf));
-                    gl.bind_renderbuffer(glow::RENDERBUFFER, Some(raw));
                     gl.framebuffer_renderbuffer(
                         glow::DRAW_FRAMEBUFFER,
-                        attachment,
+                        glow::DEPTH_STENCIL_ATTACHMENT,
                         glow::RENDERBUFFER,
-                        Some(raw),
+                        None,
                     );
                 }
-                super::TextureInner::Texture { raw, target } => {
-                    let mip_level = 0; //TODO
-                    gl.framebuffer_texture_2d(
-                        glow::DRAW_FRAMEBUFFER,
-                        attachment,
-                        target,
-                        Some(raw),
-                        mip_level,
-                    );
-                }
-            },
-            Self::InvalidateAttachment(attachment) => {
-                gl.invalidate_framebuffer(glow::DRAW_FRAMEBUFFER, &[attachment]);
-            }
-            Self::SetDrawColorBuffers(count) => {
-                gl.draw_buffers(&COLOR_ATTACHMENTS[..count as usize]);
-            }
-            Self::SetAllColorTargets(blend, write_mask) => {
-                if let Some(blend_state) = blend {
-                    gl.enable(glow::BLEND);
-                    gl.blend_func_separate(
-                        blend_state.color.src_factor.to_gles(),
-                        blend_state.color.dst_factor.to_gles(),
-                        blend_state.alpha.src_factor.to_gles(),
-                        blend_state.alpha.dst_factor.to_gles(),
-                    );
-                    gl.blend_equation(blend_state.color.operation.to_gles());
-                } else {
-                    gl.disable(glow::BLEND);
-                }
-                gl.color_mask(
-                    write_mask.contains(crate::ColorWrites::RED),
-                    write_mask.contains(crate::ColorWrites::GREEN),
-                    write_mask.contains(crate::ColorWrites::BLUE),
-                    write_mask.contains(crate::ColorWrites::ALPHA),
-                );
-            }
-            Self::SetSingleColorTarget(i, blend, write_mask) => {
-                if let Some(blend_state) = blend {
-                    gl.enable_draw_buffer(glow::BLEND, i);
-                    gl.blend_func_separate_draw_buffer(
-                        i,
-                        blend_state.color.src_factor.to_gles(),
-                        blend_state.color.dst_factor.to_gles(),
-                        blend_state.alpha.src_factor.to_gles(),
-                        blend_state.alpha.dst_factor.to_gles(),
-                    );
-                    gl.blend_equation_draw_buffer(i, blend_state.color.operation.to_gles());
-                } else {
-                    gl.disable_draw_buffer(glow::BLEND, i);
-                }
-                gl.color_mask_draw_buffer(
-                    i,
-                    write_mask.contains(crate::ColorWrites::RED),
-                    write_mask.contains(crate::ColorWrites::GREEN),
-                    write_mask.contains(crate::ColorWrites::BLUE),
-                    write_mask.contains(crate::ColorWrites::ALPHA),
-                );
-            }
-            Self::ClearColor {
-                draw_buffer,
-                color,
-                ty,
-            } => match ty {
-                super::ColorType::Float => {
-                    gl.clear_buffer_f32_slice(
-                        glow::COLOR,
-                        draw_buffer,
-                        &match color {
-                            crate::TextureColor::TransparentBlack => [0.0; 4],
-                            crate::TextureColor::OpaqueBlack => [0.0, 0.0, 0.0, 1.0],
-                            crate::TextureColor::White => [1.0; 4],
-                        },
-                    );
-                }
-                super::ColorType::Uint => {
-                    gl.clear_buffer_u32_slice(
-                        glow::COLOR,
-                        draw_buffer,
-                        &match color {
-                            crate::TextureColor::TransparentBlack => [0; 4],
-                            crate::TextureColor::OpaqueBlack => [0, 0, 0, !0],
-                            crate::TextureColor::White => [!0; 4],
-                        },
-                    );
-                }
-                super::ColorType::Sint => {
-                    gl.clear_buffer_i32_slice(
-                        glow::COLOR,
-                        draw_buffer,
-                        &match color {
-                            crate::TextureColor::TransparentBlack => [0; 4],
-                            crate::TextureColor::OpaqueBlack => [0, 0, 0, !0],
-                            crate::TextureColor::White => [!0; 4],
-                        },
-                    );
-                }
-            },
-            Self::ClearDepthStencil { depth, stencil } => match (depth, stencil) {
-                (Some(d), Some(s)) => {
-                    gl.clear_buffer_depth_stencil(glow::DEPTH_STENCIL, 0, d, s as i32)
-                }
-                (Some(d), None) => gl.clear_buffer_f32_slice(glow::DEPTH, 0, &[d]),
-                (None, Some(s)) => gl.clear_buffer_i32_slice(glow::STENCIL, 0, &[s as i32]),
-                (None, None) => (),
-            },
-            Self::Barrier => unimplemented!(),
-            Self::SetViewport(ref vp) => {
-                gl.viewport(vp.x as i32, vp.y as i32, vp.w as i32, vp.h as i32);
-                gl.depth_range_f32(vp.depth.start, vp.depth.end);
-            }
-            Self::SetScissor(ref rect) => {
-                gl.scissor(rect.x, rect.y, rect.w as i32, rect.h as i32);
-            }
-            Self::SetStencilFunc {
-                face,
-                function,
-                reference,
-                read_mask,
-            } => unimplemented!(),
-            Self::SetStencilOps {
-                face,
-                write_mask,
-                //ops: crate::StencilOps,
-            } => unimplemented!(),
-            //SetDepth(DepthState),
-            //SetDepthBias(wgt::DepthBiasState),
-            //ConfigureDepthStencil(crate::FormatAspects),
-            Self::SetProgram(raw_program) => {
-                gl.use_program(Some(raw_program));
-            }
-            Self::UnsetProgram => {
-                gl.use_program(None);
-            }
-            //SetPrimitive(PrimitiveState),
-            Self::SetBlendConstant([r, g, b, a]) => gl.blend_color(r, g, b, a),
-            Self::SetColorTarget {
-                draw_buffer_index,
-                //desc: ColorTargetDesc,
-            } => unimplemented!(),
-            Self::BindUniform { slot, offset, size } => {
-                gl.bind_buffer_range(
-                    glow::UNIFORM_BUFFER,
-                    slot,
-                    Some(ec.plain_buffer),
-                    offset as i32,
-                    size as i32,
-                );
-            }
-            Self::BindVertex { buffer } => {
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
-            }
-            Self::SetVertexAttribute {
-                index,
-                format,
-                offset,
-                stride,
-                instanced,
-            } => {
-                let (data_size, data_type) = format.describe();
-                match data_type {
-                    glow::FLOAT => gl.vertex_attrib_pointer_f32(
-                        index, data_size, data_type, false, stride, offset,
-                    ),
-                    glow::INT | glow::UNSIGNED_INT => {
-                        gl.vertex_attrib_pointer_i32(index, data_size, data_type, stride, offset)
+
+                Self::BlitFramebuffer { from, to } => {
+                    /*
+                        TODO: Framebuffers could be re-used instead of being created on the fly.
+                              Currently deleted down below
+                    */
+                    let framebuf_from = gl.create_framebuffer().unwrap();
+                    let framebuf_to = gl.create_framebuffer().unwrap();
+
+                    gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(framebuf_from));
+                    match from.inner {
+                        super::TextureInner::Renderbuffer { raw } => {
+                            gl.framebuffer_renderbuffer(
+                                glow::READ_FRAMEBUFFER,
+                                glow::COLOR_ATTACHMENT0, // NOTE: Assuming color attachment
+                                glow::RENDERBUFFER,
+                                Some(raw),
+                            );
+                        }
+                        super::TextureInner::Texture { raw, target } => {
+                            gl.framebuffer_texture_2d(
+                                glow::READ_FRAMEBUFFER,
+                                glow::COLOR_ATTACHMENT0,
+                                target,
+                                Some(raw),
+                                0,
+                            );
+                        }
                     }
-                    _ => unreachable!(),
+
+                    gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(framebuf_to));
+                    match to.inner {
+                        super::TextureInner::Renderbuffer { raw } => {
+                            gl.framebuffer_renderbuffer(
+                                glow::DRAW_FRAMEBUFFER,
+                                glow::COLOR_ATTACHMENT0, // NOTE: Assuming color attachment
+                                glow::RENDERBUFFER,
+                                Some(raw),
+                            );
+                        }
+                        super::TextureInner::Texture { raw, target } => {
+                            gl.framebuffer_texture_2d(
+                                glow::DRAW_FRAMEBUFFER,
+                                glow::COLOR_ATTACHMENT0,
+                                target,
+                                Some(raw),
+                                0,
+                            );
+                        }
+                    }
+
+                    debug_assert_eq!(
+                        gl.check_framebuffer_status(glow::DRAW_FRAMEBUFFER),
+                        glow::FRAMEBUFFER_COMPLETE,
+                        "DRAW_FRAMEBUFFER is not complete"
+                    );
+
+                    gl.blit_framebuffer(
+                        0,
+                        0,
+                        from.target_size[0] as _,
+                        from.target_size[1] as _,
+                        0,
+                        0,
+                        to.target_size[0] as _,
+                        to.target_size[1] as _,
+                        glow::COLOR_BUFFER_BIT, // NOTE: Assuming color
+                        glow::NEAREST,
+                    );
+
+                    gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+                    gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
+
+                    gl.delete_framebuffer(framebuf_from);
+                    gl.delete_framebuffer(framebuf_to);
                 }
-                gl.vertex_attrib_divisor(index, if instanced { 1 } else { 0 });
-                gl.enable_vertex_attrib_array(index);
-            }
-            Self::DisableVertexAttributes { count } => {
-                for index in 0..count {
-                    gl.disable_vertex_attrib_array(index);
+
+                Self::BindAttachment {
+                    attachment,
+                    ref view,
+                } => match view.inner {
+                    super::TextureInner::Renderbuffer { raw } => {
+                        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(ec.framebuf));
+                        gl.bind_renderbuffer(glow::RENDERBUFFER, Some(raw));
+                        gl.framebuffer_renderbuffer(
+                            glow::DRAW_FRAMEBUFFER,
+                            attachment,
+                            glow::RENDERBUFFER,
+                            Some(raw),
+                        );
+                    }
+                    super::TextureInner::Texture { raw, target } => {
+                        let mip_level = 0; //TODO
+                        gl.framebuffer_texture_2d(
+                            glow::DRAW_FRAMEBUFFER,
+                            attachment,
+                            target,
+                            Some(raw),
+                            mip_level,
+                        );
+                    }
+                },
+                Self::InvalidateAttachment(attachment) => {
+                    gl.invalidate_framebuffer(glow::DRAW_FRAMEBUFFER, &[attachment]);
                 }
-            }
-            Self::BindBuffer {
-                target,
-                slot,
-                ref buffer,
-                size,
-            } => {
-                gl.bind_buffer_range(
+                Self::SetDrawColorBuffers(count) => {
+                    gl.draw_buffers(&COLOR_ATTACHMENTS[..count as usize]);
+                }
+                Self::SetAllColorTargets(blend, write_mask) => {
+                    if let Some(blend_state) = blend {
+                        gl.enable(glow::BLEND);
+                        gl.blend_func_separate(
+                            blend_state.color.src_factor.to_gles(),
+                            blend_state.color.dst_factor.to_gles(),
+                            blend_state.alpha.src_factor.to_gles(),
+                            blend_state.alpha.dst_factor.to_gles(),
+                        );
+                        gl.blend_equation(blend_state.color.operation.to_gles());
+                    } else {
+                        gl.disable(glow::BLEND);
+                    }
+                    gl.color_mask(
+                        write_mask.contains(crate::ColorWrites::RED),
+                        write_mask.contains(crate::ColorWrites::GREEN),
+                        write_mask.contains(crate::ColorWrites::BLUE),
+                        write_mask.contains(crate::ColorWrites::ALPHA),
+                    );
+                }
+                Self::SetSingleColorTarget(i, blend, write_mask) => {
+                    if let Some(blend_state) = blend {
+                        gl.enable_draw_buffer(glow::BLEND, i);
+                        gl.blend_func_separate_draw_buffer(
+                            i,
+                            blend_state.color.src_factor.to_gles(),
+                            blend_state.color.dst_factor.to_gles(),
+                            blend_state.alpha.src_factor.to_gles(),
+                            blend_state.alpha.dst_factor.to_gles(),
+                        );
+                        gl.blend_equation_draw_buffer(i, blend_state.color.operation.to_gles());
+                    } else {
+                        gl.disable_draw_buffer(glow::BLEND, i);
+                    }
+                    gl.color_mask_draw_buffer(
+                        i,
+                        write_mask.contains(crate::ColorWrites::RED),
+                        write_mask.contains(crate::ColorWrites::GREEN),
+                        write_mask.contains(crate::ColorWrites::BLUE),
+                        write_mask.contains(crate::ColorWrites::ALPHA),
+                    );
+                }
+                Self::ClearColor {
+                    draw_buffer,
+                    color,
+                    ty,
+                } => match ty {
+                    super::ColorType::Float => {
+                        gl.clear_buffer_f32_slice(
+                            glow::COLOR,
+                            draw_buffer,
+                            &match color {
+                                crate::TextureColor::TransparentBlack => [0.0; 4],
+                                crate::TextureColor::OpaqueBlack => [0.0, 0.0, 0.0, 1.0],
+                                crate::TextureColor::White => [1.0; 4],
+                            },
+                        );
+                    }
+                    super::ColorType::Uint => {
+                        gl.clear_buffer_u32_slice(
+                            glow::COLOR,
+                            draw_buffer,
+                            &match color {
+                                crate::TextureColor::TransparentBlack => [0; 4],
+                                crate::TextureColor::OpaqueBlack => [0, 0, 0, !0],
+                                crate::TextureColor::White => [!0; 4],
+                            },
+                        );
+                    }
+                    super::ColorType::Sint => {
+                        gl.clear_buffer_i32_slice(
+                            glow::COLOR,
+                            draw_buffer,
+                            &match color {
+                                crate::TextureColor::TransparentBlack => [0; 4],
+                                crate::TextureColor::OpaqueBlack => [0, 0, 0, !0],
+                                crate::TextureColor::White => [!0; 4],
+                            },
+                        );
+                    }
+                },
+                Self::ClearDepthStencil { depth, stencil } => match (depth, stencil) {
+                    (Some(d), Some(s)) => {
+                        gl.clear_buffer_depth_stencil(glow::DEPTH_STENCIL, 0, d, s as i32)
+                    }
+                    (Some(d), None) => gl.clear_buffer_f32_slice(glow::DEPTH, 0, &[d]),
+                    (None, Some(s)) => gl.clear_buffer_i32_slice(glow::STENCIL, 0, &[s as i32]),
+                    (None, None) => (),
+                },
+                Self::Barrier => unimplemented!(),
+                Self::SetViewport(ref vp) => {
+                    gl.viewport(vp.x as i32, vp.y as i32, vp.w as i32, vp.h as i32);
+                    gl.depth_range_f32(vp.depth.start, vp.depth.end);
+                }
+                Self::SetScissor(ref rect) => {
+                    gl.scissor(rect.x, rect.y, rect.w as i32, rect.h as i32);
+                }
+                Self::SetStencilFunc {
+                    face: _,
+                    function: _,
+                    reference: _,
+                    read_mask: _,
+                } => unimplemented!(),
+                Self::SetStencilOps {
+                    face: _,
+                    write_mask: _,
+                    //ops: crate::StencilOps,
+                } => unimplemented!(),
+                //SetDepth(DepthState),
+                //SetDepthBias(wgt::DepthBiasState),
+                //ConfigureDepthStencil(crate::FormatAspects),
+                Self::SetProgram(raw_program) => {
+                    gl.use_program(Some(raw_program));
+                }
+                Self::UnsetProgram => {
+                    gl.use_program(None);
+                }
+                //SetPrimitive(PrimitiveState),
+                Self::SetBlendConstant([r, g, b, a]) => gl.blend_color(r, g, b, a),
+                Self::SetColorTarget {
+                    draw_buffer_index: _,
+                    //desc: ColorTargetDesc,
+                } => unimplemented!(),
+                Self::BindUniform { slot, offset, size } => {
+                    gl.bind_buffer_range(
+                        glow::UNIFORM_BUFFER,
+                        slot,
+                        Some(ec.plain_buffer),
+                        offset as i32,
+                        size as i32,
+                    );
+                }
+                Self::BindVertex { buffer } => {
+                    gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+                }
+                Self::SetVertexAttribute {
+                    index,
+                    format,
+                    offset,
+                    stride,
+                    instanced,
+                } => {
+                    let (data_size, data_type) = format.describe();
+                    match data_type {
+                        glow::FLOAT => gl.vertex_attrib_pointer_f32(
+                            index, data_size, data_type, false, stride, offset,
+                        ),
+                        glow::INT | glow::UNSIGNED_INT => gl
+                            .vertex_attrib_pointer_i32(index, data_size, data_type, stride, offset),
+                        _ => unreachable!(),
+                    }
+                    gl.vertex_attrib_divisor(index, if instanced { 1 } else { 0 });
+                    gl.enable_vertex_attrib_array(index);
+                }
+                Self::DisableVertexAttributes { count } => {
+                    for index in 0..count {
+                        gl.disable_vertex_attrib_array(index);
+                    }
+                }
+                Self::BindBuffer {
                     target,
                     slot,
-                    Some(buffer.raw),
-                    buffer.offset as i32,
-                    size as i32,
-                );
-            }
-            Self::BindSampler { slot, sampler } => {
-                gl.bind_sampler(slot, Some(sampler));
-            }
-            Self::BindTexture {
-                slot,
-                texture,
-                target,
-            } => {
-                gl.active_texture(glow::TEXTURE0 + slot);
-                gl.bind_texture(target, Some(texture));
-            }
-            Self::BindImage { slot, ref binding } => unimplemented!(),
-            Self::ResetAllSamplers => {
-                gl.active_texture(glow::TEXTURE0);
-                for slot in 0..4 {
-                    gl.bind_sampler(slot, None);
+                    ref buffer,
+                    size,
+                } => {
+                    gl.bind_buffer_range(
+                        target,
+                        slot,
+                        Some(buffer.raw),
+                        buffer.offset as i32,
+                        size as i32,
+                    );
                 }
-            }
-            Self::QueryCounter { query } => {
-                gl.query_counter(query, glow::TIMESTAMP);
-            }
-            Self::PushScope { ref name_range } => {
-                let name = str::from_utf8(&ec.string_data[name_range.clone()]).unwrap();
-                gl.push_debug_group(glow::DEBUG_SOURCE_APPLICATION, super::DEBUG_ID, name);
-            }
-            Self::PopScope => {
-                gl.pop_debug_group();
+                Self::BindSampler { slot, sampler } => {
+                    gl.bind_sampler(slot, Some(sampler));
+                }
+                Self::BindTexture {
+                    slot,
+                    texture,
+                    target,
+                } => {
+                    gl.active_texture(glow::TEXTURE0 + slot);
+                    gl.bind_texture(target, Some(texture));
+                }
+                Self::BindImage {
+                    slot: _,
+                    binding: _,
+                } => unimplemented!(),
+                Self::ResetAllSamplers => {
+                    gl.active_texture(glow::TEXTURE0);
+                    for slot in 0..4 {
+                        gl.bind_sampler(slot, None);
+                    }
+                }
+                Self::QueryCounter { query } => {
+                    gl.query_counter(query, glow::TIMESTAMP);
+                }
+                Self::PushScope { ref name_range } => {
+                    let name = str::from_utf8(&ec.string_data[name_range.clone()]).unwrap();
+                    gl.push_debug_group(glow::DEBUG_SOURCE_APPLICATION, super::DEBUG_ID, name);
+                }
+                Self::PopScope => {
+                    gl.pop_debug_group();
+                }
             }
         }
     }

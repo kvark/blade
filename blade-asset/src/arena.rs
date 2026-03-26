@@ -5,8 +5,8 @@ use std::{
     num::NonZeroU8,
     ops, ptr,
     sync::{
-        atomic::{AtomicPtr, Ordering},
         Mutex,
+        atomic::{AtomicPtr, Ordering},
     },
 };
 
