@@ -464,7 +464,7 @@ impl Context {
         let capture = if desc.capture && auto_capture_everything {
             use metal::MTLCaptureScope as _;
             objc2::rc::autoreleasepool(|_| {
-                let capture_manager = metal::MTLCaptureManager::sharedCaptureManager();
+                let capture_manager = unsafe { metal::MTLCaptureManager::sharedCaptureManager() };
                 let default_capture_scope = capture_manager.newCaptureScopeWithDevice(&device);
                 capture_manager.setDefaultCaptureScope(Some(&default_capture_scope));
                 let capture_desc = metal::MTLCaptureDescriptor::new();
@@ -488,9 +488,10 @@ impl Context {
         let mut timestamp_counter_set = None;
         if desc.timing {
             use metal::MTLCounterSet as _;
-            if let Some(counter_sets) = device.counterSets() {
+            if let Some(counter_sets) = unsafe { device.counterSets() } {
                 for counter_set in counter_sets {
-                    if counter_set.name().to_string() == "timestamp" {
+                    let name = unsafe { counter_set.name() };
+                    if name.to_string() == "timestamp" {
                         timestamp_counter_set = Some(counter_set);
                     }
                 }
@@ -521,9 +522,14 @@ impl Context {
     }
 
     pub fn capabilities(&self) -> crate::Capabilities {
-        use metal::MTLDevice as _;
         let device = self.device.lock().unwrap();
+        Self::device_capabilities(&device)
+    }
 
+    fn device_capabilities(
+        device: &objc2::runtime::ProtocolObject<dyn metal::MTLDevice>,
+    ) -> crate::Capabilities {
+        use metal::MTLDevice as _;
         crate::Capabilities {
             binding_array: false,
             ray_query: if device.supportsFamily(metal::MTLGPUFamily::Apple6) {
@@ -558,6 +564,41 @@ impl Context {
 
     pub fn device_information(&self) -> &crate::DeviceInformation {
         &self.device_information
+    }
+
+    pub fn enumerate() -> Result<Vec<crate::DeviceReport>, crate::NotSupportedError> {
+        Ok(Self::inspect_devices(None))
+    }
+
+    pub fn enumerate_devices(&self) -> Vec<crate::DeviceReport> {
+        let default_id = {
+            use metal::MTLDevice as _;
+            self.device.lock().unwrap().registryID()
+        };
+        Self::inspect_devices(Some(default_id))
+    }
+
+    fn inspect_devices(default_registry_id: Option<u64>) -> Vec<crate::DeviceReport> {
+        use metal::MTLDevice as _;
+        let devices = metal::MTLCopyAllDevices();
+        devices
+            .iter()
+            .map(|device| {
+                let registry_id = device.registryID();
+                let is_default = default_registry_id.is_some_and(|id| id == registry_id);
+                let caps = Self::device_capabilities(&device);
+                crate::DeviceReport {
+                    device_id: registry_id as u32,
+                    information: crate::DeviceInformation {
+                        is_software_emulated: false,
+                        device_name: device.name().to_string(),
+                        driver_name: "Metal".to_string(),
+                        driver_info: String::new(),
+                    },
+                    status: crate::DeviceReportStatus::Available { is_default, caps },
+                }
+            })
+            .collect()
     }
 
     /// Get an MTLDevice of this context.

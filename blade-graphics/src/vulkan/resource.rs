@@ -41,7 +41,8 @@ impl super::Context {
         let mut block = match memory {
             crate::Memory::External(e) => {
                 let memory_properties = unsafe {
-                    self.instance
+                    self.inner
+                        .instance
                         .core
                         .get_physical_device_memory_properties(self.physical_device)
                 };

@@ -96,11 +96,13 @@ use std::{fmt, num::NonZeroU32};
 #[derive(Debug)]
 pub struct PlatformError(String);
 
+// Up to the backend to use them or not
+#[allow(unused)]
 impl PlatformError {
-    pub(crate) fn loading(err: impl fmt::Debug) -> Self {
+    pub fn loading(err: impl fmt::Debug) -> Self {
         Self(format!("failed to load: {:?}", err))
     }
-    pub(crate) fn init(err: impl fmt::Debug) -> Self {
+    pub fn init(err: impl fmt::Debug) -> Self {
         Self(format!("failed to initialize: {:?}", err))
     }
 }
@@ -251,6 +253,27 @@ pub struct Capabilities {
     pub shader_float16: bool,
     /// Cooperative matrix support.
     pub cooperative_matrix: CooperativeMatrix,
+}
+
+#[derive(Clone, Debug)]
+pub enum DeviceReportStatus {
+    /// This device is available, with its capabilities.
+    Available {
+        is_default: bool,
+        caps: Capabilities,
+    },
+    /// This device was rejected for the given reason.
+    Rejected(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct DeviceReport {
+    /// Vulkan physical device ID. Can be used in [`ContextDesc::device_id`].
+    pub device_id: u32,
+    /// Device information (name, driver, etc).
+    pub information: DeviceInformation,
+    /// Selection status of this device.
+    pub status: DeviceReportStatus,
 }
 
 #[derive(Clone, Debug, Default)]
