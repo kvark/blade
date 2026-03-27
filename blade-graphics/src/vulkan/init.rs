@@ -111,10 +111,28 @@ struct AdapterCapabilities {
     bugs: SystemBugs,
 }
 
+impl AdapterCapabilities {
+    fn to_capabilities(&self) -> crate::Capabilities {
+        crate::Capabilities {
+            binding_array: self.binding_array,
+            ray_query: match self.ray_tracing {
+                Some(_) => crate::ShaderVisibility::all(),
+                None => crate::ShaderVisibility::empty(),
+            },
+            sample_count_mask: (self.properties.limits.framebuffer_color_sample_counts
+                & self.properties.limits.framebuffer_depth_sample_counts)
+                .as_raw(),
+            dual_source_blending: self.dual_source_blending,
+            shader_float16: self.shader_float16,
+            cooperative_matrix: self.cooperative_matrix,
+        }
+    }
+}
+
 /// Display server on the current Linux system.
 /// Used to determine which GPU can present in PRIME configurations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DisplayServer {
+pub(super) enum DisplayServer {
     X11,
     Wayland,
     Other,
@@ -202,7 +220,7 @@ fn inspect_adapter(
     desc: &crate::ContextDesc,
     gpu_vendors: &[u32],
     display_server: DisplayServer,
-) -> Option<AdapterCapabilities> {
+) -> Result<AdapterCapabilities, String> {
     let mut inline_uniform_block_properties =
         vk::PhysicalDeviceInlineUniformBlockPropertiesEXT::default();
     let mut timeline_semaphore_properties =
@@ -235,14 +253,15 @@ fn inspect_adapter(
     if let Some(device_id) = desc.device_id
         && device_id != properties.device_id
     {
-        log::info!("Rejected device ID 0x{:X}", properties.device_id);
-        return None;
+        return Err(format!(
+            "device ID 0x{:X} doesn't match requested 0x{:X}",
+            properties.device_id, device_id,
+        ));
     }
 
     let api_version = properties.api_version.min(driver_api_version);
     if api_version < vk::API_VERSION_1_1 {
-        log::warn!("\tRejected for API version {}", api_version);
-        return None;
+        return Err(format!("Vulkan API version {} is below 1.1", api_version));
     }
 
     let supported_extension_properties = unsafe {
@@ -257,11 +276,10 @@ fn inspect_adapter(
         .collect::<Vec<_>>();
     for extension in REQUIRED_DEVICE_EXTENSIONS {
         if !supported_extensions.contains(extension) {
-            log::warn!(
-                "Rejected for device extension {:?} not supported. Please update the driver!",
+            return Err(format!(
+                "required device extension {:?} is not supported",
                 extension
-            );
-            return None;
+            ));
         }
     }
 
@@ -273,13 +291,10 @@ fn inspect_adapter(
     if desc.presentation
         && is_presentation_broken(properties.vendor_id, gpu_vendors, display_server)
     {
-        log::warn!(
-            "Rejecting adapter {:?} (vendor 0x{:X}): cannot present on {:?} in Intel+NVIDIA PRIME configuration",
-            name,
-            properties.vendor_id,
+        return Err(format!(
+            "cannot present on {:?} in Intel+NVIDIA PRIME configuration",
             display_server,
-        );
-        return None;
+        ));
     }
 
     let mut inline_uniform_block_features =
@@ -338,20 +353,11 @@ fn inspect_adapter(
     }
 
     if timeline_semaphore_features.timeline_semaphore == 0 {
-        log::warn!(
-            "\tRejected for timeline semaphore. Properties = {:?}, Features = {:?}",
-            timeline_semaphore_properties,
-            timeline_semaphore_features,
-        );
-        return None;
+        return Err("timeline semaphore feature is not supported".to_string());
     }
 
     if dynamic_rendering_features.dynamic_rendering == 0 {
-        log::warn!(
-            "\tRejected for dynamic rendering. Features = {:?}",
-            dynamic_rendering_features,
-        );
-        return None;
+        return Err("dynamic rendering feature is not supported".to_string());
     }
 
     let external_memory = supported_extensions.contains(&vk::KHR_EXTERNAL_MEMORY_NAME);
@@ -518,7 +524,7 @@ fn inspect_adapter(
         }
     };
 
-    Some(AdapterCapabilities {
+    Ok(AdapterCapabilities {
         api_version,
         properties,
         device_information,
@@ -543,8 +549,8 @@ fn inspect_adapter(
     })
 }
 
-impl super::Context {
-    pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, NotSupportedError> {
+impl super::VulkanInstance {
+    unsafe fn create(desc: &crate::ContextDesc) -> Result<Self, NotSupportedError> {
         let entry = match unsafe { ash::Entry::load() } {
             Ok(entry) => entry,
             Err(err) => {
@@ -730,50 +736,145 @@ impl super::Context {
                 core: core_instance,
             };
 
-        // Detect GPU vendors from sysfs to identify PRIME multi-GPU topologies
-        // before touching Vulkan device enumeration.
-        let gpu_vendors = detect_gpu_vendors();
+        Ok(super::VulkanInstance {
+            entry,
+            instance,
+            driver_api_version,
+        })
+    }
+}
+
+fn inspect_devices(
+    instance: &super::Instance,
+    driver_api_version: u32,
+    default_phd: Option<vk::PhysicalDevice>,
+) -> Vec<crate::DeviceReport> {
+    let physical_devices =
+        unsafe { instance.core.enumerate_physical_devices() }.unwrap_or_default();
+
+    // Probe all capabilities unconditionally:
+    //  - `ray_tracing` must be enabled to discover RT support
+    //  - `presentation` is left off, so the PRIME topology check is skipped
+    //    (it would reject devices based on the display server, not device features)
+    let inspect_desc = crate::ContextDesc {
+        ray_tracing: true,
+        ..Default::default()
+    };
+
+    physical_devices
+        .into_iter()
+        .map(|phd| {
+            let properties = unsafe { instance.core.get_physical_device_properties(phd) };
+            let device_id = properties.device_id;
+            let device_name = unsafe {
+                ffi::CStr::from_ptr(properties.device_name.as_ptr())
+                    .to_string_lossy()
+                    .to_string()
+            };
+
+            let is_default = default_phd == Some(phd);
+            let result = inspect_adapter(
+                phd,
+                instance,
+                driver_api_version,
+                &inspect_desc,
+                &[],
+                DisplayServer::Other,
+            );
+
+            let (status, information) = match result {
+                Ok(caps) => {
+                    let capabilities = caps.to_capabilities();
+                    let status = crate::DeviceReportStatus::Available {
+                        is_default,
+                        caps: capabilities,
+                    };
+                    (status, caps.device_information)
+                }
+                Err(reason) => (
+                    crate::DeviceReportStatus::Rejected(reason),
+                    crate::DeviceInformation {
+                        is_software_emulated: properties.device_type == vk::PhysicalDeviceType::CPU,
+                        device_name,
+                        driver_name: String::new(),
+                        driver_info: String::new(),
+                    },
+                ),
+            };
+
+            crate::DeviceReport {
+                device_id,
+                information,
+                status,
+            }
+        })
+        .collect()
+}
+
+impl Drop for super::VulkanInstance {
+    fn drop(&mut self) {
+        unsafe {
+            self.instance.core.destroy_instance(None);
+        }
+    }
+}
+
+impl super::Context {
+    pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, NotSupportedError> {
+        let inner = unsafe { super::VulkanInstance::create(&desc)? };
+
+        // Detect GPU vendors from sysfs to identify PRIME multi-GPU topologies.
+        // Only needed when presentation is requested (for the PRIME rejection check).
+        let gpu_vendors = if desc.presentation {
+            let vendors = detect_gpu_vendors();
+            log::info!(
+                "PCI GPU vendors: {:?}",
+                vendors
+                    .iter()
+                    .map(|v| format!("0x{v:04X}"))
+                    .collect::<Vec<_>>(),
+            );
+            vendors
+        } else {
+            Vec::new()
+        };
         let display_server = detect_display_server();
-        log::info!(
-            "PCI GPU vendors: {:?}, display server: {:?}",
-            gpu_vendors
-                .iter()
-                .map(|v| format!("0x{v:04X}"))
-                .collect::<Vec<_>>(),
-            display_server,
-        );
 
         let (physical_device, capabilities) = if let Some(ref xr_desc) = desc.xr {
             let xr_physical_device = unsafe {
                 xr_desc
                     .instance
-                    .vulkan_graphics_device(xr_desc.system_id, instance.core.handle().as_raw() as _)
+                    .vulkan_graphics_device(
+                        xr_desc.system_id,
+                        inner.instance.core.handle().as_raw() as _,
+                    )
                     .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?
             };
             let physical_device = vk::PhysicalDevice::from_raw(xr_physical_device as _);
             let capabilities = inspect_adapter(
                 physical_device,
-                &instance,
-                driver_api_version,
+                &inner.instance,
+                inner.driver_api_version,
                 &desc,
                 &gpu_vendors,
                 display_server,
             )
-            .ok_or(NotSupportedError::NoSupportedDeviceFound)?;
+            .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?;
             (physical_device, capabilities)
         } else {
-            unsafe { instance.core.enumerate_physical_devices() }
+            unsafe { inner.instance.core.enumerate_physical_devices() }
                 .map_err(crate::PlatformError::init)?
                 .into_iter()
                 .find_map(|phd| {
                     inspect_adapter(
                         phd,
-                        &instance,
-                        driver_api_version,
+                        &inner.instance,
+                        inner.driver_api_version,
                         &desc,
                         &gpu_vendors,
                         display_server,
                     )
+                    .ok()
                     .map(|caps| (phd, caps))
                 })
                 .ok_or(NotSupportedError::NoSupportedDeviceFound)?
@@ -970,26 +1071,27 @@ impl super::Context {
 
             if let Some(ref xr_desc) = desc.xr {
                 let get_instance_proc_addr: openxr::sys::platform::VkGetInstanceProcAddr =
-                    unsafe { std::mem::transmute(entry.static_fn().get_instance_proc_addr) };
+                    unsafe { std::mem::transmute(inner.entry.static_fn().get_instance_proc_addr) };
                 unsafe {
                     let raw_device = xr_desc
                         .instance
                         .create_vulkan_device(
                             xr_desc.system_id,
                             get_instance_proc_addr,
-                            physical_device.as_raw() as _,
-                            &device_create_info as *const _ as *const _,
+                            physical_device.as_raw() as *const ffi::c_void,
+                            &device_create_info as *const _ as *const ffi::c_void,
                         )
                         .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?
                         .map_err(|raw| crate::PlatformError::init(vk::Result::from_raw(raw)))?;
                     ash::Device::load(
-                        instance.core.fp_v1_0(),
+                        inner.instance.core.fp_v1_0(),
                         vk::Device::from_raw(raw_device as _),
                     )
                 }
             } else {
                 unsafe {
-                    instance
+                    inner
+                        .instance
                         .core
                         .create_device(physical_device, &device_create_info, None)
                         .map_err(crate::PlatformError::init)?
@@ -997,6 +1099,7 @@ impl super::Context {
             }
         };
 
+        let instance = &inner.instance;
         let device = super::Device {
             swapchain: if desc.presentation {
                 Some(khr::swapchain::Device::new(&instance.core, &device_core))
@@ -1087,7 +1190,8 @@ impl super::Context {
 
         let memory_manager = {
             let mem_properties = unsafe {
-                instance
+                inner
+                    .instance
                     .core
                     .get_physical_device_memory_properties(physical_device)
             };
@@ -1186,7 +1290,7 @@ impl super::Context {
 
         let xr = if let Some(ref xr_desc) = desc.xr {
             let session_info = openxr::vulkan::SessionCreateInfo {
-                instance: instance.core.handle().as_raw() as _,
+                instance: inner.instance.core.handle().as_raw() as _,
                 physical_device: physical_device.as_raw() as _,
                 device: device.core.handle().as_raw() as _,
                 queue_family_index: capabilities.queue_family_index,
@@ -1266,8 +1370,7 @@ impl super::Context {
             cooperative_matrix: capabilities.cooperative_matrix,
             binding_array: capabilities.binding_array,
             memory_budget: capabilities.memory_budget,
-            instance,
-            entry,
+            inner,
             xr,
         })
     }
@@ -1302,6 +1405,24 @@ impl super::Context {
         &self.device.device_information
     }
 
+    pub fn enumerate() -> Result<Vec<crate::DeviceReport>, NotSupportedError> {
+        let desc = crate::ContextDesc::default();
+        let inner = unsafe { super::VulkanInstance::create(&desc)? };
+        Ok(inspect_devices(
+            &inner.instance,
+            inner.driver_api_version,
+            None,
+        ))
+    }
+
+    pub fn enumerate_devices(&self) -> Vec<crate::DeviceReport> {
+        inspect_devices(
+            &self.inner.instance,
+            self.inner.driver_api_version,
+            Some(self.physical_device),
+        )
+    }
+
     pub fn memory_stats(&self) -> crate::MemoryStats {
         if !self.memory_budget {
             return crate::MemoryStats::default();
@@ -1312,7 +1433,8 @@ impl super::Context {
             vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget_properties);
 
         unsafe {
-            self.instance
+            self.inner
+                .instance
                 .get_physical_device_properties2
                 .get_physical_device_memory_properties2(self.physical_device, &mut mem_properties2);
         }
@@ -1356,7 +1478,7 @@ impl Drop for super::Context {
                     .destroy_semaphore(queue.timeline_semaphore, None);
             }
             self.device.core.destroy_device(None);
-            self.instance.core.destroy_instance(None);
+            // inner.drop() destroys the Vulkan instance
         }
     }
 }

@@ -12,6 +12,13 @@ mod pipeline;
 mod resource;
 mod surface;
 
+/// Shared Vulkan instance state used by both `Context::init` and `Context::enumerate`.
+struct VulkanInstance {
+    pub entry: ash::Entry,
+    pub instance: Instance,
+    pub driver_api_version: u32,
+}
+
 const QUERY_POOL_SIZE: usize = crate::limits::PASS_COUNT + 1;
 const MAX_XR_EYES: usize = 2;
 
@@ -270,8 +277,7 @@ pub struct Context {
     cooperative_matrix: crate::CooperativeMatrix,
     binding_array: bool,
     memory_budget: bool,
-    instance: Instance,
-    entry: ash::Entry,
+    inner: VulkanInstance,
     xr: Option<Mutex<XrSessionState>>,
 }
 

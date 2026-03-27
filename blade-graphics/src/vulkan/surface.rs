@@ -196,8 +196,8 @@ impl super::Context {
 
         let raw = unsafe {
             ash_window::create_surface(
-                &self.entry,
-                &self.instance.core,
+                &self.inner.entry,
+                &self.inner.instance.core,
                 window.display_handle().unwrap().as_raw(),
                 window.window_handle().unwrap().as_raw(),
                 None,
@@ -206,6 +206,7 @@ impl super::Context {
         };
 
         let khr_surface = self
+            .inner
             .instance
             .surface
             .as_ref()
@@ -231,7 +232,8 @@ impl super::Context {
         let mut capabilities2_khr =
             vk::SurfaceCapabilities2KHR::default().push_next(&mut fullscreen_exclusive_ext);
         let _ = unsafe {
-            self.instance
+            self.inner
+                .instance
                 .get_surface_capabilities2
                 .as_ref()
                 .unwrap()
@@ -273,13 +275,13 @@ impl super::Context {
                 .core
                 .destroy_semaphore(surface.next_semaphore, None)
         };
-        if let Some(ref surface_instance) = self.instance.surface {
+        if let Some(ref surface_instance) = self.inner.instance.surface {
             unsafe { surface_instance.destroy_surface(surface.raw, None) };
         }
     }
 
     pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
-        let khr_surface = self.instance.surface.as_ref().unwrap();
+        let khr_surface = self.inner.instance.surface.as_ref().unwrap();
 
         let capabilities = unsafe {
             khr_surface

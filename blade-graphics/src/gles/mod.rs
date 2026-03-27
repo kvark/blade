@@ -465,6 +465,22 @@ impl Context {
         &self.device_information
     }
 
+    pub fn enumerate() -> Result<Vec<crate::DeviceReport>, crate::NotSupportedError> {
+        let context = unsafe { Self::init(crate::ContextDesc::default())? };
+        Ok(context.enumerate_devices())
+    }
+
+    pub fn enumerate_devices(&self) -> Vec<crate::DeviceReport> {
+        vec![crate::DeviceReport {
+            device_id: 0,
+            information: self.device_information.clone(),
+            status: crate::DeviceReportStatus::Available {
+                is_default: true,
+                caps: self.capabilities(),
+            },
+        }]
+    }
+
     pub fn memory_stats(&self) -> crate::MemoryStats {
         crate::MemoryStats::default()
     }
