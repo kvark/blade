@@ -74,7 +74,7 @@ pub mod traits;
 pub mod util;
 pub mod limits {
     /// Max number of passes inside a command encoder.
-    pub const PASS_COUNT: usize = 100;
+    pub const PASS_COUNT: usize = 1000;
     /// Max plain data size for a pipeline.
     pub const PLAIN_DATA_SIZE: u32 = 256;
     /// Max number of resources in a bind group.
