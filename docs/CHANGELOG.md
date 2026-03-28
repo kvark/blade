@@ -1,8 +1,9 @@
 Changelog for *Blade* project
 
-## blade-graphics-0.8.1 (TBD)
+## blade-graphics-0.8.1 (28 Mar 2026)
 
 - new API for enumerating device availability
+- bumped the max pass count to 1000 for better ML compatibility
 
 ## blade-graphics-0.8, blade-util-0.3, blade-egui-0.7, blade-particle-0.1, blade-asset-0.2.1, blade-engine-0.1 (26 Mar 2026)
 
