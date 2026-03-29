@@ -311,7 +311,7 @@ impl super::Context {
         let source_string = NSString::from_str(&source);
         let options = metal::MTLCompileOptions::new();
         options.setLanguageVersion(self.info.language_version);
-        options.setPreserveInvariance(true);
+        unsafe { options.setMathMode(metal::MTLMathMode::Fast) };
 
         let library = self
             .device

@@ -280,6 +280,7 @@ impl super::CommandEncoder {
         });
         super::ComputeCommandEncoder {
             raw,
+            enable_debug_groups: self.enable_debug_groups,
             phantom: PhantomData,
         }
     }
@@ -393,6 +394,7 @@ impl super::CommandEncoder {
 
         super::RenderCommandEncoder {
             raw,
+            enable_debug_groups: self.enable_debug_groups,
             phantom: PhantomData,
         }
     }
@@ -643,7 +645,9 @@ impl super::ComputeCommandEncoder<'_> {
         &'p mut self,
         pipeline: &'p super::ComputePipeline,
     ) -> super::ComputePipelineContext<'p> {
-        self.raw.pushDebugGroup(&NSString::from_str(&pipeline.name));
+        if self.enable_debug_groups {
+            self.raw.pushDebugGroup(&NSString::from_str(&pipeline.name));
+        }
         self.raw.setComputePipelineState(&pipeline.raw);
         if let Some(index) = pipeline.layout.sizes_buffer_slot {
             //TODO: get real sizes? shouldn't matter without bounds checks
@@ -667,6 +671,7 @@ impl super::ComputeCommandEncoder<'_> {
             encoder: self.raw.as_ref(),
             wg_size: pipeline.wg_size,
             group_mappings: &pipeline.layout.group_mappings,
+            enable_debug_groups: self.enable_debug_groups,
         }
     }
 }
@@ -722,7 +727,9 @@ impl super::RenderCommandEncoder<'_> {
         &'p mut self,
         pipeline: &'p super::RenderPipeline,
     ) -> super::RenderPipelineContext<'p> {
-        self.raw.pushDebugGroup(&NSString::from_str(&pipeline.name));
+        if self.enable_debug_groups {
+            self.raw.pushDebugGroup(&NSString::from_str(&pipeline.name));
+        }
         self.raw.setRenderPipelineState(&pipeline.raw);
         if let Some(index) = pipeline.layout.sizes_buffer_slot {
             //TODO: get real sizes
@@ -758,6 +765,7 @@ impl super::RenderCommandEncoder<'_> {
             encoder: self.raw.as_ref(),
             primitive_type: pipeline.primitive_type,
             group_mappings: &pipeline.layout.group_mappings,
+            enable_debug_groups: self.enable_debug_groups,
         }
     }
 }
@@ -814,7 +822,9 @@ impl crate::traits::ComputePipelineEncoder for super::ComputePipelineContext<'_>
 
 impl Drop for super::ComputePipelineContext<'_> {
     fn drop(&mut self) {
-        self.encoder.popDebugGroup();
+        if self.enable_debug_groups {
+            self.encoder.popDebugGroup();
+        }
     }
 }
 
@@ -980,7 +990,9 @@ impl crate::traits::RenderPipelineEncoder for super::RenderPipelineContext<'_> {
 
 impl Drop for super::RenderPipelineContext<'_> {
     fn drop(&mut self) {
-        self.encoder.popDebugGroup();
+        if self.enable_debug_groups {
+            self.encoder.popDebugGroup();
+        }
     }
 }
 
