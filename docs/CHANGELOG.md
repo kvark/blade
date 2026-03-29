@@ -1,5 +1,9 @@
 Changelog for *Blade* project
 
+## blade-graphics-0.8.2 (TBD)
+
+- metal: enable fast math, skip debug groups in production
+
 ## blade-graphics-0.8.1 (28 Mar 2026)
 
 - new API for enumerating device availability

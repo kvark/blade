@@ -296,11 +296,13 @@ pub struct AccelerationStructureCommandEncoder<'a> {
 
 pub struct ComputeCommandEncoder<'a> {
     raw: Retained<ProtocolObject<dyn metal::MTLComputeCommandEncoder>>,
+    enable_debug_groups: bool,
     phantom: PhantomData<&'a CommandEncoder>,
 }
 
 pub struct RenderCommandEncoder<'a> {
     raw: Retained<ProtocolObject<dyn metal::MTLRenderCommandEncoder>>,
+    enable_debug_groups: bool,
     phantom: PhantomData<&'a CommandEncoder>,
 }
 
@@ -316,12 +318,14 @@ pub struct ComputePipelineContext<'a> {
     encoder: &'a ProtocolObject<dyn metal::MTLComputeCommandEncoder>,
     wg_size: metal::MTLSize,
     group_mappings: &'a [ShaderDataMapping],
+    enable_debug_groups: bool,
 }
 
 pub struct RenderPipelineContext<'a> {
     encoder: &'a ProtocolObject<dyn metal::MTLRenderCommandEncoder>,
     primitive_type: metal::MTLPrimitiveType,
     group_mappings: &'a [ShaderDataMapping],
+    enable_debug_groups: bool,
 }
 
 fn map_texture_format(format: crate::TextureFormat) -> metal::MTLPixelFormat {
