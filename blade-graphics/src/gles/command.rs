@@ -290,6 +290,11 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
 }
 
 impl super::PassEncoder<'_, super::ComputePipeline> {
+    /// Insert a compute-to-compute memory barrier within the current pass.
+    pub fn barrier(&mut self) {
+        self.commands.push(super::Command::Barrier);
+    }
+
     pub fn with<'b>(
         &'b mut self,
         pipeline: &'b super::ComputePipeline,
@@ -1100,7 +1105,13 @@ impl super::Command {
                     (None, Some(s)) => gl.clear_buffer_i32_slice(glow::STENCIL, 0, &[s as i32]),
                     (None, None) => (),
                 },
-                Self::Barrier => unimplemented!(),
+                Self::Barrier => {
+                    gl.memory_barrier(
+                        glow::SHADER_STORAGE_BARRIER_BIT
+                            | glow::BUFFER_UPDATE_BARRIER_BIT
+                            | glow::UNIFORM_BARRIER_BIT,
+                    );
+                }
                 Self::SetViewport(ref vp) => {
                     gl.viewport(vp.x as i32, vp.y as i32, vp.w as i32, vp.h as i32);
                     gl.depth_range_f32(vp.depth.start, vp.depth.end);

@@ -848,6 +848,33 @@ impl Drop for super::AccelerationStructureCommandEncoder<'_> {
 }
 
 impl<'a> super::ComputeCommandEncoder<'a> {
+    /// Insert a compute-to-compute memory barrier within the current pass.
+    ///
+    /// Ensures that storage buffer writes from preceding dispatches are
+    /// visible to subsequent dispatches, without ending the compute pass.
+    /// Uses `COMPUTE_SHADER` stage scope since this is inherently a
+    /// compute-only synchronization point.
+    pub fn barrier(&mut self) {
+        let barrier = vk::MemoryBarrier {
+            src_access_mask: vk::AccessFlags::SHADER_WRITE,
+            dst_access_mask: vk::AccessFlags::SHADER_READ
+                | vk::AccessFlags::SHADER_WRITE
+                | vk::AccessFlags::UNIFORM_READ,
+            ..Default::default()
+        };
+        unsafe {
+            self.device.core.cmd_pipeline_barrier(
+                self.cmd_buf.raw,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::DependencyFlags::empty(),
+                &[barrier],
+                &[],
+                &[],
+            );
+        }
+    }
+
     pub fn with<'b, 'p>(
         &'b mut self,
         pipeline: &'p super::ComputePipeline,
