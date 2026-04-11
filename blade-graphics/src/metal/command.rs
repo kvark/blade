@@ -641,6 +641,18 @@ impl Drop for super::AccelerationStructureCommandEncoder<'_> {
 }
 
 impl super::ComputeCommandEncoder<'_> {
+    /// Insert a compute-to-compute memory barrier within the current pass.
+    ///
+    /// Ensures that storage buffer writes from preceding dispatches are
+    /// visible to subsequent dispatches without ending the compute encoder.
+    pub fn barrier(&mut self) {
+        // MTLBarrierScope.buffers = 1 << 0
+        // memoryBarrier(scope:) requires macOS 10.14+ / iOS 12.0+
+        unsafe {
+            let _: () = objc2::msg_send![&*self.raw, memoryBarrierWithScope: 1u64];
+        }
+    }
+
     pub fn with<'p>(
         &'p mut self,
         pipeline: &'p super::ComputePipeline,
