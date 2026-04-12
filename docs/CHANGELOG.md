@@ -4,6 +4,7 @@ Changelog for *Blade* project
 
 - metal: enable fast math, skip debug groups in production
 - add `ComputeCommandEncoder::barrier()` for inline compute-to-compute synchronization within a pass
+- enable `naga::valid::Capabilities::SUBGROUP` for shader validation
 
 ## blade-graphics-0.8.1 (28 Mar 2026)
 
