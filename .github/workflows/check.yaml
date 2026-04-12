@@ -76,8 +76,8 @@ jobs:
 
       - name: Install MSRV toolchain
         run: |
-          rustup toolchain install 1.88.0 --profile minimal
-          rustup default 1.88.0
+          rustup toolchain install 1.92.0 --profile minimal
+          rustup default 1.92.0
 
       - name: Check MSRV
         run: cargo check --workspace --no-default-features
