@@ -47,6 +47,12 @@ impl super::Context {
             naga::valid::Capabilities::COOPERATIVE_MATRIX,
             device_caps.cooperative_matrix.is_supported(),
         );
+        // Subgroup operations (subgroupAdd, subgroupBroadcast, etc.) are
+        // broadly supported on modern GPUs via VK_EXT_subgroup_size_control.
+        // Enable unconditionally so naga validates subgroup ops and emits
+        // the correct SPIR-V capabilities (GroupNonUniform, etc.).
+        caps.set(naga::valid::Capabilities::SUBGROUP, true);
+
         naga::valid::Validator::new(flags, caps)
             .validate(module)
             .map_err(|e| {
