@@ -1466,9 +1466,6 @@ impl super::Context {
 
 impl Drop for super::Context {
     fn drop(&mut self) {
-        if std::thread::panicking() {
-            return;
-        }
         unsafe {
             self.xr = None;
             if let Ok(queue) = self.queue.lock() {
