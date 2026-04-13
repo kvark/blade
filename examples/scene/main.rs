@@ -957,9 +957,9 @@ impl winit::application::ApplicationHandler for App {
             }
             winit::event::WindowEvent::RedrawRequested => {
                 let raw_input = egui_winit.take_egui_input(window);
-                let egui_output = egui_winit.egui_ctx().run(raw_input, |egui_ctx| {
+                let egui_output = egui_winit.egui_ctx().run_ui(raw_input, |egui_ctx| {
                     let frame = {
-                        let mut frame = egui::Frame::side_top_panel(&egui_ctx.style());
+                        let mut frame = egui::Frame::side_top_panel(&egui_ctx.global_style());
                         let mut fill = frame.fill.to_array();
                         for f in fill.iter_mut() {
                             *f = (*f as u32 * 7 / 8) as u8;
@@ -969,14 +969,14 @@ impl winit::application::ApplicationHandler for App {
                         );
                         frame
                     };
-                    egui::SidePanel::right("view")
+                    egui::Panel::right("view")
                         .frame(frame)
-                        .show(egui_ctx, |ui| {
+                        .show_inside(egui_ctx, |ui| {
                             example.populate_view(ui);
                         });
-                    egui::SidePanel::left("content")
+                    egui::Panel::left("content")
                         .frame(frame)
-                        .show(egui_ctx, |ui| {
+                        .show_inside(egui_ctx, |ui| {
                             example.populate_content(ui);
                             ui.separator();
                             if ui.button("Quit").clicked() {
@@ -986,7 +986,8 @@ impl winit::application::ApplicationHandler for App {
                 });
 
                 //HACK: https://github.com/urholaukkarinen/egui-gizmo/issues/29
-                if example.have_objects_changed && egui_winit.egui_ctx().wants_pointer_input() {
+                if example.have_objects_changed && egui_winit.egui_ctx().egui_wants_pointer_input()
+                {
                     self.drag_start = None;
                 }
 

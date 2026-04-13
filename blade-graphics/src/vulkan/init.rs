@@ -341,25 +341,21 @@ fn inspect_adapter(
         && inline_uniform_block_features.inline_uniform_block != 0;
     // Adreno 740 (Qualcomm) has a driver bug: inline uniform blocks combined
     // with inter-stage varyings cause "Failed to link shaders" at pipeline creation.
-    let max_inline_uniform_block_size = if has_inline_ub
-        && properties.vendor_id != db::qualcomm::VENDOR
-    {
-        inline_uniform_block_properties.max_inline_uniform_block_size
-    } else {
-        0
-    };
-    if max_inline_uniform_block_size == 0 {
-        log::info!(
-            "Inline uniform blocks disabled (supported={}, vendor=0x{:X}). Using UBO fallback.",
-            has_inline_ub,
-            properties.vendor_id,
-        );
-    } else {
-        log::info!(
-            "Inline uniform blocks enabled (max size per binding: {} bytes)",
-            max_inline_uniform_block_size,
-        );
-    }
+    let max_inline_uniform_block_size =
+        if has_inline_ub && properties.vendor_id != db::qualcomm::VENDOR {
+            log::info!(
+                "Inline uniform blocks enabled (max size per binding: {} bytes)",
+                inline_uniform_block_properties.max_inline_uniform_block_size,
+            );
+            inline_uniform_block_properties.max_inline_uniform_block_size
+        } else {
+            log::info!(
+                "Inline uniform blocks disabled (supported={}, vendor=0x{:X}). Using UBO fallback.",
+                has_inline_ub,
+                properties.vendor_id,
+            );
+            0
+        };
 
     if timeline_semaphore_features.timeline_semaphore == 0 {
         return Err("timeline semaphore feature is not supported".to_string());

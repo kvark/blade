@@ -579,9 +579,9 @@ impl Game {
 
         let raw_input = self.egui_state.take_egui_input(&self.window);
         let egui_context = self.egui_state.egui_ctx().clone();
-        let egui_output = egui_context.run(raw_input, |egui_ctx| {
+        let egui_output = egui_context.run_ui(raw_input, |egui_ctx| {
             let frame = {
-                let mut frame = egui::Frame::side_top_panel(&egui_ctx.style());
+                let mut frame = egui::Frame::side_top_panel(&egui_ctx.global_style());
                 let mut fill = frame.fill.to_array();
                 for f in fill.iter_mut() {
                     *f = (*f as u32 * 7 / 8) as u8;
@@ -590,9 +590,9 @@ impl Game {
                     egui::Color32::from_rgba_premultiplied(fill[0], fill[1], fill[2], fill[3]);
                 frame
             };
-            egui::SidePanel::right("engine")
+            egui::Panel::right("engine")
                 .frame(frame)
-                .show(egui_ctx, |ui| self.populate_hud(ui));
+                .show_inside(egui_ctx, |ui| self.populate_hud(ui));
         });
 
         self.egui_state

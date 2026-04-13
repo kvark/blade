@@ -473,8 +473,8 @@ impl winit::application::ApplicationHandler for App {
 
             winit::event::WindowEvent::RedrawRequested => {
                 let raw_input = egui_winit.take_egui_input(window);
-                let egui_output = egui_winit.egui_ctx().run(raw_input, |egui_ctx| {
-                    egui::SidePanel::left("info").show(egui_ctx, |ui| {
+                let egui_output = egui_winit.egui_ctx().run_ui(raw_input, |egui_ctx| {
+                    egui::Panel::left("info").show_inside(egui_ctx, |ui| {
                         ui.add_space(5.0);
                         example.add_gui(ui);
 
