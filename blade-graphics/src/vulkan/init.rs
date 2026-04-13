@@ -97,7 +97,7 @@ struct AdapterCapabilities {
     binding_array: bool,
     ray_tracing: Option<RayTracingCapabilities>,
     buffer_device_address: bool,
-    inline_uniform_blocks: bool,
+    max_inline_uniform_block_size: u32,
     buffer_marker: bool,
     shader_info: bool,
     full_screen_exclusive: bool,
@@ -337,18 +337,27 @@ fn inspect_adapter(
     let shader_float16 = float16_int8_features.shader_float16 != 0;
 
     let has_inline_ub = supported_extensions.contains(&vk::EXT_INLINE_UNIFORM_BLOCK_NAME)
-        && inline_uniform_block_properties.max_inline_uniform_block_size
-            >= crate::limits::PLAIN_DATA_SIZE
         && inline_uniform_block_properties.max_descriptor_set_inline_uniform_blocks > 0
         && inline_uniform_block_features.inline_uniform_block != 0;
     // Adreno 740 (Qualcomm) has a driver bug: inline uniform blocks combined
     // with inter-stage varyings cause "Failed to link shaders" at pipeline creation.
-    let inline_uniform_blocks = has_inline_ub && properties.vendor_id != db::qualcomm::VENDOR;
-    if !inline_uniform_blocks {
+    let max_inline_uniform_block_size = if has_inline_ub
+        && properties.vendor_id != db::qualcomm::VENDOR
+    {
+        inline_uniform_block_properties.max_inline_uniform_block_size
+    } else {
+        0
+    };
+    if max_inline_uniform_block_size == 0 {
         log::info!(
             "Inline uniform blocks disabled (supported={}, vendor=0x{:X}). Using UBO fallback.",
             has_inline_ub,
             properties.vendor_id,
+        );
+    } else {
+        log::info!(
+            "Inline uniform blocks enabled (max size per binding: {} bytes)",
+            max_inline_uniform_block_size,
         );
     }
 
@@ -533,7 +542,7 @@ fn inspect_adapter(
         binding_array,
         ray_tracing,
         buffer_device_address,
-        inline_uniform_blocks,
+        max_inline_uniform_block_size,
         buffer_marker,
         shader_info,
         full_screen_exclusive,
@@ -893,7 +902,7 @@ impl super::Context {
             let family_infos = [family_info];
 
             let mut device_extensions = REQUIRED_DEVICE_EXTENSIONS.to_vec();
-            if capabilities.inline_uniform_blocks {
+            if capabilities.max_inline_uniform_block_size > 0 {
                 device_extensions.push(vk::EXT_INLINE_UNIFORM_BLOCK_NAME);
             }
             if desc.presentation {
@@ -975,7 +984,7 @@ impl super::Context {
                 .enabled_extension_names(&str_pointers)
                 .push_next(&mut khr_timeline_semaphore)
                 .push_next(&mut khr_dynamic_rendering);
-            if capabilities.inline_uniform_blocks {
+            if capabilities.max_inline_uniform_block_size > 0 {
                 device_create_info = device_create_info.push_next(&mut ext_inline_uniform_block);
             }
 
@@ -1121,7 +1130,7 @@ impl super::Context {
                 None
             },
             buffer_device_address: capabilities.buffer_device_address,
-            inline_uniform_blocks: capabilities.inline_uniform_blocks,
+            max_inline_uniform_block_size: capabilities.max_inline_uniform_block_size,
             buffer_marker: if capabilities.buffer_marker && desc.validation {
                 Some(amd::buffer_marker::Device::new(
                     &instance.core,
