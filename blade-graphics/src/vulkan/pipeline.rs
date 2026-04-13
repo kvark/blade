@@ -186,6 +186,7 @@ impl super::Context {
         let mut template_entries = Vec::with_capacity(layout.bindings.len());
         let mut template_offsets = Vec::with_capacity(layout.bindings.len());
         let mut binding_flags = Vec::with_capacity(layout.bindings.len());
+        let mut inline_uniform_mask = 0u64;
         let mut update_offset = 0;
         for (binding_index, (&(_, binding), &access)) in layout
             .bindings
@@ -245,7 +246,7 @@ impl super::Context {
                     vk::DescriptorBindingFlags::PARTIALLY_BOUND,
                 ),
                 crate::ShaderBinding::Plain { size } => {
-                    if self.device.inline_uniform_blocks {
+                    if size <= self.device.max_inline_uniform_block_size {
                         (
                             vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
                             1,
@@ -270,25 +271,7 @@ impl super::Context {
                     binding_index,
                     descriptor_count
                 );
-                assert!(
-                    descriptor_count <= crate::limits::PLAIN_DATA_SIZE,
-                    "Inline uniform block binding {} size {} exceeds blade limit {}",
-                    binding_index,
-                    descriptor_count,
-                    crate::limits::PLAIN_DATA_SIZE
-                );
-            }
-            // UBO fallback: ensure Plain size fits in the scratch buffer
-            if descriptor_type == vk::DescriptorType::UNIFORM_BUFFER
-                && let crate::ShaderBinding::Plain { size } = binding
-            {
-                assert!(
-                    size <= crate::limits::PLAIN_DATA_SIZE,
-                    "UBO binding {} size {} exceeds blade limit {}",
-                    binding_index,
-                    size,
-                    crate::limits::PLAIN_DATA_SIZE
-                );
+                inline_uniform_mask |= 1 << binding_index;
             }
 
             vk_bindings.push(vk::DescriptorSetLayoutBinding {
@@ -339,6 +322,7 @@ impl super::Context {
             update_template,
             template_size: update_offset as u32,
             template_offsets: template_offsets.into_boxed_slice(),
+            inline_uniform_mask,
         }
     }
 

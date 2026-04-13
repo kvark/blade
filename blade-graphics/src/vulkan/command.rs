@@ -52,38 +52,40 @@ impl super::PipelineContext<'_> {
 
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
-        let descriptor_buf_info = if let Some(ref mut scratch) = ctx.scratch {
-            // UBO fallback: copy data to scratch buffer
-            let data = bytemuck::bytes_of(self);
-            let aligned_offset =
-                (scratch.offset + scratch.alignment - 1) & !(scratch.alignment - 1);
-            let end = aligned_offset + data.len() as u64;
-            assert!(
-                end <= scratch.capacity,
-                "Scratch buffer overflow: needed {end}, capacity {}",
-                scratch.capacity
-            );
-            unsafe {
-                ptr::copy_nonoverlapping(
-                    data.as_ptr(),
-                    scratch.mapped.add(aligned_offset as usize),
-                    data.len(),
-                );
-            }
-            scratch.offset = end;
-            Some(vk::DescriptorBufferInfo {
-                buffer: scratch.raw,
-                offset: aligned_offset,
-                range: data.len() as u64,
-            })
-        } else {
-            None
-        };
-        if let Some(info) = descriptor_buf_info {
-            ctx.write(index, info);
-        } else {
+        if ctx.inline_uniform_mask & (1 << index) != 0 {
             // Inline uniform block mode: write raw data directly
             ctx.write(index, *self);
+        } else {
+            // UBO mode: copy data to scratch buffer, then write descriptor
+            let info = {
+                let scratch = ctx
+                    .scratch
+                    .as_mut()
+                    .expect("scratch buffer required for UBO binding");
+                let data = bytemuck::bytes_of(self);
+                let aligned_offset =
+                    (scratch.offset + scratch.alignment - 1) & !(scratch.alignment - 1);
+                let end = aligned_offset + data.len() as u64;
+                assert!(
+                    end <= scratch.capacity,
+                    "Scratch buffer overflow: needed {end}, capacity {}",
+                    scratch.capacity
+                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        data.as_ptr(),
+                        scratch.mapped.add(aligned_offset as usize),
+                        data.len(),
+                    );
+                }
+                scratch.offset = end;
+                vk::DescriptorBufferInfo {
+                    buffer: scratch.raw,
+                    offset: aligned_offset,
+                    range: data.len() as u64,
+                }
+            };
+            ctx.write(index, info);
         }
     }
 }
@@ -1003,6 +1005,7 @@ impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_, '_> {
                 update_data: self.update_data.as_mut_slice(),
                 template_offsets: &dsl.template_offsets,
                 scratch: self.cmd_buf.scratch.as_mut(),
+                inline_uniform_mask: dsl.inline_uniform_mask,
             });
         }
 

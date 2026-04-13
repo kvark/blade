@@ -61,7 +61,7 @@ struct Device {
     dynamic_rendering: khr::dynamic_rendering::Device,
     ray_tracing: Option<RayTracingDevice>,
     buffer_device_address: bool,
-    inline_uniform_blocks: bool,
+    max_inline_uniform_block_size: u32,
     buffer_marker: Option<ash::amd::buffer_marker::Device>,
     shader_info: Option<ash::amd::shader_info::Device>,
     full_screen_exclusive: Option<ash::ext::full_screen_exclusive::Device>,
@@ -361,6 +361,9 @@ struct DescriptorSetLayout {
     update_template: vk::DescriptorUpdateTemplate,
     template_size: u32,
     template_offsets: Box<[u32]>,
+    /// Bitmask: bit N is set if binding N uses inline uniform blocks.
+    /// Clear bits use uniform buffer objects via the scratch buffer.
+    inline_uniform_mask: u64,
 }
 
 impl DescriptorSetLayout {
@@ -389,6 +392,8 @@ pub struct PipelineContext<'a> {
     update_data: &'a mut [u8],
     template_offsets: &'a [u32],
     scratch: Option<&'a mut ScratchBuffer>,
+    /// Bitmask: bit N is set if binding N uses inline uniform blocks.
+    inline_uniform_mask: u64,
 }
 
 #[derive(Debug)]
@@ -520,24 +525,23 @@ impl crate::traits::CommandDevice for Context {
                 } else {
                     vk::QueryPool::null()
                 };
-                let scratch = if !self.device.inline_uniform_blocks {
-                    const SCRATCH_SIZE: u64 = 1 << 20; // 1 MiB
-                    let buf = self.create_buffer(crate::BufferDesc {
-                        name: "_scratch",
-                        size: SCRATCH_SIZE,
-                        memory: crate::Memory::Shared,
-                    });
-                    Some(ScratchBuffer {
-                        raw: buf.raw,
-                        memory_handle: buf.memory_handle,
-                        mapped: buf.mapped_data,
-                        capacity: SCRATCH_SIZE,
-                        offset: 0,
-                        alignment: self.min_uniform_buffer_offset_alignment,
-                    })
-                } else {
-                    None
-                };
+                // Always create a scratch buffer for UBO bindings.
+                // Even when inline uniform blocks are supported, individual
+                // bindings that exceed the device limit fall back to UBOs.
+                const SCRATCH_SIZE: u64 = 1 << 20; // 1 MiB
+                let scratch_buf = self.create_buffer(crate::BufferDesc {
+                    name: "_scratch",
+                    size: SCRATCH_SIZE,
+                    memory: crate::Memory::Shared,
+                });
+                let scratch = Some(ScratchBuffer {
+                    raw: scratch_buf.raw,
+                    memory_handle: scratch_buf.memory_handle,
+                    mapped: scratch_buf.mapped_data,
+                    capacity: SCRATCH_SIZE,
+                    offset: 0,
+                    alignment: self.min_uniform_buffer_offset_alignment,
+                });
                 CommandBuffer {
                     raw,
                     descriptor_pool,

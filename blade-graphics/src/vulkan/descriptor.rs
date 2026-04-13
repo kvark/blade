@@ -31,17 +31,18 @@ impl super::Device {
                 descriptor_count: max_sets,
             },
         ];
-        if self.inline_uniform_blocks {
+        if self.max_inline_uniform_block_size > 0 {
             descriptor_sizes.push(vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
-                descriptor_count: max_sets * crate::limits::PLAIN_DATA_SIZE,
-            });
-        } else {
-            descriptor_sizes.push(vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::UNIFORM_BUFFER,
-                descriptor_count: max_sets,
+                descriptor_count: max_sets * self.max_inline_uniform_block_size,
             });
         }
+        // Always include UBO type: needed as fallback when bindings exceed
+        // the inline uniform block size limit, or when IUBs aren't supported.
+        descriptor_sizes.push(vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::UNIFORM_BUFFER,
+            descriptor_count: max_sets,
+        });
         if self.ray_tracing.is_some() {
             descriptor_sizes.push(vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
@@ -58,7 +59,7 @@ impl super::Device {
             .max_sets(max_sets)
             .flags(self.workarounds.extra_descriptor_pool_create_flags)
             .pool_sizes(&descriptor_sizes);
-        if self.inline_uniform_blocks {
+        if self.max_inline_uniform_block_size > 0 {
             descriptor_pool_info = descriptor_pool_info.push_next(&mut inline_uniform_block_info);
         }
 
