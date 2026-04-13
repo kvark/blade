@@ -2,9 +2,10 @@ Changelog for *Blade* project
 
 ## blade-graphics-0.8.2 (TBD)
 
-- metal: enable fast math, skip debug groups in production
 - add `ComputeCommandEncoder::barrier()` for inline compute-to-compute synchronization within a pass
 - enable `naga::valid::Capabilities::SUBGROUP` for shader validation
+- vulkan: fall back to UBO for larger uniform blocks on all systems
+- metal: enable fast math, skip debug groups in production
 
 ## blade-graphics-0.8.1 (28 Mar 2026)
 
