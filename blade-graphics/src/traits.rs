@@ -43,7 +43,7 @@ pub trait ShaderDevice {
 
 pub trait CommandDevice {
     type CommandEncoder;
-    type SyncPoint: Clone + Debug;
+    type SyncPoint: Clone + Debug + Default;
 
     fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> Self::CommandEncoder;
     fn destroy_command_encoder(&self, encoder: &mut Self::CommandEncoder);

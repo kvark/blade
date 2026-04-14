@@ -458,7 +458,7 @@ impl Engine {
         if !self.track_hot_reloads {
             return;
         }
-        let sync_point = self.pacer.last_sync_point().unwrap();
+        let sync_point = self.pacer.last_sync_point();
         match self.renderer {
             Renderer::RayTracer { ref mut inner, .. } => {
                 inner.hot_reload(&self.asset_hub, &self.gpu_context, sync_point);

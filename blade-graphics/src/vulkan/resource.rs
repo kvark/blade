@@ -297,6 +297,16 @@ impl crate::traits::ResourceDevice for super::Context {
             handle_types: external_source_handle_type(e),
             ..Default::default()
         });
+        let (sharing_mode, queue_family_index_count, p_queue_family_indices) =
+            if self.queue_family_indices.len() > 1 {
+                (
+                    vk::SharingMode::CONCURRENT,
+                    self.queue_family_indices.len() as u32,
+                    self.queue_family_indices.as_ptr(),
+                )
+            } else {
+                (vk::SharingMode::EXCLUSIVE, 0, ptr::null())
+            };
         let mut vk_info = vk::BufferCreateInfo {
             size: desc.size,
             usage: Buf::TRANSFER_SRC
@@ -305,7 +315,9 @@ impl crate::traits::ResourceDevice for super::Context {
                 | Buf::INDEX_BUFFER
                 | Buf::VERTEX_BUFFER
                 | Buf::INDIRECT_BUFFER,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            sharing_mode,
+            queue_family_index_count,
+            p_queue_family_indices,
             ..Default::default()
         };
         // Always include UNIFORM_BUFFER usage: even when inline uniform blocks
@@ -386,6 +398,16 @@ impl crate::traits::ResourceDevice for super::Context {
             ..Default::default()
         });
 
+        let (sharing_mode, queue_family_index_count, p_queue_family_indices) =
+            if self.queue_family_indices.len() > 1 {
+                (
+                    vk::SharingMode::CONCURRENT,
+                    self.queue_family_indices.len() as u32,
+                    self.queue_family_indices.as_ptr(),
+                )
+            } else {
+                (vk::SharingMode::EXCLUSIVE, 0, ptr::null())
+            };
         let mut vk_info = vk::ImageCreateInfo {
             flags: create_flags,
             image_type: map_texture_dimension(desc.dimension),
@@ -396,7 +418,9 @@ impl crate::traits::ResourceDevice for super::Context {
             samples: vk::SampleCountFlags::from_raw(desc.sample_count),
             tiling: vk::ImageTiling::OPTIMAL,
             usage: map_texture_usage(desc.usage, desc.format.aspects()),
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            sharing_mode,
+            queue_family_index_count,
+            p_queue_family_indices,
             ..Default::default()
         };
 
@@ -528,11 +552,23 @@ impl crate::traits::ResourceDevice for super::Context {
         &self,
         desc: crate::AccelerationStructureDesc,
     ) -> super::AccelerationStructure {
+        let (sharing_mode, queue_family_index_count, p_queue_family_indices) =
+            if self.queue_family_indices.len() > 1 {
+                (
+                    vk::SharingMode::CONCURRENT,
+                    self.queue_family_indices.len() as u32,
+                    self.queue_family_indices.as_ptr(),
+                )
+            } else {
+                (vk::SharingMode::EXCLUSIVE, 0, ptr::null())
+            };
         let buffer_info = vk::BufferCreateInfo {
             size: desc.size,
             usage: vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            sharing_mode,
+            queue_family_index_count,
+            p_queue_family_indices,
             ..Default::default()
         };
 

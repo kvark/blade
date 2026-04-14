@@ -4,7 +4,8 @@ use blade_graphics as gpu;
 
 struct Example {
     command_encoder: gpu::CommandEncoder,
-    prev_sync_point: Option<gpu::SyncPoint>,
+    compute_encoder: gpu::CommandEncoder,
+    prev_sync_point: gpu::SyncPoint,
     context: gpu::Context,
     surface: gpu::Surface,
     gui_painter: blade_egui::GuiPainter,
@@ -27,9 +28,7 @@ impl Example {
 
         let surface_info = self.surface.info();
 
-        if let Some(sp) = self.prev_sync_point.take() {
-            let _ = self.context.wait_for(&sp, !0);
-        }
+        let _ = self.context.wait_for(&self.prev_sync_point, !0);
 
         if let Some(msaa_view) = self.msaa_view.take() {
             self.context.destroy_texture_view(msaa_view);
@@ -120,7 +119,7 @@ impl Example {
                 validation: cfg!(debug_assertions),
                 timing: true,
                 capture: false,
-
+                multi_queue: true,
                 ..Default::default()
             })
             .unwrap()
@@ -174,10 +173,16 @@ impl Example {
             buffer_count: 2,
             queue: gpu::QueueType::Main,
         });
+        let compute_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+            name: "async-compute",
+            buffer_count: 2,
+            queue: gpu::QueueType::AsyncCompute,
+        });
 
         Self {
             command_encoder,
-            prev_sync_point: None,
+            compute_encoder,
+            prev_sync_point: gpu::SyncPoint::default(),
             context,
             surface,
             gui_painter,
@@ -192,11 +197,11 @@ impl Example {
     }
 
     fn destroy(&mut self) {
-        if let Some(sp) = self.prev_sync_point.take() {
-            let _ = self.context.wait_for(&sp, !0);
-        }
+        let _ = self.context.wait_for(&self.prev_sync_point, !0);
         self.context
             .destroy_command_encoder(&mut self.command_encoder);
+        self.context
+            .destroy_command_encoder(&mut self.compute_encoder);
         self.gui_painter.destroy(&self.context);
         self.particle_system.destroy(&self.context);
         self.particle_pipeline.destroy(&self.context);
@@ -242,14 +247,6 @@ impl Example {
 
         let frame = self.surface.acquire_frame();
         let frame_view = frame.texture_view();
-        self.command_encoder.start();
-        if let Some(msaa_texture) = self.msaa_texture {
-            self.command_encoder.init_texture(msaa_texture);
-        }
-        self.command_encoder.init_texture(frame.texture());
-
-        self.gui_painter
-            .update_textures(&mut self.command_encoder, gui_textures, &self.context);
 
         // Orbit the emitter and rotate its axis
         self.time += 0.01;
@@ -261,8 +258,24 @@ impl Example {
         ];
         let spray_angle = self.time * 3.0;
         self.particle_system.axis = [spray_angle.cos(), spray_angle.sin(), 0.0];
+
+        // Submit particle update on async compute queue.
+        // Wait for previous frame's render to finish before reusing particle buffers.
+        let prev_sp = self.prev_sync_point.clone();
+        self.compute_encoder.start();
         self.particle_system
-            .update(&self.particle_pipeline, &mut self.command_encoder, 0.01);
+            .update(&self.particle_pipeline, &mut self.compute_encoder, 0.01);
+        let sp_compute = self.context.submit(&mut self.compute_encoder, &[prev_sp]);
+
+        // Record rendering on main queue, waiting for compute to finish.
+        self.command_encoder.start();
+        if let Some(msaa_texture) = self.msaa_texture {
+            self.command_encoder.init_texture(msaa_texture);
+        }
+        self.command_encoder.init_texture(frame.texture());
+
+        self.gui_painter
+            .update_textures(&mut self.command_encoder, gui_textures, &self.context);
 
         let camera = self.make_camera(screen_desc.physical_size);
 
@@ -319,13 +332,13 @@ impl Example {
         }
 
         self.command_encoder.present(frame);
-        let sync_point = self.context.submit(&mut self.command_encoder, &[]);
+        let sync_point = self
+            .context
+            .submit(&mut self.command_encoder, &[sp_compute]);
         self.gui_painter.after_submit(&sync_point);
 
-        if let Some(sp) = self.prev_sync_point.take() {
-            let _ = self.context.wait_for(&sp, !0);
-        }
-        self.prev_sync_point = Some(sync_point);
+        let _ = self.context.wait_for(&self.prev_sync_point, !0);
+        self.prev_sync_point = sync_point;
     }
 
     fn add_gui(&mut self, ui: &mut egui::Ui) {
@@ -354,9 +367,7 @@ impl Example {
                         .selectable_value(&mut self.sample_count, i, format!("x{i}"))
                         .changed()
                     {
-                        if let Some(sp) = self.prev_sync_point.take() {
-                            let _ = self.context.wait_for(&sp, !0);
-                        }
+                        let _ = self.context.wait_for(&self.prev_sync_point, !0);
 
                         let old_effect = self.particle_system.effect.clone();
                         self.particle_system.destroy(&self.context);

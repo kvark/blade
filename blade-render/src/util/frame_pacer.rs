@@ -7,7 +7,7 @@ use std::mem;
 pub struct FramePacer {
     frame_index: usize,
     prev_resources: FrameResources,
-    prev_sync_point: Option<blade_graphics::SyncPoint>,
+    prev_sync_point: blade_graphics::SyncPoint,
     command_encoder: blade_graphics::CommandEncoder,
     next_resources: FrameResources,
 }
@@ -22,7 +22,7 @@ impl FramePacer {
         Self {
             frame_index: 0,
             prev_resources: FrameResources::default(),
-            prev_sync_point: None,
+            prev_sync_point: blade_graphics::SyncPoint::default(),
             command_encoder: encoder,
             next_resources: FrameResources::default(),
         }
@@ -30,9 +30,7 @@ impl FramePacer {
 
     #[profiling::function]
     pub fn wait_for_previous_frame(&mut self, context: &blade_graphics::Context) {
-        if let Some(sp) = self.prev_sync_point.take() {
-            let _ = context.wait_for(&sp, !0);
-        }
+        let _ = context.wait_for(&self.prev_sync_point, !0);
         for buffer in self.prev_resources.buffers.drain(..) {
             context.destroy_buffer(buffer);
         }
@@ -41,8 +39,8 @@ impl FramePacer {
         }
     }
 
-    pub fn last_sync_point(&self) -> Option<&blade_graphics::SyncPoint> {
-        self.prev_sync_point.as_ref()
+    pub fn last_sync_point(&self) -> &blade_graphics::SyncPoint {
+        &self.prev_sync_point
     }
 
     pub fn destroy(&mut self, context: &blade_graphics::Context) {
@@ -61,9 +59,9 @@ impl FramePacer {
         // Wait for the previous frame immediately - this ensures that we are
         // only processing one frame at a time, and yet not stalling.
         self.wait_for_previous_frame(context);
-        self.prev_sync_point = Some(sync_point);
+        self.prev_sync_point = sync_point;
         mem::swap(&mut self.prev_resources, &mut self.next_resources);
-        self.prev_sync_point.as_ref().unwrap()
+        &self.prev_sync_point
     }
 
     pub fn timings(&self) -> &blade_graphics::Timings {

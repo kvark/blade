@@ -3,6 +3,7 @@ Changelog for *Blade* project
 ## blade-graphics-0.9 (TBD)
 
 - multi-queue support
+- `SyncPoint: Default`
 
 ## blade-graphics-0.8.2 (4 Apr 2026)
 

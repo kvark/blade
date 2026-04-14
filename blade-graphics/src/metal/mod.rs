@@ -201,9 +201,9 @@ impl AccelerationStructure {
 }
 
 //TODO: make this copyable?
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SyncPoint {
-    cmd_buf: Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>,
+    cmd_buf: Option<Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>>,
 }
 // Safe because all mutability is externalized
 unsafe impl Send for SyncPoint {}
@@ -678,14 +678,20 @@ impl crate::traits::CommandDevice for Context {
         use metal::MTLCommandBuffer as _;
         let cmd_buf = encoder.finish();
         cmd_buf.commit();
-        SyncPoint { cmd_buf }
+        SyncPoint {
+            cmd_buf: Some(cmd_buf),
+        }
     }
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<bool, crate::DeviceError> {
         use metal::MTLCommandBuffer as _;
+        let cmd_buf = match sp.cmd_buf {
+            Some(ref buf) => buf,
+            None => return Ok(true), // default SyncPoint is already complete
+        };
         let start = time::Instant::now();
         loop {
-            match sp.cmd_buf.status() {
+            match cmd_buf.status() {
                 metal::MTLCommandBufferStatus::Completed => return Ok(true),
                 metal::MTLCommandBufferStatus::Error => return Err(crate::DeviceError::DeviceLost),
                 _ => {}

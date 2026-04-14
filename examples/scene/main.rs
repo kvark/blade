@@ -398,7 +398,7 @@ impl Example {
             self.need_accumulation_reset |= self.renderer.hot_reload(
                 &self.asset_hub,
                 &self.context,
-                self.pacer.last_sync_point().unwrap(),
+                self.pacer.last_sync_point(),
             );
         }
 

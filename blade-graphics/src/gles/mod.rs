@@ -438,9 +438,9 @@ pub struct PipelineContext<'a> {
     limits: &'a Limits,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SyncPoint {
-    fence: glow::Fence,
+    fence: Option<glow::Fence>,
 }
 //TODO: destructor
 
@@ -585,12 +585,16 @@ impl crate::traits::CommandDevice for Context {
         for frame in encoder.present_frames.drain(..) {
             self.platform.present(frame);
         }
-        SyncPoint { fence }
+        SyncPoint { fence: Some(fence) }
     }
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<bool, crate::DeviceError> {
         use glow::HasContext as _;
 
+        let fence = match sp.fence {
+            Some(fence) => fence,
+            None => return Ok(true), // default SyncPoint is already complete
+        };
         let gl = self.lock();
         let timeout_ns = if timeout_ms == !0 {
             !0
@@ -601,7 +605,7 @@ impl crate::traits::CommandDevice for Context {
         let timeout_ns_i32 = timeout_ns.min(MAX_TIMEOUT) as i32;
 
         let status =
-            unsafe { gl.client_wait_sync(sp.fence, glow::SYNC_FLUSH_COMMANDS_BIT, timeout_ns_i32) };
+            unsafe { gl.client_wait_sync(fence, glow::SYNC_FLUSH_COMMANDS_BIT, timeout_ns_i32) };
         match status {
             glow::ALREADY_SIGNALED | glow::CONDITION_SATISFIED => Ok(true),
             glow::TIMEOUT_EXPIRED => Ok(false),
