@@ -1,6 +1,6 @@
 Changelog for *Blade* project
 
-## blade-graphics-0.8.2 (TBD)
+## blade-graphics-0.8.2 (4 Apr 2026)
 
 - add `ComputeCommandEncoder::barrier()` for inline compute-to-compute synchronization within a pass
 - enable `naga::valid::Capabilities::SUBGROUP` for shader validation
