@@ -172,6 +172,7 @@ impl Example {
         let command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
+            queue: gpu::QueueType::Main,
         });
 
         Self {
@@ -318,7 +319,7 @@ impl Example {
         }
 
         self.command_encoder.present(frame);
-        let sync_point = self.context.submit(&mut self.command_encoder);
+        let sync_point = self.context.submit(&mut self.command_encoder, &[]);
         self.gui_painter.after_submit(&sync_point);
 
         if let Some(sp) = self.prev_sync_point.take() {

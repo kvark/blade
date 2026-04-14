@@ -277,6 +277,7 @@ pub struct Context {
     cooperative_matrix: crate::CooperativeMatrix,
     binding_array: bool,
     memory_budget: bool,
+    multi_queue: bool,
     inner: VulkanInstance,
     xr: Option<Mutex<XrSessionState>>,
 }
@@ -436,6 +437,7 @@ pub struct CommandEncoder {
     pool: vk::CommandPool,
     buffers: Box<[CommandBuffer]>,
     device: Device,
+    queue_type: crate::QueueType,
     update_data: Vec<u8>,
     present: Option<Presentation>,
     crash_handler: Option<CrashHandler>,
@@ -571,6 +573,7 @@ impl crate::traits::CommandDevice for Context {
             pool,
             buffers,
             device: self.device.clone(),
+            queue_type: desc.queue,
             update_data: Vec::new(),
             present: None,
             crash_handler,
@@ -616,37 +619,51 @@ impl crate::traits::CommandDevice for Context {
         };
     }
 
-    fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+    fn submit(&self, encoder: &mut CommandEncoder, after: &[SyncPoint]) -> SyncPoint {
+        assert!(
+            !self.multi_queue || !after.is_empty(),
+            "multi-queue mode requires explicit sync points in every submit"
+        );
         let raw_cmd_buf = encoder.finish();
         let mut queue = self.queue.lock().unwrap();
         queue.last_progress += 1;
         let progress = queue.last_progress;
         let command_buffers = [raw_cmd_buf];
-        let wait_values_all = [0];
-        let mut wait_semaphores_all = [vk::Semaphore::null()];
-        let wait_stages = [vk::PipelineStageFlags::ALL_COMMANDS];
+
+        // Build wait semaphore arrays: dependencies first, then optional acquire semaphore
+        let mut wait_semaphores = Vec::with_capacity(after.len() + 1);
+        let mut wait_values = Vec::with_capacity(after.len() + 1);
+        let mut wait_stages = Vec::with_capacity(after.len() + 1);
+        for sp in after {
+            wait_semaphores.push(queue.timeline_semaphore);
+            wait_values.push(sp.progress);
+            wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
+        }
+
         let mut signal_semaphores_all = [queue.timeline_semaphore, vk::Semaphore::null()];
         let signal_values_all = [progress, 0];
-        let (num_wait_semaphores, num_signal_sepahores) = match encoder.present {
+        let num_signal_semaphores = match encoder.present {
             Some(Presentation::Window {
                 acquire_semaphore,
                 present_semaphore,
                 ..
             }) => {
-                wait_semaphores_all[0] = acquire_semaphore;
+                wait_semaphores.push(acquire_semaphore);
+                wait_values.push(0);
+                wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
                 signal_semaphores_all[1] = present_semaphore;
-                (1, 2)
+                2
             }
-            Some(Presentation::Xr { .. }) | None => (0, 1),
+            Some(Presentation::Xr { .. }) | None => 1,
         };
         let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-            .wait_semaphore_values(&wait_values_all[..num_wait_semaphores])
-            .signal_semaphore_values(&signal_values_all[..num_signal_sepahores]);
+            .wait_semaphore_values(&wait_values)
+            .signal_semaphore_values(&signal_values_all[..num_signal_semaphores]);
         let vk_info = vk::SubmitInfo::default()
             .command_buffers(&command_buffers)
-            .wait_semaphores(&wait_semaphores_all[..num_wait_semaphores])
-            .wait_dst_stage_mask(&wait_stages[..num_wait_semaphores])
-            .signal_semaphores(&signal_semaphores_all[..num_signal_sepahores])
+            .wait_semaphores(&wait_semaphores)
+            .wait_dst_stage_mask(&wait_stages)
+            .signal_semaphores(&signal_semaphores_all[..num_signal_semaphores])
             .push_next(&mut timeline_info);
         let ret = unsafe {
             self.device

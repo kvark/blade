@@ -58,6 +58,7 @@ impl winit::application::ApplicationHandler for App {
         let command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
+            queue: gpu::QueueType::Main,
         });
 
         self.example = Some(example);
@@ -107,7 +108,7 @@ impl winit::application::ApplicationHandler for App {
                 command_encoder.init_texture(frame.texture());
                 example.render(command_encoder, frame.texture_view(), rotation_angle);
                 command_encoder.present(frame);
-                let sync_point = context.submit(command_encoder);
+                let sync_point = context.submit(command_encoder, &[]);
 
                 if let Some(sp) = self.prev_sync_point.take() {
                     let _ = context.wait_for(&sp, !0);

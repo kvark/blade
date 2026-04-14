@@ -219,6 +219,7 @@ pub struct CommandEncoder {
     raw: Option<RawCommandBuffer>,
     name: String,
     queue: Arc<Mutex<Retained<ProtocolObject<dyn metal::MTLCommandQueue>>>>,
+    queue_type: crate::QueueType,
     enable_debug_groups: bool,
     enable_dispatch_type: bool,
     has_open_debug_group: bool,
@@ -662,6 +663,7 @@ impl crate::traits::CommandDevice for Context {
             raw: None,
             name: desc.name.to_string(),
             queue: Arc::clone(&self.queue),
+            queue_type: desc.queue,
             enable_debug_groups: self.info.enable_debug_groups,
             enable_dispatch_type: self.info.enable_dispatch_type,
             has_open_debug_group: false,
@@ -672,7 +674,7 @@ impl crate::traits::CommandDevice for Context {
 
     fn destroy_command_encoder(&self, _command_encoder: &mut CommandEncoder) {}
 
-    fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+    fn submit(&self, encoder: &mut CommandEncoder, _after: &[SyncPoint]) -> SyncPoint {
         use metal::MTLCommandBuffer as _;
         let cmd_buf = encoder.finish();
         cmd_buf.commit();

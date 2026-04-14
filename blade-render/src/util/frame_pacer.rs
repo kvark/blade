@@ -17,6 +17,7 @@ impl FramePacer {
         let encoder = context.create_command_encoder(blade_graphics::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
+            queue: blade_graphics::QueueType::Main,
         });
         Self {
             frame_index: 0,
@@ -55,7 +56,7 @@ impl FramePacer {
     }
 
     pub fn end_frame(&mut self, context: &blade_graphics::Context) -> &blade_graphics::SyncPoint {
-        let sync_point = context.submit(&mut self.command_encoder);
+        let sync_point = context.submit(&mut self.command_encoder, &[]);
         self.frame_index += 1;
         // Wait for the previous frame immediately - this ensures that we are
         // only processing one frame at a time, and yet not stalling.

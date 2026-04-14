@@ -382,6 +382,7 @@ struct TimingData {
 
 pub struct CommandEncoder {
     name: String,
+    queue_type: crate::QueueType,
     commands: Vec<Command>,
     plain_data: Vec<u8>,
     string_data: Vec<u8>,
@@ -513,6 +514,7 @@ impl crate::traits::CommandDevice for Context {
         };
         CommandEncoder {
             name: desc.name.to_string(),
+            queue_type: desc.queue,
             commands: Vec::new(),
             plain_data: Vec::new(),
             string_data: Vec::new(),
@@ -537,7 +539,7 @@ impl crate::traits::CommandDevice for Context {
         }
     }
 
-    fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+    fn submit(&self, encoder: &mut CommandEncoder, _after: &[SyncPoint]) -> SyncPoint {
         use glow::HasContext as _;
 
         let fence = {

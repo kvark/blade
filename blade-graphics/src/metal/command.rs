@@ -229,6 +229,11 @@ impl super::CommandEncoder {
         &mut self,
         label: &str,
     ) -> super::AccelerationStructureCommandEncoder<'_> {
+        assert_ne!(
+            self.queue_type,
+            crate::QueueType::AsyncTransfer,
+            "acceleration structure builds are not supported on transfer queues"
+        );
         let raw = objc2::rc::autoreleasepool(|_| unsafe {
             let descriptor = metal::MTLAccelerationStructurePassDescriptor::new();
 
@@ -255,6 +260,11 @@ impl super::CommandEncoder {
     }
 
     pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder<'_> {
+        assert_ne!(
+            self.queue_type,
+            crate::QueueType::AsyncTransfer,
+            "compute passes are not supported on transfer queues"
+        );
         let raw = objc2::rc::autoreleasepool(|_| unsafe {
             let descriptor = metal::MTLComputePassDescriptor::new();
             if self.enable_dispatch_type {
@@ -290,6 +300,11 @@ impl super::CommandEncoder {
         label: &str,
         targets: crate::RenderTargetSet,
     ) -> super::RenderCommandEncoder<'_> {
+        assert_eq!(
+            self.queue_type,
+            crate::QueueType::Main,
+            "render passes are only supported on the main queue"
+        );
         let raw = objc2::rc::autoreleasepool(|_| {
             let descriptor = unsafe { metal::MTLRenderPassDescriptor::new() };
 

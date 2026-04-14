@@ -242,6 +242,7 @@ fn dispatch_gpu_test() {
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "dispatch-test",
         buffer_count: 1,
+        queue: gpu::QueueType::Main,
     });
     command_encoder.start();
     if let mut compute = command_encoder.compute("dispatch")
@@ -257,7 +258,7 @@ fn dispatch_gpu_test() {
         pass.dispatch([1, 1, 1]);
     }
 
-    let sync_point = context.submit(&mut command_encoder);
+    let sync_point = context.submit(&mut command_encoder, &[]);
     assert!(context.wait_for(&sync_point, 2000).unwrap());
 
     let actual = unsafe { slice::from_raw_parts(output.data() as *const u32, 4) };
@@ -287,6 +288,7 @@ fn env_map_gpu_test() {
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "env-map-test",
         buffer_count: 1,
+        queue: gpu::QueueType::Main,
     });
     command_encoder.start();
 
@@ -320,7 +322,7 @@ fn env_map_gpu_test() {
         );
     }
 
-    let sync_point = context.submit(&mut command_encoder);
+    let sync_point = context.submit(&mut command_encoder, &[]);
     assert!(context.wait_for(&sync_point, 2000).unwrap());
 
     let actual = unsafe { slice::from_raw_parts(readback.data(), 8) };
@@ -359,6 +361,7 @@ fn snapshot_bunnymark() {
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "snapshot-bunnymark",
         buffer_count: 1,
+        queue: gpu::QueueType::Main,
     });
     command_encoder.start();
     command_encoder.init_texture(target.texture);
@@ -417,6 +420,7 @@ fn snapshot_ray_query() {
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "snapshot-ray-query",
         buffer_count: 1,
+        queue: gpu::QueueType::Main,
     });
     command_encoder.start();
     command_encoder.init_texture(target.texture);
@@ -472,6 +476,7 @@ fn snapshot_particle() {
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "snapshot-particle",
         buffer_count: 1,
+        queue: gpu::QueueType::Main,
     });
     command_encoder.start();
     // Run several update cycles to emit and move particles
@@ -613,6 +618,7 @@ fn snapshot_space_sky() {
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "sky-test",
         buffer_count: 1,
+        queue: gpu::QueueType::Main,
     });
     command_encoder.start();
     command_encoder.init_texture(target.texture);

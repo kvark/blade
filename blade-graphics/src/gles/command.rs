@@ -170,6 +170,11 @@ impl super::CommandEncoder {
     }
 
     pub fn compute(&mut self, label: &str) -> super::PassEncoder<'_, super::ComputePipeline> {
+        assert_ne!(
+            self.queue_type,
+            crate::QueueType::AsyncTransfer,
+            "compute passes are not supported on transfer queues"
+        );
         self.begin_pass(label);
         self.pass(super::PassKind::Compute)
     }
@@ -179,6 +184,11 @@ impl super::CommandEncoder {
         label: &str,
         targets: crate::RenderTargetSet,
     ) -> super::PassEncoder<'_, super::RenderPipeline> {
+        assert_eq!(
+            self.queue_type,
+            crate::QueueType::Main,
+            "render passes are only supported on the main queue"
+        );
         self.begin_pass(label);
 
         let mut target_size = [0u16; 2];

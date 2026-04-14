@@ -1,5 +1,9 @@
 Changelog for *Blade* project
 
+## blade-graphics-0.9 (TBD)
+
+- multi-queue support
+
 ## blade-graphics-0.8.2 (4 Apr 2026)
 
 - add `ComputeCommandEncoder::barrier()` for inline compute-to-compute synchronization within a pass

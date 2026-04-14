@@ -1375,6 +1375,7 @@ impl super::Context {
             cooperative_matrix: capabilities.cooperative_matrix,
             binding_array: capabilities.binding_array,
             memory_budget: capabilities.memory_budget,
+            multi_queue: desc.multi_queue,
             inner,
             xr,
         })

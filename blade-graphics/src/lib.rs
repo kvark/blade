@@ -162,6 +162,10 @@ pub struct ContextDesc {
     pub overlay: bool,
     /// Force selection of a specific Device ID.
     pub device_id: Option<u32>,
+    /// Enable multi-queue support (async compute and transfer).
+    /// When enabled, every `submit` call must provide explicit
+    /// synchronization via a non-empty list of sync points.
+    pub multi_queue: bool,
 }
 
 #[derive(Debug)]
@@ -870,12 +874,16 @@ pub struct ShaderDesc<'a> {
     pub naga_module: Option<naga::Module>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum CommandType {
-    Transfer,
-    Compute,
+/// Type of GPU queue to submit work to.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum QueueType {
+    /// Main graphics+compute+transfer queue.
     #[default]
-    General,
+    Main,
+    /// Dedicated async compute queue.
+    AsyncCompute,
+    /// Dedicated async transfer queue.
+    AsyncTransfer,
 }
 
 pub struct CommandEncoderDesc<'a> {
@@ -884,6 +892,8 @@ pub struct CommandEncoderDesc<'a> {
     /// For example, one buffer is being run on GPU while the
     /// other is being actively encoded, which makes 2.
     pub buffer_count: u32,
+    /// Queue to submit commands to.
+    pub queue: QueueType,
 }
 
 pub struct ComputePipelineDesc<'a> {

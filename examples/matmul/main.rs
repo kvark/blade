@@ -142,6 +142,7 @@ fn main() {
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "matmul",
         buffer_count: 1,
+        queue: gpu::QueueType::Main,
     });
     encoder.start();
     {
@@ -158,7 +159,7 @@ fn main() {
         );
         pe.dispatch([M / tile, N / tile, 1]);
     }
-    let sp = context.submit(&mut encoder);
+    let sp = context.submit(&mut encoder, &[]);
     let _ = context.wait_for(&sp, !0);
 
     // Read back results
