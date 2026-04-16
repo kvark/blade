@@ -84,6 +84,7 @@ struct Queue {
     raw: vk::Queue,
     timeline_semaphore: vk::Semaphore,
     last_progress: u64,
+    family_index: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -266,6 +267,10 @@ pub struct Context {
     device: Device,
     queue_family_index: u32,
     queue: Mutex<Queue>,
+    async_compute_queue: Option<Mutex<Queue>>,
+    async_transfer_queue: Option<Mutex<Queue>>,
+    /// All unique queue family indices, for CONCURRENT sharing mode.
+    queue_family_indices: Box<[u32]>,
     physical_device: vk::PhysicalDevice,
     naga_flags: naga::back::spv::WriterFlags,
     shader_debug_path: Option<PathBuf>,
@@ -277,6 +282,7 @@ pub struct Context {
     cooperative_matrix: crate::CooperativeMatrix,
     binding_array: bool,
     memory_budget: bool,
+    multi_queue: bool,
     inner: VulkanInstance,
     xr: Option<Mutex<XrSessionState>>,
 }
@@ -436,6 +442,7 @@ pub struct CommandEncoder {
     pool: vk::CommandPool,
     buffers: Box<[CommandBuffer]>,
     device: Device,
+    queue_type: crate::QueueType,
     update_data: Vec<u8>,
     present: Option<Presentation>,
     crash_handler: Option<CrashHandler>,
@@ -472,9 +479,10 @@ pub struct PipelineEncoder<'a, 'p> {
     update_data: &'a mut Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SyncPoint {
     progress: u64,
+    timeline_semaphore: vk::Semaphore,
 }
 
 #[hidden_trait::expose]
@@ -483,8 +491,22 @@ impl crate::traits::CommandDevice for Context {
     type SyncPoint = SyncPoint;
 
     fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
+        let queue_family_index = match desc.queue {
+            crate::QueueType::Main => self.queue_family_index,
+            crate::QueueType::AsyncCompute => self
+                .async_compute_queue
+                .as_ref()
+                .map(|q| q.lock().unwrap().family_index)
+                .unwrap_or(self.queue_family_index),
+            crate::QueueType::AsyncTransfer => self
+                .async_transfer_queue
+                .as_ref()
+                .map(|q| q.lock().unwrap().family_index)
+                .unwrap_or(self.queue_family_index),
+        };
         let pool_info = vk::CommandPoolCreateInfo {
             flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+            queue_family_index,
             ..Default::default()
         };
         let pool = unsafe {
@@ -571,6 +593,7 @@ impl crate::traits::CommandDevice for Context {
             pool,
             buffers,
             device: self.device.clone(),
+            queue_type: desc.queue,
             update_data: Vec::new(),
             present: None,
             crash_handler,
@@ -616,37 +639,65 @@ impl crate::traits::CommandDevice for Context {
         };
     }
 
-    fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+    fn submit(&self, encoder: &mut CommandEncoder, after: &[SyncPoint]) -> SyncPoint {
+        if self.multi_queue && after.is_empty() {
+            log::warn!("multi-queue mode: submit without explicit sync points");
+        }
         let raw_cmd_buf = encoder.finish();
-        let mut queue = self.queue.lock().unwrap();
+
+        // Lock the target queue based on encoder type, falling back to main
+        let queue_mutex = match encoder.queue_type {
+            crate::QueueType::AsyncCompute => {
+                self.async_compute_queue.as_ref().unwrap_or(&self.queue)
+            }
+            crate::QueueType::AsyncTransfer => {
+                self.async_transfer_queue.as_ref().unwrap_or(&self.queue)
+            }
+            crate::QueueType::Main => &self.queue,
+        };
+        let mut queue = queue_mutex.lock().unwrap();
         queue.last_progress += 1;
         let progress = queue.last_progress;
         let command_buffers = [raw_cmd_buf];
-        let wait_values_all = [0];
-        let mut wait_semaphores_all = [vk::Semaphore::null()];
-        let wait_stages = [vk::PipelineStageFlags::ALL_COMMANDS];
+
+        // Build wait semaphore arrays: dependencies first, then optional acquire semaphore.
+        // Each SyncPoint carries its own timeline semaphore, so cross-queue waits work.
+        let mut wait_semaphores = Vec::with_capacity(after.len() + 1);
+        let mut wait_values = Vec::with_capacity(after.len() + 1);
+        let mut wait_stages = Vec::with_capacity(after.len() + 1);
+        for sp in after {
+            if sp.timeline_semaphore == vk::Semaphore::null() {
+                continue; // skip default (no-op) sync points
+            }
+            wait_semaphores.push(sp.timeline_semaphore);
+            wait_values.push(sp.progress);
+            wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
+        }
+
         let mut signal_semaphores_all = [queue.timeline_semaphore, vk::Semaphore::null()];
         let signal_values_all = [progress, 0];
-        let (num_wait_semaphores, num_signal_sepahores) = match encoder.present {
+        let num_signal_semaphores = match encoder.present {
             Some(Presentation::Window {
                 acquire_semaphore,
                 present_semaphore,
                 ..
             }) => {
-                wait_semaphores_all[0] = acquire_semaphore;
+                wait_semaphores.push(acquire_semaphore);
+                wait_values.push(0);
+                wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
                 signal_semaphores_all[1] = present_semaphore;
-                (1, 2)
+                2
             }
-            Some(Presentation::Xr { .. }) | None => (0, 1),
+            Some(Presentation::Xr { .. }) | None => 1,
         };
         let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-            .wait_semaphore_values(&wait_values_all[..num_wait_semaphores])
-            .signal_semaphore_values(&signal_values_all[..num_signal_sepahores]);
+            .wait_semaphore_values(&wait_values)
+            .signal_semaphore_values(&signal_values_all[..num_signal_semaphores]);
         let vk_info = vk::SubmitInfo::default()
             .command_buffers(&command_buffers)
-            .wait_semaphores(&wait_semaphores_all[..num_wait_semaphores])
-            .wait_dst_stage_mask(&wait_stages[..num_wait_semaphores])
-            .signal_semaphores(&signal_semaphores_all[..num_signal_sepahores])
+            .wait_semaphores(&wait_semaphores)
+            .wait_dst_stage_mask(&wait_stages)
+            .signal_semaphores(&signal_semaphores_all[..num_signal_semaphores])
             .push_next(&mut timeline_info);
         let ret = unsafe {
             self.device
@@ -760,14 +811,17 @@ impl crate::traits::CommandDevice for Context {
             }
         }
 
-        SyncPoint { progress }
+        SyncPoint {
+            progress,
+            timeline_semaphore: queue.timeline_semaphore,
+        }
     }
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<bool, crate::DeviceError> {
-        //Note: technically we could get away without locking the queue,
-        // but also this isn't time-sensitive, so it's fine.
-        let timeline_semaphore = self.queue.lock().unwrap().timeline_semaphore;
-        let semaphores = [timeline_semaphore];
+        if sp.timeline_semaphore == vk::Semaphore::null() {
+            return Ok(true); // default SyncPoint is already complete
+        }
+        let semaphores = [sp.timeline_semaphore];
         let semaphore_values = [sp.progress];
         let wait_info = vk::SemaphoreWaitInfoKHR::default()
             .semaphores(&semaphores)

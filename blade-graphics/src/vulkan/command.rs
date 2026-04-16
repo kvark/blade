@@ -400,6 +400,11 @@ impl super::CommandEncoder {
         &mut self,
         label: &str,
     ) -> super::AccelerationStructureCommandEncoder<'_> {
+        assert_ne!(
+            self.queue_type,
+            crate::QueueType::AsyncTransfer,
+            "acceleration structure builds are not supported on transfer queues"
+        );
         self.begin_pass(label);
         super::AccelerationStructureCommandEncoder {
             raw: self.buffers[0].raw,
@@ -408,6 +413,11 @@ impl super::CommandEncoder {
     }
 
     pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder<'_> {
+        assert_ne!(
+            self.queue_type,
+            crate::QueueType::AsyncTransfer,
+            "compute passes are not supported on transfer queues"
+        );
         self.begin_pass(label);
         super::ComputeCommandEncoder {
             cmd_buf: self.buffers.first_mut().unwrap(),
@@ -421,6 +431,11 @@ impl super::CommandEncoder {
         label: &str,
         targets: crate::RenderTargetSet,
     ) -> super::RenderCommandEncoder<'_> {
+        assert_eq!(
+            self.queue_type,
+            crate::QueueType::Main,
+            "render passes are only supported on the main queue"
+        );
         self.begin_pass(label);
 
         let mut target_size = [0u16; 2];
@@ -575,6 +590,8 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         let barrier = vk::ImageMemoryBarrier {
             old_layout: vk::ImageLayout::UNDEFINED,
             new_layout: vk::ImageLayout::GENERAL,
+            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
             image: texture.raw,
             subresource_range: vk::ImageSubresourceRange {
                 aspect_mask: super::map_aspects(texture.format.aspects()),
@@ -620,6 +637,8 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
             let barrier = vk::ImageMemoryBarrier {
                 old_layout: vk::ImageLayout::GENERAL,
                 new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+                src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                 image: frame.internal.image,
                 subresource_range: vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,

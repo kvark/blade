@@ -21,7 +21,7 @@ fn make_surface_config(size: winit::dpi::PhysicalSize<u32>) -> gpu::SurfaceConfi
 struct App {
     example: Option<example::Example>,
     command_encoder: Option<gpu::CommandEncoder>,
-    prev_sync_point: Option<gpu::SyncPoint>,
+    prev_sync_point: gpu::SyncPoint,
     surface: Option<gpu::Surface>,
     context: Option<gpu::Context>,
     window: Option<winit::window::Window>,
@@ -85,6 +85,7 @@ impl winit::application::ApplicationHandler for App {
         let command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
+            queue: gpu::QueueType::Main,
         });
 
         self.example = Some(example);
@@ -173,11 +174,9 @@ impl winit::application::ApplicationHandler for App {
                 command_encoder.init_texture(frame.texture());
                 example.render(command_encoder, frame.texture_view());
                 command_encoder.present(frame);
-                let sync_point = context.submit(command_encoder);
-                if let Some(sp) = self.prev_sync_point.take() {
-                    let _ = context.wait_for(&sp, !0);
-                }
-                self.prev_sync_point = Some(sync_point);
+                let sync_point = context.submit(command_encoder, &[]);
+                let _ = context.wait_for(&self.prev_sync_point, !0);
+                self.prev_sync_point = sync_point;
             }
             _ => {}
         }
@@ -192,7 +191,7 @@ fn main() {
     let mut app = App {
         example: None,
         command_encoder: None,
-        prev_sync_point: None,
+        prev_sync_point: gpu::SyncPoint::default(),
         surface: None,
         context: None,
         window: None,
@@ -203,9 +202,7 @@ fn main() {
     event_loop.run_app(&mut app).unwrap();
 
     let context = app.context.as_ref().unwrap();
-    if let Some(sp) = app.prev_sync_point.take() {
-        let _ = context.wait_for(&sp, !0);
-    }
+    let _ = context.wait_for(&app.prev_sync_point, !0);
     if let Some(mut example) = app.example.take() {
         example.deinit(context);
     }

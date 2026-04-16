@@ -201,9 +201,9 @@ impl AccelerationStructure {
 }
 
 //TODO: make this copyable?
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SyncPoint {
-    cmd_buf: Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>,
+    cmd_buf: Option<Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>>,
 }
 // Safe because all mutability is externalized
 unsafe impl Send for SyncPoint {}
@@ -219,6 +219,7 @@ pub struct CommandEncoder {
     raw: Option<RawCommandBuffer>,
     name: String,
     queue: Arc<Mutex<Retained<ProtocolObject<dyn metal::MTLCommandQueue>>>>,
+    queue_type: crate::QueueType,
     enable_debug_groups: bool,
     enable_dispatch_type: bool,
     has_open_debug_group: bool,
@@ -563,6 +564,7 @@ impl Context {
             } else {
                 crate::CooperativeMatrix::default()
             },
+            queues: vec![crate::QueueType::Main],
         }
     }
 
@@ -662,6 +664,7 @@ impl crate::traits::CommandDevice for Context {
             raw: None,
             name: desc.name.to_string(),
             queue: Arc::clone(&self.queue),
+            queue_type: desc.queue,
             enable_debug_groups: self.info.enable_debug_groups,
             enable_dispatch_type: self.info.enable_dispatch_type,
             has_open_debug_group: false,
@@ -672,18 +675,24 @@ impl crate::traits::CommandDevice for Context {
 
     fn destroy_command_encoder(&self, _command_encoder: &mut CommandEncoder) {}
 
-    fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+    fn submit(&self, encoder: &mut CommandEncoder, _after: &[SyncPoint]) -> SyncPoint {
         use metal::MTLCommandBuffer as _;
         let cmd_buf = encoder.finish();
         cmd_buf.commit();
-        SyncPoint { cmd_buf }
+        SyncPoint {
+            cmd_buf: Some(cmd_buf),
+        }
     }
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<bool, crate::DeviceError> {
         use metal::MTLCommandBuffer as _;
+        let cmd_buf = match sp.cmd_buf {
+            Some(ref buf) => buf,
+            None => return Ok(true), // default SyncPoint is already complete
+        };
         let start = time::Instant::now();
         loop {
-            match sp.cmd_buf.status() {
+            match cmd_buf.status() {
                 metal::MTLCommandBufferStatus::Completed => return Ok(true),
                 metal::MTLCommandBufferStatus::Error => return Err(crate::DeviceError::DeviceLost),
                 _ => {}

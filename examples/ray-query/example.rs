@@ -183,6 +183,7 @@ impl Example {
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "init",
             buffer_count: 1,
+            queue: gpu::QueueType::Main,
         });
         command_encoder.start();
         command_encoder.init_texture(target);
@@ -199,7 +200,7 @@ impl Example {
                 scratch_buffer.at(tlas_scratch_offset),
             );
         }
-        let sync_point = context.submit(&mut command_encoder);
+        let sync_point = context.submit(&mut command_encoder, &[]);
 
         let _ = context.wait_for(&sync_point, !0);
         context.destroy_command_encoder(&mut command_encoder);

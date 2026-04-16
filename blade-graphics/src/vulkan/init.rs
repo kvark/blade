@@ -93,6 +93,8 @@ struct AdapterCapabilities {
     properties: vk::PhysicalDeviceProperties,
     device_information: crate::DeviceInformation,
     queue_family_index: u32,
+    async_compute_queue_family: Option<u32>,
+    async_transfer_queue_family: Option<u32>,
     layered: bool,
     binding_array: bool,
     ray_tracing: Option<RayTracingCapabilities>,
@@ -113,6 +115,13 @@ struct AdapterCapabilities {
 
 impl AdapterCapabilities {
     fn to_capabilities(&self) -> crate::Capabilities {
+        let mut queues = vec![crate::QueueType::Main];
+        if self.async_compute_queue_family.is_some() {
+            queues.push(crate::QueueType::AsyncCompute);
+        }
+        if self.async_transfer_queue_family.is_some() {
+            queues.push(crate::QueueType::AsyncTransfer);
+        }
         crate::Capabilities {
             binding_array: self.binding_array,
             ray_query: match self.ray_tracing {
@@ -125,6 +134,7 @@ impl AdapterCapabilities {
             dual_source_blending: self.dual_source_blending,
             shader_float16: self.shader_float16,
             cooperative_matrix: self.cooperative_matrix,
+            queues,
         }
     }
 }
@@ -287,7 +297,42 @@ fn inspect_adapter(
         intel_fix_descriptor_pool_leak: cfg!(windows) && properties.vendor_id == db::intel::VENDOR,
     };
 
-    let queue_family_index = 0; //TODO
+    let queue_families = unsafe {
+        instance
+            .core
+            .get_physical_device_queue_family_properties(phd)
+    };
+    // Find main (graphics) queue family
+    let queue_family_index = queue_families
+        .iter()
+        .position(|qf| qf.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+        .unwrap_or(0) as u32;
+    // Find dedicated async compute queue family (compute+transfer but NOT graphics)
+    let async_compute_queue_family = if desc.multi_queue {
+        queue_families
+            .iter()
+            .position(|qf| {
+                qf.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                    && !qf.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+            })
+            .map(|i| i as u32)
+    } else {
+        None
+    };
+    // Find dedicated async transfer queue family (transfer only, not compute or graphics)
+    let async_transfer_queue_family = if desc.multi_queue {
+        queue_families
+            .iter()
+            .position(|qf| {
+                qf.queue_flags.contains(vk::QueueFlags::TRANSFER)
+                    && !qf.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                    && !qf.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+            })
+            .map(|i| i as u32)
+    } else {
+        None
+    };
+
     if desc.presentation
         && is_presentation_broken(properties.vendor_id, gpu_vendors, display_server)
     {
@@ -534,6 +579,8 @@ fn inspect_adapter(
         properties,
         device_information,
         queue_family_index,
+        async_compute_queue_family,
+        async_transfer_queue_family,
         layered: portability_subset_properties.min_vertex_input_binding_stride_alignment != 0,
         binding_array,
         ray_tracing,
@@ -892,10 +939,25 @@ impl super::Context {
         }
 
         let device_core = {
-            let family_info = vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(capabilities.queue_family_index)
-                .queue_priorities(&[1.0]);
-            let family_infos = [family_info];
+            let mut family_infos = vec![
+                vk::DeviceQueueCreateInfo::default()
+                    .queue_family_index(capabilities.queue_family_index)
+                    .queue_priorities(&[1.0]),
+            ];
+            if let Some(qfi) = capabilities.async_compute_queue_family {
+                family_infos.push(
+                    vk::DeviceQueueCreateInfo::default()
+                        .queue_family_index(qfi)
+                        .queue_priorities(&[1.0]),
+                );
+            }
+            if let Some(qfi) = capabilities.async_transfer_queue_family {
+                family_infos.push(
+                    vk::DeviceQueueCreateInfo::default()
+                        .queue_family_index(qfi)
+                        .queue_priorities(&[1.0]),
+                );
+            }
 
             let mut device_extensions = REQUIRED_DEVICE_EXTENSIONS.to_vec();
             if capabilities.max_inline_uniform_block_size > 0 {
@@ -1262,25 +1324,40 @@ impl super::Context {
             }
         };
 
-        let queue = unsafe {
-            device
-                .core
-                .get_device_queue(capabilities.queue_family_index, 0)
+        let create_queue = |queue_family_index: u32| -> super::Queue {
+            let raw = unsafe { device.core.get_device_queue(queue_family_index, 0) };
+            let mut timeline_info = vk::SemaphoreTypeCreateInfo {
+                semaphore_type: vk::SemaphoreType::TIMELINE,
+                initial_value: 0,
+                ..Default::default()
+            };
+            let semaphore_info = vk::SemaphoreCreateInfo::default().push_next(&mut timeline_info);
+            let timeline_semaphore =
+                unsafe { device.core.create_semaphore(&semaphore_info, None).unwrap() };
+            super::Queue {
+                raw,
+                timeline_semaphore,
+                last_progress: 0,
+                family_index: queue_family_index,
+            }
         };
-        let last_progress = 0;
-        let mut timeline_info = vk::SemaphoreTypeCreateInfo {
-            semaphore_type: vk::SemaphoreType::TIMELINE,
-            initial_value: last_progress,
-            ..Default::default()
-        };
-        let timeline_semaphore_create_info =
-            vk::SemaphoreCreateInfo::default().push_next(&mut timeline_info);
-        let timeline_semaphore = unsafe {
-            device
-                .core
-                .create_semaphore(&timeline_semaphore_create_info, None)
-                .unwrap()
-        };
+
+        let queue = create_queue(capabilities.queue_family_index);
+        let async_compute_queue = capabilities.async_compute_queue_family.map(&create_queue);
+        let async_transfer_queue = capabilities.async_transfer_queue_family.map(&create_queue);
+
+        if async_compute_queue.is_some() {
+            log::info!(
+                "Async compute queue family: {}",
+                capabilities.async_compute_queue_family.unwrap()
+            );
+        }
+        if async_transfer_queue.is_some() {
+            log::info!(
+                "Async transfer queue family: {}",
+                capabilities.async_transfer_queue_family.unwrap()
+            );
+        }
 
         let mut naga_flags = spv::WriterFlags::FORCE_POINT_SIZE;
         let shader_debug_path = if desc.validation || desc.capture {
@@ -1345,15 +1422,23 @@ impl super::Context {
             None
         };
 
+        // Collect all queue family indices for concurrent resource sharing
+        let mut queue_family_indices = vec![capabilities.queue_family_index];
+        if let Some(qfi) = capabilities.async_compute_queue_family {
+            queue_family_indices.push(qfi);
+        }
+        if let Some(qfi) = capabilities.async_transfer_queue_family {
+            queue_family_indices.push(qfi);
+        }
+
         Ok(super::Context {
             memory: Mutex::new(memory_manager),
             device,
             queue_family_index: capabilities.queue_family_index,
-            queue: Mutex::new(super::Queue {
-                raw: queue,
-                timeline_semaphore,
-                last_progress,
-            }),
+            queue: Mutex::new(queue),
+            async_compute_queue: async_compute_queue.map(Mutex::new),
+            async_transfer_queue: async_transfer_queue.map(Mutex::new),
+            queue_family_indices: queue_family_indices.into_boxed_slice(),
             physical_device,
             naga_flags,
             shader_debug_path,
@@ -1375,6 +1460,7 @@ impl super::Context {
             cooperative_matrix: capabilities.cooperative_matrix,
             binding_array: capabilities.binding_array,
             memory_budget: capabilities.memory_budget,
+            multi_queue: desc.multi_queue,
             inner,
             xr,
         })
@@ -1393,6 +1479,13 @@ impl super::Context {
     }
 
     pub fn capabilities(&self) -> crate::Capabilities {
+        let mut queues = vec![crate::QueueType::Main];
+        if self.async_compute_queue.is_some() {
+            queues.push(crate::QueueType::AsyncCompute);
+        }
+        if self.async_transfer_queue.is_some() {
+            queues.push(crate::QueueType::AsyncTransfer);
+        }
         crate::Capabilities {
             binding_array: self.binding_array,
             ray_query: match self.device.ray_tracing {
@@ -1403,6 +1496,7 @@ impl super::Context {
             dual_source_blending: self.dual_source_blending,
             shader_float16: self.shader_float16,
             cooperative_matrix: self.cooperative_matrix,
+            queues,
         }
     }
 
@@ -1471,14 +1565,25 @@ impl super::Context {
 
 impl Drop for super::Context {
     fn drop(&mut self) {
-        unsafe {
-            self.xr = None;
-            if let Ok(queue) = self.queue.lock() {
-                let _ = self.device.core.queue_wait_idle(queue.raw);
-                self.device
-                    .core
-                    .destroy_semaphore(queue.timeline_semaphore, None);
+        let destroy_queue = |device: &super::Device, queue: &Mutex<super::Queue>| {
+            if let Ok(queue) = queue.lock() {
+                unsafe {
+                    let _ = device.core.queue_wait_idle(queue.raw);
+                    device
+                        .core
+                        .destroy_semaphore(queue.timeline_semaphore, None);
+                }
             }
+        };
+        self.xr = None;
+        if let Some(ref q) = self.async_transfer_queue {
+            destroy_queue(&self.device, q);
+        }
+        if let Some(ref q) = self.async_compute_queue {
+            destroy_queue(&self.device, q);
+        }
+        destroy_queue(&self.device, &self.queue);
+        unsafe {
             self.device.core.destroy_device(None);
             // inner.drop() destroys the Vulkan instance
         }

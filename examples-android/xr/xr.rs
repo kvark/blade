@@ -116,6 +116,7 @@ impl Example {
         let command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "xr",
             buffer_count: 1,
+            queue: gpu::QueueType::Main,
         });
         let params_buf = context.create_buffer(gpu::BufferDesc {
             name: "xr-params",
@@ -227,7 +228,7 @@ impl Example {
         }
 
         self.command_encoder.present(frame);
-        let _sync_point = context.submit(&mut self.command_encoder);
+        let _sync_point = context.submit(&mut self.command_encoder, &[]);
         self.rendered_frames += 1;
         if self.xr_debug && (self.rendered_frames <= 5 || self.rendered_frames % 120 == 0) {
             info!("XR frame submitted: {}", self.rendered_frames);
