@@ -683,24 +683,9 @@ impl crate::traits::CommandDevice for Context {
         use metal::MTLCommandBuffer as _;
 
         if timeout_ms == !0 {
-            /*
-                NOTE: Special case if we are waiting indefinately
-            */
-            loop {
-                sp.cmd_buf.waitUntilCompleted();
-                match sp.cmd_buf.status() {
-                    metal::MTLCommandBufferStatus::Completed => return Ok(true),
-                    metal::MTLCommandBufferStatus::Error => {
-                        return Err(crate::DeviceError::DeviceLost);
-                    }
-                    _ => {}
-                }
-            }
+            sp.cmd_buf.waitUntilCompleted();
         }
 
-        /*
-            NOTE: Otherwise fallback to manual poll and sleep
-        */
         let start = time::Instant::now();
         loop {
             match sp.cmd_buf.status() {
