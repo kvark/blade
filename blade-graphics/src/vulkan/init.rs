@@ -108,6 +108,7 @@ struct AdapterCapabilities {
     cooperative_matrix: crate::CooperativeMatrix,
     unified_image_layouts: bool,
     memory_budget: bool,
+    frame_boundary: bool,
     bugs: SystemBugs,
 }
 
@@ -513,6 +514,7 @@ fn inspect_adapter(
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
     let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
     let memory_budget = supported_extensions.contains(&vk::EXT_MEMORY_BUDGET_NAME);
+    let frame_boundary = supported_extensions.contains(&vk::EXT_FRAME_BOUNDARY_NAME);
 
     let device_information = unsafe {
         crate::DeviceInformation {
@@ -550,6 +552,7 @@ fn inspect_adapter(
         unified_image_layouts: supported_extensions.contains(&unified_image_layouts::NAME)
             && unified_image_layouts_features.unified_image_layouts == vk::TRUE,
         memory_budget,
+        frame_boundary,
         bugs,
     })
 }
@@ -952,6 +955,10 @@ impl super::Context {
             }
             if capabilities.memory_budget {
                 device_extensions.push(vk::EXT_MEMORY_BUDGET_NAME);
+            }
+            if capabilities.frame_boundary {
+                log::info!("Enabling VK_EXT_frame_boundary for profiler integration");
+                device_extensions.push(vk::EXT_FRAME_BOUNDARY_NAME);
             }
             if capabilities.unified_image_layouts {
                 // TODO: Replace with ash constant once available.
@@ -1375,6 +1382,8 @@ impl super::Context {
             cooperative_matrix: capabilities.cooperative_matrix,
             binding_array: capabilities.binding_array,
             memory_budget: capabilities.memory_budget,
+            frame_boundary: capabilities.frame_boundary,
+            frame_counter: std::sync::atomic::AtomicU64::new(0),
             inner,
             xr,
         })

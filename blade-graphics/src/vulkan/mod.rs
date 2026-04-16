@@ -277,6 +277,10 @@ pub struct Context {
     cooperative_matrix: crate::CooperativeMatrix,
     binding_array: bool,
     memory_budget: bool,
+    /// When true, chain `VkFrameBoundaryEXT` to each queue submit so that
+    /// NSight Graphics can delimit frames for compute-only workloads.
+    frame_boundary: bool,
+    frame_counter: std::sync::atomic::AtomicU64,
     inner: VulkanInstance,
     xr: Option<Mutex<XrSessionState>>,
 }
@@ -642,12 +646,24 @@ impl crate::traits::CommandDevice for Context {
         let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
             .wait_semaphore_values(&wait_values_all[..num_wait_semaphores])
             .signal_semaphore_values(&signal_values_all[..num_signal_sepahores]);
-        let vk_info = vk::SubmitInfo::default()
+        let mut vk_info = vk::SubmitInfo::default()
             .command_buffers(&command_buffers)
             .wait_semaphores(&wait_semaphores_all[..num_wait_semaphores])
             .wait_dst_stage_mask(&wait_stages[..num_wait_semaphores])
             .signal_semaphores(&signal_semaphores_all[..num_signal_sepahores])
             .push_next(&mut timeline_info);
+        // Chain VK_EXT_frame_boundary so NSight Graphics can delimit
+        // frames for compute-only (headless) workloads.
+        let mut frame_boundary_info;
+        if self.frame_boundary {
+            let fid = self
+                .frame_counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            frame_boundary_info = vk::FrameBoundaryEXT::default()
+                .flags(vk::FrameBoundaryFlagsEXT::FRAME_END)
+                .frame_id(fid);
+            vk_info = vk_info.push_next(&mut frame_boundary_info);
+        }
         let ret = unsafe {
             self.device
                 .core
