@@ -115,6 +115,13 @@ struct AdapterCapabilities {
 
 impl AdapterCapabilities {
     fn to_capabilities(&self) -> crate::Capabilities {
+        let mut queues = vec![crate::QueueType::Main];
+        if self.async_compute_queue_family.is_some() {
+            queues.push(crate::QueueType::AsyncCompute);
+        }
+        if self.async_transfer_queue_family.is_some() {
+            queues.push(crate::QueueType::AsyncTransfer);
+        }
         crate::Capabilities {
             binding_array: self.binding_array,
             ray_query: match self.ray_tracing {
@@ -127,6 +134,7 @@ impl AdapterCapabilities {
             dual_source_blending: self.dual_source_blending,
             shader_float16: self.shader_float16,
             cooperative_matrix: self.cooperative_matrix,
+            queues,
         }
     }
 }
@@ -1471,6 +1479,13 @@ impl super::Context {
     }
 
     pub fn capabilities(&self) -> crate::Capabilities {
+        let mut queues = vec![crate::QueueType::Main];
+        if self.async_compute_queue.is_some() {
+            queues.push(crate::QueueType::AsyncCompute);
+        }
+        if self.async_transfer_queue.is_some() {
+            queues.push(crate::QueueType::AsyncTransfer);
+        }
         crate::Capabilities {
             binding_array: self.binding_array,
             ray_query: match self.device.ray_tracing {
@@ -1481,6 +1496,7 @@ impl super::Context {
             dual_source_blending: self.dual_source_blending,
             shader_float16: self.shader_float16,
             cooperative_matrix: self.cooperative_matrix,
+            queues,
         }
     }
 

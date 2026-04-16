@@ -459,6 +459,7 @@ impl Context {
             dual_source_blending: false,
             shader_float16: false,
             cooperative_matrix: crate::CooperativeMatrix::default(),
+            queues: vec![crate::QueueType::Main],
         }
     }
 

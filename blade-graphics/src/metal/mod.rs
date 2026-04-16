@@ -564,6 +564,7 @@ impl Context {
             } else {
                 crate::CooperativeMatrix::default()
             },
+            queues: vec![crate::QueueType::Main],
         }
     }
 

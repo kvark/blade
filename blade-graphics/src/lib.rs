@@ -257,6 +257,8 @@ pub struct Capabilities {
     pub shader_float16: bool,
     /// Cooperative matrix support.
     pub cooperative_matrix: CooperativeMatrix,
+    /// Available GPU queues. Always contains [`QueueType::Main`].
+    pub queues: Vec<QueueType>,
 }
 
 #[derive(Clone, Debug)]

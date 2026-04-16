@@ -590,6 +590,8 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         let barrier = vk::ImageMemoryBarrier {
             old_layout: vk::ImageLayout::UNDEFINED,
             new_layout: vk::ImageLayout::GENERAL,
+            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
             image: texture.raw,
             subresource_range: vk::ImageSubresourceRange {
                 aspect_mask: super::map_aspects(texture.format.aspects()),
@@ -635,6 +637,8 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
             let barrier = vk::ImageMemoryBarrier {
                 old_layout: vk::ImageLayout::GENERAL,
                 new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+                src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                 image: frame.internal.image,
                 subresource_range: vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
