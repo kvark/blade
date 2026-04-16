@@ -1,6 +1,9 @@
 #![allow(irrefutable_let_patterns)]
 
 use blade_graphics as gpu;
+use std::collections::VecDeque;
+
+const TIMING_HISTORY_SIZE: usize = 120;
 
 struct Example {
     command_encoder: gpu::CommandEncoder,
@@ -19,6 +22,7 @@ struct Example {
     frame_index: usize,
     async_compute: bool,
     parallel_update: bool,
+    timing_history: VecDeque<[f32; 2]>,
     time: f32,
 
     sample_count: u32,
@@ -214,6 +218,7 @@ impl Example {
             frame_index: 0,
             async_compute,
             parallel_update: async_compute,
+            timing_history: VecDeque::with_capacity(TIMING_HISTORY_SIZE),
             time: 0.0,
             sample_count,
             msaa_texture: None,
@@ -438,6 +443,24 @@ impl Example {
             self.prev_render_sync = render_sync;
         }
 
+        // Record timing history
+        let compute_ms: f32 = self
+            .compute_encoder
+            .timings()
+            .iter()
+            .map(|(_, d)| d.as_secs_f32() * 1000.0)
+            .sum();
+        let render_ms: f32 = self
+            .command_encoder
+            .timings()
+            .iter()
+            .map(|(_, d)| d.as_secs_f32() * 1000.0)
+            .sum();
+        if self.timing_history.len() >= TIMING_HISTORY_SIZE {
+            self.timing_history.pop_front();
+        }
+        self.timing_history.push_back([compute_ms, render_ms]);
+
         self.frame_index += 1;
         profiling::finish_frame!();
     }
@@ -520,21 +543,101 @@ impl Example {
             });
 
         ui.add_space(5.0);
-        ui.heading("Timings (compute)");
-        for (name, time) in self.compute_encoder.timings() {
-            let millis = time.as_secs_f32() * 1000.0;
-            ui.horizontal(|ui| {
-                ui.label(name);
-                ui.colored_label(egui::Color32::WHITE, format!("{:.2} ms", millis));
-            });
+        ui.heading("GPU Timings");
+        // Current frame numbers
+        let compute_ms: f32 = self
+            .compute_encoder
+            .timings()
+            .iter()
+            .map(|(_, d)| d.as_secs_f32() * 1000.0)
+            .sum();
+        let render_ms: f32 = self
+            .command_encoder
+            .timings()
+            .iter()
+            .map(|(_, d)| d.as_secs_f32() * 1000.0)
+            .sum();
+        if self.parallel_update {
+            ui.label(format!(
+                "compute: {compute_ms:.2} ms  render: {render_ms:.2} ms"
+            ));
+        } else {
+            ui.label(format!("frame: {:.2} ms", compute_ms + render_ms));
         }
-        ui.heading("Timings (render)");
-        for (name, time) in self.command_encoder.timings() {
-            let millis = time.as_secs_f32() * 1000.0;
-            ui.horizontal(|ui| {
-                ui.label(name);
-                ui.colored_label(egui::Color32::WHITE, format!("{:.2} ms", millis));
-            });
+
+        // Stacked bar chart of timing history
+        let plot_height = 80.0;
+        let (rect, _response) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), plot_height),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 0.0, egui::Color32::from_gray(20));
+
+        if !self.timing_history.is_empty() {
+            let max_ms = self
+                .timing_history
+                .iter()
+                .map(|[c, r]| c + r)
+                .fold(0.1_f32, f32::max);
+            let bar_w = rect.width() / TIMING_HISTORY_SIZE as f32;
+            let offset = TIMING_HISTORY_SIZE - self.timing_history.len();
+            for (i, &[c_ms, r_ms]) in self.timing_history.iter().enumerate() {
+                let x = rect.left() + (offset + i) as f32 * bar_w;
+                // Compute bar (bottom)
+                let c_h = (c_ms / max_ms) * rect.height();
+                let c_rect = egui::Rect::from_min_size(
+                    egui::pos2(x, rect.bottom() - c_h),
+                    egui::vec2(bar_w - 1.0, c_h),
+                );
+                painter.rect_filled(c_rect, 0.0, egui::Color32::from_rgb(100, 200, 255));
+                // Render bar (stacked on top)
+                let r_h = (r_ms / max_ms) * rect.height();
+                let r_rect = egui::Rect::from_min_size(
+                    egui::pos2(x, rect.bottom() - c_h - r_h),
+                    egui::vec2(bar_w - 1.0, r_h),
+                );
+                painter.rect_filled(r_rect, 0.0, egui::Color32::from_rgb(255, 150, 50));
+            }
+            // Legend
+            let legend_y = rect.top() + 2.0;
+            painter.text(
+                egui::pos2(rect.left() + 4.0, legend_y),
+                egui::Align2::LEFT_TOP,
+                format!("{max_ms:.1} ms"),
+                egui::FontId::proportional(10.0),
+                egui::Color32::GRAY,
+            );
+            painter.rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.right() - 90.0, legend_y),
+                    egui::vec2(8.0, 8.0),
+                ),
+                0.0,
+                egui::Color32::from_rgb(255, 150, 50),
+            );
+            painter.text(
+                egui::pos2(rect.right() - 78.0, legend_y),
+                egui::Align2::LEFT_TOP,
+                "render",
+                egui::FontId::proportional(10.0),
+                egui::Color32::GRAY,
+            );
+            painter.rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.right() - 44.0, legend_y),
+                    egui::vec2(8.0, 8.0),
+                ),
+                0.0,
+                egui::Color32::from_rgb(100, 200, 255),
+            );
+            painter.text(
+                egui::pos2(rect.right() - 32.0, legend_y),
+                egui::Align2::LEFT_TOP,
+                "compute",
+                egui::FontId::proportional(10.0),
+                egui::Color32::GRAY,
+            );
         }
     }
 }
