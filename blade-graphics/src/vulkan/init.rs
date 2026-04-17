@@ -681,7 +681,7 @@ impl super::VulkanInstance {
             let app_info = vk::ApplicationInfo::default()
                 .engine_name(c"blade")
                 .engine_version(1)
-                .api_version(vk::HEADER_VERSION_COMPLETE);
+                .api_version(driver_api_version.min(vk::HEADER_VERSION_COMPLETE));
             let str_pointers = layers
                 .iter()
                 .chain(enabled_instance_extensions.iter())
