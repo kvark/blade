@@ -859,9 +859,7 @@ impl<'a> super::ComputeCommandEncoder<'a> {
     pub fn barrier(&mut self) {
         let barrier = vk::MemoryBarrier {
             src_access_mask: vk::AccessFlags::SHADER_WRITE,
-            dst_access_mask: vk::AccessFlags::SHADER_READ
-                | vk::AccessFlags::SHADER_WRITE
-                | vk::AccessFlags::UNIFORM_READ,
+            dst_access_mask: vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
             ..Default::default()
         };
         unsafe {
