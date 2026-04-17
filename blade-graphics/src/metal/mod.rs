@@ -681,6 +681,11 @@ impl crate::traits::CommandDevice for Context {
 
     fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<bool, crate::DeviceError> {
         use metal::MTLCommandBuffer as _;
+
+        if timeout_ms == !0 {
+            sp.cmd_buf.waitUntilCompleted();
+        }
+
         let start = time::Instant::now();
         loop {
             match sp.cmd_buf.status() {
