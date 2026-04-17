@@ -3,6 +3,9 @@ Changelog for *Blade* project
 ## blade-graphics-0.8.3 (17 Apr 2026)
 
 - vk: fix descriptor over-allocation for uniform data
+- vk: use driver API version for instance creation
+- vk: drop unnecessary UNIFORM_READ from intra-pass compute barrier
+- vk: log leaked GPU memory blocks by name on context teardown
 
 ## blade-graphics-0.8.2 (14 Apr 2026)
 

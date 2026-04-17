@@ -15,6 +15,7 @@ impl super::Context {
         &self,
         requirements: vk::MemoryRequirements,
         memory: crate::Memory,
+        name: &str,
     ) -> Allocation {
         let mut manager = self.memory.lock().unwrap();
         let device_address_usage = if self.device.buffer_device_address {
@@ -147,14 +148,14 @@ impl super::Context {
             memory: *block.memory(),
             offset: block.offset(),
             data,
-            handle: manager.slab.insert(block),
+            handle: manager.slab.insert((block, name.to_string())),
             memory_type: memory,
         }
     }
 
     fn free_memory(&self, handle: usize) {
         let mut manager = self.memory.lock().unwrap();
-        let block = manager.slab.remove(handle);
+        let (block, _name) = manager.slab.remove(handle);
         unsafe {
             manager
                 .allocator
@@ -324,7 +325,7 @@ impl crate::traits::ResourceDevice for super::Context {
         let raw = unsafe { self.device.core.create_buffer(&vk_info, None).unwrap() };
         let mut requirements = unsafe { self.device.core.get_buffer_memory_requirements(raw) };
         requirements.alignment = requirements.alignment.max(self.min_buffer_alignment);
-        let allocation = self.allocate_memory(requirements, desc.memory);
+        let allocation = self.allocate_memory(requirements, desc.memory, desc.name);
 
         log::info!(
             "Creating buffer {:?} of size {}, name '{}', handle {:?}",
@@ -414,6 +415,7 @@ impl crate::traits::ResourceDevice for super::Context {
             requirements,
             desc.external
                 .map_or(crate::Memory::Device, crate::Memory::External),
+            desc.name,
         );
 
         log::info!(
@@ -538,7 +540,7 @@ impl crate::traits::ResourceDevice for super::Context {
 
         let buffer = unsafe { self.device.core.create_buffer(&buffer_info, None).unwrap() };
         let requirements = unsafe { self.device.core.get_buffer_memory_requirements(buffer) };
-        let allocation = self.allocate_memory(requirements, crate::Memory::Device);
+        let allocation = self.allocate_memory(requirements, crate::Memory::Device, desc.name);
 
         unsafe {
             self.device

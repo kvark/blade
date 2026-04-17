@@ -1479,6 +1479,16 @@ impl Drop for super::Context {
                     .core
                     .destroy_semaphore(queue.timeline_semaphore, None);
             }
+            if let Ok(mut manager) = self.memory.lock() {
+                let leaked: Vec<_> = manager.slab.drain().collect();
+                for (block, name) in leaked {
+                    log::error!("Leaked GPU memory block: '{name}'");
+                    manager.allocator.dealloc(
+                        gpu_alloc_ash::AshMemoryDevice::wrap(&self.device.core),
+                        block,
+                    );
+                }
+            }
             self.device.core.destroy_device(None);
             // inner.drop() destroys the Vulkan instance
         }
