@@ -76,7 +76,7 @@ struct Device {
 
 struct MemoryManager {
     allocator: gpu_alloc::GpuAllocator<vk::DeviceMemory>,
-    slab: slab::Slab<gpu_alloc::MemoryBlock<vk::DeviceMemory>>,
+    slab: slab::Slab<(gpu_alloc::MemoryBlock<vk::DeviceMemory>, String)>,
     valid_ash_memory_types: u32,
 }
 
