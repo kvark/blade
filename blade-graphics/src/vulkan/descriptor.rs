@@ -3,6 +3,12 @@ use ash::vk;
 //TODO: replace by an abstraction in `gpu-descriptor`
 // https://github.com/zakarumych/gpu-descriptor/issues/42
 const COUNT_BASE: u32 = 16;
+/// Budget for inline uniform block bytes per descriptor set.
+/// The hardware max (e.g. 4 MiB on RADV) is far larger than actual
+/// usage (typically 32–256 bytes of push constants per set).
+/// Using the hardware max as the multiplier causes pool creation to
+/// request more memory than the device has (e.g. 4096 sets × 4 MiB = 16 GiB).
+const IUB_BYTES_PER_SET: u32 = 4096;
 
 #[derive(Debug)]
 pub struct DescriptorPool {
@@ -34,7 +40,7 @@ impl super::Device {
         if self.max_inline_uniform_block_size > 0 {
             descriptor_sizes.push(vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
-                descriptor_count: max_sets * self.max_inline_uniform_block_size,
+                descriptor_count: max_sets * IUB_BYTES_PER_SET,
             });
         }
         // Always include UBO type: needed as fallback when bindings exceed

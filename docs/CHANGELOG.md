@@ -1,6 +1,10 @@
 Changelog for *Blade* project
 
-## blade-graphics-0.8.2 (4 Apr 2026)
+## blade-graphics-0.8.3 (17 Apr 2026)
+
+- vk: fix descriptor over-allocation for uniform data
+
+## blade-graphics-0.8.2 (14 Apr 2026)
 
 - add `ComputeCommandEncoder::barrier()` for inline compute-to-compute synchronization within a pass
 - enable `naga::valid::Capabilities::SUBGROUP` for shader validation
