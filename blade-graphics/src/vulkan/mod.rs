@@ -64,6 +64,7 @@ struct Device {
     max_inline_uniform_block_size: u32,
     buffer_marker: Option<ash::amd::buffer_marker::Device>,
     shader_info: Option<ash::amd::shader_info::Device>,
+    pipeline_executable_properties: Option<ash::khr::pipeline_executable_properties::Device>,
     full_screen_exclusive: Option<ash::ext::full_screen_exclusive::Device>,
     #[cfg(target_os = "windows")]
     external_memory: Option<ash::khr::external_memory_win32::Device>,

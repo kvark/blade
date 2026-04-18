@@ -345,6 +345,13 @@ impl crate::traits::ShaderDevice for super::Context {
         super::ComputePipeline { inner, wg_size }
     }
 
+    fn get_pipeline_statistics(
+        &self,
+        _pipeline: &super::ComputePipeline,
+    ) -> Vec<crate::PipelineExecutableInfo> {
+        Vec::new()
+    }
+
     fn destroy_compute_pipeline(&self, pipeline: &mut super::ComputePipeline) {
         unsafe {
             self.destroy_pipeline(&mut pipeline.inner);

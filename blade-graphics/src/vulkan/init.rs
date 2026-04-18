@@ -100,6 +100,7 @@ struct AdapterCapabilities {
     max_inline_uniform_block_size: u32,
     buffer_marker: bool,
     shader_info: bool,
+    pipeline_executable_properties: bool,
     full_screen_exclusive: bool,
     external_memory: bool,
     timing: bool,
@@ -511,6 +512,8 @@ fn inspect_adapter(
 
     let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
+    let pipeline_executable_properties =
+        supported_extensions.contains(&vk::KHR_PIPELINE_EXECUTABLE_PROPERTIES_NAME);
     let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
     let memory_budget = supported_extensions.contains(&vk::EXT_MEMORY_BUDGET_NAME);
 
@@ -541,6 +544,7 @@ fn inspect_adapter(
         max_inline_uniform_block_size,
         buffer_marker,
         shader_info,
+        pipeline_executable_properties,
         full_screen_exclusive,
         external_memory,
         timing,
@@ -933,6 +937,9 @@ impl super::Context {
             if capabilities.shader_info {
                 device_extensions.push(vk::AMD_SHADER_INFO_NAME);
             }
+            if capabilities.pipeline_executable_properties {
+                device_extensions.push(vk::KHR_PIPELINE_EXECUTABLE_PROPERTIES_NAME);
+            }
             if capabilities.full_screen_exclusive {
                 device_extensions.push(vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
             }
@@ -1054,6 +1061,17 @@ impl super::Context {
                     .push_next(&mut vulkan_memory_model);
             }
 
+            let mut khr_pipeline_executable_properties;
+            if capabilities.pipeline_executable_properties {
+                khr_pipeline_executable_properties =
+                    vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR {
+                        pipeline_executable_info: vk::TRUE,
+                        ..Default::default()
+                    };
+                device_create_info =
+                    device_create_info.push_next(&mut khr_pipeline_executable_properties);
+            }
+
             // TODO: Replace with ash typed struct once available.
             let mut khr_unified_image_layouts;
             if capabilities.unified_image_layouts {
@@ -1137,6 +1155,14 @@ impl super::Context {
             },
             shader_info: if capabilities.shader_info {
                 Some(amd::shader_info::Device::new(&instance.core, &device_core))
+            } else {
+                None
+            },
+            pipeline_executable_properties: if capabilities.pipeline_executable_properties {
+                Some(khr::pipeline_executable_properties::Device::new(
+                    &instance.core,
+                    &device_core,
+                ))
             } else {
                 None
             },

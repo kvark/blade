@@ -39,6 +39,10 @@ pub trait ShaderDevice {
     fn destroy_compute_pipeline(&self, pipeline: &mut Self::ComputePipeline);
     fn create_render_pipeline(&self, desc: super::RenderPipelineDesc) -> Self::RenderPipeline;
     fn destroy_render_pipeline(&self, pipeline: &mut Self::RenderPipeline);
+    fn get_pipeline_statistics(
+        &self,
+        pipeline: &Self::ComputePipeline,
+    ) -> Vec<super::PipelineExecutableInfo>;
 }
 
 pub trait CommandDevice {
