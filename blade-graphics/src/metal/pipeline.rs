@@ -1,7 +1,7 @@
 use naga::back::msl;
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::NSString;
-use objc2_metal::{self as metal, MTLDevice, MTLLibrary};
+use objc2_metal::{self as metal, MTLComputePipelineState, MTLDevice, MTLLibrary};
 
 fn map_blend_factor(factor: crate::BlendFactor) -> metal::MTLBlendFactor {
     use crate::BlendFactor as Bf;
@@ -380,6 +380,32 @@ impl crate::traits::ShaderDevice for super::Context {
                 wg_memory_sizes: cs.wg_memory_sizes.into_boxed_slice(),
             }
         })
+    }
+
+    fn get_pipeline_statistics(
+        &self,
+        pipeline: &super::ComputePipeline,
+    ) -> Vec<crate::PipelineExecutableInfo> {
+        vec![crate::PipelineExecutableInfo {
+            name: pipeline.name.clone(),
+            statistics: vec![
+                crate::PipelineStatistic {
+                    name: "maxTotalThreadsPerThreadgroup".to_string(),
+                    description: "Maximum threads per threadgroup for this pipeline".to_string(),
+                    value: pipeline.raw.maxTotalThreadsPerThreadgroup() as f64,
+                },
+                crate::PipelineStatistic {
+                    name: "threadExecutionWidth".to_string(),
+                    description: "SIMD-group width".to_string(),
+                    value: pipeline.raw.threadExecutionWidth() as f64,
+                },
+                crate::PipelineStatistic {
+                    name: "staticThreadgroupMemoryLength".to_string(),
+                    description: "Statically allocated threadgroup memory in bytes".to_string(),
+                    value: pipeline.raw.staticThreadgroupMemoryLength() as f64,
+                },
+            ],
+        }]
     }
 
     fn destroy_compute_pipeline(&self, _pipeline: &mut super::ComputePipeline) {

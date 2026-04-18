@@ -892,6 +892,26 @@ pub struct ComputePipelineDesc<'a> {
     pub compute: ShaderFunction<'a>,
 }
 
+/// A single statistic reported for a pipeline executable.
+#[derive(Clone, Debug)]
+pub struct PipelineStatistic {
+    /// Name of the statistic (e.g. "numUsedVgprs", "spilledSgprs").
+    pub name: String,
+    /// Human-readable description.
+    pub description: String,
+    /// Numeric value (integer statistics are converted to f64).
+    pub value: f64,
+}
+
+/// Statistics for one executable stage within a pipeline.
+#[derive(Clone, Debug)]
+pub struct PipelineExecutableInfo {
+    /// Name of the executable (e.g. "Compute").
+    pub name: String,
+    /// Individual statistics.
+    pub statistics: Vec<PipelineStatistic>,
+}
+
 /// Primitive type the input mesh is composed of.
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
 pub enum PrimitiveTopology {
