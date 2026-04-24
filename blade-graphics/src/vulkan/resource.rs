@@ -47,11 +47,83 @@ impl super::Context {
                         .core
                         .get_physical_device_memory_properties(self.physical_device)
                 };
-                let memory_type_index = memory_types.ilog2();
-                let memory_type: vk::MemoryType =
-                    memory_properties.memory_types[memory_type_index as usize];
-
                 let handle_type = external_source_handle_type(e);
+
+                // For a `HostAllocation` import the driver constrains
+                // which memory types can back the pointer — query it
+                // via `vkGetMemoryHostPointerPropertiesEXT` and
+                // intersect with the buffer's requirements. FD / Win32
+                // / Export paths keep the historical "any valid bit"
+                // heuristic.
+                let host_pointer_memory_type_bits = match e {
+                    crate::ExternalMemorySource::HostAllocation(ptr) => {
+                        let ext = self.device.external_memory_host.as_ref().expect(
+                            "Memory::External(HostAllocation) requires \
+                             VK_EXT_external_memory_host — check \
+                             Capabilities::external_memory_host before calling",
+                        );
+                        let mut host_props = vk::MemoryHostPointerPropertiesEXT::default();
+                        unsafe {
+                            (ext.fp().get_memory_host_pointer_properties_ext)(
+                                self.device.core.handle(),
+                                handle_type,
+                                ptr as *const std::ffi::c_void,
+                                &mut host_props,
+                            )
+                            .result()
+                            .expect("vkGetMemoryHostPointerPropertiesEXT");
+                        }
+                        Some(host_props.memory_type_bits)
+                    }
+                    _ => None,
+                };
+
+                let allowed = memory_types & host_pointer_memory_type_bits.unwrap_or(!0);
+                let (memory_type_index, memory_type) = if host_pointer_memory_type_bits.is_some() {
+                    // Host-pointer imports need HOST_VISIBLE. Prefer
+                    // HOST_COHERENT to skip explicit flushes.
+                    (0..memory_properties.memory_type_count)
+                        .filter(|&i| allowed & (1 << i) != 0)
+                        .map(|i| (i, memory_properties.memory_types[i as usize]))
+                        .filter(|item| {
+                            item.1
+                                .property_flags
+                                .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+                        })
+                        .min_by_key(|item| {
+                            if item
+                                .1
+                                .property_flags
+                                .contains(vk::MemoryPropertyFlags::HOST_COHERENT)
+                            {
+                                0u8
+                            } else {
+                                1u8
+                            }
+                        })
+                        .expect(
+                            "no host-visible memory type compatible with the imported \
+                                 host pointer",
+                        )
+                } else {
+                    assert!(
+                        allowed != 0,
+                        "no memory type satisfies the external-buffer requirements"
+                    );
+                    let idx = allowed.ilog2();
+                    (idx, memory_properties.memory_types[idx as usize])
+                };
+
+                // `VkPhysicalDeviceExternalMemoryHostPropertiesEXT::minImportedHostPointerAlignment`
+                // — allocationSize must be a multiple of this when
+                // importing a host pointer.
+                let allocation_size = if host_pointer_memory_type_bits.is_some() {
+                    let align = self.device.min_imported_host_pointer_alignment.max(1);
+                    requirements.size.next_multiple_of(align)
+                } else {
+                    requirements.size
+                };
+
                 let external_info: &mut dyn vk::ExtendsMemoryAllocateInfo = match e {
                     #[cfg(target_os = "windows")]
                     crate::ExternalMemorySource::Win32(Some(handle))
@@ -89,7 +161,7 @@ impl super::Context {
                 };
 
                 let allocation_info = vk::MemoryAllocateInfo {
-                    allocation_size: requirements.size,
+                    allocation_size,
                     memory_type_index,
                     ..vk::MemoryAllocateInfo::default()
                 }
@@ -99,7 +171,7 @@ impl super::Context {
                     self.device
                         .core
                         .allocate_memory(&allocation_info, None)
-                        .unwrap()
+                        .expect("vkAllocateMemory (external import)")
                 };
 
                 unsafe {
@@ -108,7 +180,7 @@ impl super::Context {
                         memory_type_index,
                         gpu_alloc_ash::memory_properties_from_ash(memory_type.property_flags),
                         0,
-                        requirements.size,
+                        allocation_size,
                     )
                 }
             }
