@@ -70,6 +70,14 @@ struct Device {
     external_memory: Option<ash::khr::external_memory_win32::Device>,
     #[cfg(not(target_os = "windows"))]
     external_memory: Option<ash::khr::external_memory_fd::Device>,
+    /// `VK_EXT_external_memory_host` device wrapper. Populated when
+    /// the extension is enabled; imports of
+    /// `Memory::External(HostAllocation(..))` fail clearly when this
+    /// is `None`.
+    external_memory_host: Option<ash::ext::external_memory_host::Device>,
+    /// Driver-reported alignment for imported host pointers and
+    /// allocation sizes (0 when `external_memory_host` is `None`).
+    min_imported_host_pointer_alignment: u64,
     command_scope: Option<CommandScopeDevice>,
     timing: Option<TimingDevice>,
     workarounds: Workarounds,

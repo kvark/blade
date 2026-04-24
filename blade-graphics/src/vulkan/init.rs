@@ -103,6 +103,12 @@ struct AdapterCapabilities {
     pipeline_executable_properties: bool,
     full_screen_exclusive: bool,
     external_memory: bool,
+    external_memory_host: bool,
+    /// `VkPhysicalDeviceExternalMemoryHostPropertiesEXT::minImportedHostPointerAlignment`.
+    /// Allocation size and host-pointer alignment for an imported
+    /// `Memory::External(HostAllocation(..))` allocation must be a
+    /// multiple of this value (0 when the extension is unsupported).
+    min_imported_host_pointer_alignment: u64,
     timing: bool,
     dual_source_blending: bool,
     shader_float16: bool,
@@ -374,6 +380,27 @@ fn inspect_adapter(
             &vk::KHR_EXTERNAL_MEMORY_FD_NAME
         });
 
+    // `VK_EXT_external_memory_host` is what lets us import a plain host
+    // allocation (`ExternalMemorySource::HostAllocation(ptr)`) as a
+    // Vulkan buffer without a staging copy. It's orthogonal to the
+    // FD/Win32 variants above — a driver may support one without the
+    // other. RADV, NVIDIA, and modern Intel all expose it.
+    let external_memory_host = supported_extensions.contains(&vk::EXT_EXTERNAL_MEMORY_HOST_NAME);
+    let min_imported_host_pointer_alignment = if external_memory_host {
+        let mut host_props = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
+        let mut props2 = vk::PhysicalDeviceProperties2::default().push_next(&mut host_props);
+        unsafe {
+            instance
+                .get_physical_device_properties2
+                .get_physical_device_properties2(phd, &mut props2);
+        }
+        // The spec forbids 0; guard anyway so downstream alignment
+        // math stays well-defined.
+        host_props.min_imported_host_pointer_alignment.max(1)
+    } else {
+        0
+    };
+
     let timing = if properties.limits.timestamp_compute_and_graphics == vk::FALSE {
         log::info!("No timing because of queue support");
         false
@@ -547,6 +574,8 @@ fn inspect_adapter(
         pipeline_executable_properties,
         full_screen_exclusive,
         external_memory,
+        external_memory_host,
+        min_imported_host_pointer_alignment,
         timing,
         dual_source_blending,
         shader_float16,
@@ -951,6 +980,9 @@ impl super::Context {
                     vk::KHR_EXTERNAL_MEMORY_FD_NAME
                 });
             }
+            if capabilities.external_memory_host {
+                device_extensions.push(vk::EXT_EXTERNAL_MEMORY_HOST_NAME);
+            }
             if capabilities.cooperative_matrix.is_supported() {
                 device_extensions.push(vk::KHR_COOPERATIVE_MATRIX_NAME);
                 if capabilities.api_version < vk::API_VERSION_1_2 {
@@ -1184,6 +1216,15 @@ impl super::Context {
             } else {
                 None
             },
+            external_memory_host: if capabilities.external_memory_host {
+                Some(ash::ext::external_memory_host::Device::new(
+                    &instance.core,
+                    &device_core,
+                ))
+            } else {
+                None
+            },
+            min_imported_host_pointer_alignment: capabilities.min_imported_host_pointer_alignment,
             core: device_core,
             device_information: capabilities.device_information,
             command_scope: if desc.capture {
