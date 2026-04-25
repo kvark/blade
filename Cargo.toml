@@ -18,8 +18,8 @@ exclude = []
 
 [workspace.dependencies]
 blade-graphics = { path = "blade-graphics", version = "0.8" }
-blade-util = { path = "blade-util", version = "0.4" }
-blade-egui = { path = "blade-egui", version = "0.8" }
+blade-util = { path = "blade-util", version = "0.4.1" }
+blade-egui = { path = "blade-egui", version = "0.8.1" }
 blade-particle = { path = "blade-particle", version = "0.1" }
 blade-macros = { path = "blade-macros", version = "0.3" }
 blade-helpers = { path = "blade-helpers", version = "0.2" }

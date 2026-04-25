@@ -4,6 +4,10 @@ Changelog for *Blade* project
 
 - vk: support `VK_EXT_external_memory_host` — enable the extension, query memory-type compatibility via `vkGetMemoryHostPointerPropertiesEXT`, and round allocation size to `minImportedHostPointerAlignment` so `Memory::External(HostAllocation)` imports succeed on drivers that expose the extension
 
+## blade-egui-0.8.2, blade-util-0.4.1 (25 Apr 2026)
+
+- fix leaking textures and non-reusable buffers in egui workflow
+
 ## blade-graphics-0.8.4 (17 Apr 2026)
 
 - vk: use driver API version for instance creation

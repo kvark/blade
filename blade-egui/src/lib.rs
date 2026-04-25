@@ -222,7 +222,7 @@ impl GuiPainter {
             .textures_to_delete
             .iter()
             .position(|&(_, ref sp)| !context.wait_for(sp, 0).unwrap_or(true))
-            .unwrap_or_default();
+            .unwrap_or(self.textures_to_delete.len());
         for (texture, _) in self.textures_to_delete.drain(..valid_pos) {
             context.destroy_texture_view(texture.view);
             context.destroy_texture(texture.allocation);
@@ -303,6 +303,7 @@ impl GuiPainter {
         }
 
         self.triage_deletions(context);
+        self.belt.trim(4, context);
     }
 
     /// Render the set of clipped primitives into a render pass.

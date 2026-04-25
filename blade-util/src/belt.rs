@@ -125,4 +125,22 @@ impl BufferBelt {
         self.buffers
             .extend(self.active.drain(..).map(|(rb, _)| (rb, sp.clone())));
     }
+
+    /// Free completed buffers that weren't reused, preventing unbounded
+    /// accumulation of stale chunks. Keeps at most `keep` buffers in
+    /// the pool so steady-state allocation can still recycle.
+    pub fn trim(&mut self, keep: usize, gpu: &gpu::Context) {
+        if self.buffers.len() <= keep {
+            return;
+        }
+        let mut i = 0;
+        while i < self.buffers.len() && self.buffers.len() > keep {
+            if gpu.wait_for(&self.buffers[i].1, 0).unwrap_or(false) {
+                let (rb, _) = self.buffers.remove(i);
+                gpu.destroy_buffer(rb.raw);
+            } else {
+                i += 1;
+            }
+        }
+    }
 }
