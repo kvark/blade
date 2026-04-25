@@ -348,6 +348,31 @@ impl super::Context {
             } else if let Some(egl1_5) = egl.upcast::<egl::EGL1_5>() {
                 if let Some(state) = try_create_gbm_display(egl1_5, &client_extensions) {
                     (state.0, Some(state.1))
+                } else if std::env::var("WAYLAND_DISPLAY").is_ok()
+                    && (client_extensions.contains("EGL_KHR_platform_wayland")
+                        || client_extensions.contains("EGL_EXT_platform_wayland"))
+                {
+                    log::info!("Using Wayland EGL platform");
+                    let d = egl1_5
+                        .get_platform_display(
+                            EGL_PLATFORM_WAYLAND_KHR,
+                            egl::DEFAULT_DISPLAY as *mut _,
+                            &[egl::ATTRIB_NONE],
+                        )
+                        .unwrap();
+                    (d, None)
+                } else if client_extensions.contains("EGL_KHR_platform_x11")
+                    || client_extensions.contains("EGL_EXT_platform_x11")
+                {
+                    log::info!("Using X11 EGL platform");
+                    let d = egl1_5
+                        .get_platform_display(
+                            EGL_PLATFORM_X11_KHR,
+                            egl::DEFAULT_DISPLAY as *mut _,
+                            &[egl::ATTRIB_NONE],
+                        )
+                        .unwrap();
+                    (d, None)
                 } else if client_extensions.contains("EGL_MESA_platform_surfaceless") {
                     log::info!("Using surfaceless platform");
                     let d = egl1_5
@@ -691,7 +716,7 @@ impl super::Context {
     ) {
         use raw_window_handle::RawWindowHandle as Rwh;
 
-        let (mut temp_xlib_handle, mut temp_xcb_handle);
+        let mut temp_xlib_handle;
         let mut new_wl_window = None;
         #[allow(trivial_casts)]
         let native_window_ptr = match surface.platform.window_handle {
@@ -700,10 +725,7 @@ impl super::Context {
                 temp_xlib_handle = handle.window;
                 &mut temp_xlib_handle as *mut _ as *mut ffi::c_void
             }
-            Rwh::Xcb(handle) => {
-                temp_xcb_handle = handle.window;
-                &mut temp_xcb_handle as *mut _ as *mut ffi::c_void
-            }
+            Rwh::Xcb(handle) => handle.window.get() as usize as *mut ffi::c_void,
             Rwh::AndroidNdk(handle) => handle.a_native_window.as_ptr(),
             Rwh::Wayland(handle) => unsafe {
                 let wl_egl_window_create: libloading::Symbol<WlEglWindowCreateFun> = surface
@@ -753,16 +775,9 @@ impl super::Context {
 
         let mut attributes = vec![
             egl::RENDER_BUFFER,
-            if cfg!(any(
-                target_os = "android",
-                target_os = "macos",
-                windows,
-                target_env = "ohos"
-            )) {
-                egl::BACK_BUFFER
-            } else {
-                egl::SINGLE_BUFFER
-            },
+            // Use BACK_BUFFER unconditionally: some Mesa drivers reject
+            // EGL_SINGLE_BUFFER with BadAlloc on window surfaces.
+            egl::BACK_BUFFER,
         ];
         match inner.egl.srgb_kind {
             SrgbFrameBufferKind::None => {}
@@ -852,7 +867,7 @@ impl super::Context {
         pres_egl_context.shared_display = true;
 
         // Create the window surface on the presentation display
-        let (mut temp_xlib_handle, mut temp_xcb_handle);
+        let mut temp_xlib_handle;
         let mut new_wl_window = None;
         #[allow(trivial_casts)]
         let native_window_ptr = match surface.platform.window_handle {
@@ -861,10 +876,7 @@ impl super::Context {
                 temp_xlib_handle = handle.window;
                 &mut temp_xlib_handle as *mut _ as *mut ffi::c_void
             }
-            Rwh::Xcb(handle) => {
-                temp_xcb_handle = handle.window;
-                &mut temp_xcb_handle as *mut _ as *mut ffi::c_void
-            }
+            Rwh::Xcb(handle) => handle.window.get() as usize as *mut ffi::c_void,
             Rwh::Wayland(handle) => unsafe {
                 let wl_egl_window_create: libloading::Symbol<WlEglWindowCreateFun> = surface
                     .platform
@@ -886,7 +898,7 @@ impl super::Context {
             }
         };
 
-        let mut attributes = vec![egl::RENDER_BUFFER, egl::SINGLE_BUFFER];
+        let mut attributes = vec![egl::RENDER_BUFFER, egl::BACK_BUFFER];
         match pres_egl_context.srgb_kind {
             SrgbFrameBufferKind::None => {}
             SrgbFrameBufferKind::Core | SrgbFrameBufferKind::Khr => {
