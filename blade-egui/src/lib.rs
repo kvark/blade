@@ -226,6 +226,7 @@ impl GuiPainter {
         for (texture, _) in self.textures_to_delete.drain(..valid_pos) {
             context.destroy_texture_view(texture.view);
             context.destroy_texture(texture.allocation);
+            context.destroy_sampler(texture.sampler);
         }
     }
 
