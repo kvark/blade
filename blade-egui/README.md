@@ -17,4 +17,4 @@ cargo run --release --example bunnymark
 ## Platforms
 
 The full-stack Blade Engine can only run on Vulkan with hardware Ray Tracing support.
-However, on secondary platforms, such as Metal and GLES/WebGL2, one can still use Blde-Graphics and Blade-Egui.
+However, on secondary platforms, such as Metal and GLES/WebGL2, one can still use Blade-Graphics and Blade-Egui.
