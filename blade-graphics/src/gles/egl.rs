@@ -326,15 +326,13 @@ impl super::Context {
                         if desc.validation { 1 } else { 0 },
                         egl::ATTRIB_NONE,
                     ];
-                    Some(
-                        egl1_5
-                            .get_platform_display(
-                                EGL_PLATFORM_ANGLE_ANGLE,
-                                ptr::null_mut(),
-                                &display_attributes,
-                            )
-                            .unwrap(),
-                    )
+                    egl1_5
+                        .get_platform_display(
+                            EGL_PLATFORM_ANGLE_ANGLE,
+                            ptr::null_mut(),
+                            &display_attributes,
+                        )
+                        .ok()
                 } else {
                     None
                 }
@@ -355,9 +353,14 @@ impl super::Context {
                             EGL_PLATFORM_SURFACELESS_MESA,
                             ptr::null_mut(),
                             &[egl::ATTRIB_NONE],
-                        )
-                        .unwrap();
-                    (d, None)
+                        );
+                    match d {
+                        Ok(display) => (display, None),
+                        Err(e) => {
+                            log::warn!("Surfaceless platform failed: {:?}, falling back to default", e);
+                            (egl.get_display(egl::DEFAULT_DISPLAY).unwrap(), None)
+                        }
+                    }
                 } else {
                     log::info!("Using default platform");
                     let d = egl

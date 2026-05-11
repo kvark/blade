@@ -120,6 +120,12 @@ impl BufferBelt {
         unsafe { self.alloc_typed(data, gpu) }
     }
 
+    pub fn sync(&self, gpu: &gpu::Context) {
+        for (rb, _) in &self.active {
+            gpu.sync_buffer(rb.raw);
+        }
+    }
+
     /// Mark the actively used buffers as used by GPU with a given sync point.
     pub fn flush(&mut self, sp: &gpu::SyncPoint) {
         self.buffers

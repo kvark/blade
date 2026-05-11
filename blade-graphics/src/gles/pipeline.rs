@@ -146,7 +146,12 @@ impl super::Context {
 
                 for mapping in attribute_mappings {
                     let vf = &vertex_fetch_states[mapping.buffer_index];
-                    let (_, attrib) = vf.layout.attributes[mapping.attribute_index];
+                    let (attrib_name, attrib) = vf.layout.attributes[mapping.attribute_index];
+                    
+                    let location = attributes.len() as u32;
+                    gl.bind_attrib_location(program, location, attrib_name);
+                    gl.bind_attrib_location(program, location, &format!("e_{}", attrib_name));
+
                     attributes.push(super::VertexAttributeInfo {
                         attrib,
                         buffer_index: mapping.buffer_index as u32,
@@ -268,7 +273,24 @@ impl super::Context {
                                 unimplemented!()
                             }
                             crate::ShaderBinding::Plain { size } => {
-                                if let Some(index) = gl.get_uniform_block_index(program, glsl_name)
+                                let mut index_opt = gl.get_uniform_block_index(program, glsl_name);
+                                if index_opt.is_none() {
+                                    if let Some(ref type_name) = sf.shader.module.types[var.ty].name {
+                                        index_opt = gl.get_uniform_block_index(program, type_name);
+                                    }
+                                }
+                                if index_opt.is_none() {
+                                    let type_name = format!("type_{}", var.ty.index());
+                                    index_opt = gl.get_uniform_block_index(program, &type_name);
+                                }
+                                if index_opt.is_none() {
+                                    let num_blocks = gl.get_program_parameter_i32(program, glow::ACTIVE_UNIFORM_BLOCKS);
+                                    if num_blocks == 1 {
+                                        index_opt = Some(0);
+                                    }
+                                }
+
+                                if let Some(index) = index_opt
                                 {
                                     let expected_size = gl.get_active_uniform_block_parameter_i32(
                                         program,
@@ -296,6 +318,19 @@ impl super::Context {
                                         ) as u32
                                     };
                                     targets.push(slot);
+                                } else {
+                                    let num_blocks = gl.get_program_parameter_i32(program, glow::ACTIVE_UNIFORM_BLOCKS);
+                                    let mut available_blocks = String::new();
+                                    for i in 0..num_blocks {
+                                        let name = gl.get_active_uniform_block_name(program, i as u32);
+                                        available_blocks.push_str(&format!("{}, ", name));
+                                    }
+                                    log::error!(
+                                        "Failed to find uniform block for variable '{}' (type '{:?}'). Available blocks: {}",
+                                        glsl_name,
+                                        sf.shader.module.types[var.ty].name,
+                                        available_blocks
+                                    );
                                 }
                             }
                         }

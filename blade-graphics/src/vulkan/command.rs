@@ -281,7 +281,9 @@ fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo<'s
 fn end_pass(device: &super::Device, cmd_buf: vk::CommandBuffer) {
     if device.command_scope.is_some() {
         unsafe {
-            device.debug_utils.cmd_end_debug_utils_label(cmd_buf);
+            if let Some(ref ext) = device.debug_utils {
+                ext.cmd_end_debug_utils_label(cmd_buf);
+            }
         }
     }
 }
@@ -338,13 +340,15 @@ impl super::CommandEncoder {
             self.temp_label.extend_from_slice(label.as_bytes());
             self.temp_label.push(0);
             unsafe {
-                self.device.debug_utils.cmd_begin_debug_utils_label(
-                    self.buffers[0].raw,
-                    &vk::DebugUtilsLabelEXT {
-                        p_label_name: self.temp_label.as_ptr() as *const _,
-                        ..Default::default()
-                    },
-                )
+                if let Some(ref ext) = self.device.debug_utils {
+                    ext.cmd_begin_debug_utils_label(
+                        self.buffers[0].raw,
+                        &vk::DebugUtilsLabelEXT {
+                            p_label_name: self.temp_label.as_ptr() as *const _,
+                            ..Default::default()
+                        },
+                    )
+                }
             }
         }
     }

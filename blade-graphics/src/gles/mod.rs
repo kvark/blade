@@ -406,6 +406,7 @@ pub struct PassEncoder<'a, P> {
     pipeline: PhantomData<P>,
     limits: &'a Limits,
     has_scope: bool,
+    target_size: [u16; 2],
 }
 
 pub type ComputeCommandEncoder<'a> = PassEncoder<'a, ComputePipeline>;
@@ -641,9 +642,9 @@ fn describe_texture_format(format: crate::TextureFormat) -> FormatInfo {
         Tf::R32Float => (glow::R32F, glow::RED, glow::FLOAT),
         Tf::Rg32Float => (glow::RG32F, glow::RG, glow::FLOAT),
         Tf::Rgba32Float => (glow::RGBA32F, glow::RGBA, glow::FLOAT),
-        Tf::R32Uint => (glow::R32UI, glow::RED, glow::UNSIGNED_INT),
-        Tf::Rg32Uint => (glow::RG32UI, glow::RG, glow::UNSIGNED_INT),
-        Tf::Rgba32Uint => (glow::RGBA32UI, glow::RGBA, glow::UNSIGNED_INT),
+        Tf::R32Uint => (glow::R32UI, glow::RED_INTEGER, glow::UNSIGNED_INT),
+        Tf::Rg32Uint => (glow::RG32UI, glow::RG_INTEGER, glow::UNSIGNED_INT),
+        Tf::Rgba32Uint => (glow::RGBA32UI, glow::RGBA_INTEGER, glow::UNSIGNED_INT),
         Tf::Depth32Float => (glow::DEPTH_COMPONENT32F, glow::DEPTH_COMPONENT, glow::FLOAT),
         Tf::Depth32FloatStencil8Uint => (
             glow::DEPTH32F_STENCIL8,

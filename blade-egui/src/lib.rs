@@ -32,7 +32,6 @@ struct Globals {
 
 #[derive(blade_macros::ShaderData)]
 struct Locals {
-    r_vertex_data: blade_graphics::BufferPiece,
     r_texture: blade_graphics::TextureView,
     r_sampler: blade_graphics::Sampler,
 }
@@ -140,6 +139,7 @@ pub struct GuiPainter {
     textures: HashMap<egui::TextureId, GuiTexture>,
     //TODO: this could also look better
     textures_dropped: Vec<GuiTexture>,
+    textures_to_free: Vec<egui::TextureId>,
     textures_to_delete: Vec<(GuiTexture, blade_graphics::SyncPoint)>,
 }
 
@@ -171,11 +171,33 @@ impl GuiPainter {
         });
         let globals_layout = <Globals as blade_graphics::ShaderData>::layout();
         let locals_layout = <Locals as blade_graphics::ShaderData>::layout();
+        let egui_vertex_layout = blade_graphics::VertexLayout {
+            stride: 20, // egui::Vertex: pos(2xf32) + uv(2xf32) + color(u32) = 20
+            attributes: vec![
+                ("a_pos", blade_graphics::VertexAttribute {
+                    offset: 0,
+                    format: blade_graphics::VertexFormat::F32Vec2,
+                }),
+                ("a_tex_coord", blade_graphics::VertexAttribute {
+                    offset: 8,
+                    format: blade_graphics::VertexFormat::F32Vec2,
+                }),
+                ("a_color", blade_graphics::VertexAttribute {
+                    offset: 16,
+                    format: blade_graphics::VertexFormat::U32,
+                }),
+            ],
+        };
         let pipeline = context.create_render_pipeline(blade_graphics::RenderPipelineDesc {
             name: "gui",
             data_layouts: &[&globals_layout, &locals_layout],
             vertex: shader.at("vs_main"),
-            vertex_fetches: &[],
+            vertex_fetches: &[
+                blade_graphics::VertexFetchState {
+                    layout: &egui_vertex_layout,
+                    instanced: false,
+                },
+            ],
             primitive: blade_graphics::PrimitiveState {
                 topology: blade_graphics::PrimitiveTopology::TriangleList,
                 ..Default::default()
@@ -212,6 +234,7 @@ impl GuiPainter {
             belt,
             textures: Default::default(),
             textures_dropped: Vec::new(),
+            textures_to_free: Vec::new(),
             textures_to_delete: Vec::new(),
         }
     }
@@ -298,10 +321,7 @@ impl GuiPainter {
             }
         }
 
-        for texture_id in textures_delta.free.iter() {
-            let texture = self.textures.remove(texture_id).unwrap();
-            self.textures_dropped.push(texture);
-        }
+        self.textures_to_free.extend(textures_delta.free.iter().copied());
 
         self.triage_deletions(context);
         self.belt.trim(4, context);
@@ -365,11 +385,12 @@ impl GuiPainter {
                 pc.bind(
                     1,
                     &Locals {
-                        r_vertex_data: vertex_buf,
                         r_texture: texture.view,
                         r_sampler: texture.sampler,
                     },
                 );
+
+                pc.bind_vertex(0, vertex_buf);
 
                 pc.draw_indexed(
                     index_buf,
@@ -383,9 +404,18 @@ impl GuiPainter {
         }
     }
 
+    pub fn sync(&mut self, context: &blade_graphics::Context) {
+        self.belt.sync(context);
+    }
+
     /// Call this after submitting work at the given `sync_point`.
     #[profiling::function]
     pub fn after_submit(&mut self, sync_point: &blade_graphics::SyncPoint) {
+        for texture_id in self.textures_to_free.drain(..) {
+            if let Some(texture) = self.textures.remove(&texture_id) {
+                self.textures_dropped.push(texture);
+            }
+        }
         self.textures_to_delete.extend(
             self.textures_dropped
                 .drain(..)

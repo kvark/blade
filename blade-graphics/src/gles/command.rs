@@ -109,15 +109,16 @@ impl super::CommandEncoder {
 
     pub fn barrier(&mut self) {}
 
-    fn pass<P>(&mut self, kind: super::PassKind) -> super::PassEncoder<'_, P> {
+    fn pass<P>(&mut self, kind: super::PassKind, target_size: [u16; 2]) -> super::PassEncoder<'_, P> {
         super::PassEncoder {
             commands: &mut self.commands,
             plain_data: &mut self.plain_data,
             kind,
             invalidate_attachments: Vec::new(),
-            pipeline: Default::default(),
+            pipeline: std::marker::PhantomData,
             limits: &self.limits,
             has_scope: self.needs_scopes,
+            target_size,
         }
     }
 
@@ -164,7 +165,7 @@ impl super::CommandEncoder {
 
     pub fn transfer(&mut self, label: &str) -> super::PassEncoder<'_, ()> {
         self.begin_pass(label);
-        self.pass(super::PassKind::Transfer)
+        self.pass(super::PassKind::Transfer, [0, 0])
     }
 
     pub fn acceleration_structure(&mut self, _label: &str) -> super::PassEncoder<'_, ()> {
@@ -173,7 +174,7 @@ impl super::CommandEncoder {
 
     pub fn compute(&mut self, label: &str) -> super::PassEncoder<'_, super::ComputePipeline> {
         self.begin_pass(label);
-        self.pass(super::PassKind::Compute)
+        self.pass(super::PassKind::Compute, [0, 0])
     }
 
     pub fn render(
@@ -262,7 +263,7 @@ impl super::CommandEncoder {
             });
         }
 
-        let mut pass = self.pass(super::PassKind::Render);
+        let mut pass = self.pass(super::PassKind::Render, target_size);
         pass.invalidate_attachments = invalidate_attachments;
         pass
     }
@@ -317,7 +318,14 @@ impl super::PassEncoder<'_, super::ComputePipeline> {
 #[hidden_trait::expose]
 impl crate::traits::RenderEncoder for super::PassEncoder<'_, super::RenderPipeline> {
     fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
-        self.commands.push(super::Command::SetScissor(rect.clone()));
+        // Invert Y axis for OpenGL's bottom-left window coordinates
+        let y = (self.target_size[1] as i32).saturating_sub(rect.y).saturating_sub(rect.h as i32);
+        self.commands.push(super::Command::SetScissor(crate::ScissorRect {
+            x: rect.x,
+            y: y.max(0),
+            w: rect.w,
+            h: rect.h,
+        }));
     }
 
     fn set_viewport(&mut self, viewport: &crate::Viewport) {
