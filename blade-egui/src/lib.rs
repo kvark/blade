@@ -174,30 +174,37 @@ impl GuiPainter {
         let egui_vertex_layout = blade_graphics::VertexLayout {
             stride: 20, // egui::Vertex: pos(2xf32) + uv(2xf32) + color(u32) = 20
             attributes: vec![
-                ("a_pos", blade_graphics::VertexAttribute {
-                    offset: 0,
-                    format: blade_graphics::VertexFormat::F32Vec2,
-                }),
-                ("a_tex_coord", blade_graphics::VertexAttribute {
-                    offset: 8,
-                    format: blade_graphics::VertexFormat::F32Vec2,
-                }),
-                ("a_color", blade_graphics::VertexAttribute {
-                    offset: 16,
-                    format: blade_graphics::VertexFormat::U32,
-                }),
+                (
+                    "a_pos",
+                    blade_graphics::VertexAttribute {
+                        offset: 0,
+                        format: blade_graphics::VertexFormat::F32Vec2,
+                    },
+                ),
+                (
+                    "a_tex_coord",
+                    blade_graphics::VertexAttribute {
+                        offset: 8,
+                        format: blade_graphics::VertexFormat::F32Vec2,
+                    },
+                ),
+                (
+                    "a_color",
+                    blade_graphics::VertexAttribute {
+                        offset: 16,
+                        format: blade_graphics::VertexFormat::U32,
+                    },
+                ),
             ],
         };
         let pipeline = context.create_render_pipeline(blade_graphics::RenderPipelineDesc {
             name: "gui",
             data_layouts: &[&globals_layout, &locals_layout],
             vertex: shader.at("vs_main"),
-            vertex_fetches: &[
-                blade_graphics::VertexFetchState {
-                    layout: &egui_vertex_layout,
-                    instanced: false,
-                },
-            ],
+            vertex_fetches: &[blade_graphics::VertexFetchState {
+                layout: &egui_vertex_layout,
+                instanced: false,
+            }],
             primitive: blade_graphics::PrimitiveState {
                 topology: blade_graphics::PrimitiveTopology::TriangleList,
                 ..Default::default()
@@ -321,7 +328,8 @@ impl GuiPainter {
             }
         }
 
-        self.textures_to_free.extend(textures_delta.free.iter().copied());
+        self.textures_to_free
+            .extend(textures_delta.free.iter().copied());
 
         self.triage_deletions(context);
         self.belt.trim(4, context);

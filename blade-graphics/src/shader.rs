@@ -298,7 +298,7 @@ impl super::Shader {
                         Some(ref name) => name.as_str(),
                         None => "?",
                     };
-                    
+
                     let has_binding = member.binding.is_some();
                     if !has_binding {
                         member.binding = Some(naga::Binding::Location {

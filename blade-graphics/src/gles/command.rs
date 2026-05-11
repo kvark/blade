@@ -109,7 +109,11 @@ impl super::CommandEncoder {
 
     pub fn barrier(&mut self) {}
 
-    fn pass<P>(&mut self, kind: super::PassKind, target_size: [u16; 2]) -> super::PassEncoder<'_, P> {
+    fn pass<P>(
+        &mut self,
+        kind: super::PassKind,
+        target_size: [u16; 2],
+    ) -> super::PassEncoder<'_, P> {
         super::PassEncoder {
             commands: &mut self.commands,
             plain_data: &mut self.plain_data,
@@ -319,13 +323,16 @@ impl super::PassEncoder<'_, super::ComputePipeline> {
 impl crate::traits::RenderEncoder for super::PassEncoder<'_, super::RenderPipeline> {
     fn set_scissor_rect(&mut self, rect: &crate::ScissorRect) {
         // Invert Y axis for OpenGL's bottom-left window coordinates
-        let y = (self.target_size[1] as i32).saturating_sub(rect.y).saturating_sub(rect.h as i32);
-        self.commands.push(super::Command::SetScissor(crate::ScissorRect {
-            x: rect.x,
-            y: y.max(0),
-            w: rect.w,
-            h: rect.h,
-        }));
+        let y = (self.target_size[1] as i32)
+            .saturating_sub(rect.y)
+            .saturating_sub(rect.h as i32);
+        self.commands
+            .push(super::Command::SetScissor(crate::ScissorRect {
+                x: rect.x,
+                y: y.max(0),
+                w: rect.w,
+                h: rect.h,
+            }));
     }
 
     fn set_viewport(&mut self, viewport: &crate::Viewport) {
@@ -669,7 +676,10 @@ impl super::Command {
                     base_vertex,
                     instance_count,
                 } => {
+                    #[cfg(not(target_arch = "wasm32"))]
                     gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(index_buf.raw));
+                    #[cfg(target_arch = "wasm32")]
+                    gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(index_buf.raw_index));
                     match (base_vertex, instance_count) {
                         (0, 1) => gl.draw_elements(
                             topology,
@@ -791,7 +801,11 @@ impl super::Command {
                     let row_texels =
                         bytes_per_row / block_info.size as u32 * block_info.dimensions.0 as u32;
                     gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-                    gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, row_texels as i32);
+                    // Only set row length when stride differs from width;
+                    // redundant values trigger Firefox's slow defensive copy path.
+                    if row_texels != size.width {
+                        gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, row_texels as i32);
+                    }
                     gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(src.raw));
                     gl.bind_texture(dst.target, Some(dst.raw));
                     let unpack_data = glow::PixelUnpackData::BufferOffset(src.offset as u32);
@@ -861,6 +875,7 @@ impl super::Command {
                         _ => unreachable!(),
                     }
                     gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
+                    gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, 0);
                 }
                 Self::CopyTextureToBuffer {
                     ref src,
@@ -1214,6 +1229,21 @@ impl super::Command {
                     target,
                 } => {
                     gl.active_texture(glow::TEXTURE0 + slot);
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        if target != glow::TEXTURE_2D {
+                            gl.bind_texture(glow::TEXTURE_2D, None);
+                        }
+                        if target != glow::TEXTURE_2D_ARRAY {
+                            gl.bind_texture(glow::TEXTURE_2D_ARRAY, None);
+                        }
+                        if target != glow::TEXTURE_3D {
+                            gl.bind_texture(glow::TEXTURE_3D, None);
+                        }
+                        if target != glow::TEXTURE_CUBE_MAP {
+                            gl.bind_texture(glow::TEXTURE_CUBE_MAP, None);
+                        }
+                    }
                     gl.bind_texture(target, Some(texture));
                 }
                 Self::BindImage {

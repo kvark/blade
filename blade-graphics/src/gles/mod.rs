@@ -9,7 +9,8 @@ use std::{marker::PhantomData, mem, ops::Range};
 
 type BindTarget = u32;
 const DEBUG_ID: u32 = 0;
-const MAX_TIMEOUT: u64 = 1_000_000_000; // MAX_CLIENT_WAIT_TIMEOUT_WEBGL;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_TIMEOUT: u64 = 1_000_000_000;
 const MAX_QUERIES: usize = crate::limits::PASS_COUNT + 1;
 
 bitflags::bitflags! {
@@ -48,6 +49,8 @@ pub struct Surface {
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Buffer {
     raw: glow::Buffer,
+    #[cfg(target_arch = "wasm32")]
+    raw_index: glow::Buffer,
     size: u64,
     data: *mut u8,
 }
@@ -169,6 +172,8 @@ impl Frame {
 #[derive(Clone, Debug)]
 struct BufferPart {
     raw: glow::Buffer,
+    #[cfg(target_arch = "wasm32")]
+    raw_index: glow::Buffer,
     offset: u64,
     data: *mut u8,
 }
@@ -176,6 +181,8 @@ impl From<crate::BufferPiece> for BufferPart {
     fn from(piece: crate::BufferPiece) -> Self {
         Self {
             raw: piece.buffer.raw,
+            #[cfg(target_arch = "wasm32")]
+            raw_index: piece.buffer.raw_index,
             offset: piece.offset,
             data: piece.buffer.data,
         }
@@ -587,17 +594,26 @@ impl crate::traits::CommandDevice for Context {
         SyncPoint { fence }
     }
 
-    fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<bool, crate::DeviceError> {
+    fn wait_for(
+        &self,
+        sp: &SyncPoint,
+        #[allow(unused)] timeout_ms: u32,
+    ) -> Result<bool, crate::DeviceError> {
         use glow::HasContext as _;
 
         let gl = self.lock();
-        let timeout_ns = if timeout_ms == !0 {
-            !0
-        } else {
-            timeout_ms as u64 * 1_000_000
+        // WebGL2: MAX_CLIENT_WAIT_TIMEOUT_WEBGL is 0, blocking is forbidden.
+        #[cfg(target_arch = "wasm32")]
+        let timeout_ns_i32 = 0i32;
+        #[cfg(not(target_arch = "wasm32"))]
+        let timeout_ns_i32 = {
+            let timeout_ns = if timeout_ms == !0 {
+                !0
+            } else {
+                timeout_ms as u64 * 1_000_000
+            };
+            timeout_ns.min(MAX_TIMEOUT) as i32
         };
-        //TODO: https://github.com/grovesNL/glow/issues/287
-        let timeout_ns_i32 = timeout_ns.min(MAX_TIMEOUT) as i32;
 
         let status =
             unsafe { gl.client_wait_sync(sp.fence, glow::SYNC_FLUSH_COMMANDS_BIT, timeout_ns_i32) };

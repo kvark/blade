@@ -669,9 +669,7 @@ impl super::VulkanInstance {
         let core_instance = {
             let mut create_flags = vk::InstanceCreateFlags::empty();
 
-            let mut instance_extensions = vec![
-                vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME,
-            ];
+            let mut instance_extensions = vec![vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME];
             if has_debug_utils {
                 instance_extensions.push(vk::EXT_DEBUG_UTILS_NAME);
             }
@@ -1467,9 +1465,7 @@ impl super::Context {
             .object_handle(object)
             .object_name(&name_cstr);
         if let Some(ref dbg) = self.device.debug_utils {
-            let _ = unsafe {
-                dbg.set_debug_utils_object_name(&name_info)
-            };
+            let _ = unsafe { dbg.set_debug_utils_object_name(&name_info) };
         }
     }
 
