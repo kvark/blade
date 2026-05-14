@@ -127,21 +127,19 @@ impl super::Context {
             crate::DisplaySync::Recent | crate::DisplaySync::Tear => false,
         };
 
-        unsafe {
-            surface.render_layer.setOpaque(!config.transparent);
-            surface.render_layer.setDevice(Some(device.as_ref()));
-            surface
-                .render_layer
-                .setPixelFormat(super::map_texture_format(surface.info.format));
-            surface
-                .render_layer
-                .setFramebufferOnly(config.usage == crate::TextureUsage::TARGET);
-            surface.render_layer.setMaximumDrawableCount(3);
-            surface.render_layer.setDrawableSize(CGSize {
-                width: config.size.width as f64,
-                height: config.size.height as f64,
-            });
-            surface.render_layer.setDisplaySyncEnabled(vsync);
-        }
+        surface.render_layer.setOpaque(!config.transparent);
+        surface.render_layer.setDevice(Some(device.as_ref()));
+        surface
+            .render_layer
+            .setPixelFormat(super::map_texture_format(surface.info.format));
+        surface
+            .render_layer
+            .setFramebufferOnly(config.usage == crate::TextureUsage::TARGET);
+        surface.render_layer.setMaximumDrawableCount(3);
+        surface.render_layer.setDrawableSize(CGSize {
+            width: config.size.width as f64,
+            height: config.size.height as f64,
+        });
+        surface.render_layer.setDisplaySyncEnabled(vsync);
     }
 }

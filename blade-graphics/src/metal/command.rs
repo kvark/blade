@@ -293,7 +293,7 @@ impl super::CommandEncoder {
         targets: crate::RenderTargetSet,
     ) -> super::RenderCommandEncoder<'_> {
         let raw = objc2::rc::autoreleasepool(|_| {
-            let descriptor = unsafe { metal::MTLRenderPassDescriptor::new() };
+            let descriptor = metal::MTLRenderPassDescriptor::new();
 
             for (i, rt) in targets.colors.iter().enumerate() {
                 let at_descriptor =
@@ -432,7 +432,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         }
 
         let queue = self.queue.lock().unwrap();
-        self.raw = Some(objc2::rc::autoreleasepool(|_| unsafe {
+        self.raw = Some(objc2::rc::autoreleasepool(|_| {
             use metal::MTLCommandQueue as _;
             let cmd_buf = queue.commandBufferWithUnretainedReferences().unwrap();
             if !self.name.is_empty() {

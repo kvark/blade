@@ -76,7 +76,7 @@ fn create_stencil_desc(
     read_mask: u32,
     write_mask: u32,
 ) -> Retained<metal::MTLStencilDescriptor> {
-    let desc = unsafe { metal::MTLStencilDescriptor::new() };
+    let desc = metal::MTLStencilDescriptor::new();
     desc.setStencilCompareFunction(super::map_compare_function(face.compare));
     desc.setReadMask(read_mask);
     desc.setWriteMask(write_mask);
@@ -89,7 +89,7 @@ fn create_stencil_desc(
 fn create_depth_stencil_desc(
     state: &crate::DepthStencilState,
 ) -> Retained<metal::MTLDepthStencilDescriptor> {
-    let desc = unsafe { metal::MTLDepthStencilDescriptor::new() };
+    let desc = metal::MTLDepthStencilDescriptor::new();
     desc.setDepthCompareFunction(super::map_compare_function(state.depth_compare));
     desc.setDepthWriteEnabled(state.depth_write_enabled);
 
@@ -314,7 +314,7 @@ impl super::Context {
         let source_string = NSString::from_str(&source);
         let options = metal::MTLCompileOptions::new();
         options.setLanguageVersion(self.info.language_version);
-        unsafe { options.setMathMode(metal::MTLMathMode::Fast) };
+        options.setMathMode(metal::MTLMathMode::Fast);
 
         let library = self
             .device
@@ -478,7 +478,7 @@ impl crate::traits::ShaderDevice for super::Context {
                 None
             };
 
-            let vertex_descriptor = unsafe { metal::MTLVertexDescriptor::new() };
+            let vertex_descriptor = metal::MTLVertexDescriptor::new();
             for (i, vf) in desc.vertex_fetches.iter().enumerate() {
                 unsafe {
                     let buffer_desc = vertex_descriptor.layouts().objectAtIndexedSubscript(i);
@@ -487,15 +487,16 @@ impl crate::traits::ShaderDevice for super::Context {
                         metal::MTLVertexStepFunction::PerInstance
                     } else {
                         metal::MTLVertexStepFunction::PerVertex
-                    })
-                };
+                    });
+                }
             }
             for (i, mapping) in vs.attribute_mappings.into_iter().enumerate() {
                 let vf = &desc.vertex_fetches[mapping.buffer_index];
                 let (_, attrib) = vf.layout.attributes[mapping.attribute_index];
                 let (vertex_format, _) = super::map_vertex_format(attrib.format);
                 unsafe {
-                    let attribute_desc = vertex_descriptor.attributes().objectAtIndexedSubscript(i);
+                    let attribute_desc =
+                        vertex_descriptor.attributes().objectAtIndexedSubscript(i);
                     attribute_desc.setFormat(vertex_format);
                     attribute_desc.setBufferIndex(mapping.buffer_index);
                     attribute_desc.setOffset(attrib.offset as usize);
