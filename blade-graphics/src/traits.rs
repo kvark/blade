@@ -9,6 +9,7 @@ pub trait ResourceDevice {
 
     fn create_buffer(&self, desc: super::BufferDesc) -> Self::Buffer;
     fn sync_buffer(&self, buffer: Self::Buffer);
+    fn sync_buffer_range(&self, buffer: Self::Buffer, offset: u64, size: u64);
     fn destroy_buffer(&self, buffer: Self::Buffer);
     fn create_texture(&self, desc: super::TextureDesc) -> Self::Texture;
     fn destroy_texture(&self, texture: Self::Texture);

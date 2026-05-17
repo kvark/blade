@@ -521,6 +521,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     type Frame = super::Frame;
 
     fn start(&mut self) {
+        log::trace!("CommandEncoder::start()");
         self.buffers.rotate_left(1);
         let cmd_buf = self.buffers.first_mut().unwrap();
         self.device

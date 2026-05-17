@@ -150,6 +150,7 @@ impl super::Context {
 
                     let location = attributes.len() as u32;
                     gl.bind_attrib_location(program, location, attrib_name);
+                    // Naga's GLSL backend prefixes entry point arguments with 'e_'
                     gl.bind_attrib_location(program, location, &format!("e_{}", attrib_name));
 
                     attributes.push(super::VertexAttributeInfo {
@@ -281,6 +282,9 @@ impl super::Context {
                                 unimplemented!()
                             }
                             crate::ShaderBinding::Plain { size } => {
+                                // Naga may emit the uniform block name as the variable name,
+                                // the user-defined type name, or a generated type name (type_N).
+                                // We check all possibilities to find the correct index.
                                 let mut index_opt = gl.get_uniform_block_index(program, glsl_name);
                                 if index_opt.is_none() {
                                     if let Some(ref type_name) = sf.shader.module.types[var.ty].name

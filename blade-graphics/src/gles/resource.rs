@@ -131,6 +131,26 @@ impl crate::traits::ResourceDevice for super::Context {
         }
     }
 
+    fn sync_buffer_range(&self, buffer: super::Buffer, offset: u64, size: u64) {
+        if !self
+            .capabilities
+            .contains(super::Capabilities::BUFFER_STORAGE)
+        {
+            let gl = self.lock();
+            unsafe {
+                let data = slice::from_raw_parts(buffer.data.add(offset as usize), size as usize);
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer.raw));
+                gl.buffer_sub_data_u8_slice(glow::ARRAY_BUFFER, offset as i32, data);
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(buffer.raw_index));
+                    gl.buffer_sub_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, offset as i32, data);
+                }
+            }
+        }
+    }
+
     fn destroy_buffer(&self, buffer: super::Buffer) {
         let gl = self.lock();
         unsafe {

@@ -348,21 +348,14 @@ impl super::Context {
                     (state.0, Some(state.1))
                 } else if client_extensions.contains("EGL_MESA_platform_surfaceless") {
                     log::info!("Using surfaceless platform");
-                    let d = egl1_5.get_platform_display(
-                        EGL_PLATFORM_SURFACELESS_MESA,
-                        ptr::null_mut(),
-                        &[egl::ATTRIB_NONE],
-                    );
-                    match d {
-                        Ok(display) => (display, None),
-                        Err(e) => {
-                            log::warn!(
-                                "Surfaceless platform failed: {:?}, falling back to default",
-                                e
-                            );
-                            (egl.get_display(egl::DEFAULT_DISPLAY).unwrap(), None)
-                        }
-                    }
+                    let display = egl1_5
+                        .get_platform_display(
+                            EGL_PLATFORM_SURFACELESS_MESA,
+                            ptr::null_mut(),
+                            &[egl::ATTRIB_NONE],
+                        )
+                        .unwrap();
+                    (display, None)
                 } else {
                     log::info!("Using default platform");
                     let d = egl

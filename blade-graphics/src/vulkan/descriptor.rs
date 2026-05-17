@@ -18,7 +18,7 @@ pub struct DescriptorPool {
 
 impl super::Device {
     fn create_descriptor_sub_pool(&self, max_sets: u32) -> vk::DescriptorPool {
-        log::info!("Creating a descriptor pool for at most {} sets", max_sets);
+        log::debug!("Creating a descriptor sub-pool for at most {} sets", max_sets);
         let mut descriptor_sizes = vec![
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_BUFFER,
@@ -85,6 +85,7 @@ impl super::Device {
     }
 
     pub(super) fn destroy_descriptor_pool(&self, pool: &mut DescriptorPool) {
+        log::trace!("Destroying descriptor pool ({} sub-pools)", pool.sub_pools.len());
         for sub_pool in pool.sub_pools.drain(..) {
             unsafe { self.core.destroy_descriptor_pool(sub_pool, None) };
         }
@@ -116,12 +117,18 @@ impl super::Device {
     }
 
     pub(super) fn reset_descriptor_pool(&self, pool: &mut DescriptorPool) {
+        if pool.sub_pools.is_empty() {
+            log::error!("reset_descriptor_pool called on empty pool — recreating base pool");
+            let vk_pool = self.create_descriptor_sub_pool(COUNT_BASE);
+            pool.sub_pools.push(vk_pool);
+            pool.growth_iter = 0;
+            return;
+        }
         for vk_pool in pool.sub_pools.drain(1..) {
             unsafe {
                 self.core.destroy_descriptor_pool(vk_pool, None);
             }
         }
-
         unsafe {
             self.core
                 .reset_descriptor_pool(pool.sub_pools[0], vk::DescriptorPoolResetFlags::empty())
