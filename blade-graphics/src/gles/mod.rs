@@ -48,8 +48,7 @@ pub struct Surface {
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Buffer {
     raw: glow::Buffer,
-    #[cfg(target_arch = "wasm32")]
-    raw_index: glow::Buffer,
+    pub target: u32,
     size: u64,
     data: *mut u8,
 }
@@ -171,8 +170,6 @@ impl Frame {
 #[derive(Clone, Debug)]
 struct BufferPart {
     raw: glow::Buffer,
-    #[cfg(target_arch = "wasm32")]
-    raw_index: glow::Buffer,
     offset: u64,
     data: *mut u8,
 }
@@ -180,8 +177,6 @@ impl From<crate::BufferPiece> for BufferPart {
     fn from(piece: crate::BufferPiece) -> Self {
         Self {
             raw: piece.buffer.raw,
-            #[cfg(target_arch = "wasm32")]
-            raw_index: piece.buffer.raw_index,
             offset: piece.offset,
             data: piece.buffer.data,
         }
@@ -252,7 +247,7 @@ enum Command {
     },
     DrawIndexedIndirect {
         topology: u32,
-        raw_index_buf: glow::Buffer,
+        index_buf: BufferPart,
         index_type: u32,
         indirect_buf: BufferPart,
     },

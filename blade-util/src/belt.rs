@@ -12,6 +12,7 @@ pub struct BufferBeltDescriptor {
     pub memory: gpu::Memory,
     pub min_chunk_size: u64,
     pub alignment: u64,
+    pub name: &'static str,
 }
 
 /// A belt of reusable buffer space.
@@ -69,7 +70,7 @@ impl BufferBelt {
         let chunk_index = self.buffers.len() + self.active.len();
         let chunk_size = size.max(self.desc.min_chunk_size);
         let chunk = gpu.create_buffer(gpu::BufferDesc {
-            name: &format!("chunk-{}", chunk_index),
+            name: &format!("chunk-{}-{}", self.desc.name, chunk_index),
             size: chunk_size,
             memory: self.desc.memory,
         });

@@ -37,8 +37,6 @@ impl crate::traits::ResourceDevice for super::Context {
         let gl = self.lock();
 
         let raw = unsafe { gl.create_buffer() }.unwrap();
-        #[cfg(target_arch = "wasm32")]
-        let raw_index = unsafe { gl.create_buffer() }.unwrap();
         let mut data = ptr::null_mut();
 
         let mut storage_flags = 0;
@@ -63,36 +61,29 @@ impl crate::traits::ResourceDevice for super::Context {
             crate::Memory::External(_) => unimplemented!(),
         };
 
+        let target = if desc.name.contains("index") {
+            glow::ELEMENT_ARRAY_BUFFER
+        } else {
+            glow::ARRAY_BUFFER
+        };
+
         unsafe {
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(raw));
-            #[cfg(target_arch = "wasm32")]
-            gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(raw_index));
+            gl.bind_buffer(target, Some(raw));
             if self
                 .capabilities
                 .contains(super::Capabilities::BUFFER_STORAGE)
             {
-                gl.buffer_storage(glow::ARRAY_BUFFER, desc.size as _, None, storage_flags);
-                #[cfg(target_arch = "wasm32")]
-                gl.buffer_storage(
-                    glow::ELEMENT_ARRAY_BUFFER,
-                    desc.size as _,
-                    None,
-                    storage_flags,
-                );
+                gl.buffer_storage(target, desc.size as _, None, storage_flags);
                 if map_flags != 0 {
-                    data = gl.map_buffer_range(glow::ARRAY_BUFFER, 0, desc.size as _, map_flags);
+                    data = gl.map_buffer_range(target, 0, desc.size as _, map_flags);
                     assert!(!data.is_null());
                 }
             } else {
-                gl.buffer_data_size(glow::ARRAY_BUFFER, desc.size as _, usage);
-                #[cfg(target_arch = "wasm32")]
-                gl.buffer_data_size(glow::ELEMENT_ARRAY_BUFFER, desc.size as _, usage);
+                gl.buffer_data_size(target, desc.size as _, usage);
                 let data_vec = vec![0; desc.size as usize];
                 data = Vec::leak(data_vec).as_mut_ptr();
             }
-            gl.bind_buffer(glow::ARRAY_BUFFER, None);
-            #[cfg(target_arch = "wasm32")]
-            gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, None);
+            gl.bind_buffer(target, None);
             #[cfg(not(target_arch = "wasm32"))]
             if !desc.name.is_empty() && gl.supports_debug() {
                 gl.object_label(
@@ -104,8 +95,7 @@ impl crate::traits::ResourceDevice for super::Context {
         }
         super::Buffer {
             raw,
-            #[cfg(target_arch = "wasm32")]
-            raw_index,
+            target,
             size: desc.size,
             data,
         }
@@ -119,14 +109,8 @@ impl crate::traits::ResourceDevice for super::Context {
             let gl = self.lock();
             unsafe {
                 let data = slice::from_raw_parts(buffer.data, buffer.size as usize);
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer.raw));
-                gl.buffer_sub_data_u8_slice(glow::ARRAY_BUFFER, 0, data);
-
-                #[cfg(target_arch = "wasm32")]
-                {
-                    gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(buffer.raw_index));
-                    gl.buffer_sub_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, 0, data);
-                }
+                gl.bind_buffer(buffer.target, Some(buffer.raw));
+                gl.buffer_sub_data_u8_slice(buffer.target, 0, data);
             }
         }
     }
@@ -139,14 +123,8 @@ impl crate::traits::ResourceDevice for super::Context {
             let gl = self.lock();
             unsafe {
                 let data = slice::from_raw_parts(buffer.data.add(offset as usize), size as usize);
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer.raw));
-                gl.buffer_sub_data_u8_slice(glow::ARRAY_BUFFER, offset as i32, data);
-
-                #[cfg(target_arch = "wasm32")]
-                {
-                    gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(buffer.raw_index));
-                    gl.buffer_sub_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, offset as i32, data);
-                }
+                gl.bind_buffer(buffer.target, Some(buffer.raw));
+                gl.buffer_sub_data_u8_slice(buffer.target, offset as i32, data);
             }
         }
     }
@@ -155,8 +133,6 @@ impl crate::traits::ResourceDevice for super::Context {
         let gl = self.lock();
         unsafe {
             gl.delete_buffer(buffer.raw);
-            #[cfg(target_arch = "wasm32")]
-            gl.delete_buffer(buffer.raw_index);
         }
         if !buffer.data.is_null()
             && !self

@@ -135,7 +135,8 @@ impl GuiTexture {
 pub struct GuiPainter {
     pipeline: blade_graphics::RenderPipeline,
     //TODO: find a better way to allocate temporary buffers.
-    belt: BufferBelt,
+    vertex_belt: BufferBelt,
+    index_belt: BufferBelt,
     textures: HashMap<egui::TextureId, GuiTexture>,
     //TODO: this could also look better
     textures_dropped: Vec<GuiTexture>,
@@ -147,7 +148,8 @@ impl GuiPainter {
     /// Destroy the contents of the painter.
     pub fn destroy(&mut self, context: &blade_graphics::Context) {
         context.destroy_render_pipeline(&mut self.pipeline);
-        self.belt.destroy(context);
+        self.vertex_belt.destroy(context);
+        self.index_belt.destroy(context);
         for (_, gui_texture) in self.textures.drain() {
             gui_texture.delete(context);
         }
@@ -230,15 +232,23 @@ impl GuiPainter {
             multisample_state: Default::default(),
         });
 
-        let belt = BufferBelt::new(BufferBeltDescriptor {
+        let vertex_belt = BufferBelt::new(BufferBeltDescriptor {
             memory: blade_graphics::Memory::Shared,
             min_chunk_size: 0x1000,
             alignment: blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
+            name: "vertex",
+        });
+        let index_belt = BufferBelt::new(BufferBeltDescriptor {
+            memory: blade_graphics::Memory::Shared,
+            min_chunk_size: 0x1000,
+            alignment: blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
+            name: "index",
         });
 
         Self {
             pipeline,
-            belt,
+            vertex_belt,
+            index_belt,
             textures: Default::default(),
             textures_dropped: Vec::new(),
             textures_to_free: Vec::new(),
@@ -277,7 +287,7 @@ impl GuiPainter {
         let mut copies = Vec::new();
         for &(texture_id, ref image_delta) in textures_delta.set.iter() {
             let src = match image_delta.image {
-                egui::ImageData::Color(ref c) => self.belt.alloc_pod(c.pixels.as_slice(), context),
+                egui::ImageData::Color(ref c) => self.vertex_belt.alloc_pod(c.pixels.as_slice(), context),
             };
 
             let image_size = image_delta.image.size();
@@ -332,7 +342,7 @@ impl GuiPainter {
             .extend(textures_delta.free.iter().copied());
 
         self.triage_deletions(context);
-        self.belt.trim(4, context);
+        self.vertex_belt.trim(4, context);
     }
 
     /// Render the set of clipped primitives into a render pass.
@@ -387,8 +397,8 @@ impl GuiPainter {
 
             if let egui::epaint::Primitive::Mesh(ref mesh) = clipped_prim.primitive {
                 let texture = self.textures.get(&mesh.texture_id).unwrap();
-                let index_buf = self.belt.alloc_pod(&mesh.indices, context);
-                let vertex_buf = self.belt.alloc_pod(&mesh.vertices, context);
+                let index_buf = self.index_belt.alloc_pod(&mesh.indices, context);
+                let vertex_buf = self.vertex_belt.alloc_pod(&mesh.vertices, context);
 
                 pc.bind(
                     1,
@@ -413,7 +423,8 @@ impl GuiPainter {
     }
 
     pub fn sync(&mut self, context: &blade_graphics::Context) {
-        self.belt.sync(context);
+        self.vertex_belt.sync(context);
+        self.index_belt.sync(context);
     }
 
     /// Call this after submitting work at the given `sync_point`.
@@ -429,6 +440,7 @@ impl GuiPainter {
                 .drain(..)
                 .map(|texture| (texture, sync_point.clone())),
         );
-        self.belt.flush(sync_point);
+        self.vertex_belt.flush(sync_point);
+        self.index_belt.flush(sync_point);
     }
 }

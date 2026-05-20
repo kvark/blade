@@ -676,10 +676,7 @@ impl super::Command {
                     base_vertex,
                     instance_count,
                 } => {
-                    #[cfg(not(target_arch = "wasm32"))]
                     gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(index_buf.raw));
-                    #[cfg(target_arch = "wasm32")]
-                    gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(index_buf.raw_index));
                     match (base_vertex, instance_count) {
                         (0, 1) => gl.draw_elements(
                             topology,
@@ -720,11 +717,11 @@ impl super::Command {
                 }
                 Self::DrawIndexedIndirect {
                     topology,
-                    raw_index_buf,
+                    ref index_buf,
                     index_type,
                     ref indirect_buf,
                 } => {
-                    gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(raw_index_buf));
+                    gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(index_buf.raw));
                     gl.bind_buffer(glow::DRAW_INDIRECT_BUFFER, Some(indirect_buf.raw));
                     gl.draw_elements_indirect_offset(
                         topology,
