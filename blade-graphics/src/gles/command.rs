@@ -1229,8 +1229,7 @@ impl super::Command {
                     target,
                 } => {
                     gl.active_texture(glow::TEXTURE0 + slot);
-                    #[cfg(target_arch = "wasm32")]
-                    {
+                    if cfg!(target_arch = "wasm32") {
                         if target != glow::TEXTURE_2D {
                             gl.bind_texture(glow::TEXTURE_2D, None);
                         }

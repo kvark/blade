@@ -44,9 +44,8 @@ var r_sampler: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    //Note: we always assume rendering to linear color space,
-    // but Egui wants to blend in gamma space, see
-    // https://github.com/emilk/egui/pull/2071
+    //Note: we output sRGB directly because our swapchain is configured as Srgb 
+    // which gives us a Unorm format (no hardware conversion).
     let blended = in.color * textureSample(r_texture, r_sampler, in.tex_coord);
-    return vec4f(linear_from_gamma(blended.xyz), blended.a);
+    return vec4f(blended.xyz, blended.a);
 }

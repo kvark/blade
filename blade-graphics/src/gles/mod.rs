@@ -9,7 +9,6 @@ use std::{marker::PhantomData, mem, ops::Range};
 
 type BindTarget = u32;
 const DEBUG_ID: u32 = 0;
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_TIMEOUT: u64 = 1_000_000_000;
 const MAX_QUERIES: usize = crate::limits::PASS_COUNT + 1;
 
@@ -603,10 +602,9 @@ impl crate::traits::CommandDevice for Context {
 
         let gl = self.lock();
         // WebGL2: MAX_CLIENT_WAIT_TIMEOUT_WEBGL is 0, blocking is forbidden.
-        #[cfg(target_arch = "wasm32")]
-        let timeout_ns_i32 = 0i32;
-        #[cfg(not(target_arch = "wasm32"))]
-        let timeout_ns_i32 = {
+        let timeout_ns_i32 = if cfg!(target_arch = "wasm32") {
+            0i32
+        } else {
             let timeout_ns = if timeout_ms == !0 {
                 !0
             } else {
