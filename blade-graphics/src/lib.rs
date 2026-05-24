@@ -473,6 +473,8 @@ pub enum TextureFormat {
     R32Float,
     Rg32Float,
     Rgba32Float,
+    R8Uint,
+    R16Uint,
     R32Uint,
     Rg32Uint,
     Rgba32Uint,

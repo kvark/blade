@@ -311,7 +311,8 @@ impl super::Context {
                                         program,
                                         index,
                                         glow::UNIFORM_BLOCK_DATA_SIZE,
-                                    ) as u32;
+                                    )
+                                        as u32;
                                     let rounded_up_size = super::round_up_uniform_size(size);
                                     assert!(
                                         expected_size <= rounded_up_size,

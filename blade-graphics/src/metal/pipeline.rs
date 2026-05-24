@@ -495,8 +495,7 @@ impl crate::traits::ShaderDevice for super::Context {
                 let (_, attrib) = vf.layout.attributes[mapping.attribute_index];
                 let (vertex_format, _) = super::map_vertex_format(attrib.format);
                 unsafe {
-                    let attribute_desc =
-                        vertex_descriptor.attributes().objectAtIndexedSubscript(i);
+                    let attribute_desc = vertex_descriptor.attributes().objectAtIndexedSubscript(i);
                     attribute_desc.setFormat(vertex_format);
                     attribute_desc.setBufferIndex(mapping.buffer_index);
                     attribute_desc.setOffset(attrib.offset as usize);

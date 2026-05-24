@@ -287,7 +287,9 @@ impl GuiPainter {
         let mut copies = Vec::new();
         for &(texture_id, ref image_delta) in textures_delta.set.iter() {
             let src = match image_delta.image {
-                egui::ImageData::Color(ref c) => self.vertex_belt.alloc_pod(c.pixels.as_slice(), context),
+                egui::ImageData::Color(ref c) => {
+                    self.vertex_belt.alloc_pod(c.pixels.as_slice(), context)
+                }
             };
 
             let image_size = image_delta.image.size();
@@ -429,7 +431,11 @@ impl GuiPainter {
 
     /// Call this after submitting work at the given `sync_point`.
     #[profiling::function]
-    pub fn after_submit(&mut self, sync_point: &blade_graphics::SyncPoint) {
+    pub fn after_submit(
+        &mut self,
+        sync_point: &blade_graphics::SyncPoint,
+        context: &blade_graphics::Context,
+    ) {
         for texture_id in self.textures_to_free.drain(..) {
             if let Some(texture) = self.textures.remove(&texture_id) {
                 self.textures_dropped.push(texture);
@@ -442,5 +448,7 @@ impl GuiPainter {
         );
         self.vertex_belt.flush(sync_point);
         self.index_belt.flush(sync_point);
+        self.vertex_belt.trim(4, context);
+        self.index_belt.trim(4, context);
     }
 }
