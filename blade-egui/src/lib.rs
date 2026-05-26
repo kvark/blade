@@ -234,13 +234,13 @@ impl GuiPainter {
 
         let vertex_belt = BufferBelt::new(BufferBeltDescriptor {
             memory: blade_graphics::Memory::Shared,
-            min_chunk_size: 0x1000,
+            min_chunk_size: 0x40000,
             alignment: blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
             name: "vertex",
         });
         let index_belt = BufferBelt::new(BufferBeltDescriptor {
             memory: blade_graphics::Memory::Shared,
-            min_chunk_size: 0x1000,
+            min_chunk_size: 0x40000,
             alignment: blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
             name: "index",
         });
@@ -398,7 +398,9 @@ impl GuiPainter {
             });
 
             if let egui::epaint::Primitive::Mesh(ref mesh) = clipped_prim.primitive {
-                let texture = self.textures.get(&mesh.texture_id).unwrap();
+                let Some(texture) = self.textures.get(&mesh.texture_id) else {
+                    continue;
+                };
                 let index_buf = self.index_belt.alloc_pod(&mesh.indices, context);
                 let vertex_buf = self.vertex_belt.alloc_pod(&mesh.vertices, context);
 
