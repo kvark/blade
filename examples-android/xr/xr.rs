@@ -116,6 +116,7 @@ impl Example {
         let command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "xr",
             buffer_count: 1,
+            manual_barriers: false,
         });
         let params_buf = context.create_buffer(gpu::BufferDesc {
             name: "xr-params",

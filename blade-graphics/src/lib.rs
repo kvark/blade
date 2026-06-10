@@ -884,6 +884,10 @@ pub struct CommandEncoderDesc<'a> {
     /// For example, one buffer is being run on GPU while the
     /// other is being actively encoded, which makes 2.
     pub buffer_count: u32,
+    /// When set, automatic memory barriers between passes are
+    /// not inserted. The user is responsible for calling
+    /// `barrier()` on the encoder where synchronization is needed.
+    pub manual_barriers: bool,
 }
 
 pub struct ComputePipelineDesc<'a> {

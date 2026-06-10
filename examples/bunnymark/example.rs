@@ -174,6 +174,7 @@ impl Example {
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "init",
             buffer_count: 1,
+            manual_barriers: false,
         });
         command_encoder.start();
         command_encoder.init_texture(texture);

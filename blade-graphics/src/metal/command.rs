@@ -191,6 +191,8 @@ impl super::CommandEncoder {
         }
     }
 
+    pub fn barrier(&mut self) {}
+
     pub(super) fn finish(&mut self) -> super::RawCommandBuffer {
         if self.has_open_debug_group {
             self.raw.as_mut().unwrap().popDebugGroup();
