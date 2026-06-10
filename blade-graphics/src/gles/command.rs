@@ -107,6 +107,8 @@ impl super::CommandEncoder {
         }
     }
 
+    pub fn barrier(&mut self) {}
+
     fn pass<P>(&mut self, kind: super::PassKind) -> super::PassEncoder<'_, P> {
         super::PassEncoder {
             commands: &mut self.commands,

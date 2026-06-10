@@ -142,6 +142,7 @@ fn main() {
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "matmul",
         buffer_count: 1,
+        manual_barriers: false,
     });
     encoder.start();
     {

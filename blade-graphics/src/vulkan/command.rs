@@ -327,7 +327,9 @@ impl super::CommandEncoder {
     }
 
     fn begin_pass(&mut self, label: &str) {
-        self.barrier();
+        if !self.manual_barriers {
+            self.barrier();
+        }
         self.add_marker(label);
         self.add_timestamp(label);
 
@@ -366,7 +368,7 @@ impl super::CommandEncoder {
         cmd_buf.raw
     }
 
-    fn barrier(&mut self) {
+    pub fn barrier(&mut self) {
         let wa = &self.device.workarounds;
         let barrier = vk::MemoryBarrier {
             src_access_mask: vk::AccessFlags::MEMORY_WRITE | wa.extra_sync_src_access,
