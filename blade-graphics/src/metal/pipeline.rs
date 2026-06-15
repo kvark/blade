@@ -290,6 +290,9 @@ impl super::Context {
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
             zero_initialize_workgroup_memory: false,
             force_loop_bounding: false,
+            task_dispatch_limits: None,
+            mesh_shader_primitive_indices_clamp: true,
+            emit_int_div_checks: true,
         };
 
         let pipeline_options = msl::PipelineOptions {

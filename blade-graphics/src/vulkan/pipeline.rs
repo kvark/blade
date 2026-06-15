@@ -53,10 +53,12 @@ impl super::Context {
             zero_initialize_workgroup_memory: spv::ZeroInitializeWorkgroupMemoryMode::None,
             force_loop_bounding: false,
             ray_query_initialization_tracking: true,
+            trace_ray_argument_validation: true,
             use_storage_input_output_16: false,
             debug_info: None,
             task_dispatch_limits: None,
             mesh_shader_primitive_indices_clamp: true,
+            emit_int_div_checks: true,
         }
     }
 
