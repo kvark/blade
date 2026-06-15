@@ -292,7 +292,7 @@ impl super::Context {
             force_loop_bounding: false,
             task_dispatch_limits: None,
             mesh_shader_primitive_indices_clamp: true,
-            emit_int_div_checks: true,
+            emit_int_div_checks: false,
         };
 
         let pipeline_options = msl::PipelineOptions {
