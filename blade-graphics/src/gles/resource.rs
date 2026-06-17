@@ -61,8 +61,8 @@ impl crate::traits::ResourceDevice for super::Context {
             crate::Memory::External(_) => unimplemented!(),
         };
 
-        let target = if desc.name.contains("index") {
-            glow::ELEMENT_ARRAY_BUFFER
+        let target = if desc.bind_point != 0 {
+            desc.bind_point
         } else {
             glow::ARRAY_BUFFER
         };
@@ -101,21 +101,7 @@ impl crate::traits::ResourceDevice for super::Context {
         }
     }
 
-    fn sync_buffer(&self, buffer: super::Buffer) {
-        if !self
-            .capabilities
-            .contains(super::Capabilities::BUFFER_STORAGE)
-        {
-            let gl = self.lock();
-            unsafe {
-                let data = slice::from_raw_parts(buffer.data, buffer.size as usize);
-                gl.bind_buffer(buffer.target, Some(buffer.raw));
-                gl.buffer_sub_data_u8_slice(buffer.target, 0, data);
-            }
-        }
-    }
-
-    fn sync_buffer_range(&self, buffer: super::Buffer, offset: u64, size: u64) {
+    fn sync_buffer(&self, buffer: super::Buffer, offset: u64, size: u64) {
         if !self
             .capabilities
             .contains(super::Capabilities::BUFFER_STORAGE)
@@ -227,9 +213,6 @@ impl crate::traits::ResourceDevice for super::Context {
                 // assigning the storage.
                 gl.tex_parameter_i32(target, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
                 gl.tex_parameter_i32(target, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
-                gl.tex_parameter_i32(target, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-                gl.tex_parameter_i32(target, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
-                gl.tex_parameter_i32(target, glow::TEXTURE_WRAP_R, glow::CLAMP_TO_EDGE as i32);
 
                 match desc.dimension {
                     crate::TextureDimension::D3 => {

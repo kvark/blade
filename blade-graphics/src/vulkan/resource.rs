@@ -300,6 +300,7 @@ impl super::Context {
             size: (instances.len().max(1) * mem::size_of::<vk::AccelerationStructureInstanceKHR>())
                 as u64,
             memory: crate::Memory::Shared,
+            bind_point: 0,
         });
         let rt = self.device.ray_tracing.as_ref().unwrap();
         for (i, instance) in instances.iter().enumerate() {
@@ -425,8 +426,7 @@ impl crate::traits::ResourceDevice for super::Context {
         }
     }
 
-    fn sync_buffer(&self, _buffer: super::Buffer) {}
-    fn sync_buffer_range(&self, _buffer: super::Buffer, _offset: u64, _size: u64) {}
+    fn sync_buffer(&self, _buffer: super::Buffer, _offset: u64, _size: u64) {}
 
     fn destroy_buffer(&self, buffer: super::Buffer) {
         log::info!(

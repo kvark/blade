@@ -150,8 +150,6 @@ impl super::Context {
 
                     let location = attributes.len() as u32;
                     gl.bind_attrib_location(program, location, attrib_name);
-                    // Naga's GLSL backend prefixes entry point arguments with 'e_'
-                    gl.bind_attrib_location(program, location, &format!("e_{}", attrib_name));
 
                     attributes.push(super::VertexAttributeInfo {
                         attrib,
@@ -251,6 +249,8 @@ impl super::Context {
                                 if let Some(ref location) =
                                     gl.get_uniform_location(program, glsl_name)
                                 {
+                                    // GLES texture units are global; Naga may list the same
+                                    // GLSL sampler name for both the texture and sampler binding.
                                     let slot = *texture_slots
                                         .entry(glsl_name.to_string())
                                         .or_insert_with(|| {
@@ -282,58 +282,18 @@ impl super::Context {
                                 unimplemented!()
                             }
                             crate::ShaderBinding::Plain { size } => {
-                                // Naga may emit the uniform block name as the variable name,
-                                // the user-defined type name, or a generated type name (type_N).
-                                // We check all possibilities to find the correct index.
+                                // Naga reflection name first, then the WGSL struct type name.
                                 let mut index_opt = gl.get_uniform_block_index(program, glsl_name);
                                 if index_opt.is_none() {
-                                    if let Some(ref type_name) = sf.shader.module.types[var.ty].name
+                                    if let Some(ref type_name) =
+                                        sf.shader.module.types[var.ty].name
                                     {
-                                        index_opt = gl.get_uniform_block_index(program, type_name);
-                                    }
-                                }
-                                if index_opt.is_none() {
-                                    let type_name = format!("type_{}", var.ty.index());
-                                    index_opt = gl.get_uniform_block_index(program, &type_name);
-                                }
-                                if index_opt.is_none() {
-                                    let num_blocks = gl.get_program_parameter_i32(
-                                        program,
-                                        glow::ACTIVE_UNIFORM_BLOCKS,
-                                    );
-                                    if num_blocks == 1 {
-                                        index_opt = Some(0);
+                                        index_opt =
+                                            gl.get_uniform_block_index(program, type_name);
                                     }
                                 }
 
-                                if let Some(index) = index_opt {
-                                    let expected_size = gl.get_active_uniform_block_parameter_i32(
-                                        program,
-                                        index,
-                                        glow::UNIFORM_BLOCK_DATA_SIZE,
-                                    )
-                                        as u32;
-                                    let rounded_up_size = super::round_up_uniform_size(size);
-                                    assert!(
-                                        expected_size <= rounded_up_size,
-                                        "Shader expects block[{}] size {}, but data has size of {} (rounded up to {})",
-                                        index,
-                                        expected_size,
-                                        size,
-                                        rounded_up_size,
-                                    );
-                                    let slot = if force_uniform_block_assignment {
-                                        gl.uniform_block_binding(program, index, index);
-                                        index
-                                    } else {
-                                        gl.get_active_uniform_block_parameter_i32(
-                                            program,
-                                            index,
-                                            glow::UNIFORM_BLOCK_BINDING,
-                                        ) as u32
-                                    };
-                                    targets.push(slot);
-                                } else {
+                                let index = index_opt.unwrap_or_else(|| {
                                     let num_blocks = gl.get_program_parameter_i32(
                                         program,
                                         glow::ACTIVE_UNIFORM_BLOCKS,
@@ -342,15 +302,43 @@ impl super::Context {
                                     for i in 0..num_blocks {
                                         let name =
                                             gl.get_active_uniform_block_name(program, i as u32);
-                                        available_blocks.push_str(&format!("{}, ", name));
+                                        available_blocks.push_str(&format!("'{name}', "));
                                     }
-                                    log::error!(
-                                        "Failed to find uniform block for variable '{}' (type '{:?}'). Available blocks: {}",
+                                    panic!(
+                                        "Uniform block for '{}' (WGSL type {:?}) not found. \
+                                         Available blocks: [{}]. \
+                                         Name the uniform struct in WGSL so Naga can reflect it.",
                                         glsl_name,
                                         sf.shader.module.types[var.ty].name,
                                         available_blocks
                                     );
-                                }
+                                });
+
+                                let expected_size = gl.get_active_uniform_block_parameter_i32(
+                                    program,
+                                    index,
+                                    glow::UNIFORM_BLOCK_DATA_SIZE,
+                                ) as u32;
+                                let rounded_up_size = super::round_up_uniform_size(size);
+                                assert!(
+                                    expected_size <= rounded_up_size,
+                                    "Shader expects block[{}] size {}, but data has size of {} (rounded up to {})",
+                                    index,
+                                    expected_size,
+                                    size,
+                                    rounded_up_size,
+                                );
+                                let slot = if force_uniform_block_assignment {
+                                    gl.uniform_block_binding(program, index, index);
+                                    index
+                                } else {
+                                    gl.get_active_uniform_block_parameter_i32(
+                                        program,
+                                        index,
+                                        glow::UNIFORM_BLOCK_BINDING,
+                                    ) as u32
+                                };
+                                targets.push(slot);
                             }
                         }
                     }

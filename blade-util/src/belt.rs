@@ -13,6 +13,8 @@ pub struct BufferBeltDescriptor {
     pub min_chunk_size: u64,
     pub alignment: u64,
     pub name: &'static str,
+    /// GLES/WebGL: `glow::ARRAY_BUFFER` or `glow::ELEMENT_ARRAY_BUFFER`.
+    pub bind_point: u32,
 }
 
 /// A belt of reusable buffer space.
@@ -73,6 +75,7 @@ impl BufferBelt {
             name: &format!("chunk-{}-{}", self.desc.name, chunk_index),
             size: chunk_size,
             memory: self.desc.memory,
+            bind_point: self.desc.bind_point,
         });
         let rb = ReusableBuffer {
             raw: chunk,
@@ -123,7 +126,7 @@ impl BufferBelt {
 
     pub fn sync(&self, gpu: &gpu::Context) {
         for (rb, _) in &self.active {
-            gpu.sync_buffer(rb.raw);
+            gpu.sync_buffer(rb.raw, 0, rb.size);
         }
     }
 

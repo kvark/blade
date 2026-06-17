@@ -37,6 +37,8 @@ pub struct Context {
     toggles: Toggles,
     limits: Limits,
     device_information: crate::DeviceInformation,
+    /// WebGL2 context (wasm); native EGL is false.
+    is_webgl: bool,
 }
 
 pub struct Surface {
@@ -596,16 +598,15 @@ impl crate::traits::CommandDevice for Context {
         use glow::HasContext as _;
 
         let gl = self.lock();
-        // WebGL2: MAX_CLIENT_WAIT_TIMEOUT_WEBGL is 0, blocking is forbidden.
-        let timeout_ns_i32 = if cfg!(target_arch = "wasm32") {
+        // WebGL2: MAX_CLIENT_WAIT_TIMEOUT_WEBGL is 0, blocking is forbidden on the main thread.
+        const MAX_CLIENT_WAIT_TIMEOUT_WEBGL: u32 = 0x9246;
+        let timeout_ns_i32 = if self.is_webgl {
+            let _max_wait =
+                unsafe { gl.get_parameter_i32(MAX_CLIENT_WAIT_TIMEOUT_WEBGL) };
             0i32
         } else {
-            let timeout_ns = if timeout_ms == !0 {
-                !0
-            } else {
-                timeout_ms as u64 * 1_000_000
-            };
-            timeout_ns.min(MAX_TIMEOUT) as i32
+            //TODO: https://github.com/grovesNL/glow/issues/287
+            (timeout_ms as u64 * 1_000_000).min(MAX_TIMEOUT) as i32
         };
 
         let status =

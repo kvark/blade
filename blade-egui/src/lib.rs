@@ -199,6 +199,15 @@ impl GuiPainter {
                 ),
             ],
         };
+        // Fragment entry contract: Linear/sRGB-capable swapchains (Vulkan, Metal, EGL) use
+        // `fs_main` (gamma→linear output). Plain UNORM surfaces (WebGL blit to HTML canvas)
+        // use `fs_main_srgb` (gamma passthrough). WebGL is the only backend that reports
+        // Rgba8Unorm here; embedders with other UNORM targets should pick the srgb entry likewise.
+        let fragment_entry = if matches!(info.format, blade_graphics::TextureFormat::Rgba8Unorm) {
+            "fs_main_srgb"
+        } else {
+            "fs_main"
+        };
         let pipeline = context.create_render_pipeline(blade_graphics::RenderPipelineDesc {
             name: "gui",
             data_layouts: &[&globals_layout, &locals_layout],
@@ -212,7 +221,7 @@ impl GuiPainter {
                 ..Default::default()
             },
             depth_stencil: None, //TODO?
-            fragment: Some(shader.at("fs_main")),
+            fragment: Some(shader.at(fragment_entry)),
             color_targets: &[blade_graphics::ColorTargetState {
                 format: info.format,
                 blend: Some(blade_graphics::BlendState {
@@ -237,12 +246,14 @@ impl GuiPainter {
             min_chunk_size: 0x40000,
             alignment: blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
             name: "vertex",
+            bind_point: 0x8892, // glow::ARRAY_BUFFER
         });
         let index_belt = BufferBelt::new(BufferBeltDescriptor {
             memory: blade_graphics::Memory::Shared,
             min_chunk_size: 0x40000,
             alignment: blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
             name: "index",
+            bind_point: 0x8893, // glow::ELEMENT_ARRAY_BUFFER
         });
 
         Self {

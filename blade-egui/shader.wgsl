@@ -6,8 +6,7 @@ struct VertexOutput {
 
 struct Uniforms {
     screen_size: vec2<f32>,
-    convert_to_linear: f32,
-    padding: f32,
+    padding: vec2<f32>,
 };
 var<uniform> r_uniforms: Uniforms;
 
@@ -42,10 +41,21 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 var r_texture: texture_2d<f32>;
 var r_sampler: sampler;
 
+// Egui blends in gamma space, see https://github.com/emilk/egui/pull/2071
+fn blended_color(in: VertexOutput) -> vec4<f32> {
+    return in.color * textureSample(r_texture, r_sampler, in.tex_coord);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    //Note: we output sRGB directly because our swapchain is configured as Srgb 
-    // which gives us a Unorm format (no hardware conversion).
-    let blended = in.color * textureSample(r_texture, r_sampler, in.tex_coord);
+    // ColorSpace::Linear swapchain (Vulkan/Metal/EGL sRGB storage).
+    let blended = blended_color(in);
+    return vec4f(linear_from_gamma(blended.xyz), blended.a);
+}
+
+@fragment
+fn fs_main_srgb(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Plain UNORM canvas (WebGL blit to HTML canvas): output gamma-space directly.
+    let blended = blended_color(in);
     return vec4f(blended.xyz, blended.a);
 }

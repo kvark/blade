@@ -96,6 +96,7 @@ impl super::Context {
             toggles: super::Toggles::default(),
             limits,
             device_information,
+            is_webgl: true,
         })
     }
 
@@ -126,16 +127,6 @@ impl super::Context {
         let format_desc = super::describe_texture_format(surface.platform.info.format);
         let gl = &self.platform.glow;
         //Note: this code can be shared with EGL
-        let canvas = web_sys::window()
-            .unwrap()
-            .document()
-            .unwrap()
-            .get_element_by_id("blade")
-            .unwrap()
-            .dyn_into::<web_sys::HtmlCanvasElement>()
-            .unwrap();
-        canvas.set_width(config.size.width);
-        canvas.set_height(config.size.height);
 
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(surface.offscreen_texture));
