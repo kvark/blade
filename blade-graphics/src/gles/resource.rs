@@ -61,29 +61,23 @@ impl crate::traits::ResourceDevice for super::Context {
             crate::Memory::External(_) => unimplemented!(),
         };
 
-        let target = if desc.bind_point != 0 {
-            desc.bind_point
-        } else {
-            glow::ARRAY_BUFFER
-        };
-
         unsafe {
-            gl.bind_buffer(target, Some(raw));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(raw));
             if self
                 .capabilities
                 .contains(super::Capabilities::BUFFER_STORAGE)
             {
-                gl.buffer_storage(target, desc.size as _, None, storage_flags);
+                gl.buffer_storage(glow::ARRAY_BUFFER, desc.size as _, None, storage_flags);
                 if map_flags != 0 {
-                    data = gl.map_buffer_range(target, 0, desc.size as _, map_flags);
+                    data = gl.map_buffer_range(glow::ARRAY_BUFFER, 0, desc.size as _, map_flags);
                     assert!(!data.is_null());
                 }
             } else {
-                gl.buffer_data_size(target, desc.size as _, usage);
+                gl.buffer_data_size(glow::ARRAY_BUFFER, desc.size as _, usage);
                 let data_vec = vec![0; desc.size as usize];
                 data = Vec::leak(data_vec).as_mut_ptr();
             }
-            gl.bind_buffer(target, None);
+            gl.bind_buffer(glow::ARRAY_BUFFER, None);
             #[cfg(not(target_arch = "wasm32"))]
             if !desc.name.is_empty() && gl.supports_debug() {
                 gl.object_label(
@@ -95,7 +89,6 @@ impl crate::traits::ResourceDevice for super::Context {
         }
         super::Buffer {
             raw,
-            target,
             size: desc.size,
             data,
         }
@@ -109,8 +102,9 @@ impl crate::traits::ResourceDevice for super::Context {
             let gl = self.lock();
             unsafe {
                 let data = slice::from_raw_parts(buffer.data.add(offset as usize), size as usize);
-                gl.bind_buffer(buffer.target, Some(buffer.raw));
-                gl.buffer_sub_data_u8_slice(buffer.target, offset as i32, data);
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer.raw));
+                gl.buffer_sub_data_u8_slice(glow::ARRAY_BUFFER, offset as i32, data);
+                gl.bind_buffer(glow::ARRAY_BUFFER, None);
             }
         }
     }

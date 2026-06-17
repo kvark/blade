@@ -350,8 +350,6 @@ pub struct BufferDesc<'a> {
     pub name: &'a str,
     pub size: u64,
     pub memory: Memory,
-    /// GLES/WebGL: `glow::ARRAY_BUFFER` or `glow::ELEMENT_ARRAY_BUFFER`. Ignored on other backends.
-    pub bind_point: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
