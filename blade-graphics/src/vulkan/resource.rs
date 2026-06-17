@@ -300,7 +300,6 @@ impl super::Context {
             size: (instances.len().max(1) * mem::size_of::<vk::AccelerationStructureInstanceKHR>())
                 as u64,
             memory: crate::Memory::Shared,
-            bind_point: 0,
         });
         let rt = self.device.ray_tracing.as_ref().unwrap();
         for (i, instance) in instances.iter().enumerate() {

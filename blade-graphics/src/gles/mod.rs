@@ -50,7 +50,6 @@ pub struct Surface {
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Buffer {
     raw: glow::Buffer,
-    pub target: u32,
     size: u64,
     data: *mut u8,
 }

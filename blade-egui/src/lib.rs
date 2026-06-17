@@ -246,14 +246,12 @@ impl GuiPainter {
             min_chunk_size: 0x40000,
             alignment: blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
             name: "vertex",
-            bind_point: 0x8892, // glow::ARRAY_BUFFER
         });
         let index_belt = BufferBelt::new(BufferBeltDescriptor {
             memory: blade_graphics::Memory::Shared,
             min_chunk_size: 0x40000,
             alignment: blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
             name: "index",
-            bind_point: 0x8893, // glow::ELEMENT_ARRAY_BUFFER
         });
 
         Self {
@@ -356,6 +354,7 @@ impl GuiPainter {
 
         self.triage_deletions(context);
         self.vertex_belt.trim(4, context);
+        self.index_belt.trim(4, context);
     }
 
     /// Render the set of clipped primitives into a render pass.
@@ -447,7 +446,6 @@ impl GuiPainter {
     pub fn after_submit(
         &mut self,
         sync_point: &blade_graphics::SyncPoint,
-        context: &blade_graphics::Context,
     ) {
         for texture_id in self.textures_to_free.drain(..) {
             if let Some(texture) = self.textures.remove(&texture_id) {
@@ -461,7 +459,5 @@ impl GuiPainter {
         );
         self.vertex_belt.flush(sync_point);
         self.index_belt.flush(sync_point);
-        self.vertex_belt.trim(4, context);
-        self.index_belt.trim(4, context);
     }
 }

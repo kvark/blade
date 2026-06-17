@@ -132,7 +132,7 @@ impl Example {
                 texture_data.len(),
             );
         }
-        context.sync_buffer(upload_buffer);
+        context.sync_buffer(upload_buffer, 0, upload_buffer.size());
 
         let sampler = context.create_sampler(gpu::SamplerDesc {
             name: "main",
@@ -157,7 +157,7 @@ impl Example {
                 vertex_data.len(),
             );
         }
-        context.sync_buffer(vertex_buf);
+        context.sync_buffer(vertex_buf, 0, vertex_buf.size());
 
         let bunnies = vec![Sprite {
             data: SpriteData {

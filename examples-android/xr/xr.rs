@@ -197,7 +197,7 @@ impl Example {
                 *(self.params_buf.data().offset(params_offset) as *mut Uniforms) = uniforms;
             }
         }
-        context.sync_buffer(self.params_buf);
+        context.sync_buffer(self.params_buf, 0, self.params_buf.size());
 
         for eye in 0..view_count {
             let eye_view = frame.xr_texture_view(eye);
