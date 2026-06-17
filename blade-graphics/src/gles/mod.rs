@@ -601,8 +601,7 @@ impl crate::traits::CommandDevice for Context {
         // WebGL2: MAX_CLIENT_WAIT_TIMEOUT_WEBGL is 0, blocking is forbidden on the main thread.
         const MAX_CLIENT_WAIT_TIMEOUT_WEBGL: u32 = 0x9246;
         let timeout_ns_i32 = if self.is_webgl {
-            let _max_wait =
-                unsafe { gl.get_parameter_i32(MAX_CLIENT_WAIT_TIMEOUT_WEBGL) };
+            let _max_wait = unsafe { gl.get_parameter_i32(MAX_CLIENT_WAIT_TIMEOUT_WEBGL) };
             0i32
         } else {
             //TODO: https://github.com/grovesNL/glow/issues/287

@@ -675,14 +675,7 @@ impl super::Context {
         inner.egl.unmake_current();
 
         // Direct path: create window surface on the main display
-        self.reconfigure_surface_direct(
-            surface,
-            &inner,
-            config.size,
-            format,
-            alpha,
-            swap_interval,
-        );
+        self.reconfigure_surface_direct(surface, &inner, config.size, format, alpha, swap_interval);
     }
 
     /// Direct presentation path: create a window surface on the main EGL display.

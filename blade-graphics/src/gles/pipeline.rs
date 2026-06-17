@@ -285,11 +285,9 @@ impl super::Context {
                                 // Naga reflection name first, then the WGSL struct type name.
                                 let mut index_opt = gl.get_uniform_block_index(program, glsl_name);
                                 if index_opt.is_none() {
-                                    if let Some(ref type_name) =
-                                        sf.shader.module.types[var.ty].name
+                                    if let Some(ref type_name) = sf.shader.module.types[var.ty].name
                                     {
-                                        index_opt =
-                                            gl.get_uniform_block_index(program, type_name);
+                                        index_opt = gl.get_uniform_block_index(program, type_name);
                                     }
                                 }
 
