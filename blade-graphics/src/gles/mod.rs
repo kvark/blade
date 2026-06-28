@@ -598,10 +598,15 @@ impl crate::traits::CommandDevice for Context {
         use glow::HasContext as _;
 
         let gl = self.lock();
-        // WebGL2: MAX_CLIENT_WAIT_TIMEOUT_WEBGL is 0, blocking is forbidden on the main thread.
-        const MAX_CLIENT_WAIT_TIMEOUT_WEBGL: u32 = 0x9246;
         let timeout_ns_i32 = if self.is_webgl {
-            let _max_wait = unsafe { gl.get_parameter_i32(MAX_CLIENT_WAIT_TIMEOUT_WEBGL) };
+            // WebGL2 forbids blocking client waits on the main thread (its max
+            // timeout is 0), so just poll with timeout 0. Do NOT query
+            // MAX_CLIENT_WAIT_TIMEOUT_WEBGL here: getParameter is a synchronous
+            // GPU-process round-trip and `wait_for` runs several times per frame
+            // (frame throttle + belt alloc/trim), so a per-call query stalls
+            // WebGL hard — the 600-bot FPS cliff. Native is unaffected (is_webgl
+            // is false there). Commit 6adf666 added that query; it does nothing
+            // useful (result was discarded).
             0i32
         } else {
             //TODO: https://github.com/grovesNL/glow/issues/287

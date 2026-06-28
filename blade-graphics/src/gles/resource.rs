@@ -109,9 +109,12 @@ impl crate::traits::ResourceDevice for super::Context {
             let gl = self.lock();
             unsafe {
                 let data = slice::from_raw_parts(buffer.data.add(offset as usize), size as usize);
-                gl.bind_buffer(buffer.target, Some(buffer.raw));
-                gl.buffer_sub_data_u8_slice(buffer.target, offset as i32, data);
-                gl.bind_buffer(buffer.target, None);
+                // Use COPY_WRITE_BUFFER to upload data. This is a neutral target under WebGL2 / ES3.0
+                // that does not alter the active VAO's ELEMENT_ARRAY_BUFFER binding or vertex attributes.
+                // This avoids VAO thrashing and expensive per-draw validation, while letting us safely unbind.
+                gl.bind_buffer(glow::COPY_WRITE_BUFFER, Some(buffer.raw));
+                gl.buffer_sub_data_u8_slice(glow::COPY_WRITE_BUFFER, offset as i32, data);
+                gl.bind_buffer(glow::COPY_WRITE_BUFFER, None);
             }
         }
     }
