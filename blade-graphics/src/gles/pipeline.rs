@@ -146,7 +146,11 @@ impl super::Context {
 
                 for mapping in attribute_mappings {
                     let vf = &vertex_fetch_states[mapping.buffer_index];
-                    let (_, attrib) = vf.layout.attributes[mapping.attribute_index];
+                    let (attrib_name, attrib) = vf.layout.attributes[mapping.attribute_index];
+
+                    let location = attributes.len() as u32;
+                    gl.bind_attrib_location(program, location, attrib_name);
+
                     attributes.push(super::VertexAttributeInfo {
                         attrib,
                         buffer_index: mapping.buffer_index as u32,
@@ -208,6 +212,8 @@ impl super::Context {
             if !force_explicit_bindings {
                 let force_uniform_block_assignment = true;
                 let mut variables_to_bind = Vec::new();
+                let mut texture_slots = std::collections::HashMap::new();
+                let mut next_texture_slot = 0i32;
                 for (sf, baked_shader) in shaders.iter().zip(baked_shaders.iter()) {
                     let reflection = &baked_shader.1;
                     for (glsl_name, mapping) in reflection.texture_mapping.iter() {
@@ -243,9 +249,17 @@ impl super::Context {
                                 if let Some(ref location) =
                                     gl.get_uniform_location(program, glsl_name)
                                 {
-                                    let mut slots = [0i32];
-                                    gl.get_uniform_i32(program, location, &mut slots);
-                                    targets.push(slots[0] as u32);
+                                    // GLES texture units are global; Naga may list the same
+                                    // GLSL sampler name for both the texture and sampler binding.
+                                    let slot = *texture_slots
+                                        .entry(glsl_name.to_string())
+                                        .or_insert_with(|| {
+                                            let s = next_texture_slot;
+                                            gl.uniform_1_i32(Some(location), s);
+                                            next_texture_slot += 1;
+                                            s
+                                        });
+                                    targets.push(slot as u32);
                                 }
                             }
                             crate::ShaderBinding::Buffer => {
@@ -268,35 +282,61 @@ impl super::Context {
                                 unimplemented!()
                             }
                             crate::ShaderBinding::Plain { size } => {
-                                if let Some(index) = gl.get_uniform_block_index(program, glsl_name)
-                                {
-                                    let expected_size = gl.get_active_uniform_block_parameter_i32(
+                                // Naga reflection name first, then the WGSL struct type name.
+                                let mut index_opt = gl.get_uniform_block_index(program, glsl_name);
+                                if index_opt.is_none() {
+                                    if let Some(ref type_name) = sf.shader.module.types[var.ty].name
+                                    {
+                                        index_opt = gl.get_uniform_block_index(program, type_name);
+                                    }
+                                }
+
+                                let index = index_opt.unwrap_or_else(|| {
+                                    let num_blocks = gl.get_program_parameter_i32(
+                                        program,
+                                        glow::ACTIVE_UNIFORM_BLOCKS,
+                                    );
+                                    let mut available_blocks = String::new();
+                                    for i in 0..num_blocks {
+                                        let name =
+                                            gl.get_active_uniform_block_name(program, i as u32);
+                                        available_blocks.push_str(&format!("'{name}', "));
+                                    }
+                                    panic!(
+                                        "Uniform block for '{}' (WGSL type {:?}) not found. \
+                                         Available blocks: [{}]. \
+                                         Name the uniform struct in WGSL so Naga can reflect it.",
+                                        glsl_name,
+                                        sf.shader.module.types[var.ty].name,
+                                        available_blocks
+                                    );
+                                });
+
+                                let expected_size = gl.get_active_uniform_block_parameter_i32(
+                                    program,
+                                    index,
+                                    glow::UNIFORM_BLOCK_DATA_SIZE,
+                                ) as u32;
+                                let rounded_up_size = super::round_up_uniform_size(size);
+                                assert!(
+                                    expected_size <= rounded_up_size,
+                                    "Shader expects block[{}] size {}, but data has size of {} (rounded up to {})",
+                                    index,
+                                    expected_size,
+                                    size,
+                                    rounded_up_size,
+                                );
+                                let slot = if force_uniform_block_assignment {
+                                    gl.uniform_block_binding(program, index, index);
+                                    index
+                                } else {
+                                    gl.get_active_uniform_block_parameter_i32(
                                         program,
                                         index,
-                                        glow::UNIFORM_BLOCK_DATA_SIZE,
-                                    )
-                                        as u32;
-                                    let rounded_up_size = super::round_up_uniform_size(size);
-                                    assert!(
-                                        expected_size <= rounded_up_size,
-                                        "Shader expects block[{}] size {}, but data has size of {} (rounded up to {})",
-                                        index,
-                                        expected_size,
-                                        size,
-                                        rounded_up_size,
-                                    );
-                                    let slot = if force_uniform_block_assignment {
-                                        gl.uniform_block_binding(program, index, index);
-                                        index
-                                    } else {
-                                        gl.get_active_uniform_block_parameter_i32(
-                                            program,
-                                            index,
-                                            glow::UNIFORM_BLOCK_BINDING,
-                                        ) as u32
-                                    };
-                                    targets.push(slot);
-                                }
+                                        glow::UNIFORM_BLOCK_BINDING,
+                                    ) as u32
+                                };
+                                targets.push(slot);
                             }
                         }
                     }

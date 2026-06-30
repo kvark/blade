@@ -96,6 +96,7 @@ impl super::Context {
             toggles: super::Toggles::default(),
             limits,
             device_information,
+            is_webgl: true,
         })
     }
 
@@ -126,6 +127,7 @@ impl super::Context {
         let format_desc = super::describe_texture_format(surface.platform.info.format);
         let gl = &self.platform.glow;
         //Note: this code can be shared with EGL
+
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(surface.offscreen_texture));
             gl.tex_image_2d(

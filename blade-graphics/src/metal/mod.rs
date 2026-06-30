@@ -346,6 +346,8 @@ fn map_texture_format(format: crate::TextureFormat) -> metal::MTLPixelFormat {
         Tf::R32Float => Mpf::R32Float,
         Tf::Rg32Float => Mpf::RG32Float,
         Tf::Rgba32Float => Mpf::RGBA32Float,
+        Tf::R8Uint => Mpf::R8Uint,
+        Tf::R16Uint => Mpf::R16Uint,
         Tf::R32Uint => Mpf::R32Uint,
         Tf::Rg32Uint => Mpf::RG32Uint,
         Tf::Rgba32Uint => Mpf::RGBA32Uint,
@@ -492,9 +494,9 @@ impl Context {
         let mut timestamp_counter_set = None;
         if desc.timing {
             use metal::MTLCounterSet as _;
-            if let Some(counter_sets) = unsafe { device.counterSets() } {
+            if let Some(counter_sets) = device.counterSets() {
                 for counter_set in counter_sets {
-                    let name = unsafe { counter_set.name() };
+                    let name = counter_set.name();
                     if name.to_string() == "timestamp" {
                         timestamp_counter_set = Some(counter_set);
                     }
@@ -631,23 +633,24 @@ impl crate::traits::CommandDevice for Context {
 
         let timing_datas = if let Some(ref counter_set) = self.timestamp_counter_set {
             let mut array = Vec::with_capacity(desc.buffer_count as usize);
-            let csb_desc = unsafe {
-                let desc = metal::MTLCounterSampleBufferDescriptor::new();
-                desc.setCounterSet(Some(counter_set));
-                desc.setStorageMode(metal::MTLStorageMode::Shared);
-                desc.setSampleCount(MAX_TIMESTAMPS);
-                desc
+            let csb_desc = {
+                let d = metal::MTLCounterSampleBufferDescriptor::new();
+                d.setCounterSet(Some(counter_set));
+                d.setStorageMode(metal::MTLStorageMode::Shared);
+                unsafe {
+                    d.setSampleCount(MAX_TIMESTAMPS);
+                }
+                d
             };
             for i in 0..desc.buffer_count {
                 let label = format!("{}/counter{}", desc.name, i);
-                let sample_buffer = unsafe {
-                    csb_desc.setLabel(&objc2_foundation::NSString::from_str(&label));
-                    self.device
-                        .lock()
-                        .unwrap()
-                        .newCounterSampleBufferWithDescriptor_error(&csb_desc)
-                        .unwrap()
-                };
+                csb_desc.setLabel(&objc2_foundation::NSString::from_str(&label));
+                let sample_buffer = self
+                    .device
+                    .lock()
+                    .unwrap()
+                    .newCounterSampleBufferWithDescriptor_error(&csb_desc)
+                    .unwrap();
                 array.push(TimingData {
                     sample_buffer,
                     pass_names: Vec::new(),

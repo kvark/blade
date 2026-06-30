@@ -664,13 +664,15 @@ impl super::VulkanInstance {
             .map(|ext_prop| unsafe { ffi::CStr::from_ptr(ext_prop.extension_name.as_ptr()) })
             .collect::<Vec<_>>();
 
+        let has_debug_utils = supported_instance_extensions.contains(&vk::EXT_DEBUG_UTILS_NAME);
+
         let core_instance = {
             let mut create_flags = vk::InstanceCreateFlags::empty();
 
-            let mut instance_extensions = vec![
-                vk::EXT_DEBUG_UTILS_NAME,
-                vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME,
-            ];
+            let mut instance_extensions = vec![vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME];
+            if has_debug_utils {
+                instance_extensions.push(vk::EXT_DEBUG_UTILS_NAME);
+            }
             if desc.presentation {
                 instance_extensions.push(vk::KHR_SURFACE_NAME);
                 instance_extensions.push(vk::KHR_GET_SURFACE_CAPABILITIES2_NAME);
@@ -754,7 +756,11 @@ impl super::VulkanInstance {
 
         let instance =
             super::Instance {
-                _debug_utils: ext::debug_utils::Instance::new(&entry, &core_instance),
+                _debug_utils: if has_debug_utils {
+                    Some(ext::debug_utils::Instance::new(&entry, &core_instance))
+                } else {
+                    None
+                },
                 get_physical_device_properties2:
                     khr::get_physical_device_properties2::Instance::new(&entry, &core_instance),
                 cooperative_matrix: khr::cooperative_matrix::Instance::new(&entry, &core_instance),
@@ -904,16 +910,18 @@ impl super::Context {
                 .map_err(crate::PlatformError::init)?
                 .into_iter()
                 .find_map(|phd| {
-                    inspect_adapter(
+                    let result = inspect_adapter(
                         phd,
                         &inner.instance,
                         inner.driver_api_version,
                         &desc,
                         &gpu_vendors,
                         display_server,
-                    )
-                    .ok()
-                    .map(|caps| (phd, caps))
+                    );
+                    if let Err(ref e) = result {
+                        log::error!("Adapter rejected: {}", e);
+                    }
+                    result.ok().map(|caps| (phd, caps))
                 })
                 .ok_or(NotSupportedError::NoSupportedDeviceFound)?
         };
@@ -1161,7 +1169,11 @@ impl super::Context {
             } else {
                 None
             },
-            debug_utils: ext::debug_utils::Device::new(&instance.core, &device_core),
+            debug_utils: if instance._debug_utils.is_some() {
+                Some(ext::debug_utils::Device::new(&instance.core, &device_core))
+            } else {
+                None
+            },
             timeline_semaphore: khr::timeline_semaphore::Device::new(&instance.core, &device_core),
             dynamic_rendering: khr::dynamic_rendering::Device::new(&instance.core, &device_core),
             ray_tracing: if let Some(ref caps) = capabilities.ray_tracing {
@@ -1452,11 +1464,9 @@ impl super::Context {
         let name_info = vk::DebugUtilsObjectNameInfoEXT::default()
             .object_handle(object)
             .object_name(&name_cstr);
-        let _ = unsafe {
-            self.device
-                .debug_utils
-                .set_debug_utils_object_name(&name_info)
-        };
+        if let Some(ref dbg) = self.device.debug_utils {
+            let _ = unsafe { dbg.set_debug_utils_object_name(&name_info) };
+        }
     }
 
     pub fn capabilities(&self) -> crate::Capabilities {

@@ -24,7 +24,7 @@ const MAX_XR_EYES: usize = 2;
 
 struct Instance {
     core: ash::Instance,
-    _debug_utils: ash::ext::debug_utils::Instance,
+    _debug_utils: Option<ash::ext::debug_utils::Instance>,
     get_physical_device_properties2: khr::get_physical_device_properties2::Instance,
     cooperative_matrix: khr::cooperative_matrix::Instance,
     get_surface_capabilities2: Option<khr::get_surface_capabilities2::Instance>,
@@ -56,7 +56,7 @@ struct Device {
     core: ash::Device,
     device_information: crate::DeviceInformation,
     swapchain: Option<khr::swapchain::Device>,
-    debug_utils: ash::ext::debug_utils::Device,
+    debug_utils: Option<ash::ext::debug_utils::Device>,
     timeline_semaphore: khr::timeline_semaphore::Device,
     dynamic_rendering: khr::dynamic_rendering::Device,
     ray_tracing: Option<RayTracingDevice>,
@@ -819,6 +819,8 @@ fn map_texture_format(format: crate::TextureFormat) -> vk::Format {
         Tf::R32Float => vk::Format::R32_SFLOAT,
         Tf::Rg32Float => vk::Format::R32G32_SFLOAT,
         Tf::Rgba32Float => vk::Format::R32G32B32A32_SFLOAT,
+        Tf::R8Uint => vk::Format::R8_UINT,
+        Tf::R16Uint => vk::Format::R16_UINT,
         Tf::R32Uint => vk::Format::R32_UINT,
         Tf::Rg32Uint => vk::Format::R32G32_UINT,
         Tf::Rgba32Uint => vk::Format::R32G32B32A32_UINT,

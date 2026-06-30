@@ -202,7 +202,7 @@ impl crate::traits::ResourceDevice for super::Context {
         }
     }
 
-    fn sync_buffer(&self, _buffer: super::Buffer) {}
+    fn sync_buffer(&self, _buffer: super::Buffer, _offset: u64, _size: u64) {}
 
     fn destroy_buffer(&self, buffer: super::Buffer) {
         let _ = unsafe { Retained::from_raw(buffer.raw) };

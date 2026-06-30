@@ -61,23 +61,29 @@ impl crate::traits::ResourceDevice for super::Context {
             crate::Memory::External(_) => unimplemented!(),
         };
 
+        let target = if desc.name.contains("index") {
+            glow::ELEMENT_ARRAY_BUFFER
+        } else {
+            glow::ARRAY_BUFFER
+        };
+
         unsafe {
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(raw));
+            gl.bind_buffer(target, Some(raw));
             if self
                 .capabilities
                 .contains(super::Capabilities::BUFFER_STORAGE)
             {
-                gl.buffer_storage(glow::ARRAY_BUFFER, desc.size as _, None, storage_flags);
+                gl.buffer_storage(target, desc.size as _, None, storage_flags);
                 if map_flags != 0 {
-                    data = gl.map_buffer_range(glow::ARRAY_BUFFER, 0, desc.size as _, map_flags);
+                    data = gl.map_buffer_range(target, 0, desc.size as _, map_flags);
                     assert!(!data.is_null());
                 }
             } else {
-                gl.buffer_data_size(glow::ARRAY_BUFFER, desc.size as _, usage);
+                gl.buffer_data_size(target, desc.size as _, usage);
                 let data_vec = vec![0; desc.size as usize];
                 data = Vec::leak(data_vec).as_mut_ptr();
             }
-            gl.bind_buffer(glow::ARRAY_BUFFER, None);
+            gl.bind_buffer(target, None);
             #[cfg(not(target_arch = "wasm32"))]
             if !desc.name.is_empty() && gl.supports_debug() {
                 gl.object_label(
@@ -89,28 +95,35 @@ impl crate::traits::ResourceDevice for super::Context {
         }
         super::Buffer {
             raw,
+            target,
             size: desc.size,
             data,
         }
     }
 
-    fn sync_buffer(&self, buffer: super::Buffer) {
+    fn sync_buffer(&self, buffer: super::Buffer, offset: u64, size: u64) {
         if !self
             .capabilities
             .contains(super::Capabilities::BUFFER_STORAGE)
         {
             let gl = self.lock();
             unsafe {
-                let data = slice::from_raw_parts(buffer.data, buffer.size as usize);
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer.raw));
-                gl.buffer_sub_data_u8_slice(glow::ARRAY_BUFFER, 0, data);
+                let data = slice::from_raw_parts(buffer.data.add(offset as usize), size as usize);
+                // Use COPY_WRITE_BUFFER to upload data. This is a neutral target under WebGL2 / ES3.0
+                // that does not alter the active VAO's ELEMENT_ARRAY_BUFFER binding or vertex attributes.
+                // This avoids VAO thrashing and expensive per-draw validation, while letting us safely unbind.
+                gl.bind_buffer(glow::COPY_WRITE_BUFFER, Some(buffer.raw));
+                gl.buffer_sub_data_u8_slice(glow::COPY_WRITE_BUFFER, offset as i32, data);
+                gl.bind_buffer(glow::COPY_WRITE_BUFFER, None);
             }
         }
     }
 
     fn destroy_buffer(&self, buffer: super::Buffer) {
         let gl = self.lock();
-        unsafe { gl.delete_buffer(buffer.raw) };
+        unsafe {
+            gl.delete_buffer(buffer.raw);
+        }
         if !buffer.data.is_null()
             && !self
                 .capabilities

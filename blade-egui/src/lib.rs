@@ -32,7 +32,6 @@ struct Globals {
 
 #[derive(blade_macros::ShaderData)]
 struct Locals {
-    r_vertex_data: blade_graphics::BufferPiece,
     r_texture: blade_graphics::TextureView,
     r_sampler: blade_graphics::Sampler,
 }
@@ -136,10 +135,12 @@ impl GuiTexture {
 pub struct GuiPainter {
     pipeline: blade_graphics::RenderPipeline,
     //TODO: find a better way to allocate temporary buffers.
-    belt: BufferBelt,
+    vertex_belt: BufferBelt,
+    index_belt: BufferBelt,
     textures: HashMap<egui::TextureId, GuiTexture>,
     //TODO: this could also look better
     textures_dropped: Vec<GuiTexture>,
+    textures_to_free: Vec<egui::TextureId>,
     textures_to_delete: Vec<(GuiTexture, blade_graphics::SyncPoint)>,
 }
 
@@ -147,7 +148,8 @@ impl GuiPainter {
     /// Destroy the contents of the painter.
     pub fn destroy(&mut self, context: &blade_graphics::Context) {
         context.destroy_render_pipeline(&mut self.pipeline);
-        self.belt.destroy(context);
+        self.vertex_belt.destroy(context);
+        self.index_belt.destroy(context);
         for (_, gui_texture) in self.textures.drain() {
             gui_texture.delete(context);
         }
@@ -171,17 +173,55 @@ impl GuiPainter {
         });
         let globals_layout = <Globals as blade_graphics::ShaderData>::layout();
         let locals_layout = <Locals as blade_graphics::ShaderData>::layout();
+        let egui_vertex_layout = blade_graphics::VertexLayout {
+            stride: 20, // egui::Vertex: pos(2xf32) + uv(2xf32) + color(u32) = 20
+            attributes: vec![
+                (
+                    "a_pos",
+                    blade_graphics::VertexAttribute {
+                        offset: 0,
+                        format: blade_graphics::VertexFormat::F32Vec2,
+                    },
+                ),
+                (
+                    "a_tex_coord",
+                    blade_graphics::VertexAttribute {
+                        offset: 8,
+                        format: blade_graphics::VertexFormat::F32Vec2,
+                    },
+                ),
+                (
+                    "a_color",
+                    blade_graphics::VertexAttribute {
+                        offset: 16,
+                        format: blade_graphics::VertexFormat::U32,
+                    },
+                ),
+            ],
+        };
+        // Fragment entry contract: Linear/sRGB-capable swapchains (Vulkan, Metal, EGL) use
+        // `fs_main` (gamma→linear output). Plain UNORM surfaces (WebGL blit to HTML canvas)
+        // use `fs_main_srgb` (gamma passthrough). WebGL is the only backend that reports
+        // Rgba8Unorm here; embedders with other UNORM targets should pick the srgb entry likewise.
+        let fragment_entry = if matches!(info.format, blade_graphics::TextureFormat::Rgba8Unorm) {
+            "fs_main_srgb"
+        } else {
+            "fs_main"
+        };
         let pipeline = context.create_render_pipeline(blade_graphics::RenderPipelineDesc {
             name: "gui",
             data_layouts: &[&globals_layout, &locals_layout],
             vertex: shader.at("vs_main"),
-            vertex_fetches: &[],
+            vertex_fetches: &[blade_graphics::VertexFetchState {
+                layout: &egui_vertex_layout,
+                instanced: false,
+            }],
             primitive: blade_graphics::PrimitiveState {
                 topology: blade_graphics::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
             depth_stencil: None, //TODO?
-            fragment: Some(shader.at("fs_main")),
+            fragment: Some(shader.at(fragment_entry)),
             color_targets: &[blade_graphics::ColorTargetState {
                 format: info.format,
                 blend: Some(blade_graphics::BlendState {
@@ -201,17 +241,26 @@ impl GuiPainter {
             multisample_state: Default::default(),
         });
 
-        let belt = BufferBelt::new(BufferBeltDescriptor {
+        let vertex_belt = BufferBelt::new(BufferBeltDescriptor {
             memory: blade_graphics::Memory::Shared,
-            min_chunk_size: 0x1000,
+            min_chunk_size: 0x40000,
             alignment: blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
+            name: "vertex",
+        });
+        let index_belt = BufferBelt::new(BufferBeltDescriptor {
+            memory: blade_graphics::Memory::Shared,
+            min_chunk_size: 0x40000,
+            alignment: blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
+            name: "index",
         });
 
         Self {
             pipeline,
-            belt,
+            vertex_belt,
+            index_belt,
             textures: Default::default(),
             textures_dropped: Vec::new(),
+            textures_to_free: Vec::new(),
             textures_to_delete: Vec::new(),
         }
     }
@@ -247,7 +296,9 @@ impl GuiPainter {
         let mut copies = Vec::new();
         for &(texture_id, ref image_delta) in textures_delta.set.iter() {
             let src = match image_delta.image {
-                egui::ImageData::Color(ref c) => self.belt.alloc_pod(c.pixels.as_slice(), context),
+                egui::ImageData::Color(ref c) => {
+                    self.vertex_belt.alloc_pod(c.pixels.as_slice(), context)
+                }
             };
 
             let image_size = image_delta.image.size();
@@ -298,13 +349,12 @@ impl GuiPainter {
             }
         }
 
-        for texture_id in textures_delta.free.iter() {
-            let texture = self.textures.remove(texture_id).unwrap();
-            self.textures_dropped.push(texture);
-        }
+        self.textures_to_free
+            .extend(textures_delta.free.iter().copied());
 
         self.triage_deletions(context);
-        self.belt.trim(4, context);
+        self.vertex_belt.trim(4, context);
+        self.index_belt.trim(4, context);
     }
 
     /// Render the set of clipped primitives into a render pass.
@@ -358,18 +408,21 @@ impl GuiPainter {
             });
 
             if let egui::epaint::Primitive::Mesh(ref mesh) = clipped_prim.primitive {
-                let texture = self.textures.get(&mesh.texture_id).unwrap();
-                let index_buf = self.belt.alloc_pod(&mesh.indices, context);
-                let vertex_buf = self.belt.alloc_pod(&mesh.vertices, context);
+                let Some(texture) = self.textures.get(&mesh.texture_id) else {
+                    continue;
+                };
+                let index_buf = self.index_belt.alloc_pod(&mesh.indices, context);
+                let vertex_buf = self.vertex_belt.alloc_pod(&mesh.vertices, context);
 
                 pc.bind(
                     1,
                     &Locals {
-                        r_vertex_data: vertex_buf,
                         r_texture: texture.view,
                         r_sampler: texture.sampler,
                     },
                 );
+
+                pc.bind_vertex(0, vertex_buf);
 
                 pc.draw_indexed(
                     index_buf,
@@ -383,14 +436,28 @@ impl GuiPainter {
         }
     }
 
+    pub fn sync(&mut self, context: &blade_graphics::Context) {
+        self.vertex_belt.sync(context);
+        self.index_belt.sync(context);
+    }
+
     /// Call this after submitting work at the given `sync_point`.
     #[profiling::function]
-    pub fn after_submit(&mut self, sync_point: &blade_graphics::SyncPoint) {
+    pub fn after_submit(
+        &mut self,
+        sync_point: &blade_graphics::SyncPoint,
+    ) {
+        for texture_id in self.textures_to_free.drain(..) {
+            if let Some(texture) = self.textures.remove(&texture_id) {
+                self.textures_dropped.push(texture);
+            }
+        }
         self.textures_to_delete.extend(
             self.textures_dropped
                 .drain(..)
                 .map(|texture| (texture, sync_point.clone())),
         );
-        self.belt.flush(sync_point);
+        self.vertex_belt.flush(sync_point);
+        self.index_belt.flush(sync_point);
     }
 }

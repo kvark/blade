@@ -9,7 +9,7 @@ use std::{marker::PhantomData, mem, ops::Range};
 
 type BindTarget = u32;
 const DEBUG_ID: u32 = 0;
-const MAX_TIMEOUT: u64 = 1_000_000_000; // MAX_CLIENT_WAIT_TIMEOUT_WEBGL;
+const MAX_TIMEOUT: u64 = 1_000_000_000;
 const MAX_QUERIES: usize = crate::limits::PASS_COUNT + 1;
 
 bitflags::bitflags! {
@@ -37,6 +37,8 @@ pub struct Context {
     toggles: Toggles,
     limits: Limits,
     device_information: crate::DeviceInformation,
+    /// WebGL2 context (wasm); native EGL is false.
+    is_webgl: bool,
 }
 
 pub struct Surface {
@@ -48,6 +50,7 @@ pub struct Surface {
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Buffer {
     raw: glow::Buffer,
+    pub target: u32,
     size: u64,
     data: *mut u8,
 }
@@ -246,7 +249,7 @@ enum Command {
     },
     DrawIndexedIndirect {
         topology: u32,
-        raw_index_buf: glow::Buffer,
+        index_buf: BufferPart,
         index_type: u32,
         indirect_buf: BufferPart,
     },
@@ -406,6 +409,7 @@ pub struct PassEncoder<'a, P> {
     pipeline: PhantomData<P>,
     limits: &'a Limits,
     has_scope: bool,
+    target_size: [u16; 2],
 }
 
 pub type ComputeCommandEncoder<'a> = PassEncoder<'a, ComputePipeline>;
@@ -586,17 +590,28 @@ impl crate::traits::CommandDevice for Context {
         SyncPoint { fence }
     }
 
-    fn wait_for(&self, sp: &SyncPoint, timeout_ms: u32) -> Result<bool, crate::DeviceError> {
+    fn wait_for(
+        &self,
+        sp: &SyncPoint,
+        #[allow(unused)] timeout_ms: u32,
+    ) -> Result<bool, crate::DeviceError> {
         use glow::HasContext as _;
 
         let gl = self.lock();
-        let timeout_ns = if timeout_ms == !0 {
-            !0
+        let timeout_ns_i32 = if self.is_webgl {
+            // WebGL2 forbids blocking client waits on the main thread (its max
+            // timeout is 0), so just poll with timeout 0. Do NOT query
+            // MAX_CLIENT_WAIT_TIMEOUT_WEBGL here: getParameter is a synchronous
+            // GPU-process round-trip and `wait_for` runs several times per frame
+            // (frame throttle + belt alloc/trim), so a per-call query stalls
+            // WebGL hard — the 600-bot FPS cliff. Native is unaffected (is_webgl
+            // is false there). Commit 6adf666 added that query; it does nothing
+            // useful (result was discarded).
+            0i32
         } else {
-            timeout_ms as u64 * 1_000_000
+            //TODO: https://github.com/grovesNL/glow/issues/287
+            (timeout_ms as u64 * 1_000_000).min(MAX_TIMEOUT) as i32
         };
-        //TODO: https://github.com/grovesNL/glow/issues/287
-        let timeout_ns_i32 = timeout_ns.min(MAX_TIMEOUT) as i32;
 
         let status =
             unsafe { gl.client_wait_sync(sp.fence, glow::SYNC_FLUSH_COMMANDS_BIT, timeout_ns_i32) };
@@ -641,9 +656,11 @@ fn describe_texture_format(format: crate::TextureFormat) -> FormatInfo {
         Tf::R32Float => (glow::R32F, glow::RED, glow::FLOAT),
         Tf::Rg32Float => (glow::RG32F, glow::RG, glow::FLOAT),
         Tf::Rgba32Float => (glow::RGBA32F, glow::RGBA, glow::FLOAT),
-        Tf::R32Uint => (glow::R32UI, glow::RED, glow::UNSIGNED_INT),
-        Tf::Rg32Uint => (glow::RG32UI, glow::RG, glow::UNSIGNED_INT),
-        Tf::Rgba32Uint => (glow::RGBA32UI, glow::RGBA, glow::UNSIGNED_INT),
+        Tf::R8Uint => (glow::R8UI, glow::RED_INTEGER, glow::UNSIGNED_BYTE),
+        Tf::R16Uint => (glow::R16UI, glow::RED_INTEGER, glow::UNSIGNED_SHORT),
+        Tf::R32Uint => (glow::R32UI, glow::RED_INTEGER, glow::UNSIGNED_INT),
+        Tf::Rg32Uint => (glow::RG32UI, glow::RG_INTEGER, glow::UNSIGNED_INT),
+        Tf::Rgba32Uint => (glow::RGBA32UI, glow::RGBA_INTEGER, glow::UNSIGNED_INT),
         Tf::Depth32Float => (glow::DEPTH_COMPONENT32F, glow::DEPTH_COMPONENT, glow::FLOAT),
         Tf::Depth32FloatStencil8Uint => (
             glow::DEPTH32F_STENCIL8,

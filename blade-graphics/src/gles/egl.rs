@@ -326,15 +326,13 @@ impl super::Context {
                         if desc.validation { 1 } else { 0 },
                         egl::ATTRIB_NONE,
                     ];
-                    Some(
-                        egl1_5
-                            .get_platform_display(
-                                EGL_PLATFORM_ANGLE_ANGLE,
-                                ptr::null_mut(),
-                                &display_attributes,
-                            )
-                            .unwrap(),
-                    )
+                    egl1_5
+                        .get_platform_display(
+                            EGL_PLATFORM_ANGLE_ANGLE,
+                            ptr::null_mut(),
+                            &display_attributes,
+                        )
+                        .ok()
                 } else {
                     None
                 }
@@ -350,14 +348,14 @@ impl super::Context {
                     (state.0, Some(state.1))
                 } else if client_extensions.contains("EGL_MESA_platform_surfaceless") {
                     log::info!("Using surfaceless platform");
-                    let d = egl1_5
+                    let display = egl1_5
                         .get_platform_display(
                             EGL_PLATFORM_SURFACELESS_MESA,
                             ptr::null_mut(),
                             &[egl::ATTRIB_NONE],
                         )
                         .unwrap();
-                    (d, None)
+                    (display, None)
                 } else {
                     log::info!("Using default platform");
                     let d = egl
@@ -391,6 +389,7 @@ impl super::Context {
                 toggles,
                 limits,
                 device_information,
+                is_webgl: false,
             })
         }
     }
