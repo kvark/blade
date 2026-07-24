@@ -34,6 +34,9 @@ impl super::Context {
                     | gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS
                     | device_address_usage
             }
+            crate::Memory::Download => {
+                gpu_alloc::UsageFlags::HOST_ACCESS | gpu_alloc::UsageFlags::DOWNLOAD
+            }
             crate::Memory::Upload => {
                 gpu_alloc::UsageFlags::HOST_ACCESS | gpu_alloc::UsageFlags::UPLOAD
             }
@@ -205,7 +208,7 @@ impl super::Context {
                 ptr as *mut u8
             }
             crate::Memory::Device | crate::Memory::External(_) => ptr::null_mut(),
-            crate::Memory::Shared | crate::Memory::Upload => unsafe {
+            crate::Memory::Shared | crate::Memory::Download | crate::Memory::Upload => unsafe {
                 block
                     .map(
                         AshMemoryDevice::wrap(&self.device.core),
