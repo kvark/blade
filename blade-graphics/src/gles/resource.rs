@@ -51,6 +51,12 @@ impl crate::traits::ResourceDevice for super::Context {
                     | glow::MAP_WRITE_BIT;
                 glow::DYNAMIC_DRAW //TEMP
             }
+            crate::Memory::Download => {
+                map_flags = glow::MAP_READ_BIT | glow::MAP_PERSISTENT_BIT;
+                storage_flags =
+                    glow::MAP_PERSISTENT_BIT | glow::MAP_COHERENT_BIT | glow::MAP_READ_BIT;
+                glow::DYNAMIC_READ
+            }
             crate::Memory::Upload => {
                 map_flags =
                     glow::MAP_WRITE_BIT | glow::MAP_PERSISTENT_BIT | glow::MAP_UNSYNCHRONIZED_BIT;

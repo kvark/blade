@@ -308,6 +308,8 @@ pub enum Memory {
     Device,
     /// Shared CPU-GPU memory. Not so fast for GPU.
     Shared,
+    /// Download memory. Optimized for CPU reads after GPU transfers.
+    Download,
     /// Upload memory. Can only be transferred on GPU.
     Upload,
     /// External memory
@@ -338,6 +340,7 @@ impl Memory {
     pub fn is_host_visible(&self) -> bool {
         match *self {
             Self::Shared
+            | Self::Download
             | Self::Upload
             | Self::External(ExternalMemorySource::HostAllocation(_)) => true,
             Self::Device | Self::External(_) => false,
