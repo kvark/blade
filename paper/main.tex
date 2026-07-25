@@ -68,11 +68,12 @@ disables FMASK compression, so multisampled colour is the surviving exception.
 \noindent\colorbox{yellow!25}{%
 \parbox{\dimexpr\columnwidth-2\fboxsep\relax}{%
 \textbf{Working draft.} All numbers below are measured and reproduced by the
-scripts in this directory. One result gate from \texttt{experiments.md} is
-partly open: CPU profiles are collected and reported
-(Section~\ref{sec:profile}), but Vulkan command-stream captures are not, so the
-description of the barriers each implementation generates is still read from
-source rather than observed. Application workloads are also outstanding.}}
+scripts in this directory. The last result gate from \texttt{experiments.md} is
+nearly closed: CPU profiles are collected and reported
+(Section~\ref{sec:profile}), and command-stream captures confirm \blade's
+generated barriers and layouts, but the matched \wgpu{} program has not been
+captured, so statements about \emph{its} generated commands remain
+source-derived. Application workloads are also outstanding.}}
 
 \section{Introduction}
 
@@ -941,13 +942,36 @@ knew.
 
 \subsection{Generated barriers and image layouts}
 
-The barrier that \texttt{B-auto} emits is known exactly from
-Section~\ref{sec:radv-barriers}, and \wgpu's Vulkan backend is known from its
-source to emit per-resource barriers with derived layouts. What is missing is a
-capture confirming the counts and layouts actually reaching each driver.
-\pending{Capture one representative command stream per workload per driver;
-report barrier counts, scopes, and image layouts; stratify by
-unified-image-layout support.}
+RenderDoc captures of all six workloads under three policies confirm what
+Sections~\ref{sec:radv-barriers} and~\ref{sec:scoped} describe from source. The
+counts are exactly the contract: with four passes recorded, \texttt{B-auto}
+emits five barriers per configuration --- one per boundary plus the one the
+encoder emits on finish --- \texttt{B-hazard} emits one on the independent
+workloads and four on the chains, and the scoped policies emit the same number
+as their unscoped twins.
+
+The masks match too. Every \texttt{B-auto} barrier in every workload is the
+same shape, \texttt{ALL\_COMMANDS} to \texttt{ALL\_COMMANDS} with
+\texttt{TRANSFER\_WRITE\,|\,MEMORY\_WRITE} made available to
+\texttt{TRANSFER\_READ\,|\,TRANSFER\_WRITE\,|\,MEMORY\_READ\,|\,MEMORY\_WRITE},
+including the two driver-workaround accesses. Under \texttt{B-scoped} the
+derivation is visible in the capture: compute-to-compute boundaries carry
+\texttt{COMPUTE\_SHADER} to \texttt{DRAW\_INDIRECT\,|\,COMPUTE\_SHADER},
+render-to-render carry \texttt{ALL\_GRAPHICS} on both sides, mixed workloads
+show both crossings, the first barrier of each encoder still carries
+\texttt{ALL\_COMMANDS} on the source side, the barrier emitted on finish still
+carries it on the destination side, and the workaround accesses are absent, as
+intended.
+
+Two things the capture settles that source reading could not. Every barrier in
+the steady state is a global memory barrier: no buffer or image barrier appears
+in any configuration. And no image layout transition appears at all --- images
+are moved to \texttt{GENERAL} at initialization and stay there, which is the
+layout claim the paper makes, observed rather than asserted.
+
+\pending{Capture the matched \wgpu{} program for the same comparison; it needs
+a \texttt{-{}-capture} flag equivalent to \blade's. Repeat on a RADV driver to
+confirm the same commands are emitted there.}
 
 The one layout claim this draft does make is negative and comes from the
 sources rather than the measurements: on RADV, a persistent \texttt{GENERAL}

@@ -411,9 +411,14 @@ configuration, so the barriers the paper describes from source can be checked
 against what reaches the driver.
 
 ```sh
-sudo apt install renderdoc
 python3 paper/capture-streams.py
 ```
+
+If no RenderDoc is installed it downloads the official build, verifies it
+against a pinned hash, and unpacks it under `paper/data/tools/`. Use
+`--no-download` to refuse that, or `--library` to point at your own. Note that
+the library ends up preloaded into the benchmark process, which is a trust
+decision the script states out loud rather than making quietly.
 
 The benchmark is headless, so there is no swapchain present for RenderDoc to
 delimit a capture at; `sync-bench --capture` calls the in-application API
@@ -421,11 +426,21 @@ around one warmed iteration instead, and the script preloads
 `librenderdoc.so` so that API is available. Without the preload the benchmark
 warns and runs uncaptured rather than failing a measurement.
 
-Two gaps. This has not been run --- the package was not installed on the
-machine it was written on --- so expect to fix something on first use. And it
-captures Blade only: the matched wgpu benchmark has no `--capture` flag, and
-adding one that wraps the same warmed iteration would make the comparison
-symmetric.
+After capturing it converts each `.rdc` with `renderdoccmd convert -c xml` and
+tabulates every `vkCmdPipelineBarrier` into `barriers.csv`: stage and access
+masks decoded to names, barrier counts by kind, and any image layout
+transition. That is what makes the captures checkable rather than merely
+archived.
+
+One gap remains: it captures Blade only. The matched wgpu benchmark has no
+`--capture` flag, and adding one that wraps the same warmed iteration would
+make the comparison symmetric.
+
+A note for anyone extending this: RenderDoc hooks Vulkan through a layer, not
+through the preloaded library alone, and the manifest shipped in the tarball
+carries the absolute `library_path` of upstream's build machine. Without
+rewriting that path and pointing the loader at the manifest, the benchmark runs
+happily and writes no capture at all.
 
 ## Manual captures and profilers
 

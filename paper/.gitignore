@@ -20,3 +20,7 @@ data/raw/
 # Regenerated from data/raw by analyze.py and build-tables.py. The paper
 # inputs data/derived/tables/*.tex, so run build-tables.py before latexmk.
 data/derived/
+
+# Downloaded tool binaries (RenderDoc), fetched on demand by
+# capture-streams.py. Not source, not measurements.
+data/tools/

@@ -339,9 +339,11 @@ The paper can lose its `RESULTS PENDING` banner only after:
   of tracked-versus-coarse behavior. CPU profiles are collected
   (`profile-hosts.py`) and reported: resource tracking is 3-7% of wgpu's
   process CPU time, which rules it out as the explanation for a 2-12x host-cost
-  gap. Command-stream captures are **outstanding**: `capture-streams.py` exists
-  and is untested for want of the `renderdoc` package, and it captures Blade
-  only until the matched wgpu benchmark gains the same flag;
+  gap. Command-stream captures are collected for Blade (`capture-streams.py`,
+  which downloads RenderDoc if none is installed) and confirm the emitted
+  masks, counts, and the absence of any steady-state layout transition. The
+  matched wgpu program is **outstanding**: it needs a `--capture` flag
+  equivalent to Blade's;
 - [x] at least the minimum hardware matrix is complete (NVIDIA and discrete
   AMD on Linux, plus two AMD integrated parts, Intel, and Apple as sensitivity
   cases);

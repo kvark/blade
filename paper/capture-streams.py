@@ -19,6 +19,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
+import hashlib
 import json
 import os
 import platform
@@ -26,6 +28,8 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,6 +40,18 @@ LIBRARY_CANDIDATES = (
     "/usr/local/lib/librenderdoc.so",
     "/opt/renderdoc/lib/librenderdoc.so",
 )
+
+# Official upstream build, used when no system RenderDoc is installed. The hash
+# is of the tarball as fetched on 2026-07-25; renderdoc.org publishes no
+# checksum of its own, so this pins reruns and detects corruption but cannot
+# attest to the first download. The transport guarantee is HTTPS with HSTS.
+RENDERDOC_VERSION = "1.45"
+RENDERDOC_URL = (
+    f"https://renderdoc.org/stable/{RENDERDOC_VERSION}/"
+    f"renderdoc_{RENDERDOC_VERSION}.tar.gz"
+)
+RENDERDOC_SHA256 = "b0a7ee8ec78c4fa511eb44137380d99a748472e5fd24c877f8afcc860a172a42"
+RENDERDOC_LIBRARY = f"renderdoc_{RENDERDOC_VERSION}/lib/librenderdoc.so"
 
 # One capture per configuration is enough to read counts, scopes and layouts;
 # these are not timing runs, so the shape is chosen to be small and legible in
@@ -68,6 +84,17 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--blade", type=Path, default=blade_root)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--library", type=Path, help="path to librenderdoc.so")
+    parser.add_argument(
+        "--renderdoc-cache",
+        type=Path,
+        default=blade_root / "paper/data/tools",
+        help="where to unpack a downloaded RenderDoc (default: paper/data/tools)",
+    )
+    parser.add_argument(
+        "--no-download",
+        action="store_true",
+        help="fail instead of fetching RenderDoc when none is installed",
+    )
     parser.add_argument("--workloads", default=",".join(WORKLOADS))
     parser.add_argument("--policies", default=",".join(POLICIES))
     parser.add_argument("--blade-device-id", type=lambda v: int(v, 0))
@@ -75,7 +102,109 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def find_library(explicit: Path | None) -> Path:
+def download_renderdoc(cache: Path) -> Path:
+    """Fetch and unpack the upstream RenderDoc build into `cache`.
+
+    This ends with a third-party shared library being preloaded into the
+    benchmark process, so it says out loud what it is fetching and from where,
+    and verifies the archive against a pinned hash before unpacking it.
+    """
+    library = cache / RENDERDOC_LIBRARY
+    if library.is_file():
+        return library
+
+    cache.mkdir(parents=True, exist_ok=True)
+    archive = cache / f"renderdoc_{RENDERDOC_VERSION}.tar.gz"
+    if not archive.is_file():
+        print(
+            f"RenderDoc not installed; downloading {RENDERDOC_URL}\n"
+            f"  into {cache}\n"
+            "  this library gets preloaded into the benchmark process",
+            file=sys.stderr,
+            flush=True,
+        )
+        temporary = archive.with_suffix(".partial")
+        with urllib.request.urlopen(RENDERDOC_URL) as response, temporary.open(
+            "wb"
+        ) as handle:
+            shutil.copyfileobj(response, handle)
+        temporary.replace(archive)
+
+    digest = hashlib.sha256()
+    with archive.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != RENDERDOC_SHA256:
+        archive.unlink()
+        raise SystemExit(
+            f"downloaded archive does not match the pinned hash.\n"
+            f"  expected {RENDERDOC_SHA256}\n"
+            f"  got      {digest.hexdigest()}\n"
+            "The archive has been deleted. If upstream republished the build, "
+            "update RENDERDOC_SHA256 after checking the change is expected."
+        )
+
+    with tarfile.open(archive, "r:gz") as tar:
+        # `data` rejects absolute paths, traversal, and special files.
+        tar.extractall(cache, filter="data")
+    if not library.is_file():
+        raise SystemExit(
+            f"{archive} unpacked but {RENDERDOC_LIBRARY} is not in it; the "
+            "archive layout has changed."
+        )
+    repair_layer_manifest(cache, library)
+    return library
+
+
+def repair_layer_manifest(cache: Path, library: Path) -> Path:
+    """Rewrite the shipped layer manifest to point at the unpacked library.
+
+    RenderDoc hooks Vulkan as a layer, not through the preloaded library alone,
+    and the manifest in the tarball carries the absolute `library_path` of
+    upstream's build machine. Without this the loader silently finds no layer,
+    the benchmark runs happily, and no capture is written.
+    """
+    manifest = (
+        cache / f"renderdoc_{RENDERDOC_VERSION}/etc/vulkan/implicit_layer.d"
+        / "renderdoc_capture.json"
+    )
+    if not manifest.is_file():
+        raise SystemExit(f"layer manifest missing from the archive: {manifest}")
+    document = json.loads(manifest.read_text())
+    document["layer"]["library_path"] = str(library)
+    manifest.write_text(json.dumps(document, indent=4) + "\n", encoding="utf-8")
+    return manifest.parent
+
+
+def layer_environment(library: Path) -> dict[str, str]:
+    """Environment that makes the Vulkan loader load RenderDoc's layer.
+
+    A system install registers its manifest where the loader already looks; an
+    unpacked tarball does not, so the directory is added explicitly. The layer
+    is implicit and gated behind its own enable variable, which is set either
+    way.
+    """
+    environment = {"ENABLE_VULKAN_RENDERDOC_CAPTURE": "1"}
+    manifests = library.parent.parent / "etc/vulkan/implicit_layer.d"
+    if manifests.is_dir():
+        # Newer loaders take this directly; older ones look under XDG_DATA_DIRS,
+        # so both are provided.
+        environment["VK_ADD_IMPLICIT_LAYER_PATH"] = str(manifests)
+        environment["XDG_DATA_DIRS"] = os.pathsep.join(
+            filter(
+                None,
+                [
+                    str(library.parent.parent / "etc"),
+                    os.environ.get("XDG_DATA_DIRS", ""),
+                ],
+            )
+        )
+    return environment
+
+
+def find_library(
+    explicit: Path | None, cache: Path, allow_download: bool
+) -> Path:
     if explicit is not None:
         if not explicit.is_file():
             raise SystemExit(f"no such library: {explicit}")
@@ -83,20 +212,162 @@ def find_library(explicit: Path | None) -> Path:
     for candidate in LIBRARY_CANDIDATES:
         if Path(candidate).is_file():
             return Path(candidate)
-    found = shutil.which("renderdoccmd")
-    hint = "" if found else "\nInstall it first, e.g. `sudo apt install renderdoc`."
-    raise SystemExit(
-        "librenderdoc.so was not found in any of:\n  "
-        + "\n  ".join(LIBRARY_CANDIDATES)
-        + hint
-        + "\nPass --library to point at it explicitly."
-    )
+    cached = cache / RENDERDOC_LIBRARY
+    if cached.is_file():
+        return cached
+    if not allow_download:
+        raise SystemExit(
+            "librenderdoc.so was not found in any of:\n  "
+            + "\n  ".join((*LIBRARY_CANDIDATES, str(cached)))
+            + "\nInstall it (`sudo apt install renderdoc`), pass --library, or "
+            "drop --no-download to fetch the upstream build."
+        )
+    return download_renderdoc(cache)
+
+
+STAGE_BITS = {
+    0x1: "TOP_OF_PIPE", 0x2: "DRAW_INDIRECT", 0x4: "VERTEX_INPUT",
+    0x8: "VERTEX_SHADER", 0x10: "TESS_CONTROL", 0x20: "TESS_EVAL",
+    0x40: "GEOMETRY", 0x80: "FRAGMENT", 0x100: "EARLY_FRAGMENT_TESTS",
+    0x200: "LATE_FRAGMENT_TESTS", 0x400: "COLOR_ATTACHMENT_OUTPUT",
+    0x800: "COMPUTE_SHADER", 0x1000: "TRANSFER", 0x2000: "BOTTOM_OF_PIPE",
+    0x4000: "HOST", 0x8000: "ALL_GRAPHICS", 0x10000: "ALL_COMMANDS",
+}
+ACCESS_BITS = {
+    0x1: "INDIRECT_COMMAND_READ", 0x2: "INDEX_READ", 0x4: "VERTEX_ATTRIBUTE_READ",
+    0x8: "UNIFORM_READ", 0x10: "INPUT_ATTACHMENT_READ", 0x20: "SHADER_READ",
+    0x40: "SHADER_WRITE", 0x80: "COLOR_ATTACHMENT_READ",
+    0x100: "COLOR_ATTACHMENT_WRITE", 0x200: "DEPTH_STENCIL_ATTACHMENT_READ",
+    0x400: "DEPTH_STENCIL_ATTACHMENT_WRITE", 0x800: "TRANSFER_READ",
+    0x1000: "TRANSFER_WRITE", 0x2000: "HOST_READ", 0x4000: "HOST_WRITE",
+    0x8000: "MEMORY_READ", 0x10000: "MEMORY_WRITE",
+}
+LAYOUTS = {
+    0: "UNDEFINED", 1: "GENERAL", 2: "COLOR_ATTACHMENT_OPTIMAL",
+    3: "DEPTH_STENCIL_ATTACHMENT_OPTIMAL", 4: "DEPTH_STENCIL_READ_ONLY_OPTIMAL",
+    5: "SHADER_READ_ONLY_OPTIMAL", 6: "TRANSFER_SRC_OPTIMAL",
+    7: "TRANSFER_DST_OPTIMAL", 8: "PREINITIALIZED", 1000001002: "PRESENT_SRC_KHR",
+}
+
+
+def decode(mask: int, names: dict[int, str]) -> str:
+    if mask == 0:
+        return "NONE"
+    parts = [name for bit, name in sorted(names.items()) if mask & bit]
+    remainder = mask & ~sum(bit for bit in names if mask & bit)
+    if remainder:
+        parts.append(f"0x{remainder:x}")
+    return "|".join(parts)
+
+
+def field(element, name: str) -> int | None:
+    for child in element:
+        if child.get("name") == name:
+            text = (child.text or "").strip()
+            if text:
+                try:
+                    return int(text)
+                except ValueError:
+                    return None
+    return None
+
+
+def extract_barriers(xml_path: Path, workload: str, policy: str) -> list[dict]:
+    """One row per `vkCmdPipelineBarrier` in the capture.
+
+    This is the point of capturing: the paper describes these masks from
+    Blade's source, and this is what the driver actually received.
+    """
+    import xml.etree.ElementTree as ElementTree
+
+    rows = []
+    root = ElementTree.parse(xml_path).getroot()
+    index = 0
+    for chunk in root.iter("chunk"):
+        name = chunk.get("name") or ""
+        if "PipelineBarrier" not in name:
+            continue
+        memory = field(chunk, "memoryBarrierCount") or 0
+        buffers = field(chunk, "bufferMemoryBarrierCount") or 0
+        images = field(chunk, "imageMemoryBarrierCount") or 0
+        source_access = destination_access = 0
+        old_layout = new_layout = None
+        for container in chunk:
+            if container.get("name") == "pMemoryBarriers":
+                for structure in container:
+                    source_access |= field(structure, "srcAccessMask") or 0
+                    destination_access |= field(structure, "dstAccessMask") or 0
+            if container.get("name") == "pImageMemoryBarriers":
+                for structure in container:
+                    source_access |= field(structure, "srcAccessMask") or 0
+                    destination_access |= field(structure, "dstAccessMask") or 0
+                    old_layout = field(structure, "oldLayout")
+                    new_layout = field(structure, "newLayout")
+        rows.append(
+            {
+                "workload": workload,
+                "policy": policy,
+                "index": index,
+                "src_stage": decode(field(chunk, "srcStageMask") or 0, STAGE_BITS),
+                "dst_stage": decode(field(chunk, "destStageMask") or 0, STAGE_BITS),
+                "src_access": decode(source_access, ACCESS_BITS),
+                "dst_access": decode(destination_access, ACCESS_BITS),
+                "memory_barriers": memory,
+                "buffer_barriers": buffers,
+                "image_barriers": images,
+                "old_layout": LAYOUTS.get(old_layout, old_layout if old_layout is not None else ""),
+                "new_layout": LAYOUTS.get(new_layout, new_layout if new_layout is not None else ""),
+            }
+        )
+        index += 1
+    return rows
+
+
+def convert_and_extract(output: Path, library: Path, runs: list[dict]) -> int:
+    """Convert each capture to XML and tabulate its barriers."""
+    root = library.parent.parent
+    command_line = root / "bin/renderdoccmd"
+    if not command_line.is_file():
+        command_line = Path(shutil.which("renderdoccmd") or "")
+    if not command_line or not Path(command_line).is_file():
+        print(
+            "renderdoccmd not found; captures are written but not tabulated",
+            file=sys.stderr,
+        )
+        return 0
+    environment = os.environ | {"LD_LIBRARY_PATH": str(root / "lib")}
+    rows: list[dict] = []
+    for capture in sorted(output.glob("*.rdc")):
+        stem = capture.stem.removeprefix("sync-bench__").removesuffix("_capture")
+        workload, _, policy = stem.rpartition("__")
+        xml_path = capture.with_suffix(".xml")
+        result = subprocess.run(
+            [str(command_line), "convert", "-f", str(capture), "-o", str(xml_path),
+             "-c", "xml"],
+            env=environment, text=True, capture_output=True,
+        )
+        if result.returncode != 0 or not xml_path.is_file():
+            print(f"could not convert {capture.name}", file=sys.stderr)
+            continue
+        rows.extend(extract_barriers(xml_path, workload, policy))
+        xml_path.unlink()
+    if not rows:
+        return 0
+    with (output / "barriers.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    return len(rows)
 
 
 def main() -> None:
     arguments = parse_arguments()
     blade = arguments.blade.resolve()
-    library = find_library(arguments.library)
+    library = find_library(
+        arguments.library,
+        arguments.renderdoc_cache.resolve(),
+        not arguments.no_download,
+    )
     collection = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     host = socket.gethostname().split(".")[0]
     output = (
@@ -137,9 +408,7 @@ def main() -> None:
             environment["LD_PRELOAD"] = (
                 f"{library}:{preload}" if preload else str(library)
             )
-            environment["RENDERDOC_CAPTUREOPTS"] = environment.get(
-                "RENDERDOC_CAPTUREOPTS", ""
-            )
+            environment.update(layer_environment(library))
             print(f"capturing {workload} / {policy}", file=sys.stderr, flush=True)
             result = subprocess.run(
                 command, cwd=output, env=environment, text=True, capture_output=True
@@ -157,6 +426,15 @@ def main() -> None:
                     "the benchmark ran but RenderDoc was not loaded; check that "
                     f"{library} matches this architecture and that LD_PRELOAD is "
                     "not being stripped."
+                )
+            if not list(output.glob("*.rdc")):
+                raise SystemExit(
+                    f"{workload}/{policy} produced no capture. RenderDoc's "
+                    "in-application API was reachable, so the library loaded, "
+                    "but its Vulkan layer did not intercept anything. Check "
+                    "that VK_ADD_IMPLICIT_LAYER_PATH reaches this loader "
+                    f"({environment.get('VK_ADD_IMPLICIT_LAYER_PATH')}) and "
+                    "that the manifest's library_path is correct."
                 )
             runs.append({"workload": workload, "policy": policy, "command": command})
 
@@ -177,6 +455,11 @@ def main() -> None:
                 "host": host,
                 "platform": platform.platform(),
                 "library": str(library),
+                "library_source": (
+                    "downloaded"
+                    if str(library).startswith(str(arguments.renderdoc_cache.resolve()))
+                    else "system"
+                ),
                 "capture_shape": list(CAPTURE_SHAPE),
                 "captures": captures,
                 "runs": runs,
@@ -192,7 +475,11 @@ def main() -> None:
         + "\n",
         encoding="utf-8",
     )
-    print(f"Captures: {output} ({len(captures)} files)", file=sys.stderr)
+    barriers = convert_and_extract(output, library, runs)
+    print(
+        f"Captures: {output} ({len(captures)} files, {barriers} barriers tabulated)",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":
