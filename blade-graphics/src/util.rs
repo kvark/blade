@@ -43,20 +43,6 @@ pub fn emit_annotated_error<E: Error>(ann_err: &naga::WithSpan<E>, filename: &st
 }
 
 impl super::TextureFormat {
-    /// Returns true if accessing the texels converts them
-    /// between the sRGB and the linear space.
-    pub const fn is_srgb(&self) -> bool {
-        matches!(
-            *self,
-            Self::Rgba8UnormSrgb
-                | Self::Bgra8UnormSrgb
-                | Self::Bc1UnormSrgb
-                | Self::Bc2UnormSrgb
-                | Self::Bc3UnormSrgb
-                | Self::Bc7UnormSrgb
-        )
-    }
-
     pub const fn block_info(&self) -> super::TexelBlockInfo {
         const fn uncompressed(size: u8) -> super::TexelBlockInfo {
             super::TexelBlockInfo {

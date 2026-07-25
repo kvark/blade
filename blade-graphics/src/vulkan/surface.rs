@@ -7,7 +7,6 @@ impl super::Surface {
         crate::SurfaceInfo {
             format: self.swapchain.format,
             alpha: self.swapchain.alpha,
-            color_space: self.swapchain.color_space,
         }
     }
 
@@ -181,7 +180,6 @@ impl super::XrSurface {
         crate::SurfaceInfo {
             format: self.swapchain.format,
             alpha: self.swapchain.alpha,
-            color_space: self.swapchain.color_space,
         }
     }
 
@@ -271,7 +269,6 @@ impl super::Context {
                 raw: vk::SwapchainKHR::null(),
                 format: crate::TextureFormat::Rgba8Unorm,
                 alpha: crate::AlphaMode::Ignored,
-                color_space: crate::ColorSpace::Srgb,
                 target_size: [0; 2],
             },
             full_screen_exclusive: fullscreen_exclusive_ext.full_screen_exclusive_supported != 0,
@@ -534,12 +531,12 @@ impl super::Context {
             raw: raw_swapchain,
             format,
             alpha,
-            color_space: crate::SurfaceInfo::derive_color_space(format, config.color_space),
             target_size,
         };
     }
 
-    fn xr_recommended_surface_config(
+    /// Surface configuration matching what the XR runtime recommends.
+    pub fn xr_recommended_surface_config(
         &self,
         view_type: xr::ViewConfigurationType,
     ) -> Option<crate::XrSurfaceConfig> {
@@ -558,7 +555,9 @@ impl super::Context {
                 depth: 1,
             },
             usage: crate::TextureUsage::TARGET,
-            color_space: crate::ColorSpace::Linear,
+            //Note: a plain swapchain format is the one XR runtimes are
+            // happiest with, and it means we do the encoding ourselves.
+            color_space: crate::ColorSpace::Srgb,
             view_count,
         })
     }
@@ -569,7 +568,7 @@ impl super::Context {
         self.create_xr_surface_configured(config)
     }
 
-    fn create_xr_surface_configured(
+    pub fn create_xr_surface_configured(
         &self,
         config: crate::XrSurfaceConfig,
     ) -> Option<super::XrSurface> {
@@ -598,7 +597,6 @@ impl super::Context {
                     raw: vk::SwapchainKHR::null(),
                     format,
                     alpha: crate::AlphaMode::Ignored,
-                    color_space: crate::SurfaceInfo::passthrough_color_space(format),
                     target_size: [config.size.width as u16, config.size.height as u16],
                 },
                 view_count: config.view_count.max(1),
@@ -737,7 +735,6 @@ impl super::Context {
             raw: vk::SwapchainKHR::null(),
             format,
             alpha: crate::AlphaMode::Ignored,
-            color_space: crate::SurfaceInfo::passthrough_color_space(format),
             target_size,
         };
         surface.view_count = config.view_count.max(1);
@@ -796,9 +793,12 @@ fn select_xr_swapchain_format(
             }
         }
     }
+    // Unlike a window surface, an XR swapchain can't declare a color space:
+    // the runtime linearizes the sRGB formats and passes the plain ones
+    // through to the compositor. So the format is what honors the request.
     match color_space {
-        crate::ColorSpace::Linear => linear_candidate.or(srgb_candidate),
-        crate::ColorSpace::Srgb => srgb_candidate.or(linear_candidate),
+        crate::ColorSpace::Linear => srgb_candidate.or(linear_candidate),
+        crate::ColorSpace::Srgb => linear_candidate.or(srgb_candidate),
     }
     .expect("No compatible XR swapchain format available")
 }

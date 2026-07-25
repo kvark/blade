@@ -545,7 +545,9 @@ impl Engine {
         };
         let gpu_context = Arc::new(unsafe { gpu::Context::init(context_desc).unwrap() });
 
-        let (surface_size, surface_info, target_surface) = match presentation {
+        // Note: the color space we ask the surface for is also the one
+        // the renderers have to produce, see `RenderConfig`.
+        let (surface_size, surface_info, color_space, target_surface) = match presentation {
             #[cfg(not(target_os = "android"))]
             Presentation::Window(window) => {
                 let surface_config = Self::make_surface_config(window.inner_size());
@@ -557,6 +559,7 @@ impl Engine {
                 (
                     surface_size,
                     surface_info,
+                    surface_config.color_space,
                     TargetSurface::Window(gpu_surface),
                 )
             }
@@ -566,12 +569,22 @@ impl Engine {
                 panic!("XR presentation is only supported on Android");
                 #[cfg(target_os = "android")]
                 {
+                    let surface_config = gpu_context
+                        .xr_recommended_surface_config(
+                            openxr::ViewConfigurationType::PRIMARY_STEREO,
+                        )
+                        .expect("Unable to query the XR surface configuration");
                     let xr_surface = gpu_context
-                        .create_xr_surface()
+                        .create_xr_surface_configured(surface_config)
                         .expect("Unable to create XR surface from GPU context");
                     let surface_size = xr_surface.extent();
                     let surface_info = xr_surface.info();
-                    (surface_size, surface_info, TargetSurface::Xr(xr_surface))
+                    (
+                        surface_size,
+                        surface_info,
+                        surface_config.color_space,
+                        TargetSurface::Xr(xr_surface),
+                    )
                 }
             }
             #[cfg(target_os = "android")]
@@ -601,6 +614,7 @@ impl Engine {
         let render_config = blade_render::RenderConfig {
             surface_size,
             surface_info,
+            color_space,
             max_debug_lines: 1 << 14,
         };
         let renderer = match config.render_backend {

@@ -33,6 +33,13 @@ fn mat3_transform(t_orig: &blade_graphics::Transform) -> glam::Mat3 {
 pub struct RenderConfig {
     pub surface_size: blade_graphics::Extent,
     pub surface_info: blade_graphics::SurfaceInfo,
+    /// Color space to produce the image in, matching the one the
+    /// surface was configured with.
+    ///
+    /// `Linear` leaves the encoding to the platform, which is what an sRGB
+    /// surface format does for us. `Srgb` means the values are passed to the
+    /// display as they are, so we have to encode them ourselves.
+    pub color_space: blade_graphics::ColorSpace,
     pub max_debug_lines: u32,
 }
 
@@ -406,6 +413,7 @@ pub struct RayTracer {
     debug: DebugRender,
     surface_size: blade_graphics::Extent,
     surface_info: blade_graphics::SurfaceInfo,
+    color_space: blade_graphics::ColorSpace,
     frame_index: usize,
     frame_scene_built: usize,
     is_frozen: bool,
@@ -880,6 +888,7 @@ impl RayTracer {
             debug,
             surface_size: config.surface_size,
             surface_info: config.surface_info,
+            color_space: config.color_space,
             frame_index: 0,
             frame_scene_built: 0,
             is_frozen: false,
@@ -1571,9 +1580,7 @@ impl RayTracer {
                         key_value: pp_config.exposure_key_value,
                         white_level: pp_config.white_level,
                         accumulated: self.show_accumulation as u32,
-                        encode_srgb: (self.surface_info.color_space
-                            == blade_graphics::ColorSpace::Srgb)
-                            as u32,
+                        encode_srgb: (self.color_space == blade_graphics::ColorSpace::Srgb) as u32,
                     },
                     debug_params,
                 },
