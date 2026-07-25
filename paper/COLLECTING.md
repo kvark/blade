@@ -298,12 +298,15 @@ run that emits it.
 ## Lock the clocks first
 
 Every collection in this study so far ran with default power management, and
-the cost is a control floor -- the disagreement between two configurations
-that emit identical commands -- ranging from 0.1% to 48% depending on the
-machine. A device whose floor exceeds the effect you are chasing cannot answer
-the question, and a short workload on a large idle GPU is the worst case: the
-RX 7900 XT never leaves its idle clock state during a 200-microsecond command
-buffer.
+the cost is a control floor -- the disagreement between two configurations that
+emit identical commands -- ranging from 0.0% to 48% depending on the cell. A
+cell whose floor exceeds the effect you are chasing cannot answer the question.
+
+Short workloads on large idle GPUs are the worst case: the RX 7900 XT never
+leaves its idle clock state during a 200-microsecond command buffer, so its
+compute cells land at 3.6-6.5% while its graphics cells, which run longer, land
+at 0.1-0.8%. Locking clocks is the cheap fix; raising `--rounds` or `--passes`
+until the device settles is the other.
 
 On AMD, before collecting:
 

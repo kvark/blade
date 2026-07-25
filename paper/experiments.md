@@ -216,7 +216,12 @@ stated wherever the region is used. A future collection should preregister it.
 - Plot distributions and time-ordered samples before aggregation.
 - Report median, interquartile range, and a 95% bootstrap confidence interval
   for the median and paired difference.
-- For counterbalanced paired runs, analyze within-pair deltas.
+- For counterbalanced paired runs, analyze within-pair deltas. `analyze.py`
+  does not yet do this: it pools samples across repetitions and bootstraps
+  unpaired. The repetition index is the blocking factor that captures clock
+  state, so a paired estimator would tighten the noisy cells; it has not been
+  needed for the claims made so far, because those rest on cells whose control
+  floor is already below 1.5%.
 - Report absolute nanoseconds/milliseconds alongside percentages.
 - Define a practical-equivalence region before interpreting “no difference.”
 - Correct for multiple comparisons when making device/workload-wide claims.
@@ -289,24 +294,26 @@ paper is transcribed by hand.
 5. Only `zork` has a timestamp-free collection, so host-cost claims are
    established there and merely corroborated elsewhere.
 
-## Per-device control floor
+## Control floor, per cell
 
 The instrumentation control (`explicit-all` against `automatic` at global
-scope) emits identical commands, so its disagreement bounds what each device
-and collection can resolve. Nothing smaller may be claimed on that device.
-`build-tables.py` computes this and prints it as the `ctrl` column of the scope
-table. With default power management:
+scope) emits identical commands, so its disagreement bounds what can be
+resolved. Nothing smaller may be claimed. `build-tables.py` computes it and
+prints it as the `ctrl` column of the scope table.
 
-| Device | control floor | usable for |
-|---|---:|---|
-| AMD Raphael iGPU | 0.1% | anything |
-| NVIDIA RTX 5070 | 2.1% | effects above ~2% |
-| AMD Radeon 780M | 3.1% | effects above ~3% |
-| AMD RX 7900 XT | 6.5% | effects above ~10%; cannot resolve barrier scope |
-| Intel Xe (RPL-U) | 48.3% | nothing; device time unusable |
+It must be read **per cell, not per device**. Noise here is a property of the
+workload on the device, not of the device: on the RX 7900 XT the compute cells
+are worth 3.6-6.5% while the graphics and mixed cells are 0.1-0.8%, and on the
+Intel part `graphics-chain` is 0.0% while `mixed-independent` is 48%. An
+earlier version of this analysis took the worst cell per device as the device's
+floor, which discarded every usable AMD and Intel cell and turned two
+answerable questions into open ones.
 
-Clock-locking is now part of the protocol precisely because of this table. The
-collections above predate it.
+The pattern behind the bad cells is short workloads on large idle GPUs: a
+200-microsecond command buffer never takes the device out of its idle clock
+state. Clock-locking (see COLLECTING.md) raises the number of usable cells and
+is part of the protocol; it is not a precondition for a result whose cell floor
+is already low.
 
 ## Correctness rules
 

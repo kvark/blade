@@ -107,7 +107,7 @@ era; later ones cross placement with scope.
 | `20260725T193736Z-rubik-amd-radeon-rx-7900-xt-radv-n` | rubik | AMD RX 7900 XT | matrix, placement × scope |
 | `20260725T193736Z-rubik-amd-ryzen-5-9600x-6-core-pro` | rubik | AMD Raphael iGPU | matrix, placement × scope |
 | `20260725T204342Z-k6` | k6 | AMD Radeon 780M | matrix, placement × scope |
-| `20260725T204044Z-matrix` | matrix | Intel Xe (RPL-U) | matrix, placement × scope (control floor 48%; unusable for device time) |
+| `20260725T204044Z-matrix` | matrix | Intel Xe (RPL-U) | matrix, placement × scope (chain cells clean; independent-target cells noisy) |
 | `20260725T062529Z-mac` | mac | Apple M3 | matrix, Metal case study |
 | `20260725T060107Z-zork` | zork | NVIDIA RTX 5070 | superseded by `191617` |
 | `20260725T185508Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, GPU-timed |
@@ -123,11 +123,10 @@ command-stream captures and CPU profiles.
 
 Also outstanding, independently of the banner:
 
-- clock-locked repeats of the RX 7900 XT and Intel collections. Their control
-  floors are 6.5% and 48%; the first cannot resolve the barrier-scope effect it
-  is meant to test, and the second cannot resolve anything. See the top of
-  [COLLECTING.md](COLLECTING.md) for the commands.
 - application workloads on heterogeneous frames.
+- optionally, clock-locked repeats to recover the eight cells (of thirty) whose
+  control floor exceeds 2%. Not a blocker: the conclusions rest on cells whose
+  floor is below 1.5%. See the top of [COLLECTING.md](COLLECTING.md).
 
 ## Current scope
 

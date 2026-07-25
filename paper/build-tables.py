@@ -576,27 +576,29 @@ def build_sweep_table(collections: list[Collection]) -> str | None:
     )
 
 
-def control_floor(collection: Collection, bootstrap_samples: int) -> float:
-    """Largest disagreement between `explicit-all` and `automatic` at global
-    scope, over the workloads in this collection.
+def control_floor(
+    collection: Collection, workload: str, bootstrap_samples: int
+) -> float | None:
+    """Disagreement between `explicit-all` and `automatic` at global scope, for
+    one cell.
 
-    Those two produce identical command streams, so this is what the device and
-    the collection can resolve. Nothing smaller should be claimed on it.
+    Those two produce identical command streams, so this is what that cell can
+    resolve. It is computed per workload rather than per device because noise
+    is not a property of the device alone: on the RX 7900 XT the compute cells
+    are worth 6.5% and the graphics cells 0.1%, and a per-device maximum would
+    throw away the half that works.
     """
-    worst = 0.0
-    for workload in WORKLOAD_ORDER:
-        baseline = collection.values("blade", "automatic", workload, 16, "gpu_ns")
-        control = collection.values("blade", "explicit-all", workload, 16, "gpu_ns")
-        if not baseline or not control:
-            continue
-        difference, _, _ = relative_difference(
-            baseline,
-            control,
-            bootstrap_samples,
-            (collection.root.name, workload, "control"),
-        )
-        worst = max(worst, abs(difference))
-    return worst
+    baseline = collection.values("blade", "automatic", workload, 16, "gpu_ns")
+    control = collection.values("blade", "explicit-all", workload, 16, "gpu_ns")
+    if not baseline or not control:
+        return None
+    difference, _, _ = relative_difference(
+        baseline,
+        control,
+        bootstrap_samples,
+        (collection.root.name, workload, "control"),
+    )
+    return abs(difference)
 
 
 def build_scope_table(
@@ -614,7 +616,6 @@ def build_scope_table(
         device = DEVICE_SHORT.get(
             collection.devices.get("blade", ""), collection.devices.get("blade", "?")
         )
-        floor = control_floor(collection, bootstrap_samples)
         if index:
             rows.append([RULE])
         first = True
@@ -622,11 +623,12 @@ def build_scope_table(
             baseline = collection.values("blade", "automatic", workload, 16, "gpu_ns")
             if not baseline:
                 continue
+            floor = control_floor(collection, workload, bootstrap_samples)
             cells = [
                 device if first else "",
                 WORKLOAD_SHORT[workload],
                 f"{median_us(baseline):.1f}",
-                f"{floor:.1f}" if first else "",
+                f"{floor:.1f}" if floor is not None else "---",
             ]
             first = False
             for policy in ("automatic-scoped", "hazard-only", "hazard-only-scoped"):
@@ -653,10 +655,12 @@ def build_scope_table(
         "declared yet."
     )
     note += (
-        " ``ctrl'' is the largest disagreement between \\texttt{explicit-all} "
-        "and \\texttt{automatic} at global scope on that device. Those two "
-        "emit identical commands, so it is the smallest effect the device and "
-        "collection can resolve; a difference below it means nothing."
+        " ``ctrl'' is the disagreement between \\texttt{explicit-all} and "
+        "\\texttt{automatic} at global scope \\emph{in that cell}. Those two "
+        "emit identical commands, so it is the smallest effect the cell can "
+        "resolve, and a difference below it means nothing. It is per cell "
+        "rather than per device because noise is not a property of the device "
+        "alone."
     )
     if dirty:
         note += (
