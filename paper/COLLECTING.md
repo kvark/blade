@@ -373,7 +373,38 @@ Blade-automatic versus wgpu-tracked comparison.
 Inspect time-ordered raw samples before interpreting aggregates. Repeat a
 representative collection after a reboot or on another day.
 
-## CPU profiles and GPU captures
+## CPU profiles
+
+`paper/profile-hosts.py` attributes host CPU time to the crate or library that
+spent it, which is what turns "wgpu costs 2-12x more host time" into a
+statement about *what* costs it.
+
+```sh
+sudo sysctl kernel.perf_event_paranoid=1     # until reboot
+python3 paper/profile-hosts.py --wgpu ../wgpu
+```
+
+It refuses to run rather than emit an empty profile if `perf` is missing or
+`perf_event_paranoid` is above 2. The workload it profiles is deliberately
+mis-shaped for the GPU and well shaped for the host -- 4096 elements, 64x64
+targets, one mixing round, 64 passes, no timestamp queries -- so the process
+stays in the recording path instead of blocking in `wait_for`. It rebuilds both
+binaries with `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`, which improves
+symbol attribution without changing optimisation.
+
+Output is `symbols.csv` (self time per symbol), `buckets.csv` (self time per
+group), the raw `perf report` text, and a manifest. The groups separate
+`wgpu_core::track` from `wgpu_core::init_tracker`: the first is resource state
+tracking, the second is lazy zero-initialisation, and conflating them would
+overstate the number the profile exists to measure.
+
+Two caveats to record with the result. Self time is attributed to the symbol
+the sample landed in, so aggressive inlining moves tracker work into its
+callers and the tracker share is a lower bound. And a flat profile answers
+"where is time spent", not "why" -- a call-graph run (`--call-graph dwarf`)
+costs more and needs frame pointers to be reliable.
+
+## GPU captures
 
 Build the wgpu benchmark with Tracy scopes enabled:
 

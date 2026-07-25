@@ -63,6 +63,13 @@ runner; it is not the final matched collector.
 harness; its results live in
 [`../docs/metal-hazard-tracking.md`](../docs/metal-hazard-tracking.md).
 
+Attribute host CPU time to the crate that spent it (needs `perf` and
+`kernel.perf_event_paranoid <= 2`):
+
+```bash
+python3 paper/profile-hosts.py --wgpu ../wgpu
+```
+
 Summarize a collection with deterministic bootstrap intervals:
 
 ```bash
