@@ -604,31 +604,35 @@ def build_scope_table(
                 cells.append(signed(difference))
                 cells.append(interval(low, high))
             rows.append(cells)
-            controls.extend(
-                abs(
-                    relative_difference(
-                        collection.values("blade", automatic, workload, 16, "gpu_ns"),
-                        collection.values("blade", explicit, workload, 16, "gpu_ns"),
-                        bootstrap_samples,
-                        (collection.root.name, workload, "control", explicit),
-                    )[0]
+            # Only the Global pair is a control. At PassKind scope an
+            # explicitly placed barrier cannot name its consumer, so
+            # `explicit-all-scoped` is a different command stream from
+            # `automatic-scoped` rather than the same one.
+            explicit = collection.values("blade", "explicit-all", workload, 16, "gpu_ns")
+            if explicit:
+                controls.append(
+                    abs(
+                        relative_difference(
+                            baseline,
+                            explicit,
+                            bootstrap_samples,
+                            (collection.root.name, workload, "control"),
+                        )[0]
+                    )
                 )
-                for automatic, explicit in (
-                    ("automatic", "explicit-all"),
-                    ("automatic-scoped", "explicit-all-scoped"),
-                )
-                if collection.values("blade", explicit, workload, 16, "gpu_ns")
-            )
     note = (
         "The two axes are crossed, so neither is a default for the other. "
         "Columns differ from \\texttt{B-auto} by scope only, by placement only, "
         "and by both. On the chain workloads placement has nothing to remove, "
-        "which makes them a scope-only test."
+        "which makes them a scope-only test. The ``both'' column narrows only "
+        "the source scope, because an explicitly placed barrier is emitted "
+        "where it is written and cannot name a consumer that has not been "
+        "declared yet."
     )
     if controls:
         note += (
-            f" The instrumentation control (\\texttt{{explicit-all}} against "
-            f"\\texttt{{automatic}} at the same scope) deviates by at most "
+            f" The instrumentation control, \\texttt{{explicit-all}} against "
+            f"\\texttt{{automatic}} at global scope, deviates by at most "
             f"{max(controls):.1f}\\% across these cells."
         )
     if dirty:

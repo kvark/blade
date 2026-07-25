@@ -505,7 +505,6 @@ pub struct CommandEncoder {
     manual_barriers: bool,
     barrier_scope: crate::BarrierScope,
     since_barrier: PassKinds,
-    pending_barrier: Option<crate::BarrierScope>,
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
@@ -644,7 +643,6 @@ impl crate::traits::CommandDevice for Context {
             manual_barriers: desc.manual_barriers,
             barrier_scope: desc.barrier_scope,
             since_barrier: PassKinds::default(),
-            pending_barrier: None,
         }
     }
 

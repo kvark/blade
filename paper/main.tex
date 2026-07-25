@@ -313,11 +313,13 @@ resource is consulted.
 
 The one case that is not derivable is an explicitly placed barrier, because
 the consumer has not been declared when \texttt{barrier()} is called. That one
-takes its scope as an argument. Its destination is resolved by holding the
-request until the next pass opens, which changes nothing observable --- the
-passes on either side are unchanged and repeated requests collapse into one
-barrier --- and keeps explicit placement from being penalized against automatic
-placement.
+takes its scope as an argument, and is emitted where it is written: its source
+scope narrows like any other, but its destination stays \texttt{ALL\_COMMANDS}.
+Holding the request back until the next pass opened would recover the
+destination as well, and we measured that it does, but a synchronization
+primitive that does not appear where the application put it is a poor trade for
+a few percent. The asymmetry is instead reported as a result: it is the
+measurable cost of not knowing what comes next.
 
 The derivation itself is a table over pass kinds:
 

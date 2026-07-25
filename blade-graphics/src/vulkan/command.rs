@@ -327,15 +327,8 @@ impl super::CommandEncoder {
     }
 
     fn begin_pass(&mut self, label: &str, kind: super::PassKind) {
-        // An explicitly requested barrier keeps the scope it asked for; an
-        // automatic one uses the encoder's.
-        let scope = self.pending_barrier.or(if self.manual_barriers {
-            None
-        } else {
-            Some(self.barrier_scope)
-        });
-        if let Some(scope) = scope {
-            self.barrier_before(scope, kind);
+        if !self.manual_barriers {
+            self.barrier_before(self.barrier_scope, kind);
         }
         // Recorded even in manual mode, so that a later explicit barrier or the
         // one emitted by `finish` covers this pass's writes.
@@ -369,8 +362,7 @@ impl super::CommandEncoder {
         // The encoder's own scope: an application that asked for narrow
         // barriers gets a narrow source scope here too, and one that did not
         // gets today's behaviour unchanged.
-        let scope = self.pending_barrier.take().unwrap_or(self.barrier_scope);
-        self.barrier_before(scope, super::PassKind::Unknown);
+        self.barrier_before(self.barrier_scope, super::PassKind::Unknown);
         self.add_marker("finish");
         let cmd_buf = self.buffers.first_mut().unwrap();
         unsafe {
@@ -504,20 +496,18 @@ impl super::CommandEncoder {
         (stages, accesses)
     }
 
-    /// Request a memory barrier at this point in the stream.
+    /// Emit a memory barrier here.
     ///
     /// `scope` says how wide it should be; there is no default, because the
     /// encoder cannot infer what an explicitly placed barrier is for.
     ///
-    /// The barrier is emitted once the encoder knows what it separates: at the
-    /// next pass, or when the encoder finishes. Nothing observable happens in
-    /// between - the passes on either side are unchanged, and repeated calls
-    /// collapse into one barrier - but it lets
-    /// [`crate::BarrierScope::PassKind`] name the consumer instead of falling
-    /// back to `ALL_COMMANDS`, so an explicitly placed barrier is not penalized
-    /// against an automatic one.
+    /// Under [`crate::BarrierScope::PassKind`] the source scope still covers
+    /// exactly the passes recorded since the previous barrier, but the
+    /// destination stays `ALL_COMMANDS`: the consumer has not been declared at
+    /// this point, and the barrier is emitted where it is written rather than
+    /// held back until one appears.
     pub fn barrier(&mut self, scope: crate::BarrierScope) {
-        self.pending_barrier = Some(scope);
+        self.barrier_before(scope, super::PassKind::Unknown);
     }
 
     fn barrier_before(&mut self, scope: crate::BarrierScope, to: super::PassKind) {
@@ -541,7 +531,6 @@ impl super::CommandEncoder {
             dst_access |= wa.extra_sync_dst_access;
         }
         self.since_barrier.clear();
-        self.pending_barrier = None;
         let barrier = vk::MemoryBarrier {
             src_access_mask: src_access,
             dst_access_mask: dst_access,
@@ -691,7 +680,6 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         // barrier must be as wide as `BarrierScope::Global`.
         self.since_barrier.clear();
         self.since_barrier.insert(super::PassKind::Unknown);
-        self.pending_barrier = None;
         self.buffers.rotate_left(1);
         let cmd_buf = self.buffers.first_mut().unwrap();
         self.device
