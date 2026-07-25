@@ -1,0 +1,8 @@
+$ cargo --version --verbose
+exit_code=0
+cargo 1.93.1 (Homebrew)
+release: 1.93.1
+host: aarch64-apple-darwin
+libgit2: 1.9.2 (sys:0.20.2 system)
+libcurl: 8.7.1 (sys:0.4.83+curl-8.15.0 system ssl:(SecureTransport) LibreSSL/3.3.6)
+os: Mac OS 15.7.3 [64-bit]

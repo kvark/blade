@@ -1,0 +1,49 @@
+# collection_id,20260725T062529Z
+# repetition,1
+# schema,blade-sync-bench-v1
+# implementation,wgpu
+# wgpu_version,30.0.0
+# backend,metal
+# device_name,"Apple M3"
+# vendor_id,0x0000
+# device_id,0x0000
+# device_type,IntegratedGpu
+# device_pci_bus_id,""
+# driver_name,""
+# driver_info,""
+# software_emulated,false
+# validation,false
+# gpu_timing,true
+# timestamp_period_ns,1
+sample,workload,policy,passes,elements,rounds,width,height,start_ns,record_ns,submit_ns,wait_ns,gpu_ns,gpu_pass_count
+0,graphics-independent,tracked,16,1048576,8,1024,1024,1875,15083,505708,2540083,1909375,16
+1,graphics-independent,tracked,16,1048576,8,1024,1024,1042,12084,345417,2555000,0,16
+2,graphics-independent,tracked,16,1048576,8,1024,1024,917,10750,326833,2908333,0,16
+3,graphics-independent,tracked,16,1048576,8,1024,1024,1167,12541,389583,2903667,0,16
+4,graphics-independent,tracked,16,1048576,8,1024,1024,1333,13500,371250,2714000,0,16
+5,graphics-independent,tracked,16,1048576,8,1024,1024,792,10250,289833,2549375,0,16
+6,graphics-independent,tracked,16,1048576,8,1024,1024,375,8708,261875,2522750,0,16
+7,graphics-independent,tracked,16,1048576,8,1024,1024,417,8542,271625,2685458,0,16
+8,graphics-independent,tracked,16,1048576,8,1024,1024,375,8666,255417,2635792,2212583,16
+9,graphics-independent,tracked,16,1048576,8,1024,1024,500,8375,262792,2865916,0,16
+10,graphics-independent,tracked,16,1048576,8,1024,1024,334,8125,246833,2541750,1952666,16
+11,graphics-independent,tracked,16,1048576,8,1024,1024,625,8583,266041,2526917,0,16
+12,graphics-independent,tracked,16,1048576,8,1024,1024,375,8209,253292,2496583,1897834,16
+13,graphics-independent,tracked,16,1048576,8,1024,1024,416,8625,258916,2803375,0,16
+14,graphics-independent,tracked,16,1048576,8,1024,1024,333,8334,250125,2634917,0,16
+15,graphics-independent,tracked,16,1048576,8,1024,1024,417,8459,249959,2889584,0,16
+16,graphics-independent,tracked,16,1048576,8,1024,1024,375,8250,246166,2713583,0,16
+17,graphics-independent,tracked,16,1048576,8,1024,1024,375,8334,246625,2636208,0,16
+18,graphics-independent,tracked,16,1048576,8,1024,1024,375,8125,246416,2706333,1900292,16
+19,graphics-independent,tracked,16,1048576,8,1024,1024,417,8375,265083,2785083,0,16
+20,graphics-independent,tracked,16,1048576,8,1024,1024,292,8083,241875,2930250,2218625,16
+21,graphics-independent,tracked,16,1048576,8,1024,1024,500,8208,246917,2968334,0,16
+22,graphics-independent,tracked,16,1048576,8,1024,1024,458,8042,236250,2594166,0,16
+23,graphics-independent,tracked,16,1048576,8,1024,1024,417,8125,246208,2642167,0,16
+24,graphics-independent,tracked,16,1048576,8,1024,1024,291,7958,242083,2823709,2120666,16
+25,graphics-independent,tracked,16,1048576,8,1024,1024,375,8167,246833,2903042,0,16
+26,graphics-independent,tracked,16,1048576,8,1024,1024,292,7875,234584,2926666,0,16
+27,graphics-independent,tracked,16,1048576,8,1024,1024,333,8333,240875,2737709,0,16
+28,graphics-independent,tracked,16,1048576,8,1024,1024,250,8000,229375,2602250,0,16
+29,graphics-independent,tracked,16,1048576,8,1024,1024,417,8084,241167,2662000,0,16
+# validation_hash,fnv1a64:161975f4e03e1a92

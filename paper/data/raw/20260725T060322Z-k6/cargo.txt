@@ -1,0 +1,11 @@
+$ cargo --version --verbose
+exit_code=0
+cargo 1.94.0 (85eff7c80 2026-01-15)
+release: 1.94.0
+commit-hash: 85eff7c80277b57f78b11e28d14154ab12fcf643
+commit-date: 2026-01-15
+host: x86_64-unknown-linux-gnu
+libgit2: 1.9.2 (sys:0.20.3 vendored)
+libcurl: 8.17.0-DEV (sys:0.4.84+curl-8.17.0 vendored ssl:OpenSSL/3.5.4)
+ssl: OpenSSL 3.5.4 30 Sep 2025
+os: Ubuntu 24.4.0 (noble) [64-bit]

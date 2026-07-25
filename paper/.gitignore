@@ -9,3 +9,7 @@ main.pdf
 main.synctex.gz
 __pycache__/
 *.pyc
+
+# Regenerated from data/raw by analyze.py and build-tables.py. The paper
+# inputs data/derived/tables/*.tex, so run build-tables.py before latexmk.
+data/derived/
