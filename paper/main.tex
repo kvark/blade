@@ -54,7 +54,7 @@ invalidates L2. That reading also suggests a fourth configuration, which we
 implemented and measured: a barrier that is still global and still tracks no
 resource, but declares stages and accesses derived from the kinds of the two
 passes it separates. At identical placement it is worth
-$5.5\%\ci{-5.5}{-5.3}$ of GPU span on a dependent graphics chain, where
+$5.3\%\ci{-5.4}{-5.3}$ of GPU span on a dependent graphics chain, where
 placement can recover nothing at all. Finally, the classic argument against
 \texttt{GENERAL} has largely expired: RADV keeps DCC colour compression in
 \texttt{GENERAL} on GFX10 and later, and keeps TC-compatible HTILE, but
@@ -661,28 +661,34 @@ accesses change. The two chain workloads make the separation sharp, because
 there \texttt{B-hazard} has nothing to remove --- every boundary is a real
 hazard --- so any difference must come from scope.
 
-On the RTX~5070, narrowing the scope is worth $5.5\%\ci{5.3}{5.5}$ on
-\texttt{graphics-chain} and $3.7\%\ci{3.6}{3.8}$ on \texttt{mixed-chain},
+On the RTX~5070, narrowing the scope is worth $5.3\%\ci{5.3}{5.4}$ on
+\texttt{graphics-chain} and $3.6\%\ci{3.5}{3.7}$ on \texttt{mixed-chain},
 neither of which barrier placement can touch at all. On the compute workloads
-it is worth under $1\%$: a compute-to-compute boundary already declares
-\texttt{COMPUTE\_SHADER} work on both sides, so there is less to give back.
-The pattern matches the mechanism --- the savings come from not asking the
-driver to drain and flush the graphics pipeline at a boundary where no graphics
-work exists.
+it is worth nothing distinguishable: the three compute-involving cells span
+$-0.7\%$ to $+1.9\%$, inside the $2.1\%$ band the instrumentation control
+itself occupies on this collection. That matches the mechanism rather than
+contradicting it --- a compute-to-compute boundary already declares
+\texttt{COMPUTE\_SHADER} work on both sides, so there is nothing to give
+back, and the savings elsewhere come from not asking the driver to drain and
+flush the graphics pipeline where no graphics work exists.
 
-The crossed design also shows how the two axes combine, which is not one
-rule. Where placement removes a barrier entirely, scope has nothing left to
-narrow: on \texttt{compute-independent} placement is worth $20.2\%$ and the
-two together are also worth $20.2\%$. Where placement can remove nothing, the
-combination is exactly the scope effect: $5.4\%$ on \texttt{graphics-chain}
-against $5.5\%$ for scope alone. And where the surviving barriers still cross
-pass kinds, the two add: on \texttt{mixed-independent}, $16.7\%$ from
-placement and $16.9\%$ from both. Scope is what is left after placement has
-done what it can, so an application that cannot restructure its passes still
-has something to gain, and one that can loses nothing by taking both.
+The third column is the one worth dwelling on, because it is not the sum of
+the first two. Combining hazard-only placement with the narrow scope
+reproduces the placement effect and nothing more: $-0.2\%$ on
+\texttt{graphics-chain} where scope alone was worth $-5.3\%$, and $+0.0\%$
+on \texttt{mixed-chain} where scope alone was worth $-3.6\%$. The reason is
+the asymmetry of Section~\ref{sec:scoped}. Under hazard-only placement every
+surviving barrier is one the application wrote, so it narrows its source but
+not its destination, and on these workloads the destination is where the
+saving was.
 
-That second gain also requires no API change and no resource tracking, so
-unlike \texttt{B-hazard} it is not something the application can get wrong.
+That is a real cost of taking manual control, and it is the opposite of the
+intuition that more control is strictly better: an application that hands
+placement back to the encoder gets a barrier the encoder can describe on both
+sides, and one that takes placement into its own hands gets a barrier that
+only half describes itself. The encoder-placed narrowing is also the safer of
+the two gains --- it needs no API change and no resource tracking, so unlike
+\texttt{B-hazard} it is not something the application can get wrong.
 
 These numbers are from NVIDIA, where the RADV mechanism does not apply. The
 prediction for AMD is larger:
@@ -893,9 +899,15 @@ Three actions follow, in the order an application should try them.
 shows a gain that costs the application nothing: it is a property of the
 encoder, it cannot be got wrong, and on RADV it removes an unconditional
 pixel-pipeline drain from every compute boundary and two attachment flushes
-plus two metadata flushes from every boundary that touches no attachment. This
-should be the default; the widest scope should be what an explicit
-\texttt{barrier()} call means, not what every pass boundary means.
+plus two metadata flushes from every boundary that touches no attachment.
+
+Take this gain first for a second reason: it is the one that manual placement
+gives up. An explicitly placed barrier narrows only its source, so the
+combination of hazard-only placement and narrow scope measured no better than
+hazard-only placement alone. An application that suppresses the encoder's
+barriers everywhere therefore forfeits the scope saving on the boundaries it
+keeps, which argues for suppressing them only where a profiler shows overlap is
+available rather than as a global setting.
 
 \emph{Then restructure the passes so the remaining barriers are ones you
 need.} The field report's renderer serialized because independent work sat on

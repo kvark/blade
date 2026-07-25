@@ -107,7 +107,7 @@ era; later ones cross placement with scope.
 | `20260725T060322Z-k6` | k6 | AMD Radeon 780M | 16-pass matrix |
 | `20260725T160725Z-matrix` | matrix | Intel Xe (RPL-U) | 16-pass matrix |
 | `20260725T062529Z-mac` | mac | Apple M3 | 16-pass matrix, Metal case study |
-| `20260725T185206Z-zork` | zork | NVIDIA RTX 5070 | placement crossed with scope |
+| `20260725T191617Z-zork` | zork | NVIDIA RTX 5070 | placement crossed with scope |
 | `20260725T185508Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, GPU-timed |
 | `20260725T190100Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, timestamp-free |
 
