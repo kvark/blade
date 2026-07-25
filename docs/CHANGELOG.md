@@ -2,6 +2,10 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- add `BarrierScope`. `PassKind` derives a barrier's stages and accesses from the kinds of the passes involved instead of naming `ALL_COMMANDS`/`MEMORY_WRITE`. Still one global memory barrier with no per-resource state: the encoder keeps a bitmask of the pass kinds recorded since the previous barrier, which is what the barrier has to make available, and takes the destination from the pass being opened
+  - `CommandEncoder::barrier` now takes a `BarrierScope`, since nothing about an explicitly placed barrier can be inferred. It is emitted at the next pass, so it can name its consumer; repeated calls collapse into one barrier
+  - `CommandEncoderDesc::barrier_scope` selects the scope for the barriers the encoder places itself. There is no default: the choice changes what the driver flushes and drains
+  - vk: the `extra_sync_*_access` workarounds are applied only at `Global` scope. They add transfer accesses that a narrowed stage mask does not support and does not need
 - vk: support `VK_EXT_external_memory_host` — enable the extension, query memory-type compatibility via `vkGetMemoryHostPointerPropertiesEXT`, and round allocation size to `minImportedHostPointerAlignment` so `Memory::External(HostAllocation)` imports succeed on drivers that expose the extension
 
 ## blade-egui-0.8.2, blade-util-0.4.1 (25 Apr 2026)

@@ -117,6 +117,7 @@ impl Example {
             name: "xr",
             buffer_count: 1,
             manual_barriers: false,
+            barrier_scope: gpu::BarrierScope::Global,
         });
         let params_buf = context.create_buffer(gpu::BufferDesc {
             name: "xr-params",

@@ -107,7 +107,9 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn barrier(&mut self) {}
+    /// Accepted for API parity; this backend does not place inter-pass
+    /// barriers of its own.
+    pub fn barrier(&mut self, _scope: crate::BarrierScope) {}
 
     fn pass<P>(&mut self, kind: super::PassKind) -> super::PassEncoder<'_, P> {
         super::PassEncoder {

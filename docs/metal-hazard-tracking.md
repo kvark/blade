@@ -57,11 +57,12 @@ It would not be sufficient to add the
 ## Benchmark
 
 The standalone harness is
-[`tools/metal-hazard-bench.swift`](../../tools/metal-hazard-bench.swift). Build
-and run it with:
+[`paper/tools/metal-hazard-bench.swift`](../paper/tools/metal-hazard-bench.swift).
+Build and run it with:
 
 ```sh
-xcrun swiftc -O tools/metal-hazard-bench.swift -o /tmp/metal-hazard-bench
+xcrun swiftc -O paper/tools/metal-hazard-bench.swift \
+  -o /tmp/metal-hazard-bench
 /tmp/metal-hazard-bench
 ```
 

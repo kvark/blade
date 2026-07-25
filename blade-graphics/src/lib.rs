@@ -881,6 +881,44 @@ pub enum CommandType {
     General,
 }
 
+/// How wide the memory barriers emitted by an encoder are.
+///
+/// Both variants are global memory barriers: neither names a buffer or an
+/// image, and neither requires the encoder to track per-resource state.
+/// They differ only in the pipeline stages and access types they declare.
+///
+/// There is deliberately no default. The choice changes what the driver is
+/// asked to flush and drain, so it belongs at the call site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarrierScope {
+    /// `ALL_COMMANDS` with `MEMORY_WRITE` made available to
+    /// `MEMORY_READ | MEMORY_WRITE`.
+    ///
+    /// Correct for any pair of passes, and the widest thing a driver can be
+    /// asked for: on AMD it expands to every write access, which drains both
+    /// the compute and the pixel pipelines and flushes the color and depth
+    /// blocks together with their metadata caches.
+    Global,
+    /// Stages and accesses derived from the kinds of the passes involved.
+    ///
+    /// The source scope is the union of the pass kinds recorded since the
+    /// previous barrier, which is what that barrier has to make available.
+    /// The destination scope is the kind of the pass about to begin when the
+    /// encoder places the barrier itself, and stays wide for an explicit
+    /// [`CommandEncoder::barrier`] call, whose consumer is not known.
+    ///
+    /// A compute pass can only have written through shader stores, so a
+    /// compute-to-compute boundary does not need the color and depth blocks
+    /// flushed; a render pass runs no compute waves, so a render-to-render
+    /// boundary does not need a compute drain.
+    ///
+    /// This preserves Blade's contract - no resource states, one barrier per
+    /// boundary - and only stops overstating what the boundary orders. The
+    /// encoder keeps one bitmask of pass kinds for it, not a per-resource
+    /// table.
+    PassKind,
+}
+
 pub struct CommandEncoderDesc<'a> {
     pub name: &'a str,
     /// Number of buffers that this encoder needs to keep alive.
@@ -891,6 +929,19 @@ pub struct CommandEncoderDesc<'a> {
     /// not inserted. The user is responsible for calling
     /// `barrier()` on the encoder where synchronization is needed.
     pub manual_barriers: bool,
+    /// Width of the barriers the encoder places on its own: the one before
+    /// each pass and the one it emits when finishing.
+    ///
+    /// Both variants are derived without any further input, because the
+    /// encoder knows the kind of every pass it has recorded and the kind of
+    /// the pass it is opening. Explicitly placed barriers take their scope as
+    /// an argument to `barrier()` instead, since nothing about them can be
+    /// inferred.
+    ///
+    /// This exists so the two scopes can be compared on the same workload.
+    /// Once one of them is established as the better choice, the encoder
+    /// should simply derive its own barriers and this field should go away.
+    pub barrier_scope: BarrierScope,
 }
 
 pub struct ComputePipelineDesc<'a> {

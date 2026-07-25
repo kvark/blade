@@ -24,17 +24,49 @@ profiling—not single-factor causal attribution.
 
 | ID | Barrier placement | Resource scope | Stage/access scope | Image policy | Status |
 |---|---|---|---|---|---|
-| `B-auto` | every pass | global | broad | `GENERAL` | implemented |
-| `B-hazard` | declared hazards | global | broad | `GENERAL` | implemented |
-| `B-explicit-all` | every pass | global | broad | `GENERAL` | implemented as a control |
-| `W-wgpu` | derived by wgpu | tracked resource usage | backend-generated | backend-generated | pending matched workload |
+| `B-auto` | every pass | global | broad | `GENERAL` | collected |
+| `B-hazard` | declared hazards | global | broad | `GENERAL` | collected |
+| `B-explicit-all` | every pass | global | broad | `GENERAL` | collected as a control |
+| `W-wgpu` | derived by wgpu | tracked resource usage | backend-generated | backend-generated | collected |
 
-Blade emits a final global barrier when finishing every encoder, including in
-manual mode. That barrier is common to all three implemented configurations.
-`B-explicit-all` additionally emits a manual barrier before every pass, making
-it command-for-command equivalent to the automatic barrier policy; it is a
-control for benchmark and instrumentation artifacts rather than a distinct
-synchronization strategy.
+Each of the three `B-*` rows is collected again with `BarrierScope::PassKind`,
+giving six Blade configurations: placement crossed with scope, so neither axis
+is a default for the other. The `-scoped` names in the data are `automatic-scoped`,
+`hazard-only-scoped`, and `explicit-all-scoped`.
+
+The `-scoped` variants promote factor 3 from observed-only to directly
+controlled. The barrier is still one global memory barrier naming no resource,
+but its stages and accesses are derived:
+
+- source: the union of the pass kinds recorded since the previous barrier,
+  kept as one bitmask on the encoder. Taking the union rather than the last
+  pass alone is what keeps it correct when the application suppressed
+  boundaries.
+- destination: the kind of the pass being opened.
+
+Neither needs anything from the caller, so the pass declaration is unchanged.
+The one thing that cannot be derived is the destination of an explicitly placed
+barrier, whose consumer has not been declared yet; `CommandEncoder::barrier`
+therefore takes a `BarrierScope` argument, and the request is emitted when the
+next pass opens so it can still name its consumer.
+
+Because a `-scoped` policy places identical numbers of barriers at identical
+boundaries to its unscoped twin, their difference is attributable to scope
+alone — the first single-factor claim this study can make about factor 3.
+
+Correctness evidence: the Khronos synchronization validation checks pass with
+no hazards and no validation errors on all six workloads times six policies,
+and every policy produces the same output hash. Validation earned its place
+here: it caught that Blade's `extra_sync_*_access` driver workarounds add
+transfer accesses that a narrowed stage mask does not support.
+
+Blade emits a barrier when finishing every encoder, including in manual mode;
+its destination scope is always wide because it has to reach the next
+submission and the host. That barrier is common to all six Blade
+configurations. `B-explicit-all` additionally emits a manual barrier before
+every pass, making it command-for-command equivalent to the automatic policy at
+the same scope; it is a control for benchmark and instrumentation artifacts
+rather than a distinct synchronization strategy.
 
 `W-wgpu` is the realistic tracked comparison. It must not be used alone to
 attribute a difference to tracking, because validation, lifetime management,
@@ -61,6 +93,13 @@ The headless `sync-bench` artifact initially provides:
 | `compute-chain` | ping-pong storage buffers | yes, every pass | cost when coarse placement is already exact |
 | `graphics-independent` | unique color targets | no | cost of redundant graphics barriers |
 | `graphics-chain` | one load/store color target with blending | yes, every pass | serialized graphics control |
+| `mixed-independent` | alternating compute and render, unique per pass | no | scope and placement together across pass kinds |
+| `mixed-chain` | alternating compute and render, each chained within its kind | yes, every pass | scope with placement held fixed |
+
+The mixed families are Blade-only: the matched wgpu benchmark does not
+implement them, and the collector runs wgpu on the four shared workloads only.
+`mixed-chain` is the cleanest single-factor test of barrier scope, because
+`B-hazard` places exactly the same barriers there as `B-auto`.
 
 Required extensions:
 
@@ -159,6 +198,13 @@ stretch target, not a requirement for an AMD/NVIDIA-scoped paper.
 
 ## Statistical analysis
 
+The practical-equivalence region was **not** preregistered. It is derived after
+the fact from the `B-explicit-all` control, whose command stream is identical to
+`B-auto`: excluding the one cell that the control itself rejects, the largest
+control deviation observed on any device is 2.6%. GPU-span differences within
+±3% are therefore reported as practically equivalent, and the derivation is
+stated wherever the region is used. A future collection should preregister it.
+
 - Preserve every valid raw sample.
 - Plot distributions and time-ordered samples before aggregation.
 - Report median, interquartile range, and a 95% bootstrap confidence interval
@@ -202,11 +248,31 @@ sample,workload,policy,passes,elements,rounds,width,height,start_ns,record_ns,su
 Metadata includes `implementation` (`blade` or `wgpu`) so matched results remain
 separate even when they share a backend and device.
 
+Sweep collections append `__pNNNN` to the run ID, and their `order.csv` carries
+a `passes` column. `analyze.py` already groups by `passes`, so a sweep needs no
+special handling.
+
 Derived files must be reproducible from raw files without manual spreadsheet
 edits. `paper/analyze.py` is the initial standard-library-only summarizer. It
 reports both within-Blade policy differences and Blade-automatic versus
 wgpu-tracked differences; its bootstrap seed is derived deterministically from
-each configuration key.
+each configuration key. `paper/build-tables.py` turns the raw collections
+directly into the LaTeX tables that `main.tex` includes, so no number in the
+paper is transcribed by hand.
+
+## Known deviations in the current collections
+
+1. `20260725T155439Z-rubik` ran Blade on the Raphael integrated GPU and wgpu on
+   the RX 7900 XT. Its within-Blade cells are valid; its cross-implementation
+   cells are void. The collector now aborts on this condition.
+2. Metal GPU timestamps are per pass rather than a span in Blade, and were
+   returned as zero by wgpu for three of the four workloads. Metal device time
+   is not reported; host wall time is used instead.
+3. `20260725T160725Z-matrix` fails its own `B-explicit-all` control on
+   `graphics-independent` (-37.4%, repetition medians spanning 3.2-5.6 ms for an
+   identical command stream). The cell is reported and rejected, not deleted.
+4. Only `zork` has a timestamp-free collection, so host-cost claims are
+   established there and merely corroborated elsewhere.
 
 ## Correctness rules
 
@@ -224,12 +290,18 @@ each configuration key.
 
 The paper can lose its `RESULTS PENDING` banner only after:
 
-- the matched wgpu workloads reproduce Blade's workload graph and outputs;
-- the paper consistently labels Blade-versus-wgpu results as end-to-end and
+- [x] the matched wgpu workloads reproduce Blade's workload graph and outputs
+  (all 216 matrix runs and 768 sweep runs agree on the per-workload hash);
+- [x] the paper consistently labels Blade-versus-wgpu results as end-to-end and
   reserves causal claims for the within-Blade barrier-placement control;
-- representative Vulkan captures and CPU profiles support the explanation of
-  tracked-versus-coarse behavior;
-- at least the minimum hardware matrix is complete;
-- raw data and analysis scripts reproduce every table and figure;
-- negative and architecture-specific results are described alongside wins;
-- the abstract contains absolute effects and uncertainty, not only ratios.
+- [ ] representative Vulkan captures and CPU profiles support the explanation of
+  tracked-versus-coarse behavior — **outstanding**; the Intel end-to-end gap is
+  currently reported as unexplained rather than attributed;
+- [x] at least the minimum hardware matrix is complete (NVIDIA and AMD on
+  Linux, plus Intel and Apple as sensitivity cases);
+- [x] raw data and analysis scripts reproduce every table (`build-tables.py`);
+- [x] negative and architecture-specific results are described alongside wins
+  (the Radeon 780M regression is reported in the abstract);
+- [x] the abstract contains absolute effects and uncertainty, not only ratios.
+
+Application workloads remain outstanding independently of the banner.

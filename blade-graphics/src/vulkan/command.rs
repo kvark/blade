@@ -326,10 +326,20 @@ impl super::CommandEncoder {
         }
     }
 
-    fn begin_pass(&mut self, label: &str) {
-        if !self.manual_barriers {
-            self.barrier();
+    fn begin_pass(&mut self, label: &str, kind: super::PassKind) {
+        // An explicitly requested barrier keeps the scope it asked for; an
+        // automatic one uses the encoder's.
+        let scope = self.pending_barrier.or(if self.manual_barriers {
+            None
+        } else {
+            Some(self.barrier_scope)
+        });
+        if let Some(scope) = scope {
+            self.barrier_before(scope, kind);
         }
+        // Recorded even in manual mode, so that a later explicit barrier or the
+        // one emitted by `finish` covers this pass's writes.
+        self.since_barrier.insert(kind);
         self.add_marker(label);
         self.add_timestamp(label);
 
@@ -350,7 +360,17 @@ impl super::CommandEncoder {
     }
 
     pub(super) fn finish(&mut self) -> vk::CommandBuffer {
-        self.barrier();
+        // Makes every write recorded since the last barrier available to the
+        // next submission and to the host, and absorbs any barrier the
+        // application requested after its last pass. The destination scope
+        // stays wide; the source scope covers exactly the passes that still
+        // need it, which is correct even when the application skipped
+        // boundaries.
+        // The encoder's own scope: an application that asked for narrow
+        // barriers gets a narrow source scope here too, and one that did not
+        // gets today's behaviour unchanged.
+        let scope = self.pending_barrier.take().unwrap_or(self.barrier_scope);
+        self.barrier_before(scope, super::PassKind::Unknown);
         self.add_marker("finish");
         let cmd_buf = self.buffers.first_mut().unwrap();
         unsafe {
@@ -368,20 +388,170 @@ impl super::CommandEncoder {
         cmd_buf.raw
     }
 
-    pub fn barrier(&mut self) {
-        let wa = &self.device.workarounds;
+    /// Stages and write accesses a pass of this kind may have produced.
+    fn source_scope(kind: super::PassKind) -> (vk::PipelineStageFlags, vk::AccessFlags) {
+        use super::PassKind as Pk;
+        match kind {
+            Pk::Transfer => (
+                vk::PipelineStageFlags::TRANSFER,
+                vk::AccessFlags::TRANSFER_WRITE,
+            ),
+            Pk::AccelerationStructure => (
+                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+                    | vk::PipelineStageFlags::TRANSFER,
+                vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR | vk::AccessFlags::TRANSFER_WRITE,
+            ),
+            Pk::Compute => (
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::AccessFlags::SHADER_WRITE,
+            ),
+            // `ALL_GRAPHICS` rather than the attachment-output stage alone:
+            // a fragment or vertex shader may also have written storage
+            // resources. It still excludes compute, which is the point.
+            Pk::Render => (
+                vk::PipelineStageFlags::ALL_GRAPHICS,
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE
+                    | vk::AccessFlags::SHADER_WRITE,
+            ),
+            Pk::Unknown => (
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::AccessFlags::MEMORY_WRITE,
+            ),
+        }
+    }
+
+    /// Stages and accesses a pass of this kind may consume.
+    ///
+    /// `ray_tracing` widens the shader-visible set with acceleration-structure
+    /// reads, which a ray query in a compute or fragment shader performs.
+    fn destination_scope(
+        kind: super::PassKind,
+        ray_tracing: bool,
+    ) -> (vk::PipelineStageFlags, vk::AccessFlags) {
+        use super::PassKind as Pk;
+        let mut shader_reads = vk::AccessFlags::SHADER_READ
+            | vk::AccessFlags::SHADER_WRITE
+            | vk::AccessFlags::UNIFORM_READ;
+        if ray_tracing {
+            shader_reads |= vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR;
+        }
+        match kind {
+            Pk::Transfer => (
+                vk::PipelineStageFlags::TRANSFER,
+                vk::AccessFlags::TRANSFER_READ | vk::AccessFlags::TRANSFER_WRITE,
+            ),
+            Pk::AccelerationStructure => (
+                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+                    | vk::PipelineStageFlags::TRANSFER,
+                vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR
+                    | vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR
+                    | vk::AccessFlags::TRANSFER_READ
+                    | vk::AccessFlags::TRANSFER_WRITE
+                    | shader_reads,
+            ),
+            // `DRAW_INDIRECT` covers `dispatch_indirect`, whose argument buffer
+            // is fetched before the compute stage.
+            Pk::Compute => (
+                vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+                shader_reads | vk::AccessFlags::INDIRECT_COMMAND_READ,
+            ),
+            Pk::Render => (
+                vk::PipelineStageFlags::ALL_GRAPHICS,
+                shader_reads
+                    | vk::AccessFlags::INDIRECT_COMMAND_READ
+                    | vk::AccessFlags::INDEX_READ
+                    | vk::AccessFlags::VERTEX_ATTRIBUTE_READ
+                    | vk::AccessFlags::COLOR_ATTACHMENT_READ
+                    | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            ),
+            Pk::Unknown => (
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
+            ),
+        }
+    }
+
+    /// Source scope covering every pass recorded since the previous barrier.
+    ///
+    /// This is what makes narrowing safe in manual mode too: whichever
+    /// boundaries the application chose to skip, their writes are still in the
+    /// set this barrier makes available.
+    fn accumulated_source_scope(&self) -> (vk::PipelineStageFlags, vk::AccessFlags) {
+        use super::PassKind as Pk;
+        if self.since_barrier.is_empty() {
+            // Nothing recorded since the last barrier. Stay wide rather than
+            // emit a barrier with an empty source scope.
+            return Self::source_scope(Pk::Unknown);
+        }
+        let mut stages = vk::PipelineStageFlags::empty();
+        let mut accesses = vk::AccessFlags::empty();
+        for kind in [
+            Pk::Transfer,
+            Pk::AccelerationStructure,
+            Pk::Compute,
+            Pk::Render,
+            Pk::Unknown,
+        ] {
+            if self.since_barrier.contains(kind) {
+                let (stage, access) = Self::source_scope(kind);
+                stages |= stage;
+                accesses |= access;
+            }
+        }
+        (stages, accesses)
+    }
+
+    /// Request a memory barrier at this point in the stream.
+    ///
+    /// `scope` says how wide it should be; there is no default, because the
+    /// encoder cannot infer what an explicitly placed barrier is for.
+    ///
+    /// The barrier is emitted once the encoder knows what it separates: at the
+    /// next pass, or when the encoder finishes. Nothing observable happens in
+    /// between - the passes on either side are unchanged, and repeated calls
+    /// collapse into one barrier - but it lets
+    /// [`crate::BarrierScope::PassKind`] name the consumer instead of falling
+    /// back to `ALL_COMMANDS`, so an explicitly placed barrier is not penalized
+    /// against an automatic one.
+    pub fn barrier(&mut self, scope: crate::BarrierScope) {
+        self.pending_barrier = Some(scope);
+    }
+
+    fn barrier_before(&mut self, scope: crate::BarrierScope, to: super::PassKind) {
+        let scoped = scope == crate::BarrierScope::PassKind;
+        let (src_stage, mut src_access) = if scoped {
+            self.accumulated_source_scope()
+        } else {
+            Self::source_scope(super::PassKind::Unknown)
+        };
+        let to = if scoped { to } else { super::PassKind::Unknown };
+        let ray_tracing = self.device.ray_tracing.is_some();
+        let (dst_stage, mut dst_access) = Self::destination_scope(to, ray_tracing);
+        if !scoped {
+            // These spell out transfer and acceleration-structure accesses that
+            // `MEMORY_WRITE`/`MEMORY_READ` should already have covered. They are
+            // only legal alongside `ALL_COMMANDS`: a narrowed stage mask does not
+            // support them, and does not need them, because a narrowed scope
+            // names the accesses of the passes that actually ran.
+            let wa = &self.device.workarounds;
+            src_access |= wa.extra_sync_src_access;
+            dst_access |= wa.extra_sync_dst_access;
+        }
+        self.since_barrier.clear();
+        self.pending_barrier = None;
         let barrier = vk::MemoryBarrier {
-            src_access_mask: vk::AccessFlags::MEMORY_WRITE | wa.extra_sync_src_access,
-            dst_access_mask: vk::AccessFlags::MEMORY_READ
-                | vk::AccessFlags::MEMORY_WRITE
-                | wa.extra_sync_dst_access,
+            src_access_mask: src_access,
+            dst_access_mask: dst_access,
             ..Default::default()
         };
         unsafe {
             self.device.core.cmd_pipeline_barrier(
                 self.buffers[0].raw,
-                vk::PipelineStageFlags::ALL_COMMANDS,
-                vk::PipelineStageFlags::ALL_COMMANDS,
+                src_stage,
+                dst_stage,
                 vk::DependencyFlags::empty(),
                 &[barrier],
                 &[],
@@ -391,7 +561,7 @@ impl super::CommandEncoder {
     }
 
     pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder<'_> {
-        self.begin_pass(label);
+        self.begin_pass(label, super::PassKind::Transfer);
         super::TransferCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
@@ -402,7 +572,7 @@ impl super::CommandEncoder {
         &mut self,
         label: &str,
     ) -> super::AccelerationStructureCommandEncoder<'_> {
-        self.begin_pass(label);
+        self.begin_pass(label, super::PassKind::AccelerationStructure);
         super::AccelerationStructureCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
@@ -410,7 +580,7 @@ impl super::CommandEncoder {
     }
 
     pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder<'_> {
-        self.begin_pass(label);
+        self.begin_pass(label, super::PassKind::Compute);
         super::ComputeCommandEncoder {
             cmd_buf: self.buffers.first_mut().unwrap(),
             device: &self.device,
@@ -423,7 +593,7 @@ impl super::CommandEncoder {
         label: &str,
         targets: crate::RenderTargetSet,
     ) -> super::RenderCommandEncoder<'_> {
-        self.begin_pass(label);
+        self.begin_pass(label, super::PassKind::Render);
 
         let mut target_size = [0u16; 2];
         let mut color_attachments = Vec::with_capacity(targets.colors.len());
@@ -517,6 +687,11 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     type Frame = super::Frame;
 
     fn start(&mut self) {
+        // A fresh command buffer has no known predecessor, so its first
+        // barrier must be as wide as `BarrierScope::Global`.
+        self.since_barrier.clear();
+        self.since_barrier.insert(super::PassKind::Unknown);
+        self.pending_barrier = None;
         self.buffers.rotate_left(1);
         let cmd_buf = self.buffers.first_mut().unwrap();
         self.device
@@ -574,6 +749,9 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     }
 
     fn init_texture(&mut self, texture: super::Texture) {
+        // Outside the pass model, so the next barrier must not assume the
+        // recorded pass kinds describe everything that happened.
+        self.since_barrier.insert(super::PassKind::Unknown);
         let barrier = vk::ImageMemoryBarrier {
             old_layout: vk::ImageLayout::UNDEFINED,
             new_layout: vk::ImageLayout::GENERAL,

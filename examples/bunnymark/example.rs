@@ -175,6 +175,7 @@ impl Example {
             name: "init",
             buffer_count: 1,
             manual_barriers: false,
+            barrier_scope: gpu::BarrierScope::Global,
         });
         command_encoder.start();
         command_encoder.init_texture(texture);

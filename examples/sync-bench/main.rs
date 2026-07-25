@@ -20,6 +20,12 @@ enum Workload {
     ComputeChain,
     GraphicsIndependent,
     GraphicsChain,
+    /// Alternating compute and render passes with no dependency between them.
+    MixedIndependent,
+    /// Alternating compute and render passes; each pass depends on the pass of
+    /// the same kind two positions earlier, so every boundary needs a barrier
+    /// and every boundary joins two different pass kinds.
+    MixedChain,
 }
 
 impl Workload {
@@ -29,6 +35,8 @@ impl Workload {
             "compute-chain" => Ok(Self::ComputeChain),
             "graphics-independent" => Ok(Self::GraphicsIndependent),
             "graphics-chain" => Ok(Self::GraphicsChain),
+            "mixed-independent" => Ok(Self::MixedIndependent),
+            "mixed-chain" => Ok(Self::MixedChain),
             _ => Err(format!("unknown workload: {value}")),
         }
     }
@@ -39,74 +47,199 @@ impl Workload {
             Self::ComputeChain => "compute-chain",
             Self::GraphicsIndependent => "graphics-independent",
             Self::GraphicsChain => "graphics-chain",
+            Self::MixedIndependent => "mixed-independent",
+            Self::MixedChain => "mixed-chain",
         }
     }
 
-    fn is_compute(self) -> bool {
-        matches!(self, Self::ComputeIndependent | Self::ComputeChain)
+    fn needs_compute(self) -> bool {
+        !matches!(self, Self::GraphicsIndependent | Self::GraphicsChain)
+    }
+
+    fn needs_graphics(self) -> bool {
+        !matches!(self, Self::ComputeIndependent | Self::ComputeChain)
+    }
+
+    fn is_mixed(self) -> bool {
+        matches!(self, Self::MixedIndependent | Self::MixedChain)
     }
 
     fn is_dependent(self) -> bool {
-        matches!(self, Self::ComputeChain | Self::GraphicsChain)
+        matches!(
+            self,
+            Self::ComputeChain | Self::GraphicsChain | Self::MixedChain
+        )
     }
-}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BarrierPolicy {
-    Automatic,
-    HazardOnly,
-    ExplicitAll,
-}
-
-impl BarrierPolicy {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "automatic" => Ok(Self::Automatic),
-            "hazard-only" => Ok(Self::HazardOnly),
-            "explicit-all" => Ok(Self::ExplicitAll),
-            _ => Err(format!("unknown barrier policy: {value}")),
+    /// Whether pass `index` is a compute pass. Mixed workloads alternate,
+    /// starting with compute.
+    fn pass_is_compute(self, index: usize) -> bool {
+        if self.is_mixed() {
+            index.is_multiple_of(2)
+        } else {
+            self.needs_compute()
         }
     }
 
+    /// Number of compute passes in a command buffer of `passes` passes.
+    fn compute_pass_count(self, passes: usize) -> usize {
+        if !self.needs_compute() {
+            0
+        } else if self.is_mixed() {
+            passes.div_ceil(2)
+        } else {
+            passes
+        }
+    }
+
+    /// Number of render passes in a command buffer of `passes` passes.
+    fn graphics_pass_count(self, passes: usize) -> usize {
+        if !self.needs_graphics() {
+            0
+        } else if self.is_mixed() {
+            passes / 2
+        } else {
+            passes
+        }
+    }
+
+    /// Whether each sub-workload uses distinct resources per pass.
+    fn resources_are_independent(self) -> bool {
+        !self.is_dependent()
+    }
+}
+
+/// Where barriers go. Orthogonal to how wide they are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Placement {
+    /// Blade places one at every pass boundary.
+    Automatic,
+    /// The application places one only where the workload has a real hazard.
+    HazardOnly,
+    /// The application places one at every pass boundary. Command-for-command
+    /// equal to `Automatic` at the same scope, so it is the instrumentation
+    /// control rather than a distinct strategy.
+    ExplicitAll,
+}
+
+/// The full barrier configuration: a placement crossed with a scope. Every
+/// combination is measured, so neither axis is confounded with the other and
+/// neither has a privileged default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BarrierPolicy {
+    placement: Placement,
+    scope: gpu::BarrierScope,
+}
+
+impl BarrierPolicy {
+    const ALL: [Self; 6] = [
+        Self::new(Placement::Automatic, gpu::BarrierScope::Global),
+        Self::new(Placement::Automatic, gpu::BarrierScope::PassKind),
+        Self::new(Placement::HazardOnly, gpu::BarrierScope::Global),
+        Self::new(Placement::HazardOnly, gpu::BarrierScope::PassKind),
+        Self::new(Placement::ExplicitAll, gpu::BarrierScope::Global),
+        Self::new(Placement::ExplicitAll, gpu::BarrierScope::PassKind),
+    ];
+
+    const fn new(placement: Placement, scope: gpu::BarrierScope) -> Self {
+        Self { placement, scope }
+    }
+
+    fn parse(value: &str) -> Result<Self, String> {
+        let (placement_name, scope) = match value.strip_suffix("-scoped") {
+            Some(rest) => (rest, gpu::BarrierScope::PassKind),
+            None => (value, gpu::BarrierScope::Global),
+        };
+        let placement = match placement_name {
+            "automatic" => Placement::Automatic,
+            "hazard-only" => Placement::HazardOnly,
+            "explicit-all" => Placement::ExplicitAll,
+            _ => return Err(format!("unknown barrier policy: {value}")),
+        };
+        Ok(Self::new(placement, scope))
+    }
+
     fn as_str(self) -> &'static str {
-        match self {
-            Self::Automatic => "automatic",
-            Self::HazardOnly => "hazard-only",
-            Self::ExplicitAll => "explicit-all",
+        match (self.placement, self.scope) {
+            (Placement::Automatic, gpu::BarrierScope::Global) => "automatic",
+            (Placement::Automatic, gpu::BarrierScope::PassKind) => "automatic-scoped",
+            (Placement::HazardOnly, gpu::BarrierScope::Global) => "hazard-only",
+            (Placement::HazardOnly, gpu::BarrierScope::PassKind) => "hazard-only-scoped",
+            (Placement::ExplicitAll, gpu::BarrierScope::Global) => "explicit-all",
+            (Placement::ExplicitAll, gpu::BarrierScope::PassKind) => "explicit-all-scoped",
         }
     }
 
     fn uses_manual_mode(self) -> bool {
-        self != Self::Automatic
+        self.placement != Placement::Automatic
     }
 
     fn inserts_before(self, workload: Workload, pass_index: usize) -> bool {
-        match self {
-            Self::Automatic => false,
-            Self::HazardOnly => pass_index != 0 && workload.is_dependent(),
-            Self::ExplicitAll => true,
+        match self.placement {
+            Placement::Automatic => false,
+            Placement::HazardOnly => pass_index != 0 && workload.is_dependent(),
+            Placement::ExplicitAll => true,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BarrierPolicy, Workload};
+    use super::{BarrierPolicy, Placement, Workload};
+    use blade_graphics as gpu;
+
+    fn policy(placement: Placement, scope: gpu::BarrierScope) -> BarrierPolicy {
+        BarrierPolicy::new(placement, scope)
+    }
 
     #[test]
     fn barrier_policies_match_the_experiment_contract() {
-        for pass_index in 0..3 {
-            assert!(
-                !BarrierPolicy::Automatic.inserts_before(Workload::ComputeIndependent, pass_index)
-            );
-            assert!(
-                BarrierPolicy::ExplicitAll.inserts_before(Workload::ComputeIndependent, pass_index)
-            );
-        }
+        for scope in [gpu::BarrierScope::Global, gpu::BarrierScope::PassKind] {
+            for pass_index in 0..3 {
+                assert!(
+                    !policy(Placement::Automatic, scope)
+                        .inserts_before(Workload::ComputeIndependent, pass_index)
+                );
+                assert!(
+                    policy(Placement::ExplicitAll, scope)
+                        .inserts_before(Workload::ComputeIndependent, pass_index)
+                );
+            }
 
-        assert!(!BarrierPolicy::HazardOnly.inserts_before(Workload::ComputeChain, 0));
-        assert!(BarrierPolicy::HazardOnly.inserts_before(Workload::ComputeChain, 1));
-        assert!(!BarrierPolicy::HazardOnly.inserts_before(Workload::ComputeIndependent, 1));
+            let hazard = policy(Placement::HazardOnly, scope);
+            assert!(!hazard.inserts_before(Workload::ComputeChain, 0));
+            assert!(hazard.inserts_before(Workload::ComputeChain, 1));
+            assert!(!hazard.inserts_before(Workload::ComputeIndependent, 1));
+            assert!(hazard.inserts_before(Workload::MixedChain, 1));
+        }
+    }
+
+    #[test]
+    fn every_policy_round_trips_through_its_name() {
+        for expected in BarrierPolicy::ALL {
+            let parsed = BarrierPolicy::parse(expected.as_str()).unwrap();
+            assert_eq!(parsed, expected, "{}", expected.as_str());
+        }
+        assert_eq!(BarrierPolicy::ALL.len(), 6);
+        assert!(BarrierPolicy::parse("nonsense").is_err());
+    }
+
+    #[test]
+    fn mixed_workloads_alternate_pass_kinds() {
+        let workload = Workload::MixedChain;
+        assert!(workload.pass_is_compute(0));
+        assert!(!workload.pass_is_compute(1));
+        assert!(workload.pass_is_compute(2));
+        assert_eq!(workload.compute_pass_count(16), 8);
+        assert_eq!(workload.graphics_pass_count(16), 8);
+        assert_eq!(workload.compute_pass_count(5), 3);
+        assert_eq!(workload.graphics_pass_count(5), 2);
+
+        // Non-mixed workloads keep every pass in one family.
+        assert_eq!(Workload::ComputeChain.compute_pass_count(16), 16);
+        assert_eq!(Workload::ComputeChain.graphics_pass_count(16), 0);
+        assert_eq!(Workload::GraphicsChain.compute_pass_count(16), 0);
+        assert_eq!(Workload::GraphicsChain.graphics_pass_count(16), 16);
     }
 }
 
@@ -132,7 +265,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             workload: Workload::ComputeIndependent,
-            policy: BarrierPolicy::Automatic,
+            policy: BarrierPolicy::new(Placement::Automatic, gpu::BarrierScope::Global),
             passes: 16,
             elements: 1 << 20,
             rounds: 8,
@@ -232,6 +365,11 @@ fn parse_value<T: std::str::FromStr>(value: &str, argument: &str) -> Result<T, S
 }
 
 fn print_usage() {
+    let policies = BarrierPolicy::ALL
+        .iter()
+        .map(|policy| policy.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
     println!(
         "\
 Blade synchronization benchmark
@@ -241,8 +379,9 @@ Usage:
 
 Options:
   --workload <name>   compute-independent, compute-chain,
-                      graphics-independent, or graphics-chain
-  --policy <name>     automatic, hazard-only, or explicit-all
+                      graphics-independent, graphics-chain,
+                      mixed-independent, or mixed-chain
+  --policy <name>     {policies}
   --passes <count>    passes per measured command buffer (default: 16)
   --elements <count>  u32 elements in compute buffers (default: 1048576)
   --rounds <count>    shader mixing rounds per invocation (default: 8)
@@ -297,8 +436,9 @@ impl ComputeBench {
             compute: shader.at("cs_main"),
         });
 
-        let independent = config.workload == Workload::ComputeIndependent;
-        let buffer_count = if independent { config.passes + 1 } else { 2 };
+        let independent = config.workload.resources_are_independent();
+        let pass_count = config.workload.compute_pass_count(config.passes);
+        let buffer_count = if independent { pass_count + 1 } else { 2 };
         let buffer_size = u64::from(config.elements) * 4;
         let buffers = (0..buffer_count)
             .map(|index| {
@@ -314,6 +454,7 @@ impl ComputeBench {
             name: "sync-bench-compute-setup",
             buffer_count: 1,
             manual_barriers: false,
+            barrier_scope: gpu::BarrierScope::Global,
         });
         setup.start();
         {
@@ -364,11 +505,11 @@ impl ComputeBench {
         pipeline.dispatch([self.element_count.div_ceil(COMPUTE_WORKGROUP_SIZE), 1, 1]);
     }
 
-    fn validate(&self, context: &gpu::Context, passes: usize) -> u64 {
+    fn validate(&self, context: &gpu::Context, compute_passes: usize) -> u64 {
         let output = if self.independent {
-            self.buffers[passes]
+            self.buffers[compute_passes]
         } else {
-            self.buffers[passes % 2]
+            self.buffers[compute_passes % 2]
         };
         let readback_size = u64::from(self.element_count.min(1024)) * 4;
         let readback = context.create_buffer(gpu::BufferDesc {
@@ -380,6 +521,7 @@ impl ComputeBench {
             name: "sync-bench-compute-validate",
             buffer_count: 1,
             manual_barriers: false,
+            barrier_scope: gpu::BarrierScope::Global,
         });
         encoder.start();
         {
@@ -455,8 +597,11 @@ impl GraphicsBench {
             multisample_state: gpu::MultisampleState::default(),
         });
 
-        let independent = config.workload == Workload::GraphicsIndependent;
-        let target_count = if independent { config.passes } else { 1 };
+        let independent = config.workload.resources_are_independent();
+        let pass_count = config.workload.graphics_pass_count(config.passes);
+        // `max(1)` keeps a target available for validation when a sweep lands
+        // on a mixed workload short enough to contain no render pass.
+        let target_count = if independent { pass_count.max(1) } else { 1 };
         let extent = gpu::Extent {
             width: config.width,
             height: config.height,
@@ -493,6 +638,7 @@ impl GraphicsBench {
             name: "sync-bench-graphics-setup",
             buffer_count: 1,
             manual_barriers: false,
+            barrier_scope: gpu::BarrierScope::Global,
         });
         setup.start();
         for &texture in &textures {
@@ -563,6 +709,7 @@ impl GraphicsBench {
             name: "sync-bench-graphics-validate",
             buffer_count: 1,
             manual_barriers: false,
+            barrier_scope: gpu::BarrierScope::Global,
         });
         encoder.start();
         {
@@ -606,33 +753,64 @@ impl GraphicsBench {
 enum Bench {
     Compute(ComputeBench),
     Graphics(GraphicsBench),
+    Mixed(ComputeBench, GraphicsBench),
 }
 
 impl Bench {
     fn new(context: &gpu::Context, config: &Config) -> Self {
-        if config.workload.is_compute() {
-            Self::Compute(ComputeBench::new(context, config))
-        } else {
-            Self::Graphics(GraphicsBench::new(context, config))
+        match (
+            config.workload.needs_compute(),
+            config.workload.needs_graphics(),
+        ) {
+            (true, false) => Self::Compute(ComputeBench::new(context, config)),
+            (false, true) => Self::Graphics(GraphicsBench::new(context, config)),
+            _ => Self::Mixed(
+                ComputeBench::new(context, config),
+                GraphicsBench::new(context, config),
+            ),
         }
     }
 
     fn record(&self, encoder: &mut gpu::CommandEncoder, config: &Config, iteration: usize) {
+        let mut compute_index = 0;
+        let mut graphics_index = 0;
         for pass_index in 0..config.passes {
             if config.policy.inserts_before(config.workload, pass_index) {
-                encoder.barrier();
+                encoder.barrier(config.policy.scope);
             }
+            let compute = config.workload.pass_is_compute(pass_index);
             match *self {
-                Self::Compute(ref bench) => bench.record_pass(encoder, pass_index, iteration),
-                Self::Graphics(ref bench) => bench.record_pass(encoder, pass_index, iteration),
+                Self::Compute(ref bench) => {
+                    bench.record_pass(encoder, compute_index, iteration);
+                    compute_index += 1;
+                }
+                Self::Graphics(ref bench) => {
+                    bench.record_pass(encoder, graphics_index, iteration);
+                    graphics_index += 1;
+                }
+                Self::Mixed(ref compute_bench, ref graphics_bench) => {
+                    if compute {
+                        compute_bench.record_pass(encoder, compute_index, iteration);
+                        compute_index += 1;
+                    } else {
+                        graphics_bench.record_pass(encoder, graphics_index, iteration);
+                        graphics_index += 1;
+                    }
+                }
             }
         }
     }
 
-    fn validate(&self, context: &gpu::Context, passes: usize) -> u64 {
+    fn validate(&self, context: &gpu::Context, workload: Workload, passes: usize) -> u64 {
+        let compute_passes = workload.compute_pass_count(passes);
         match *self {
-            Self::Compute(ref bench) => bench.validate(context, passes),
+            Self::Compute(ref bench) => bench.validate(context, compute_passes),
             Self::Graphics(ref bench) => bench.validate(context),
+            Self::Mixed(ref compute_bench, ref graphics_bench) => {
+                let compute_hash = compute_bench.validate(context, compute_passes);
+                let graphics_hash = graphics_bench.validate(context);
+                fnv1a64(&[compute_hash.to_le_bytes(), graphics_hash.to_le_bytes()].concat())
+            }
         }
     }
 
@@ -640,6 +818,10 @@ impl Bench {
         match self {
             Self::Compute(bench) => bench.destroy(context),
             Self::Graphics(bench) => bench.destroy(context),
+            Self::Mixed(compute_bench, graphics_bench) => {
+                compute_bench.destroy(context);
+                graphics_bench.destroy(context);
+            }
         }
     }
 }
@@ -711,7 +893,11 @@ fn main() {
         return;
     }
 
-    if backend_name() != "vulkan" && config.policy != BarrierPolicy::Automatic {
+    let vulkan_only_policy = BarrierPolicy::new(Placement::Automatic, gpu::BarrierScope::Global);
+    if backend_name() != "vulkan" && config.policy != vulkan_only_policy {
+        // Both `manual_barriers` and `barrier_scope` are Vulkan concepts; the
+        // other backends would silently run something else.
+
         eprintln!(
             "error: {} only supports the automatic policy; selected policy is {}",
             backend_name(),
@@ -766,6 +952,7 @@ fn main() {
         name: "sync-bench",
         buffer_count: 1,
         manual_barriers: config.policy.uses_manual_mode(),
+        barrier_scope: config.policy.scope,
     });
 
     let iteration_count = config.warmups + config.samples;
@@ -830,7 +1017,7 @@ fn main() {
         });
     }
 
-    let validation_hash = bench.validate(&context, config.passes);
+    let validation_hash = bench.validate(&context, config.workload, config.passes);
     println!("# validation_hash,fnv1a64:{validation_hash:016x}");
     context.destroy_command_encoder(&mut encoder);
     bench.destroy(&context);

@@ -441,6 +441,58 @@ struct CrashHandler {
     next_offset: usize,
 }
 
+/// What kind of work a pass contains, which is all the state the `PassKind`
+/// barrier scope needs. This is a bitmask per encoder, not a per-resource
+/// table: `PassKinds::since_barrier` accumulates the passes a barrier has to
+/// make available, and is cleared whenever a barrier is emitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PassKind {
+    Transfer,
+    AccelerationStructure,
+    Compute,
+    Render,
+    /// Start of an encoder, or an operation outside the pass model such as
+    /// `init_texture`. Widens the scope to everything.
+    Unknown,
+}
+
+impl PassKind {
+    const fn bit(self) -> u8 {
+        match self {
+            Self::Transfer => 1 << 0,
+            Self::AccelerationStructure => 1 << 1,
+            Self::Compute => 1 << 2,
+            Self::Render => 1 << 3,
+            Self::Unknown => 1 << 4,
+        }
+    }
+}
+
+/// Set of pass kinds whose writes a barrier still has to make available.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct PassKinds(u8);
+
+impl PassKinds {
+    pub(super) fn insert(&mut self, kind: PassKind) {
+        self.0 |= kind.bit();
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.0 = 0;
+    }
+
+    pub(super) fn contains(self, kind: PassKind) -> bool {
+        self.0 & kind.bit() != 0
+    }
+
+    /// True when nothing has been recorded since the last barrier, in which
+    /// case the barrier has nothing of its own to order and only has to be
+    /// correct for whatever the caller has in mind.
+    pub(super) fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
 pub struct CommandEncoder {
     pool: vk::CommandPool,
     buffers: Box<[CommandBuffer]>,
@@ -451,6 +503,9 @@ pub struct CommandEncoder {
     temp_label: Vec<u8>,
     timings: crate::Timings,
     manual_barriers: bool,
+    barrier_scope: crate::BarrierScope,
+    since_barrier: PassKinds,
+    pending_barrier: Option<crate::BarrierScope>,
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
@@ -587,6 +642,9 @@ impl crate::traits::CommandDevice for Context {
             temp_label: Vec::new(),
             timings: Default::default(),
             manual_barriers: desc.manual_barriers,
+            barrier_scope: desc.barrier_scope,
+            since_barrier: PassKinds::default(),
+            pending_barrier: None,
         }
     }
 

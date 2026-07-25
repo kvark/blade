@@ -159,6 +159,37 @@ python3 paper/run-study-matrix.py \
 The collector fails if Blade policies or wgpu produce different output hashes
 for the same workload.
 
+### Synchronization validation for `automatic-scoped`
+
+Matching output hashes are necessary but not sufficient for a policy that
+narrows synchronization scopes: a missing dependency can go unobserved on one
+schedule. Before trusting `automatic-scoped` numbers from a machine, run the
+correctness collection there with the Khronos validation layer's
+synchronization checks enabled:
+
+```sh
+sudo apt install vulkan-validationlayers   # or the platform equivalent
+for w in compute-independent compute-chain graphics-independent \
+         graphics-chain mixed-independent mixed-chain; do
+  for p in automatic automatic-scoped hazard-only hazard-only-scoped \
+           explicit-all explicit-all-scoped; do
+    VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation \
+    VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT \
+      ./target/release/examples/sync-bench \
+        --workload $w --policy $p --passes 16 \
+        --warmups 0 --samples 3 --validation 2>&1 |
+      grep -E "SYNC-HAZARD|Validation Error" && echo "FAILED: $w/$p"
+  done
+done
+```
+
+Retain the layer output next to the collection. A `SYNC-HAZARD-*` message means
+the derived stage or access masks are too narrow for that workload, and a
+`Validation Error` means they are inconsistent with the declared stages; either
+way the policy must not feed performance data until it is fixed. This check
+found a real defect once already: the `extra_sync_*_access` driver workarounds
+name transfer accesses that only `ALL_COMMANDS` supports.
+
 ## Final CPU collection
 
 GPU queries are disabled in this collection so their unequal API plumbing does
@@ -264,6 +295,32 @@ Do not pass `--allow-dirty` for final data. It exists only for local pilots.
 The collector refuses an existing output directory and retains stderr from any
 run that emits it.
 
+## Barrier policies and workloads
+
+On Vulkan the collector runs four Blade policies per workload:
+
+On Vulkan the collector crosses three placements with two scopes, giving six
+Blade policies per workload:
+
+| Policy | Placement | Scope |
+|---|---|---|
+| `automatic` | encoder, every pass | `Global` |
+| `automatic-scoped` | encoder, every pass | `PassKind` |
+| `hazard-only` | application, at real hazards | `Global` |
+| `hazard-only-scoped` | application, at real hazards | `PassKind` |
+| `explicit-all` | application, every pass | `Global` |
+| `explicit-all-scoped` | application, every pass | `PassKind` |
+
+Reading down a scope column isolates placement; reading across a placement row
+isolates scope. `explicit-all` against `automatic` at the same scope is the
+instrumentation control and should be indistinguishable. Metal collects
+`automatic` only, since `barrier_scope` and `manual_barriers` are Vulkan
+concepts.
+
+Workloads are the four shared ones plus `mixed-independent` and `mixed-chain`,
+which alternate compute and render passes. The mixed pair is Blade-only, so
+wgpu still runs four workloads per repetition and Blade runs six.
+
 ## Analyze
 
 Analyze each CPU and GPU collection separately:
@@ -314,15 +371,67 @@ collection.
 
 ## Apple hazard-mode experiment
 
-`docs/metal-hazard-tracking.md` references
-`tools/metal-hazard-bench.swift`, but that harness is currently absent from the
-checkout. Recover it before treating the Apple tables as reproducible. Its
-documented build and run commands are:
+The harness lives with the paper, at `paper/tools/metal-hazard-bench.swift`. It
+is standalone Swift with no Blade dependency, so it can be built and run
+directly:
 
 ```sh
-xcrun swiftc -O tools/metal-hazard-bench.swift -o /tmp/metal-hazard-bench
-/tmp/metal-hazard-bench
+xcrun swiftc -O paper/tools/metal-hazard-bench.swift \
+  -o /tmp/metal-hazard-bench
+/tmp/metal-hazard-bench > paper/data/raw/<collection-id>/metal-hazard.csv
 ```
 
-Run on AC power with Low Power Mode disabled and retain the raw program output,
-macOS build, hardware report, and Blade revision.
+It emits a comment header naming the device and OS build, then one row per
+(workload, tracking mode, pass count) with median and 5th/95th-percentile
+encode, commit, GPU, and wall times. It also reports each buffer's effective
+`hazardTrackingMode`, so a run that silently fell back to tracked mode is
+detectable from its own output.
+
+The results currently cited by the paper are in
+[`../docs/metal-hazard-tracking.md`](../docs/metal-hazard-tracking.md) and were
+collected on battery with Low Power Mode enabled. Repeat on AC power with Low
+Power Mode disabled before publishing absolute times, and retain the raw
+program output, macOS build, hardware report, and Blade revision.
+
+## Pass-count sweeps
+
+`--pass-list` replaces `--passes` with a comma-separated sweep and appends
+`__pNNNN` to each run ID. Use it for the scaling figures:
+
+```sh
+python3 paper/run-study-matrix.py \
+  --wgpu ../wgpu \
+  --backend vulkan \
+  --blade-device-id 0x2f04 \
+  --wgpu-adapter-name "RTX 5070" \
+  --output paper/data/raw/<collection-id>-sweep-cpu \
+  --pass-list 1,2,4,8,16,32,64,128 \
+  --cpu-only
+```
+
+Run the same command without `--cpu-only` into a `-sweep` directory for device
+time. Host and device claims must come from the respective collection: with
+timestamps enabled, Blade writes one query per pass and wgpu writes two in
+total, and at high pass counts that alone changes the apparent host cost by a
+factor of four.
+
+## Device selection
+
+By default the collector enumerates every adapter both implementations can see
+and runs the whole matrix once per device, into
+`paper/data/raw/<collection-id>-<hostname>-<device-slug>/`. With a single
+device the suffix is dropped and the directory is
+`<collection-id>-<hostname>/`. Software adapters are skipped unless
+`--allow-software` is given, and an adapter Blade sees but wgpu does not is
+skipped with a message.
+
+So on a machine with an integrated and a discrete GPU the whole study is:
+
+```sh
+python3 paper/run-study-matrix.py --wgpu ../wgpu --repetitions 3
+```
+
+Passing `--blade-device-id` or `--wgpu-adapter-name` pins one device and
+restores the previous single-collection behaviour. Either way the collector
+aborts if Blade and wgpu end up reporting different `device_name` values, which
+is the failure the `rubik` collection hit before this check existed.

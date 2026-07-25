@@ -7,11 +7,18 @@ remain.
 
 ## Draft
 
-Build the paper from this directory with:
+Every table in the paper is generated from the raw collections, so regenerate
+them before building:
 
 ```bash
+python3 build-tables.py
 latexmk -pdf main.tex
 ```
+
+`build-tables.py` writes `data/derived/tables/*.tex`, which `main.tex` pulls in
+with `\input`. It uses only the standard library and re-uses `analyze.py` for
+bootstrap intervals. It also prints a warning for any collection whose two
+implementations selected different devices.
 
 The source uses a generic two-column article layout so that the work is not
 tied to a venue before the evaluation is complete. It can later be moved to a
@@ -44,10 +51,16 @@ python3 paper/run-study-matrix.py \
   --output paper/data/raw/<collection-id>
 ```
 
+Add `--pass-list 1,2,4,8,16,32,64,128` to sweep the pass count instead of
+measuring a single point.
+
 See [COLLECTING.md](COLLECTING.md) for adapter discovery, correctness runs,
 separate CPU/GPU collections, Linux, Windows, and macOS commands, profiling,
 and capture requirements. `run-sync-matrix.sh` remains as a Blade-only pilot
 runner; it is not the final matched collector.
+`tools/metal-hazard-bench.swift` is the standalone Metal tracked-versus-untracked
+harness; its results live in
+[`../docs/metal-hazard-tracking.md`](../docs/metal-hazard-tracking.md).
 
 Summarize a collection with deterministic bootstrap intervals:
 
@@ -79,6 +92,22 @@ barriers from barriers placed only at application-declared hazards. The paper
 does not require a second resource tracker inside Blade. Precise tracked
 behavior comes from matched wgpu workloads, CPU profiles, and captured Vulkan
 commands, and is explicitly reported as an end-to-end comparison.
+
+## Collected so far
+
+| Collection | Machine | Device measured by Blade | Role |
+|---|---|---|---|
+| `20260725T060107Z-zork` | zork | NVIDIA RTX 5070 | 16-pass matrix |
+| `20260725T155439Z-rubik` | rubik | AMD Raphael iGPU | 16-pass matrix (wgpu ran on the RX 7900 XT; cross-implementation cells are void) |
+| `20260725T060322Z-k6` | k6 | AMD Radeon 780M | 16-pass matrix |
+| `20260725T160725Z-matrix` | matrix | Intel Xe (RPL-U) | 16-pass matrix |
+| `20260725T062529Z-mac` | mac | Apple M3 | 16-pass matrix, Metal case study |
+| `20260725T162334Z-zork-sweep` | zork | NVIDIA RTX 5070 | pass-count sweep, GPU-timed |
+| `20260725T162544Z-zork-sweep-cpu` | zork | NVIDIA RTX 5070 | pass-count sweep, timestamp-free |
+
+Still outstanding before the working-draft banner can come off: Vulkan
+command-stream captures and CPU profiles, application workloads, and a discrete
+AMD part running Blade.
 
 ## Current scope
 

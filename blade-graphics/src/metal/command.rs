@@ -191,7 +191,9 @@ impl super::CommandEncoder {
         }
     }
 
-    pub fn barrier(&mut self) {}
+    /// Accepted for API parity; this backend does not place inter-pass
+    /// barriers of its own.
+    pub fn barrier(&mut self, _scope: crate::BarrierScope) {}
 
     pub(super) fn finish(&mut self) -> super::RawCommandBuffer {
         if self.has_open_debug_group {

@@ -86,6 +86,7 @@ impl winit::application::ApplicationHandler for App {
             name: "main",
             buffer_count: 2,
             manual_barriers: false,
+            barrier_scope: gpu::BarrierScope::Global,
         });
 
         self.example = Some(example);

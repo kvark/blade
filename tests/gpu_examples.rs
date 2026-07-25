@@ -243,6 +243,7 @@ fn dispatch_gpu_test() {
         name: "dispatch-test",
         buffer_count: 1,
         manual_barriers: false,
+        barrier_scope: gpu::BarrierScope::Global,
     });
     command_encoder.start();
     if let mut compute = command_encoder.compute("dispatch")
@@ -289,6 +290,7 @@ fn env_map_gpu_test() {
         name: "env-map-test",
         buffer_count: 1,
         manual_barriers: false,
+        barrier_scope: gpu::BarrierScope::Global,
     });
     command_encoder.start();
 
@@ -362,6 +364,7 @@ fn snapshot_bunnymark() {
         name: "snapshot-bunnymark",
         buffer_count: 1,
         manual_barriers: false,
+        barrier_scope: gpu::BarrierScope::Global,
     });
     command_encoder.start();
     command_encoder.init_texture(target.texture);
@@ -421,6 +424,7 @@ fn snapshot_ray_query() {
         name: "snapshot-ray-query",
         buffer_count: 1,
         manual_barriers: false,
+        barrier_scope: gpu::BarrierScope::Global,
     });
     command_encoder.start();
     command_encoder.init_texture(target.texture);
@@ -477,6 +481,7 @@ fn snapshot_particle() {
         name: "snapshot-particle",
         buffer_count: 1,
         manual_barriers: false,
+        barrier_scope: gpu::BarrierScope::Global,
     });
     command_encoder.start();
     // Run several update cycles to emit and move particles
@@ -619,6 +624,7 @@ fn snapshot_space_sky() {
         name: "sky-test",
         buffer_count: 1,
         manual_barriers: false,
+        barrier_scope: gpu::BarrierScope::Global,
     });
     command_encoder.start();
     command_encoder.init_texture(target.texture);

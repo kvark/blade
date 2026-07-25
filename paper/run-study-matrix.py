@@ -11,18 +11,63 @@ import platform
 import random
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 
-WORKLOADS = (
+# Workloads both implementations provide. The matched wgpu benchmark has no
+# equivalent of the mixed families, so they are collected for Blade only and
+# are used for the within-Blade barrier-scope comparison.
+SHARED_WORKLOADS = (
     "compute-independent",
     "compute-chain",
     "graphics-independent",
     "graphics-chain",
 )
+BLADE_ONLY_WORKLOADS = (
+    "mixed-independent",
+    "mixed-chain",
+)
+BLADE_WORKLOADS = SHARED_WORKLOADS + BLADE_ONLY_WORKLOADS
+
+# Placement crossed with scope. Neither axis is a default for the other, so
+# every combination is collected and the comparison is symmetric.
+VULKAN_POLICIES = (
+    "automatic",
+    "automatic-scoped",
+    "hazard-only",
+    "hazard-only-scoped",
+    "explicit-all",
+    "explicit-all-scoped",
+)
+# `manual_barriers` and `barrier_scope` are Vulkan concepts; Metal tracks
+# hazards in the framework and has only one thing to measure.
+METAL_POLICIES = ("automatic",)
+
+
+def slugify(value: str, limit: int = 28) -> str:
+    """Filesystem-safe fragment of a device name, for directory suffixes."""
+    cleaned = []
+    for character in value.lower():
+        cleaned.append(character if character.isalnum() else "-")
+    slug = "-".join(part for part in "".join(cleaned).split("-") if part)
+    return slug[:limit].strip("-") or "device"
+
+
+def host_label() -> str:
+    return slugify(socket.gethostname().split(".")[0], limit=24)
+
+
+def parse_pass_list(value: str) -> tuple[int, ...]:
+    counts = tuple(int(part) for part in value.split(",") if part.strip())
+    if not counts:
+        raise argparse.ArgumentTypeError("--pass-list must name at least one count")
+    if any(count <= 0 for count in counts):
+        raise argparse.ArgumentTypeError("--pass-list entries must be positive")
+    return counts
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -41,6 +86,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--blade-device-id", type=lambda value: int(value, 0))
     parser.add_argument("--wgpu-adapter-name")
     parser.add_argument("--passes", type=int, default=16)
+    parser.add_argument(
+        "--pass-list",
+        type=parse_pass_list,
+        help="comma-separated pass counts to sweep instead of a single --passes value",
+    )
     parser.add_argument("--elements", type=int, default=1 << 20)
     parser.add_argument("--rounds", type=int, default=8)
     parser.add_argument("--width", type=int, default=1024)
@@ -127,6 +177,109 @@ def parse_metadata(output: str) -> dict[str, str]:
     return metadata
 
 
+class Device:
+    """One physical adapter, with the selector each implementation needs."""
+
+    def __init__(self, name: str, blade_device_id: int | None, software: bool) -> None:
+        self.name = name
+        self.blade_device_id = blade_device_id
+        self.software = software
+
+    @property
+    def slug(self) -> str:
+        return slugify(self.name)
+
+    def __repr__(self) -> str:
+        return f"Device({self.name!r}, id={self.blade_device_id}, software={self.software})"
+
+
+def list_blade_adapters(binary: Path, cwd: Path) -> list[Device]:
+    """Parse `sync-bench --list-adapters`: id, name, software=bool, status."""
+    result = run([str(binary), "--list-adapters"], cwd, check=False)
+    if result.returncode != 0:
+        return []
+    devices = []
+    for line in result.stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) < 3:
+            continue
+        try:
+            device_id = int(fields[0], 0)
+        except ValueError:
+            continue
+        software = fields[2].strip().endswith("true")
+        devices.append(Device(fields[1].strip(), device_id, software))
+    return devices
+
+
+def list_wgpu_adapter_names(binary: Path, cwd: Path, backend: str) -> set[str]:
+    """Parse `wgpu-sync-bench --list-adapters`: ids, name, type, driver, info."""
+    environment = os.environ.copy()
+    environment["WGPU_BACKEND"] = backend
+    result = run([str(binary), "--list-adapters"], cwd, env=environment, check=False)
+    if result.returncode != 0:
+        return set()
+    names = set()
+    for line in result.stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) >= 2:
+            names.add(fields[1].strip())
+    return names
+
+
+def discover_devices(
+    blade_binary: Path,
+    wgpu_binary: Path,
+    cwd: Path,
+    arguments: argparse.Namespace,
+) -> list[Device]:
+    """Devices to collect on, most specific request first.
+
+    An explicit `--blade-device-id` or `--wgpu-adapter-name` pins a single
+    device and keeps the previous single-collection behaviour. Otherwise every
+    adapter both implementations can see is collected in turn, because a
+    machine with an integrated and a discrete GPU has two answers, not one.
+    """
+    if arguments.blade_device_id is not None or arguments.wgpu_adapter_name:
+        return [
+            Device(
+                arguments.wgpu_adapter_name or "pinned",
+                arguments.blade_device_id,
+                software=False,
+            )
+        ]
+
+    blade_devices = list_blade_adapters(blade_binary, cwd)
+    if not blade_devices:
+        # Backends without adapter enumeration (or a listing failure) still
+        # collect once, on whatever each implementation picks by default.
+        print(
+            "warning: no adapters enumerated; collecting once on the default device",
+            file=sys.stderr,
+        )
+        return [Device("default", None, software=False)]
+
+    wgpu_names = list_wgpu_adapter_names(wgpu_binary, cwd, arguments.backend)
+    selected = []
+    for device in blade_devices:
+        if device.software and not arguments.allow_software:
+            print(f"skipping software device: {device.name}", file=sys.stderr)
+            continue
+        if wgpu_names and device.name not in wgpu_names:
+            print(
+                f"skipping {device.name}: not visible to wgpu on this backend",
+                file=sys.stderr,
+            )
+            continue
+        selected.append(device)
+    if not selected:
+        raise ValueError(
+            "no device is visible to both implementations; pass --blade-device-id "
+            "and --wgpu-adapter-name to pin one explicitly"
+        )
+    return selected
+
+
 def ensure_positive(arguments: argparse.Namespace) -> None:
     values = {
         "repetitions": arguments.repetitions,
@@ -144,41 +297,24 @@ def ensure_positive(arguments: argparse.Namespace) -> None:
         raise ValueError("--warmups must not be negative")
 
 
-def main() -> None:
-    arguments = parse_arguments()
-    ensure_positive(arguments)
-    blade = arguments.blade.resolve()
-    wgpu = arguments.wgpu.resolve()
-    collection_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output = (
-        arguments.output
-        if arguments.output is not None
-        else blade / "paper/data/raw" / collection_id
-    ).resolve()
+def collect_device(
+    *,
+    device: Device,
+    output: Path,
+    blade: Path,
+    wgpu: Path,
+    blade_binary: Path,
+    wgpu_binary: Path,
+    collection_id: str,
+    repository_metadata: dict[str, dict[str, str]],
+    seed: int,
+    arguments: argparse.Namespace,
+) -> None:
+    """Run the full randomized matrix for one device into its own collection."""
     if output.exists():
         raise ValueError(f"refusing to reuse output directory: {output}")
-    if not (blade / "Cargo.toml").is_file():
-        raise ValueError(f"not a Blade checkout: {blade}")
-    if not (wgpu / "examples/standalone/sync_bench/Cargo.toml").is_file():
-        raise ValueError(f"wgpu sync benchmark is missing from: {wgpu}")
-
-    repositories = {"blade": blade, "wgpu": wgpu}
-    repository_metadata: dict[str, dict[str, str]] = {}
-    for name, root in repositories.items():
-        status = git_output(root, "status", "--porcelain")
-        if status and not arguments.allow_dirty:
-            raise ValueError(
-                f"{name} worktree is dirty; commit it or pass --allow-dirty for a pilot"
-            )
-        repository_metadata[name] = {
-            "root": str(root),
-            "revision": git_output(root, "rev-parse", "HEAD"),
-            "branch": git_output(root, "branch", "--show-current"),
-            "status": status,
-            "cargo_lock_sha256": file_sha256(root / "Cargo.lock"),
-        }
-
     output.mkdir(parents=True)
+
     equivalence = run(
         [
             sys.executable,
@@ -190,37 +326,27 @@ def main() -> None:
         ],
         blade,
     )
-    (output / "workload-shaders.txt").write_text(
-        equivalence.stdout, encoding="utf-8"
-    )
+    (output / "workload-shaders.txt").write_text(equivalence.stdout, encoding="utf-8")
 
-    if not arguments.skip_build:
-        run(["cargo", "build", "--release", "--example", "sync-bench"], blade)
-        run(["cargo", "build", "--release", "-p", "wgpu-sync-bench"], wgpu)
-
-    blade_binary = blade / "target/release/examples/sync-bench"
-    wgpu_binary = wgpu / "target/release/wgpu-sync-bench"
-    if sys.platform == "win32":
-        blade_binary = blade_binary.with_suffix(".exe")
-        wgpu_binary = wgpu_binary.with_suffix(".exe")
-    if not blade_binary.is_file() or not wgpu_binary.is_file():
-        raise ValueError("release benchmark binaries are missing")
-
-    seed = arguments.seed
-    if seed is None:
-        seed = int.from_bytes(os.urandom(8), "little")
     manifest: dict[str, object] = {
         "schema": "blade-sync-study-v1",
         "collection_id": collection_id,
         "created_utc": datetime.now(timezone.utc).isoformat(),
+        "host": socket.gethostname(),
         "platform": platform.platform(),
         "python": sys.version,
         "backend": arguments.backend,
         "seed": seed,
+        "requested_device": {
+            "name": device.name,
+            "blade_device_id": device.blade_device_id,
+            "slug": device.slug,
+        },
         "repositories": repository_metadata,
         "parameters": {
             "repetitions": arguments.repetitions,
             "passes": arguments.passes,
+            "pass_list": list(arguments.pass_list) if arguments.pass_list else None,
             "elements": arguments.elements,
             "rounds": arguments.rounds,
             "width": arguments.width,
@@ -230,8 +356,8 @@ def main() -> None:
             "validation": arguments.validation,
             "gpu_timing": not arguments.cpu_only,
             "allow_software": arguments.allow_software,
-            "blade_device_id": arguments.blade_device_id,
-            "wgpu_adapter_name": arguments.wgpu_adapter_name,
+            "blade_device_id": device.blade_device_id,
+            "wgpu_adapter_name": device.name if device.name != "default" else None,
         },
         "runs": [],
     }
@@ -249,12 +375,16 @@ def main() -> None:
             output, "cargo.txt", ["cargo", "--version", "--verbose"], blade
         )
         if arguments.backend == "vulkan":
-            write_command_capture(output, "vulkaninfo.txt", ["vulkaninfo", "--summary"], blade)
+            write_command_capture(
+                output, "vulkaninfo.txt", ["vulkaninfo", "--summary"], blade
+            )
             write_command_capture(
                 output, "vulkaninfo-full.txt", ["vulkaninfo"], blade, timeout=60
             )
             write_command_capture(output, "nvidia-smi.txt", ["nvidia-smi", "-q"], blade)
-            write_command_capture(output, "rocm-smi.txt", ["rocm-smi", "--showallinfo"], blade)
+            write_command_capture(
+                output, "rocm-smi.txt", ["rocm-smi", "--showallinfo"], blade
+            )
         if sys.platform == "darwin":
             write_command_capture(
                 output,
@@ -270,20 +400,25 @@ def main() -> None:
             )
 
     blade_policies = (
-        ("automatic", "hazard-only", "explicit-all")
-        if arguments.backend == "vulkan"
-        else ("automatic",)
+        VULKAN_POLICIES if arguments.backend == "vulkan" else METAL_POLICIES
     )
+    blade_workloads = (
+        BLADE_WORKLOADS if arguments.backend == "vulkan" else SHARED_WORKLOADS
+    )
+    pass_counts = arguments.pass_list or (arguments.passes,)
     configurations = [
-        ("blade", workload, policy)
-        for workload in WORKLOADS
+        ("blade", workload, policy, passes)
+        for passes in pass_counts
+        for workload in blade_workloads
         for policy in blade_policies
     ]
-    configurations.extend(("wgpu", workload, "tracked") for workload in WORKLOADS)
+    configurations.extend(
+        ("wgpu", workload, "tracked", passes)
+        for passes in pass_counts
+        for workload in SHARED_WORKLOADS
+    )
     rng = random.Random(seed)
     common_arguments = [
-        "--passes",
-        str(arguments.passes),
         "--elements",
         str(arguments.elements),
         "--rounds",
@@ -305,19 +440,28 @@ def main() -> None:
         common_arguments.append("--allow-software")
 
     order_path = output / "order.csv"
-    validation_hashes: dict[tuple[int, str], set[str]] = {}
+    validation_hashes: dict[tuple[int, str, int], set[str]] = {}
+    device_names: dict[str, set[str]] = {}
     with order_path.open("w", encoding="utf-8", newline="") as order_file:
         order_writer = csv.writer(order_file)
         order_writer.writerow(
-            ("repetition", "index", "implementation", "workload", "policy", "file")
+            (
+                "repetition",
+                "index",
+                "implementation",
+                "workload",
+                "policy",
+                "passes",
+                "file",
+            )
         )
         for repetition in range(1, arguments.repetitions + 1):
             order = list(configurations)
             rng.shuffle(order)
-            for index, (implementation, workload, policy) in enumerate(order):
-                run_id = (
-                    f"r{repetition:02d}__{implementation}__{workload}__{policy}"
-                )
+            for index, (implementation, workload, policy, passes) in enumerate(order):
+                run_id = f"r{repetition:02d}__{implementation}__{workload}__{policy}"
+                if len(pass_counts) > 1:
+                    run_id = f"{run_id}__p{passes:04d}"
                 csv_name = f"{run_id}.csv"
                 command = [
                     str(blade_binary if implementation == "blade" else wgpu_binary),
@@ -325,24 +469,27 @@ def main() -> None:
                     workload,
                     "--policy",
                     policy,
+                    "--passes",
+                    str(passes),
                     *common_arguments,
                 ]
                 environment = os.environ.copy()
                 relevant_environment: dict[str, str] = {}
-                if implementation == "blade" and arguments.blade_device_id is not None:
-                    command.extend(
-                        ["--device-id", str(arguments.blade_device_id)]
-                    )
+                if implementation == "blade" and device.blade_device_id is not None:
+                    command.extend(["--device-id", str(device.blade_device_id)])
                 if implementation == "wgpu":
                     environment["WGPU_BACKEND"] = arguments.backend
                     relevant_environment["WGPU_BACKEND"] = arguments.backend
-                    if arguments.wgpu_adapter_name:
+                    if device.name not in ("default", "pinned"):
+                        environment["WGPU_ADAPTER_NAME"] = device.name
+                        relevant_environment["WGPU_ADAPTER_NAME"] = device.name
+                    elif arguments.wgpu_adapter_name:
                         environment["WGPU_ADAPTER_NAME"] = arguments.wgpu_adapter_name
                         relevant_environment["WGPU_ADAPTER_NAME"] = (
                             arguments.wgpu_adapter_name
                         )
 
-                print(run_id, file=sys.stderr, flush=True)
+                print(f"{output.name}/{run_id}", file=sys.stderr, flush=True)
                 result = run(command, blade, env=environment, timeout=900, check=False)
                 if result.stderr:
                     (output / f"{run_id}.stderr.txt").write_text(
@@ -375,8 +522,11 @@ def main() -> None:
                 validation_hash = metadata.get("validation_hash")
                 if validation_hash is None:
                     raise ValueError(f"{run_id}: missing validation hash")
-                validation_hashes.setdefault((repetition, workload), set()).add(
-                    validation_hash
+                validation_hashes.setdefault(
+                    (repetition, workload, passes), set()
+                ).add(validation_hash)
+                device_names.setdefault(implementation, set()).add(
+                    metadata.get("device_name", "")
                 )
                 order_writer.writerow(
                     (
@@ -385,6 +535,7 @@ def main() -> None:
                         implementation,
                         workload,
                         policy,
+                        passes,
                         csv_name,
                     )
                 )
@@ -398,16 +549,106 @@ def main() -> None:
                     }
                 )
 
-    for (repetition, workload), hashes in validation_hashes.items():
+    for (repetition, workload, passes), hashes in validation_hashes.items():
         if len(hashes) != 1:
             raise ValueError(
-                f"repetition {repetition} workload {workload} produced "
-                f"different validation hashes: {sorted(hashes)}"
+                f"repetition {repetition} workload {workload} with {passes} passes "
+                f"produced different validation hashes: {sorted(hashes)}"
             )
+
+    # A matched comparison is meaningless when the two implementations pick
+    # different physical devices, which is easy to do on a machine that has both
+    # an integrated and a discrete GPU. Fail loudly rather than publish it.
+    selected = {name for names in device_names.values() for name in names}
+    if len(selected) != 1:
+        raise ValueError(
+            "implementations selected different devices: "
+            + "; ".join(
+                f"{implementation}={sorted(names)}"
+                for implementation, names in sorted(device_names.items())
+            )
+            + "\nPass --blade-device-id and --wgpu-adapter-name to pin one device."
+        )
     (output / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(f"Raw results: {output}", file=sys.stderr)
+
+
+def main() -> None:
+    arguments = parse_arguments()
+    ensure_positive(arguments)
+    blade = arguments.blade.resolve()
+    wgpu = arguments.wgpu.resolve()
+    collection_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    if not (blade / "Cargo.toml").is_file():
+        raise ValueError(f"not a Blade checkout: {blade}")
+    if not (wgpu / "examples/standalone/sync_bench/Cargo.toml").is_file():
+        raise ValueError(f"wgpu sync benchmark is missing from: {wgpu}")
+
+    repositories = {"blade": blade, "wgpu": wgpu}
+    repository_metadata: dict[str, dict[str, str]] = {}
+    for name, root in repositories.items():
+        status = git_output(root, "status", "--porcelain")
+        if status and not arguments.allow_dirty:
+            raise ValueError(
+                f"{name} worktree is dirty; commit it or pass --allow-dirty for a pilot"
+            )
+        repository_metadata[name] = {
+            "root": str(root),
+            "revision": git_output(root, "rev-parse", "HEAD"),
+            "branch": git_output(root, "branch", "--show-current"),
+            "status": status,
+            "cargo_lock_sha256": file_sha256(root / "Cargo.lock"),
+        }
+
+    if not arguments.skip_build:
+        run(["cargo", "build", "--release", "--example", "sync-bench"], blade)
+        run(["cargo", "build", "--release", "-p", "wgpu-sync-bench"], wgpu)
+
+    blade_binary = blade / "target/release/examples/sync-bench"
+    wgpu_binary = wgpu / "target/release/wgpu-sync-bench"
+    if sys.platform == "win32":
+        blade_binary = blade_binary.with_suffix(".exe")
+        wgpu_binary = wgpu_binary.with_suffix(".exe")
+    if not blade_binary.is_file() or not wgpu_binary.is_file():
+        raise ValueError("release benchmark binaries are missing")
+
+    seed = arguments.seed
+    if seed is None:
+        seed = int.from_bytes(os.urandom(8), "little")
+
+    devices = discover_devices(blade_binary, wgpu_binary, blade, arguments)
+    for device in devices:
+        print(f"device: {device}", file=sys.stderr)
+
+    # `<collection-id>-<hostname>`, plus a device suffix when there is more than
+    # one, so collections from different machines never collide in `data/raw/`.
+    base = arguments.output
+    if base is None:
+        base = blade / "paper/data/raw" / f"{collection_id}-{host_label()}"
+    base = base.resolve()
+
+    outputs = []
+    for device in devices:
+        output = base if len(devices) == 1 else Path(f"{base}-{device.slug}")
+        collect_device(
+            device=device,
+            output=output,
+            blade=blade,
+            wgpu=wgpu,
+            blade_binary=blade_binary,
+            wgpu_binary=wgpu_binary,
+            collection_id=collection_id,
+            repository_metadata=repository_metadata,
+            seed=seed,
+            arguments=arguments,
+        )
+        outputs.append(output)
+
+    print(f"Collected {len(outputs)} device(s):", file=sys.stderr)
+    for output in outputs:
+        print(f"  {output}", file=sys.stderr)
 
 
 if __name__ == "__main__":

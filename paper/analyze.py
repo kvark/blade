@@ -272,8 +272,17 @@ def write_comparisons(
         for experiment in sorted(by_experiment):
             configurations = by_experiment[experiment]
             comparison_pairs = (
+                # Scope at fixed placement.
+                (("blade", "automatic"), ("blade", "automatic-scoped")),
+                (("blade", "hazard-only"), ("blade", "hazard-only-scoped")),
+                (("blade", "explicit-all"), ("blade", "explicit-all-scoped")),
+                # Placement at fixed scope.
                 (("blade", "automatic"), ("blade", "hazard-only")),
+                (("blade", "automatic-scoped"), ("blade", "hazard-only-scoped")),
+                # Instrumentation controls, one per scope.
                 (("blade", "automatic"), ("blade", "explicit-all")),
+                (("blade", "automatic-scoped"), ("blade", "explicit-all-scoped")),
+                # End-to-end.
                 (("blade", "automatic"), ("wgpu", "tracked")),
             )
             for baseline_key, contender_key in comparison_pairs:

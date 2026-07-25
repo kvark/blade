@@ -173,6 +173,7 @@ impl Example {
             name: "main",
             buffer_count: 2,
             manual_barriers: false,
+            barrier_scope: gpu::BarrierScope::Global,
         });
 
         Self {

@@ -143,6 +143,7 @@ fn main() {
         name: "matmul",
         buffer_count: 1,
         manual_barriers: false,
+        barrier_scope: gpu::BarrierScope::Global,
     });
     encoder.start();
     {
