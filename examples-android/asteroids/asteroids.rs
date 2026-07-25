@@ -146,7 +146,7 @@ impl XrInput {
                 vertices: laser_verts,
                 indices: laser_idxs,
                 base_color_factor: [0.2, 1.0, 0.2, 1.0],
-                roughness_factor: 0.7,
+                roughness: 0.7,
                 ..Default::default()
             }],
         );
@@ -158,7 +158,7 @@ impl XrInput {
                 vertices: aim_verts,
                 indices: aim_idxs,
                 base_color_factor: [0.1, 0.3, 0.6, 1.0],
-                roughness_factor: 0.7,
+                roughness: 0.7,
                 ..Default::default()
             }],
         );

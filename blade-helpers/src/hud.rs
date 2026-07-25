@@ -5,13 +5,24 @@ pub trait ExposeHud {
 impl ExposeHud for blade_render::RayConfig {
     fn populate_hud(&mut self, ui: &mut egui::Ui) {
         ui.add(
-            egui::Slider::new(&mut self.num_environment_samples, 1..=100u32)
+            egui::Slider::new(&mut self.num_environment_samples, 0..=100u32)
                 .text("Num env samples")
+                .logarithmic(true),
+        );
+        ui.add(
+            egui::Slider::new(&mut self.num_brdf_samples, 0..=100u32)
+                .text("Num BRDF samples")
                 .logarithmic(true),
         );
         ui.checkbox(
             &mut self.environment_importance_sampling,
             "Env importance sampling",
+        );
+        ui.add(egui::widgets::Slider::new(&mut self.max_bounces, 0..=16).text("Max bounces"));
+        ui.add(
+            egui::Slider::new(&mut self.max_accumulated_samples, 0..=4096u32)
+                .text("Accumulation limit")
+                .logarithmic(true),
         );
         ui.add(egui::widgets::Slider::new(&mut self.tap_count, 0..=10).text("Tap count"));
         ui.add(egui::widgets::Slider::new(&mut self.tap_radius, 1..=50).text("Tap radius (px)"));
@@ -30,26 +41,6 @@ impl ExposeHud for blade_render::RayConfig {
         ui.checkbox(&mut self.pairwise_mis, "Pairwise MIS");
         ui.add(
             egui::widgets::Slider::new(&mut self.defensive_mis, 0.0..=1.0).text("Defensive MIS"),
-        );
-    }
-}
-
-impl ExposeHud for blade_render::PathTraceConfig {
-    fn populate_hud(&mut self, ui: &mut egui::Ui) {
-        ui.add(
-            egui::Slider::new(&mut self.samples_per_frame, 1..=64u32)
-                .text("Samples per frame")
-                .logarithmic(true),
-        );
-        ui.add(egui::widgets::Slider::new(&mut self.max_bounces, 0..=16).text("Max bounces"));
-        ui.add(
-            egui::widgets::Slider::new(&mut self.t_start, 0.001..=0.5)
-                .text("T min")
-                .logarithmic(true),
-        );
-        ui.checkbox(
-            &mut self.environment_importance_sampling,
-            "Env importance sampling",
         );
     }
 }
@@ -160,6 +151,21 @@ impl ExposeHud for blade_render::DebugConfig {
             self.texture_flags.set(bit, enabled);
         }
     }
+}
+
+/// Pick the mode of the ray tracer, returning true when it changes.
+pub fn populate_render_mode(mode: &mut blade_render::RenderMode, ui: &mut egui::Ui) -> bool {
+    use strum::IntoEnumIterator as _;
+
+    let old = *mode;
+    egui::ComboBox::from_label("Mode")
+        .selected_text(format!("{mode:?}"))
+        .show_ui(ui, |ui| {
+            for value in blade_render::RenderMode::iter() {
+                ui.selectable_value(mode, value, format!("{value:?}"));
+            }
+        });
+    *mode != old
 }
 
 pub fn populate_debug_selection(

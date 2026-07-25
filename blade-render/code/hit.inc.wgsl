@@ -32,10 +32,10 @@ struct HitEntry {
     base_color_factor: u32,
     normal_texture: u32,
     normal_scale: f32,
-    // green channel is roughness, blue channel is metallic
+    // green channel is roughness, blue channel is metalness
     metallic_roughness_texture: u32,
-    metallic_factor: f32,
-    roughness_factor: f32,
+    metalness: f32,
+    roughness: f32,
     emissive_texture: u32,
     emissive_factor: vec4<f32>,
 }
@@ -73,15 +73,15 @@ fn sample_hit_material(entry: HitEntry, tex_coords: vec2<f32>, lod: f32, ignore_
         base_color *= textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tex_coords, lod).xyz;
     }
 
-    var metallic = entry.metallic_factor;
-    var roughness = entry.roughness_factor;
+    var metalness = entry.metalness;
+    var roughness = entry.roughness;
     if ((ignore_textures & DebugTextureFlags_METALLIC_ROUGHNESS) == 0u) {
         let mr = textureSampleLevel(textures[entry.metallic_roughness_texture], sampler_linear, tex_coords, lod);
         roughness *= mr.y;
-        metallic *= mr.z;
+        metalness *= mr.z;
     }
 
-    return material_from_metallic_roughness(base_color, metallic, roughness);
+    return material_from_metallic_roughness(base_color, metalness, roughness);
 }
 
 fn sample_hit_emissive(entry: HitEntry, tex_coords: vec2<f32>, lod: f32, ignore_textures: u32) -> vec3<f32> {

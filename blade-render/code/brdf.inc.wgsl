@@ -31,12 +31,12 @@ struct Material {
 
 // Convert the glTF metallic-roughness parameters into the specular workflow.
 //
-// Note: this is the only place that knows about "metallic", everything
+// Note: this is the only place that knows about the metalness, everything
 // downstream of the G-buffer works with the diffuse/specular split.
-fn material_from_metallic_roughness(base_color: vec3<f32>, metallic: f32, roughness: f32) -> Material {
+fn material_from_metallic_roughness(base_color: vec3<f32>, metalness: f32, roughness: f32) -> Material {
     var mat: Material;
-    mat.diffuse_albedo = base_color * (1.0 - metallic);
-    mat.specular_f0 = mix(vec3<f32>(DIELECTRIC_F0), base_color, metallic);
+    mat.diffuse_albedo = base_color * (1.0 - metalness);
+    mat.specular_f0 = mix(vec3<f32>(DIELECTRIC_F0), base_color, metalness);
     mat.roughness = roughness;
     return mat;
 }

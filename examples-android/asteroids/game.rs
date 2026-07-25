@@ -73,7 +73,7 @@ impl AsteroidField {
                         vertices,
                         indices,
                         base_color_factor: color,
-                        roughness_factor: 0.7,
+                        roughness: 0.7,
                         ..Default::default()
                     }],
                 );

@@ -379,11 +379,9 @@ enum Renderer {
         inner: blade_render::RayTracer,
         frame_config: blade_render::FrameConfig,
         ray_config: blade_render::RayConfig,
+        mode: blade_render::RenderMode,
         denoiser_enabled: bool,
         denoiser_config: blade_render::DenoiserConfig,
-        /// When set, the canonical renderer replaces the real-time one.
-        canonical_enabled: bool,
-        canonical_config: blade_render::PathTraceConfig,
         post_proc_config: blade_render::PostProcConfig,
     },
     Rasterizer {
@@ -572,10 +570,7 @@ impl Engine {
                         .create_xr_surface()
                         .expect("Unable to create XR surface from GPU context");
                     let surface_size = xr_surface.extent();
-                    let surface_info = gpu::SurfaceInfo {
-                        format: xr_surface.format(),
-                        alpha: gpu::AlphaMode::Ignored,
-                    };
+                    let surface_info = xr_surface.info();
                     (surface_size, surface_info, TargetSurface::Xr(xr_surface))
                 }
             }
@@ -625,13 +620,12 @@ impl Engine {
                     reset_accumulation: true,
                 },
                 ray_config: blade_helpers::default_ray_config(),
+                mode: blade_render::RenderMode::default(),
                 denoiser_enabled: true,
                 denoiser_config: blade_render::DenoiserConfig {
                     num_passes: 4,
                     temporal_weight: 0.1,
                 },
-                canonical_enabled: false,
-                canonical_config: blade_render::PathTraceConfig::default(),
                 post_proc_config: blade_render::PostProcConfig {
                     average_luminocity: 0.5,
                     exposure_key_value: 1.0 / 9.6,
@@ -882,8 +876,7 @@ impl Engine {
                 ref mut ray_config,
                 ref mut denoiser_enabled,
                 ref mut denoiser_config,
-                canonical_enabled,
-                canonical_config,
+                mode,
                 ..
             } = self.renderer
             {
@@ -910,14 +903,13 @@ impl Engine {
                 frame_config.reset_accumulation = false;
 
                 if !self.render_objects.is_empty() {
-                    if canonical_enabled {
-                        inner.path_trace(command_encoder, canonical_config);
-                    } else {
-                        inner.ray_trace(command_encoder, self.debug, *ray_config);
-                        if *denoiser_enabled {
-                            inner.denoise(command_encoder, *denoiser_config);
-                        }
-                    }
+                    inner.render(
+                        command_encoder,
+                        mode,
+                        self.debug,
+                        *ray_config,
+                        denoiser_enabled.then_some(*denoiser_config),
+                    );
                 }
             }
         }
@@ -1159,6 +1151,7 @@ impl Engine {
                 post_proc_config,
                 ..
             } => {
+                let mode = blade_render::RenderMode::RealTime;
                 if can_render {
                     inner.build_scene(
                         command_encoder,
@@ -1196,10 +1189,13 @@ impl Engine {
                     frame_config.reset_reservoirs = false;
                     frame_config.reset_accumulation = false;
                     if !self.render_objects.is_empty() {
-                        inner.ray_trace(command_encoder, self.debug, ray_config);
-                        if denoiser_enabled {
-                            inner.denoise(command_encoder, denoiser_config);
-                        }
+                        inner.render(
+                            command_encoder,
+                            mode,
+                            self.debug,
+                            ray_config,
+                            denoiser_enabled.then_some(denoiser_config),
+                        );
                     }
                     if let mut pass = command_encoder.render(
                         "xr-draw",
@@ -1450,30 +1446,23 @@ impl Engine {
             .default_open(false)
             .show(ui, |ui| match self.renderer {
                 Renderer::RayTracer {
+                    ref mut mode,
                     ref mut ray_config,
                     ref mut denoiser_enabled,
                     ref mut denoiser_config,
-                    ref mut canonical_enabled,
-                    ref mut canonical_config,
                     ref mut post_proc_config,
                     ref mut frame_config,
                     ..
                 } => {
+                    if blade_helpers::populate_render_mode(mode, ui) {
+                        frame_config.reset_accumulation = true;
+                    }
                     ray_config.populate_hud(ui);
                     let reset = ui.button("Reset Accumulation").clicked();
                     frame_config.reset_reservoirs |= reset;
                     frame_config.reset_accumulation |= reset;
                     ui.checkbox(denoiser_enabled, "Enable Denoiser");
                     denoiser_config.populate_hud(ui);
-                    if ui
-                        .checkbox(canonical_enabled, "Canonical renderer")
-                        .changed()
-                    {
-                        frame_config.reset_accumulation = true;
-                    }
-                    if *canonical_enabled {
-                        canonical_config.populate_hud(ui);
-                    }
                     post_proc_config.populate_hud(ui);
                 }
                 Renderer::Rasterizer {

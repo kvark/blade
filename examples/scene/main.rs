@@ -156,8 +156,7 @@ struct Example {
     is_point_selected: bool,
     is_file_hovered: bool,
     ray_config: blade_render::RayConfig,
-    canonical_enabled: bool,
-    canonical_config: blade_render::PathTraceConfig,
+    mode: blade_render::RenderMode,
     denoiser_enabled: bool,
     denoiser_config: blade_render::DenoiserConfig,
     post_proc_config: blade_render::PostProcConfig,
@@ -258,8 +257,7 @@ impl Example {
             is_point_selected: false,
             is_file_hovered: false,
             ray_config: blade_helpers::default_ray_config(),
-            canonical_enabled: false,
-            canonical_config: blade_render::PathTraceConfig::default(),
+            mode: blade_render::RenderMode::default(),
             denoiser_enabled: true,
             denoiser_config: blade_render::DenoiserConfig {
                 num_passes: 3,
@@ -472,16 +470,13 @@ impl Example {
             //TODO: figure out why the main RT pipeline
             // causes a GPU crash when there are no objects
             if !self.objects.is_empty() {
-                if self.canonical_enabled {
-                    self.renderer
-                        .path_trace(command_encoder, self.canonical_config);
-                } else {
-                    self.renderer
-                        .ray_trace(command_encoder, self.debug, self.ray_config);
-                    if self.denoiser_enabled {
-                        self.renderer.denoise(command_encoder, self.denoiser_config);
-                    }
-                }
+                self.renderer.render(
+                    command_encoder,
+                    self.mode,
+                    self.debug,
+                    self.ray_config,
+                    self.denoiser_enabled.then_some(self.denoiser_config),
+                );
             }
         }
 
@@ -660,6 +655,8 @@ impl Example {
         egui::CollapsingHeader::new("Ray Trace")
             .default_open(false)
             .show(ui, |ui| {
+                self.need_accumulation_reset |=
+                    blade_helpers::populate_render_mode(&mut self.mode, ui);
                 self.ray_config.populate_hud(ui);
             });
         self.need_accumulation_reset |= self.ray_config != old_ray_config;
@@ -670,15 +667,6 @@ impl Example {
                 ui.checkbox(&mut self.denoiser_enabled, "Enable");
                 self.denoiser_config.populate_hud(ui);
             });
-
-        let old_canonical_config = self.canonical_config;
-        egui::CollapsingHeader::new("Canonical")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.checkbox(&mut self.canonical_enabled, "Enable");
-                self.canonical_config.populate_hud(ui);
-            });
-        self.need_accumulation_reset |= self.canonical_config != old_canonical_config;
 
         egui::CollapsingHeader::new("Tone Map").show(ui, |ui| {
             self.post_proc_config.populate_hud(ui);

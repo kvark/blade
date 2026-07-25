@@ -93,13 +93,31 @@ pub struct DebugConfig {
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct RayConfig {
+    /// Light samples taken at every shading point.
     pub num_environment_samples: u32,
+    /// Material samples taken at every shading point.
+    ///
+    /// The canonical mode continues the path along each of them,
+    /// so this is also its number of paths per pixel.
+    pub num_brdf_samples: u32,
+    /// Sample the environment map by importance rather than uniformly.
     pub environment_importance_sampling: bool,
+    /// Number of surfaces a path is allowed to hit.
+    ///
+    /// Note: the real-time mode always stops at the first one.
+    pub max_bounces: u32,
+    pub t_start: f32,
+    /// Number of samples to accumulate before going idle, or 0 for no limit.
+    ///
+    /// Note: only used by the canonical mode.
+    pub max_accumulated_samples: u32,
+    /// Number of the neighbors to reuse the samples of.
+    ///
+    /// Note: reuse is only done by the real-time mode.
     pub tap_count: u32,
     pub tap_radius: u32,
     pub tap_confidence_near: u32,
     pub tap_confidence_far: u32,
-    pub t_start: f32,
     /// Evaluate MIS factor for ReSTIR in a pair-wise fashion.
     /// Adds 2 extra visibility rays per reused sample.
     pub pairwise_mis: bool,
@@ -108,29 +126,19 @@ pub struct RayConfig {
     pub defensive_mis: f32,
 }
 
-/// Configuration of the canonical renderer.
-///
-/// It traces full paths without any reuse or denoising, accumulating
-/// the result over the frames, so it converges to the ground truth.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
-pub struct PathTraceConfig {
-    /// Number of paths traced per pixel in a single frame.
-    pub samples_per_frame: u32,
-    /// Maximum number of surfaces a path is allowed to hit.
-    pub max_bounces: u32,
-    pub t_start: f32,
-    pub environment_importance_sampling: bool,
-}
-
-impl Default for PathTraceConfig {
-    fn default() -> Self {
-        Self {
-            samples_per_frame: 1,
-            max_bounces: 3,
-            t_start: 0.01,
-            environment_importance_sampling: true,
-        }
-    }
+/// What the ray tracer does with the scene.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, PartialOrd, blade_macros::AsPrimitive, strum::EnumIter,
+)]
+#[repr(u32)]
+pub enum RenderMode {
+    /// Real time: a single bounce, with the samples reused between
+    /// the neighbors and the frames, and the result denoised.
+    #[default]
+    RealTime = 0,
+    /// Reference: full paths with no reuse and no denoising, accumulated
+    /// over the frames until the camera moves. Converges to the ground truth.
+    Canonical = 1,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
@@ -424,6 +432,7 @@ pub(crate) struct DebugParams {
 struct MainParams {
     frame_index: u32,
     num_environment_samples: u32,
+    num_brdf_samples: u32,
     environment_importance_sampling: u32,
     tap_count: u32,
     tap_radius: f32,
@@ -492,8 +501,10 @@ struct MainData {
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct PathTraceParams {
     frame_index: u32,
-    num_samples: u32,
+    num_environment_samples: u32,
+    num_brdf_samples: u32,
     max_bounces: u32,
+    max_accumulated_samples: u32,
     t_start: f32,
     environment_importance_sampling: u32,
     reset_accumulation: u32,
@@ -556,6 +567,7 @@ struct PostProcParams {
     key_value: f32,
     white_level: f32,
     accumulated: u32,
+    encode_srgb: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -586,8 +598,8 @@ struct HitEntry {
     normal_texture: u32,
     normal_scale: f32,
     metallic_roughness_texture: u32,
-    metallic_factor: f32,
-    roughness_factor: f32,
+    metalness: f32,
+    roughness: f32,
     emissive_texture: u32,
     //Note: aligned to 16 bytes, matching `vec4` on the WGSL side
     emissive_factor: [f32; 4],
@@ -1140,8 +1152,8 @@ impl RayTracer {
                         material.metallic_roughness_texture,
                         dummy_white,
                     ),
-                    metallic_factor: material.metallic_factor,
-                    roughness_factor: material.roughness_factor,
+                    metalness: material.metalness,
+                    roughness: material.roughness,
                     emissive_texture: alloc_texture(material.emissive_texture, dummy_white),
                     emissive_factor: {
                         let c = material.emissive_factor;
@@ -1282,15 +1294,40 @@ impl RayTracer {
         self.post_proc_input_index = cur;
     }
 
-    /// Render the scene with the canonical renderer: full paths, no reuse,
-    /// and no denoising, accumulated on top of the previous frames.
+    /// Render a frame in the given mode.
     ///
-    /// The result replaces the real-time one in the post-processing.
+    /// The result is stored internally in an HDR render target, to be
+    /// brought to the screen by `post_proc`. The denoiser configuration
+    /// is only used by the real-time mode.
     #[profiling::function]
-    pub fn path_trace(
+    pub fn render(
         &mut self,
         command_encoder: &mut blade_graphics::CommandEncoder,
-        config: PathTraceConfig,
+        mode: RenderMode,
+        debug_config: DebugConfig,
+        ray_config: RayConfig,
+        denoiser_config: Option<DenoiserConfig>,
+    ) {
+        match mode {
+            RenderMode::RealTime => {
+                self.ray_trace(command_encoder, debug_config, ray_config);
+                if let Some(config) = denoiser_config {
+                    self.denoise(command_encoder, config);
+                }
+            }
+            RenderMode::Canonical => {
+                self.path_trace(command_encoder, ray_config);
+            }
+        }
+    }
+
+    /// Trace full paths with no reuse and no denoising, accumulating
+    /// on top of what the previous frames have produced.
+    #[profiling::function]
+    fn path_trace(
+        &mut self,
+        command_encoder: &mut blade_graphics::CommandEncoder,
+        config: RayConfig,
     ) {
         let cur = self.frame_index % 2;
         let mut pass = command_encoder.compute("path-trace");
@@ -1302,8 +1339,10 @@ impl RayTracer {
                 camera: self.targets.camera_params[cur],
                 parameters: PathTraceParams {
                     frame_index: self.frame_index as u32,
-                    num_samples: config.samples_per_frame.max(1),
+                    num_environment_samples: config.num_environment_samples,
+                    num_brdf_samples: config.num_brdf_samples,
                     max_bounces: config.max_bounces,
+                    max_accumulated_samples: config.max_accumulated_samples,
                     t_start: config.t_start,
                     environment_importance_sampling: config.environment_importance_sampling as u32,
                     reset_accumulation: self.reset_accumulation as u32,
@@ -1326,11 +1365,10 @@ impl RayTracer {
         self.show_accumulation = true;
     }
 
-    /// Ray trace the scene.
-    ///
-    /// The result is stored internally in an HDR render target.
+    /// Estimate the lighting with ReSTIR, reusing the samples of
+    /// the neighbors and of the previous frame.
     #[profiling::function]
-    pub fn ray_trace(
+    fn ray_trace(
         &self,
         command_encoder: &mut blade_graphics::CommandEncoder,
         debug_config: DebugConfig,
@@ -1381,6 +1419,7 @@ impl RayTracer {
                     parameters: MainParams {
                         frame_index: self.frame_index as u32,
                         num_environment_samples: ray_config.num_environment_samples,
+                        num_brdf_samples: ray_config.num_brdf_samples,
                         environment_importance_sampling: ray_config.environment_importance_sampling
                             as u32,
                         tap_count: ray_config.tap_count,
@@ -1430,7 +1469,7 @@ impl RayTracer {
 
     /// Perform noise reduction using SVGF.
     #[profiling::function]
-    pub fn denoise(
+    fn denoise(
         &mut self, //TODO: borrow immutably
         command_encoder: &mut blade_graphics::CommandEncoder,
         denoiser_config: DenoiserConfig,
@@ -1532,6 +1571,9 @@ impl RayTracer {
                         key_value: pp_config.exposure_key_value,
                         white_level: pp_config.white_level,
                         accumulated: self.show_accumulation as u32,
+                        encode_srgb: (self.surface_info.color_space
+                            == blade_graphics::ColorSpace::Srgb)
+                            as u32,
                     },
                     debug_params,
                 },

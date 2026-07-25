@@ -24,8 +24,13 @@ const MAX_RADIANCE: f32 = 1.0e6;
 
 struct PathTraceParams {
     frame_index: u32,
-    num_samples: u32,
+    // light samples taken at every vertex of a path
+    num_environment_samples: u32,
+    // material samples taken per pixel, i.e. the number of paths
+    num_brdf_samples: u32,
     max_bounces: u32,
+    // stop accumulating at this many samples, 0 for no limit
+    max_accumulated_samples: u32,
     t_start: f32,
     environment_importance_sampling: u32,
     // when set, the previous accumulation is discarded
@@ -108,15 +113,17 @@ fn resolve_hit(intersection: RayIntersection) -> PathVertex {
     return vertex;
 }
 
-// Balance heuristic weight of a strategy with density `pdf`,
-// against another one that would have produced `other_pdf`.
-fn mis_weight(pdf: f32, other_pdf: f32) -> f32 {
-    return select(0.0, pdf / (pdf + other_pdf), pdf > 0.0);
+// Balance heuristic weight for a strategy taking `count` samples at density
+// `pdf`, against another one taking `other_count` samples at `other_pdf`.
+fn mis_weight(count: f32, pdf: f32, other_count: f32, other_pdf: f32) -> f32 {
+    let total = count * pdf + other_count * other_pdf;
+    return select(0.0, count * pdf / total, total > 0.0);
 }
 
 // Estimate the light arriving at the camera through a single path.
 fn trace_path(start_dir: vec3<f32>, rng: ptr<function, RandomState>) -> vec3<f32> {
     let importance = parameters.environment_importance_sampling != 0u;
+    let num_light = f32(parameters.num_environment_samples);
     var radiance = vec3<f32>(0.0);
     var throughput = vec3<f32>(1.0);
     var position = camera.position;
@@ -136,7 +143,8 @@ fn trace_path(start_dir: vec3<f32>, rng: ptr<function, RandomState>) -> vec3<f32
                 // The light sampling at the previous vertex could have found
                 // this direction as well, so the two have to be weighted.
                 let light_pdf = compute_light_pdf(map_equirect_dir_to_uv(direction), importance);
-                radiance += throughput * evaluate_environment(direction) * mis_weight(bsdf_pdf, light_pdf);
+                let weight = mis_weight(1.0, bsdf_pdf, num_light, light_pdf);
+                radiance += throughput * evaluate_environment(direction) * weight;
             }
             break;
         }
@@ -148,19 +156,23 @@ fn trace_path(start_dir: vec3<f32>, rng: ptr<function, RandomState>) -> vec3<f32
         t_min = parameters.t_start;
 
         // Next event estimation: connect to the environment light.
-        let ls = sample_light(importance, rng);
-        if (ls.pdf > 0.0) {
+        for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
+            let ls = sample_light(importance, rng);
+            if (ls.pdf <= 0.0) {
+                continue;
+            }
             let light_dir = map_equirect_uv_to_dir(ls.uv);
             let bsdf = evaluate_bsdf(vertex.material, vertex.normal, view_dir, light_dir);
-            if (dot(light_dir, vertex.flat_normal) > 0.0 && any(bsdf > vec3<f32>(0.0))
-                && !is_occluded(position, light_dir)) {
-                let other_pdf = compute_bsdf_pdf(vertex.material, vertex.normal, view_dir, light_dir);
-                let weight = mis_weight(ls.pdf, other_pdf) / ls.pdf;
-                radiance += throughput * bsdf * ls.radiance * weight;
+            if (dot(light_dir, vertex.flat_normal) <= 0.0 || all(bsdf <= vec3<f32>(0.0))
+                || is_occluded(position, light_dir)) {
+                continue;
             }
+            let other_pdf = compute_bsdf_pdf(vertex.material, vertex.normal, view_dir, light_dir);
+            let weight = mis_weight(num_light, ls.pdf, 1.0, other_pdf) / (num_light * ls.pdf);
+            radiance += throughput * bsdf * ls.radiance * weight;
         }
 
-        if (bounce == parameters.max_bounces) {
+        if (bounce == parameters.max_bounces || parameters.num_brdf_samples == 0u) {
             // The next event estimation above was the last thing to do here.
             break;
         }
@@ -199,20 +211,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
+    var total = vec4<f32>(0.0);
+    if (parameters.reset_accumulation == 0u) {
+        total = textureLoad(accumulator, global_id.xy);
+        if (parameters.max_accumulated_samples != 0u
+            && total.w >= f32(parameters.max_accumulated_samples)) {
+            // Converged enough, leave the accumulator alone.
+            return;
+        }
+    }
+
     let global_index = global_id.y * camera.target_size.x + global_id.x;
     var rng = random_init(global_index, parameters.frame_index);
 
+    // Each of the material samples at the primary hit starts a path of its own.
+    let num_paths = max(parameters.num_brdf_samples, 1u);
     var sum = vec3<f32>(0.0);
-    for (var i = 0u; i < parameters.num_samples; i += 1u) {
+    for (var i = 0u; i < num_paths; i += 1u) {
         // Jitter within the pixel, which anti-aliases for free.
         let jitter = vec2<f32>(random_gen(&rng), random_gen(&rng));
         let ray_dir = get_ray_direction_at(camera, vec2<f32>(global_id.xy) + jitter);
         sum += trace_path(ray_dir, &rng);
     }
 
-    var total = vec4<f32>(sum, f32(parameters.num_samples));
-    if (parameters.reset_accumulation == 0u) {
-        total += textureLoad(accumulator, global_id.xy);
-    }
-    textureStore(accumulator, global_id.xy, total);
+    textureStore(accumulator, global_id.xy, total + vec4<f32>(sum, f32(num_paths)));
 }

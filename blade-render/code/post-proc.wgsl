@@ -1,4 +1,5 @@
 #include "debug.inc.wgsl"
+#include "color.inc.wgsl"
 #include "debug-param.inc.wgsl"
 
 struct PostProcParams {
@@ -9,6 +10,8 @@ struct PostProcParams {
     white_level: f32,
     // when set, the color comes from the path traced accumulator
     accumulated: u32,
+    // when set, the surface needs the values encoded for the display
+    encode_srgb: u32,
 }
 
 var t_diffuse_albedo: texture_2d<f32>;
@@ -52,15 +55,15 @@ fn postfx_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
             let emissive = textureLoad(t_emissive, tc, 0).xyz;
             color = diffuse_albedo * illumination.xyz + specular + emissive;
         }
+        var mapped = color;
         if (post_proc_params.tone_map_enabled != 0u) {
             // Following https://blog.en.uwa4d.com/2022/07/19/physically-based-renderingg-hdr-tone-mapping/
             let l_adjusted = post_proc_params.key_value / post_proc_params.average_lum * color;
             let l_white = post_proc_params.white_level;
-            let l_ldr = l_adjusted * (1.0 + l_adjusted / (l_white*l_white)) / (1.0 + l_adjusted);
-            return vec4<f32>(l_ldr, 1.0);
-        } else {
-            return vec4<f32>(color, 1.0);
+            mapped = l_adjusted * (1.0 + l_adjusted / (l_white*l_white)) / (1.0 + l_adjusted);
         }
+        let encode = post_proc_params.encode_srgb != 0u;
+        return vec4<f32>(encode_surface_color(mapped, encode), 1.0);
     } else if (debug_params.view_mode == DebugMode_Variance) {
         return vec4<f32>(illumination.w);
     } else {
