@@ -589,7 +589,11 @@ def main() -> None:
     repositories = {"blade": blade, "wgpu": wgpu}
     repository_metadata: dict[str, dict[str, str]] = {}
     for name, root in repositories.items():
-        status = git_output(root, "status", "--porcelain")
+        # Accumulated collections do not change what the binaries do, so they
+        # do not make the source revision ambiguous. Everything else does.
+        status = git_output(
+            root, "status", "--porcelain", "--", ":(exclude)paper/data"
+        )
         if status and not arguments.allow_dirty:
             raise ValueError(
                 f"{name} worktree is dirty; commit it or pass --allow-dirty for a pilot"
