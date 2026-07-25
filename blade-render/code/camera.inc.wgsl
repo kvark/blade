@@ -8,12 +8,17 @@ struct CameraParams {
 
 const VFLIP: vec2<f32> = vec2<f32>(1.0, -1.0);
 
-fn get_ray_direction(cp: CameraParams, pixel: vec2<i32>) -> vec3<f32> {
+// Direction of the ray through a point on the film, in pixel units.
+fn get_ray_direction_at(cp: CameraParams, film_pos: vec2<f32>) -> vec3<f32> {
     let half_size = 0.5 * vec2<f32>(cp.target_size);
-    let ndc = (vec2<f32>(pixel) + vec2<f32>(0.5) - half_size) / half_size;
+    let ndc = (film_pos - half_size) / half_size;
     // Right-handed coordinate system with X=right, Y=up, and Z=towards the camera
     let local_dir = vec3<f32>(VFLIP * ndc * tan(0.5 * cp.fov), -1.0);
     return normalize(qrot(cp.orientation, local_dir));
+}
+
+fn get_ray_direction(cp: CameraParams, pixel: vec2<i32>) -> vec3<f32> {
+    return get_ray_direction_at(cp, vec2<f32>(pixel) + vec2<f32>(0.5));
 }
 
 fn get_projected_pixel_float(cp: CameraParams, point: vec3<f32>) -> vec2<f32> {

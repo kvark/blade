@@ -783,9 +783,12 @@ fn select_xr_swapchain_format(
             }
         }
     }
+    // Unlike a window surface, an XR swapchain has no way to declare the color
+    // space of its contents: the runtime linearizes the sRGB formats and passes
+    // the plain ones through. So the format has to match what the app produces.
     match color_space {
-        crate::ColorSpace::Linear => linear_candidate.or(srgb_candidate),
-        crate::ColorSpace::Srgb => srgb_candidate.or(linear_candidate),
+        crate::ColorSpace::Linear => srgb_candidate.or(linear_candidate),
+        crate::ColorSpace::Srgb => linear_candidate.or(srgb_candidate),
     }
     .expect("No compatible XR swapchain format available")
 }

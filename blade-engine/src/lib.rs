@@ -381,6 +381,9 @@ enum Renderer {
         ray_config: blade_render::RayConfig,
         denoiser_enabled: bool,
         denoiser_config: blade_render::DenoiserConfig,
+        /// When set, the canonical renderer replaces the real-time one.
+        canonical_enabled: bool,
+        canonical_config: blade_render::PathTraceConfig,
         post_proc_config: blade_render::PostProcConfig,
     },
     Rasterizer {
@@ -619,6 +622,7 @@ impl Engine {
                     debug_draw: true,
                     reset_variance: false,
                     reset_reservoirs: true,
+                    reset_accumulation: true,
                 },
                 ray_config: blade_helpers::default_ray_config(),
                 denoiser_enabled: true,
@@ -626,6 +630,8 @@ impl Engine {
                     num_passes: 4,
                     temporal_weight: 0.1,
                 },
+                canonical_enabled: false,
+                canonical_config: blade_render::PathTraceConfig::default(),
                 post_proc_config: blade_render::PostProcConfig {
                     average_luminocity: 0.5,
                     exposure_key_value: 1.0 / 9.6,
@@ -876,6 +882,8 @@ impl Engine {
                 ref mut ray_config,
                 ref mut denoiser_enabled,
                 ref mut denoiser_config,
+                canonical_enabled,
+                canonical_config,
                 ..
             } = self.renderer
             {
@@ -899,11 +907,16 @@ impl Engine {
                     *frame_config,
                 );
                 frame_config.reset_reservoirs = false;
+                frame_config.reset_accumulation = false;
 
                 if !self.render_objects.is_empty() {
-                    inner.ray_trace(command_encoder, self.debug, *ray_config);
-                    if *denoiser_enabled {
-                        inner.denoise(command_encoder, *denoiser_config);
+                    if canonical_enabled {
+                        inner.path_trace(command_encoder, canonical_config);
+                    } else {
+                        inner.ray_trace(command_encoder, self.debug, *ray_config);
+                        if *denoiser_enabled {
+                            inner.denoise(command_encoder, *denoiser_config);
+                        }
                     }
                 }
             }
@@ -1135,6 +1148,8 @@ impl Engine {
         command_encoder.init_texture(frame.texture());
 
         match self.renderer {
+            //Note: the canonical renderer is of no use in a headset,
+            // so XR always takes the real-time path.
             Renderer::RayTracer {
                 ref mut inner,
                 ray_config,
@@ -1142,6 +1157,7 @@ impl Engine {
                 denoiser_enabled,
                 denoiser_config,
                 post_proc_config,
+                ..
             } => {
                 if can_render {
                     inner.build_scene(
@@ -1178,6 +1194,7 @@ impl Engine {
                     };
                     inner.prepare(command_encoder, &render_camera, *frame_config);
                     frame_config.reset_reservoirs = false;
+                    frame_config.reset_accumulation = false;
                     if !self.render_objects.is_empty() {
                         inner.ray_trace(command_encoder, self.debug, ray_config);
                         if denoiser_enabled {
@@ -1436,14 +1453,27 @@ impl Engine {
                     ref mut ray_config,
                     ref mut denoiser_enabled,
                     ref mut denoiser_config,
+                    ref mut canonical_enabled,
+                    ref mut canonical_config,
                     ref mut post_proc_config,
                     ref mut frame_config,
                     ..
                 } => {
                     ray_config.populate_hud(ui);
-                    frame_config.reset_reservoirs |= ui.button("Reset Accumulation").clicked();
+                    let reset = ui.button("Reset Accumulation").clicked();
+                    frame_config.reset_reservoirs |= reset;
+                    frame_config.reset_accumulation |= reset;
                     ui.checkbox(denoiser_enabled, "Enable Denoiser");
                     denoiser_config.populate_hud(ui);
+                    if ui
+                        .checkbox(canonical_enabled, "Canonical renderer")
+                        .changed()
+                    {
+                        frame_config.reset_accumulation = true;
+                    }
+                    if *canonical_enabled {
+                        canonical_config.populate_hud(ui);
+                    }
                     post_proc_config.populate_hud(ui);
                 }
                 Renderer::Rasterizer {

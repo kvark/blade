@@ -2,15 +2,18 @@ use crate::{AssetHub, CameraParams, DummyResources, Object, Shaders, Vertex};
 use blade_graphics as gpu;
 use std::mem;
 
+/// Configuration of the rasterized frame.
+///
+/// Note: the surface appearance is described by the materials of the
+/// models, this is only about the scene-wide lighting.
 #[derive(Clone, Copy, Debug)]
 pub struct RasterConfig {
     pub clear_color: gpu::TextureColor,
+    /// Direction *towards* the single directional light.
     pub light_dir: mint::Vector3<f32>,
     pub light_color: mint::Vector3<f32>,
     pub ambient_color: mint::Vector3<f32>,
-    pub roughness: f32,
-    pub metallic: f32,
-    /// When true, the sky fallback renders pure black instead of a blue gradient.
+    /// When true, the sky fallback renders stars instead of a blue gradient.
     pub space_sky: bool,
 }
 
@@ -19,9 +22,9 @@ impl Default for RasterConfig {
         Self {
             clear_color: gpu::TextureColor::OpaqueBlack,
             light_dir: mint::Vector3 {
-                x: -0.3,
-                y: -1.0,
-                z: -0.2,
+                x: 0.3,
+                y: 1.0,
+                z: 0.2,
             },
             light_color: mint::Vector3 {
                 x: 3.0,
@@ -33,8 +36,6 @@ impl Default for RasterConfig {
                 y: 0.05,
                 z: 0.05,
             },
-            roughness: 0.4,
-            metallic: 0.0,
             space_sky: false,
         }
     }
@@ -49,7 +50,7 @@ struct RasterFrameParams {
     light_dir: [f32; 4],
     light_color: [f32; 4],
     ambient_color: [f32; 4],
-    material: [f32; 4],
+    settings: [f32; 4],
 }
 
 #[repr(C)]
@@ -58,6 +59,7 @@ struct RasterDrawParams {
     model: [f32; 16],
     normal_quat: [f32; 4],
     base_color_factor: [f32; 4],
+    emissive_factor: [f32; 4],
     material: [f32; 4],
 }
 
@@ -69,6 +71,8 @@ struct RasterMainData {
     samp: gpu::Sampler,
     base_color_tex: gpu::TextureView,
     normal_tex: gpu::TextureView,
+    metallic_roughness_tex: gpu::TextureView,
+    emissive_tex: gpu::TextureView,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -328,10 +332,12 @@ impl Rasterizer {
                         }
                         None => (self.dummy.white_view, 0.0),
                     };
-                    let base_color_tex = match material.base_color_texture {
-                        Some(handle) => asset_hub.textures[handle].view,
-                        None => self.dummy.white_view,
-                    };
+                    //Note: the dummies are white, so that the factors are unaffected
+                    let texture_or_white =
+                        |handle: Option<blade_asset::Handle<crate::Texture>>| match handle {
+                            Some(handle) => asset_hub.textures[handle].view,
+                            None => self.dummy.white_view,
+                        };
 
                     pc.bind(
                         0,
@@ -346,12 +352,27 @@ impl Rasterizer {
                                     material.base_color_factor[2] * object.color_tint[2],
                                     material.base_color_factor[3] * object.color_tint[3],
                                 ],
-                                material: [normal_scale, 0.0, 0.0, 0.0],
+                                emissive_factor: [
+                                    material.emissive_factor[0],
+                                    material.emissive_factor[1],
+                                    material.emissive_factor[2],
+                                    0.0,
+                                ],
+                                material: [
+                                    normal_scale,
+                                    material.metallic_factor,
+                                    material.roughness_factor,
+                                    0.0,
+                                ],
                             },
                             vertices: model.vertex_buffer.at(0),
                             samp: self.sampler_linear,
-                            base_color_tex,
+                            base_color_tex: texture_or_white(material.base_color_texture),
                             normal_tex,
+                            metallic_roughness_tex: texture_or_white(
+                                material.metallic_roughness_texture,
+                            ),
+                            emissive_tex: texture_or_white(material.emissive_texture),
                         },
                     );
 
@@ -524,12 +545,7 @@ impl Rasterizer {
                 let c = config.ambient_color;
                 [c.x, c.y, c.z, config.space_sky as u32 as f32]
             },
-            material: [
-                config.roughness,
-                config.metallic,
-                env_map_enabled as u32 as f32,
-                0.0,
-            ],
+            settings: [env_map_enabled as u32 as f32, 0.0, 0.0, 0.0],
         }
     }
 }

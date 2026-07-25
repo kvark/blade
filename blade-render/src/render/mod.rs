@@ -58,6 +58,9 @@ pub enum DebugMode {
     Motion = 8,
     HitConsistency = 9,
     SampleReuse = 10,
+    Roughness = 11,
+    SpecularF0 = 12,
+    Emissive = 13,
     Variance = 15,
 }
 
@@ -75,6 +78,8 @@ bitflags::bitflags! {
     pub struct DebugTextureFlags: u32 {
         const ALBEDO = 1;
         const NORMAL = 2;
+        const METALLIC_ROUGHNESS = 4;
+        const EMISSIVE = 8;
     }
 }
 
@@ -101,6 +106,31 @@ pub struct RayConfig {
     /// Defensive MIS factor for the canonical sample.
     /// Can be between 0 and 1.
     pub defensive_mis: f32,
+}
+
+/// Configuration of the canonical renderer.
+///
+/// It traces full paths without any reuse or denoising, accumulating
+/// the result over the frames, so it converges to the ground truth.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct PathTraceConfig {
+    /// Number of paths traced per pixel in a single frame.
+    pub samples_per_frame: u32,
+    /// Maximum number of surfaces a path is allowed to hit.
+    pub max_bounces: u32,
+    pub t_start: f32,
+    pub environment_importance_sampling: bool,
+}
+
+impl Default for PathTraceConfig {
+    fn default() -> Self {
+        Self {
+            samples_per_frame: 1,
+            max_bounces: 3,
+            t_start: 0.01,
+            environment_importance_sampling: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
@@ -212,9 +242,17 @@ struct RestirTargets {
     depth: RenderTarget<2>,
     basis: RenderTarget<2>,
     flat_normal: RenderTarget<2>,
-    albedo: RenderTarget<1>,
+    /// The base color with the specularly reflected part taken out.
+    diffuse_albedo: RenderTarget<2>,
+    /// RGB is the specular reflectance at normal incidence, alpha is the roughness.
+    specular_f0: RenderTarget<2>,
+    emissive: RenderTarget<1>,
     motion: RenderTarget<1>,
     light_diffuse: RenderTarget<3>,
+    light_specular: RenderTarget<3>,
+    /// Sum of the radiance of the canonical renderer, with the
+    /// number of the accumulated samples in the alpha channel.
+    accumulation: RenderTarget<1>,
     camera_params: [CameraParams; 2],
 }
 
@@ -265,13 +303,21 @@ impl RestirTargets {
                 encoder,
                 gpu,
             ),
-            albedo: RenderTarget::new(
-                "albedo",
+            diffuse_albedo: RenderTarget::new(
+                "diffuse-albedo",
                 blade_graphics::TextureFormat::Rgba8Unorm,
                 size,
                 encoder,
                 gpu,
             ),
+            specular_f0: RenderTarget::new(
+                "specular-f0",
+                blade_graphics::TextureFormat::Rgba8Unorm,
+                size,
+                encoder,
+                gpu,
+            ),
+            emissive: RenderTarget::new("emissive", RADIANCE_FORMAT, size, encoder, gpu),
             motion: RenderTarget::new(
                 "motion",
                 blade_graphics::TextureFormat::Rg8Snorm,
@@ -280,6 +326,20 @@ impl RestirTargets {
                 gpu,
             ),
             light_diffuse: RenderTarget::new("light-diffuse", RADIANCE_FORMAT, size, encoder, gpu),
+            light_specular: RenderTarget::new(
+                "light-specular",
+                RADIANCE_FORMAT,
+                size,
+                encoder,
+                gpu,
+            ),
+            accumulation: RenderTarget::new(
+                "accumulation",
+                blade_graphics::TextureFormat::Rgba32Float,
+                size,
+                encoder,
+                gpu,
+            ),
             camera_params: [CameraParams::default(); 2],
         }
     }
@@ -292,9 +352,13 @@ impl RestirTargets {
         self.depth.destroy(gpu);
         self.basis.destroy(gpu);
         self.flat_normal.destroy(gpu);
-        self.albedo.destroy(gpu);
+        self.diffuse_albedo.destroy(gpu);
+        self.specular_f0.destroy(gpu);
+        self.emissive.destroy(gpu);
         self.motion.destroy(gpu);
         self.light_diffuse.destroy(gpu);
+        self.light_specular.destroy(gpu);
+        self.accumulation.destroy(gpu);
     }
 }
 
@@ -318,6 +382,7 @@ pub struct RayTracer {
     post_proc_input_index: usize,
     fill_pipeline: blade_graphics::ComputePipeline,
     main_pipeline: blade_graphics::ComputePipeline,
+    path_trace_pipeline: blade_graphics::ComputePipeline,
     post_proc_pipeline: blade_graphics::RenderPipeline,
     blur: Blur,
     acceleration_structure: blade_graphics::AccelerationStructure,
@@ -336,6 +401,8 @@ pub struct RayTracer {
     frame_index: usize,
     frame_scene_built: usize,
     is_frozen: bool,
+    reset_accumulation: bool,
+    show_accumulation: bool,
     //TODO: refactor `ResourceArray` to not carry the freelist logic
     // This way we can embed user info into the allocator.
     texture_resource_lookup:
@@ -383,7 +450,9 @@ struct FillData<'a> {
     out_depth: blade_graphics::TextureView,
     out_basis: blade_graphics::TextureView,
     out_flat_normal: blade_graphics::TextureView,
-    out_albedo: blade_graphics::TextureView,
+    out_diffuse_albedo: blade_graphics::TextureView,
+    out_specular_f0: blade_graphics::TextureView,
+    out_emissive: blade_graphics::TextureView,
     out_motion: blade_graphics::TextureView,
     out_debug: blade_graphics::TextureView,
 }
@@ -406,12 +475,44 @@ struct MainData {
     t_prev_basis: blade_graphics::TextureView,
     t_flat_normal: blade_graphics::TextureView,
     t_prev_flat_normal: blade_graphics::TextureView,
+    t_diffuse_albedo: blade_graphics::TextureView,
+    t_prev_diffuse_albedo: blade_graphics::TextureView,
+    t_specular_f0: blade_graphics::TextureView,
+    t_prev_specular_f0: blade_graphics::TextureView,
     t_motion: blade_graphics::TextureView,
     debug_buf: blade_graphics::BufferPiece,
     reservoirs: blade_graphics::BufferPiece,
     prev_reservoirs: blade_graphics::BufferPiece,
     out_diffuse: blade_graphics::TextureView,
+    out_specular: blade_graphics::TextureView,
     out_debug: blade_graphics::TextureView,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct PathTraceParams {
+    frame_index: u32,
+    num_samples: u32,
+    max_bounces: u32,
+    t_start: f32,
+    environment_importance_sampling: u32,
+    reset_accumulation: u32,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct PathTraceData<'a> {
+    camera: CameraParams,
+    parameters: PathTraceParams,
+    acc_struct: blade_graphics::AccelerationStructure,
+    hit_entries: blade_graphics::BufferPiece,
+    index_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
+    vertex_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
+    textures: &'a blade_graphics::TextureArray<MAX_RESOURCES>,
+    sampler_linear: blade_graphics::Sampler,
+    sampler_nearest: blade_graphics::Sampler,
+    env_map: blade_graphics::TextureView,
+    env_weights: blade_graphics::TextureView,
+    accumulator: blade_graphics::TextureView,
 }
 
 #[repr(C)]
@@ -449,19 +550,23 @@ struct ATrousData {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
-struct ToneMapParams {
-    enabled: u32,
+struct PostProcParams {
+    tone_map_enabled: u32,
     average_lum: f32,
     key_value: f32,
     white_level: f32,
+    accumulated: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
 struct PostProcData {
-    t_albedo: blade_graphics::TextureView,
+    t_diffuse_albedo: blade_graphics::TextureView,
+    t_emissive: blade_graphics::TextureView,
     light_diffuse: blade_graphics::TextureView,
+    light_specular: blade_graphics::TextureView,
+    t_accumulation: blade_graphics::TextureView,
     t_debug: blade_graphics::TextureView,
-    tone_map_params: ToneMapParams,
+    post_proc_params: PostProcParams,
     debug_params: DebugParams,
 }
 
@@ -480,6 +585,12 @@ struct HitEntry {
     base_color_factor: [u8; 4],
     normal_texture: u32,
     normal_scale: f32,
+    metallic_roughness_texture: u32,
+    metallic_factor: f32,
+    roughness_factor: f32,
+    emissive_texture: u32,
+    //Note: aligned to 16 bytes, matching `vec4` on the WGSL side
+    emissive_factor: [f32; 4],
 }
 
 #[derive(Clone, PartialEq)]
@@ -487,6 +598,7 @@ pub struct Shaders {
     pub(crate) env_prepare: blade_asset::Handle<crate::Shader>,
     pub(crate) fill_gbuf: blade_asset::Handle<crate::Shader>,
     pub(crate) ray_trace: blade_asset::Handle<crate::Shader>,
+    pub(crate) path_trace: blade_asset::Handle<crate::Shader>,
     pub(crate) a_trous: blade_asset::Handle<crate::Shader>,
     pub(crate) post_proc: blade_asset::Handle<crate::Shader>,
     pub(crate) raster: blade_asset::Handle<crate::Shader>,
@@ -510,6 +622,7 @@ impl Shaders {
             env_prepare: noop.unwrap_or_else(|| ctx.load_shader("env-prepare.wgsl")),
             fill_gbuf: noop.unwrap_or_else(|| ctx.load_shader("fill-gbuf.wgsl")),
             ray_trace: noop.unwrap_or_else(|| ctx.load_shader("ray-trace.wgsl")),
+            path_trace: noop.unwrap_or_else(|| ctx.load_shader("path-trace.wgsl")),
             a_trous: noop.unwrap_or_else(|| ctx.load_shader("a-trous.wgsl")),
             post_proc: noop.unwrap_or_else(|| ctx.load_shader("post-proc.wgsl")),
             raster: ctx.load_shader("raster.wgsl"),
@@ -523,6 +636,7 @@ impl Shaders {
 struct ShaderPipelines {
     fill: blade_graphics::ComputePipeline,
     main: blade_graphics::ComputePipeline,
+    path_trace: blade_graphics::ComputePipeline,
     temporal_accum: blade_graphics::ComputePipeline,
     a_trous: blade_graphics::ComputePipeline,
     post_proc: blade_graphics::RenderPipeline,
@@ -556,6 +670,22 @@ impl ShaderPipelines {
         let layout = <MainData as blade_graphics::ShaderData>::layout();
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "ray-trace",
+            data_layouts: &[&layout],
+            compute: shader.at("main"),
+        })
+    }
+
+    fn create_path_trace(
+        shader: &blade_graphics::Shader,
+        gpu: &blade_graphics::Context,
+    ) -> blade_graphics::ComputePipeline {
+        shader.check_struct_size::<crate::Vertex>();
+        shader.check_struct_size::<HitEntry>();
+        shader.check_struct_size::<CameraParams>();
+        shader.check_struct_size::<PathTraceParams>();
+        let layout = <PathTraceData as blade_graphics::ShaderData>::layout();
+        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+            name: "path-trace",
             data_layouts: &[&layout],
             compute: shader.at("main"),
         })
@@ -618,6 +748,10 @@ impl ShaderPipelines {
         Ok(Self {
             fill: Self::create_gbuf_fill(shader_man[shaders.fill_gbuf].raw.as_ref().unwrap(), gpu),
             main: Self::create_ray_trace(sh_main, gpu),
+            path_trace: Self::create_path_trace(
+                shader_man[shaders.path_trace].raw.as_ref().unwrap(),
+                gpu,
+            ),
             temporal_accum: Self::create_temporal_accum(sh_a_trous, gpu),
             a_trous: Self::create_a_trous(sh_a_trous, gpu),
             post_proc: Self::create_post_proc(
@@ -640,6 +774,10 @@ pub struct FrameConfig {
     pub debug_draw: bool,
     pub reset_variance: bool,
     pub reset_reservoirs: bool,
+    /// Throw away what the canonical renderer has accumulated so far.
+    ///
+    /// Note: this also happens automatically when the camera moves.
+    pub reset_accumulation: bool,
 }
 
 /// Temporary resources associated with a GPU frame.
@@ -711,6 +849,7 @@ impl RayTracer {
             post_proc_input_index: 0,
             fill_pipeline: sp.fill,
             main_pipeline: sp.main,
+            path_trace_pipeline: sp.path_trace,
             post_proc_pipeline: sp.post_proc,
             blur: Blur {
                 temporal_accum_pipeline: sp.temporal_accum,
@@ -732,6 +871,8 @@ impl RayTracer {
             frame_index: 0,
             frame_scene_built: 0,
             is_frozen: false,
+            reset_accumulation: true,
+            show_accumulation: false,
             texture_resource_lookup: HashMap::default(),
         }
     }
@@ -759,6 +900,7 @@ impl RayTracer {
         gpu.destroy_compute_pipeline(&mut self.blur.a_trous_pipeline);
         gpu.destroy_compute_pipeline(&mut self.fill_pipeline);
         gpu.destroy_compute_pipeline(&mut self.main_pipeline);
+        gpu.destroy_compute_pipeline(&mut self.path_trace_pipeline);
         gpu.destroy_render_pipeline(&mut self.post_proc_pipeline);
     }
 
@@ -774,6 +916,7 @@ impl RayTracer {
 
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.fill_gbuf));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.ray_trace));
+        tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.path_trace));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.a_trous));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.post_proc));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.debug_draw));
@@ -802,6 +945,11 @@ impl RayTracer {
                 self.reservoir_size
             );
             self.main_pipeline = ShaderPipelines::create_ray_trace(shader, gpu);
+        }
+        if self.shaders.path_trace != old.path_trace
+            && let Ok(ref shader) = asset_hub.shaders[self.shaders.path_trace].raw
+        {
+            self.path_trace_pipeline = ShaderPipelines::create_path_trace(shader, gpu);
         }
         if self.shaders.a_trous != old.a_trous
             && let Ok(ref shader) = asset_hub.shaders[self.shaders.a_trous].raw
@@ -918,7 +1066,20 @@ impl RayTracer {
         let mut geometry_index = 0;
         let mut instances = Vec::with_capacity(objects.len());
         let mut blases = Vec::with_capacity(objects.len());
-        let mut texture_indices = HashMap::new();
+        let mut texture_indices =
+            HashMap::<blade_asset::Handle<crate::Texture>, blade_graphics::ResourceIndex>::new();
+        // Note: this only borrows `self.textures`, so the buffer arrays stay available.
+        let mut alloc_texture =
+            |handle: Option<blade_asset::Handle<crate::Texture>>,
+             dummy: blade_graphics::ResourceIndex| {
+                match handle {
+                    Some(handle) => *texture_indices.entry(handle).or_insert_with(|| {
+                        let texture = &asset_hub.textures[handle];
+                        self.textures.alloc(texture.view)
+                    }),
+                    None => dummy,
+                }
+            };
 
         for object in objects {
             let m3_object = mat3_transform(&object.transform);
@@ -962,13 +1123,7 @@ impl RayTracer {
                         w: [0.0, 0.0, 0.0, 1.0].into(),
                     }),
                     prev_object_to_world: mat4_transform(&object.prev_transform).into(),
-                    base_color_texture: match material.base_color_texture {
-                        Some(handle) => *texture_indices.entry(handle).or_insert_with(|| {
-                            let texture = &asset_hub.textures[handle];
-                            self.textures.alloc(texture.view)
-                        }),
-                        None => dummy_white,
-                    },
+                    base_color_texture: alloc_texture(material.base_color_texture, dummy_white),
                     base_color_factor: {
                         let c = material.base_color_factor;
                         [
@@ -978,14 +1133,20 @@ impl RayTracer {
                             (c[3] * 255.0) as u8,
                         ]
                     },
-                    normal_texture: match material.normal_texture {
-                        Some(handle) => *texture_indices.entry(handle).or_insert_with(|| {
-                            let texture = &asset_hub.textures[handle];
-                            self.textures.alloc(texture.view)
-                        }),
-                        None => dummy_black,
-                    },
+                    normal_texture: alloc_texture(material.normal_texture, dummy_black),
                     normal_scale: material.normal_scale,
+                    //Note: the dummy is white, so that the factors are unaffected
+                    metallic_roughness_texture: alloc_texture(
+                        material.metallic_roughness_texture,
+                        dummy_white,
+                    ),
+                    metallic_factor: material.metallic_factor,
+                    roughness_factor: material.roughness_factor,
+                    emissive_texture: alloc_texture(material.emissive_texture, dummy_white),
+                    emissive_factor: {
+                        let c = material.emissive_factor;
+                        [c[0], c[1], c[2], 0.0]
+                    },
                 };
 
                 log::debug!("Entry[{geometry_index}] = {hit_entry:?}");
@@ -1111,8 +1272,58 @@ impl RayTracer {
             self.frame_index += 1;
         }
         self.is_frozen = config.frozen;
-        self.targets.camera_params[self.frame_index % 2] = self.make_camera_params(camera);
-        self.post_proc_input_index = self.frame_index % 2;
+        let cur = self.frame_index % 2;
+        let camera_params = self.make_camera_params(camera);
+        // A moving camera invalidates the accumulation of the canonical renderer.
+        self.reset_accumulation =
+            config.reset_accumulation || camera_params != self.targets.camera_params[cur ^ 1];
+        self.show_accumulation = false;
+        self.targets.camera_params[cur] = camera_params;
+        self.post_proc_input_index = cur;
+    }
+
+    /// Render the scene with the canonical renderer: full paths, no reuse,
+    /// and no denoising, accumulated on top of the previous frames.
+    ///
+    /// The result replaces the real-time one in the post-processing.
+    #[profiling::function]
+    pub fn path_trace(
+        &mut self,
+        command_encoder: &mut blade_graphics::CommandEncoder,
+        config: PathTraceConfig,
+    ) {
+        let cur = self.frame_index % 2;
+        let mut pass = command_encoder.compute("path-trace");
+        let mut pc = pass.with(&self.path_trace_pipeline);
+        let groups = self.path_trace_pipeline.get_dispatch_for(self.surface_size);
+        pc.bind(
+            0,
+            &PathTraceData {
+                camera: self.targets.camera_params[cur],
+                parameters: PathTraceParams {
+                    frame_index: self.frame_index as u32,
+                    num_samples: config.samples_per_frame.max(1),
+                    max_bounces: config.max_bounces,
+                    t_start: config.t_start,
+                    environment_importance_sampling: config.environment_importance_sampling as u32,
+                    reset_accumulation: self.reset_accumulation as u32,
+                },
+                acc_struct: self.acceleration_structure,
+                hit_entries: self.hit_buffer.into(),
+                index_buffers: &self.index_buffers,
+                vertex_buffers: &self.vertex_buffers,
+                textures: &self.textures,
+                sampler_linear: self.samplers.linear,
+                sampler_nearest: self.samplers.nearest,
+                env_map: self.env_map.main_view,
+                env_weights: self.env_map.weight_view,
+                accumulator: self.targets.accumulation.views[0],
+            },
+        );
+        pc.dispatch(groups);
+        // The following frames add to what this one has produced.
+        self.reset_accumulation = false;
+        self.show_accumulation = true;
     }
 
     /// Ray trace the scene.
@@ -1148,7 +1359,9 @@ impl RayTracer {
                     out_depth: self.targets.depth.views[cur],
                     out_basis: self.targets.basis.views[cur],
                     out_flat_normal: self.targets.flat_normal.views[cur],
-                    out_albedo: self.targets.albedo.views[0],
+                    out_diffuse_albedo: self.targets.diffuse_albedo.views[cur],
+                    out_specular_f0: self.targets.specular_f0.views[cur],
+                    out_emissive: self.targets.emissive.views[0],
                     out_motion: self.targets.motion.views[0],
                     out_debug: self.targets.debug.views[0],
                 },
@@ -1198,11 +1411,16 @@ impl RayTracer {
                     t_prev_basis: self.targets.basis.views[prev],
                     t_flat_normal: self.targets.flat_normal.views[cur],
                     t_prev_flat_normal: self.targets.flat_normal.views[prev],
+                    t_diffuse_albedo: self.targets.diffuse_albedo.views[cur],
+                    t_prev_diffuse_albedo: self.targets.diffuse_albedo.views[prev],
+                    t_specular_f0: self.targets.specular_f0.views[cur],
+                    t_prev_specular_f0: self.targets.specular_f0.views[prev],
                     t_motion: self.targets.motion.views[0],
                     debug_buf: self.debug.buffer_resource(),
                     reservoirs: self.targets.reservoir_buf[cur].into(),
                     prev_reservoirs: self.targets.reservoir_buf[prev].into(),
                     out_diffuse: self.targets.light_diffuse.views[cur],
+                    out_specular: self.targets.light_specular.views[cur],
                     out_debug: self.targets.debug.views[0],
                 },
             );
@@ -1225,6 +1443,11 @@ impl RayTracer {
             pad: 0,
         };
         let (cur, prev) = self.work_indices();
+        // Both of the lighting lobes are filtered the same way.
+        let radiance_views = [
+            self.targets.light_diffuse.views,
+            self.targets.light_specular.views,
+        ];
 
         if denoiser_config.temporal_weight < 1.0 {
             let mut pass = command_encoder.compute("temporal-accum");
@@ -1233,22 +1456,24 @@ impl RayTracer {
                 .blur
                 .a_trous_pipeline
                 .get_dispatch_for(self.surface_size);
-            pc.bind(
-                0,
-                &TemporalAccumData {
-                    camera: self.targets.camera_params[cur],
-                    prev_camera: self.targets.camera_params[prev],
-                    params,
-                    input: self.targets.light_diffuse.views[prev],
-                    t_depth: self.targets.depth.views[cur],
-                    t_prev_depth: self.targets.depth.views[prev],
-                    t_flat_normal: self.targets.flat_normal.views[cur],
-                    t_prev_flat_normal: self.targets.flat_normal.views[prev],
-                    t_motion: self.targets.motion.views[0],
-                    output: self.targets.light_diffuse.views[cur],
-                },
-            );
-            pc.dispatch(groups);
+            for views in radiance_views.iter() {
+                pc.bind(
+                    0,
+                    &TemporalAccumData {
+                        camera: self.targets.camera_params[cur],
+                        prev_camera: self.targets.camera_params[prev],
+                        params,
+                        input: views[prev],
+                        t_depth: self.targets.depth.views[cur],
+                        t_prev_depth: self.targets.depth.views[prev],
+                        t_flat_normal: self.targets.flat_normal.views[cur],
+                        t_prev_flat_normal: self.targets.flat_normal.views[prev],
+                        t_motion: self.targets.motion.views[0],
+                        output: views[cur],
+                    },
+                );
+                pc.dispatch(groups);
+            }
         }
 
         assert_eq!(cur, self.post_proc_input_index);
@@ -1260,17 +1485,19 @@ impl RayTracer {
                 .blur
                 .a_trous_pipeline
                 .get_dispatch_for(self.surface_size);
-            pc.bind(
-                0,
-                &ATrousData {
-                    params,
-                    input: self.targets.light_diffuse.views[self.post_proc_input_index],
-                    t_depth: self.targets.depth.views[cur],
-                    t_flat_normal: self.targets.flat_normal.views[cur],
-                    output: self.targets.light_diffuse.views[ping_pong[0]],
-                },
-            );
-            pc.dispatch(groups);
+            for views in radiance_views.iter() {
+                pc.bind(
+                    0,
+                    &ATrousData {
+                        params,
+                        input: views[self.post_proc_input_index],
+                        t_depth: self.targets.depth.views[cur],
+                        t_flat_normal: self.targets.flat_normal.views[cur],
+                        output: views[ping_pong[0]],
+                    },
+                );
+                pc.dispatch(groups);
+            }
             self.post_proc_input_index = ping_pong[0];
             ping_pong.swap(0, 1);
             params.iteration += 1;
@@ -1293,14 +1520,18 @@ impl RayTracer {
             pc.bind(
                 0,
                 &PostProcData {
-                    t_albedo: self.targets.albedo.views[0],
+                    t_diffuse_albedo: self.targets.diffuse_albedo.views[cur],
+                    t_emissive: self.targets.emissive.views[0],
                     light_diffuse: self.targets.light_diffuse.views[self.post_proc_input_index],
+                    light_specular: self.targets.light_specular.views[self.post_proc_input_index],
+                    t_accumulation: self.targets.accumulation.views[0],
                     t_debug: self.targets.debug.views[0],
-                    tone_map_params: ToneMapParams {
-                        enabled: 1,
+                    post_proc_params: PostProcParams {
+                        tone_map_enabled: 1,
                         average_lum: pp_config.average_luminocity,
                         key_value: pp_config.exposure_key_value,
                         white_level: pp_config.white_level,
+                        accumulated: self.show_accumulation as u32,
                     },
                     debug_params,
                 },

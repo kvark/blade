@@ -1,45 +1,12 @@
 enable wgpu_ray_query;
+enable wgpu_binding_array;
 #include "quaternion.inc.wgsl"
 #include "camera.inc.wgsl"
 #include "debug.inc.wgsl"
 #include "debug-param.inc.wgsl"
+#include "brdf.inc.wgsl"
+#include "hit.inc.wgsl"
 #include "gbuf.inc.wgsl"
-
-// Has to match the host!
-struct Vertex {
-    pos: vec3<f32>,
-    bitangent_sign: f32,
-    tex_coords: vec2<f32>,
-    normal: u32,
-    tangent: u32,
-}
-struct VertexBuffer {
-    data: array<Vertex>,
-}
-struct IndexBuffer {
-    data: array<u32>,
-}
-var<storage, read> vertex_buffers: binding_array<VertexBuffer>;
-var<storage, read> index_buffers: binding_array<IndexBuffer>;
-var textures: binding_array<texture_2d<f32>>;
-var sampler_linear: sampler;
-var sampler_nearest: sampler;
-
-struct HitEntry {
-    index_buf: u32,
-    vertex_buf: u32,
-    winding: f32,
-    // packed quaternion
-    geometry_to_world_rotation: u32,
-    geometry_to_object: mat4x3<f32>,
-    prev_object_to_world: mat4x3<f32>,
-    base_color_texture: u32,
-    // packed color factor
-    base_color_factor: u32,
-    normal_texture: u32,
-    normal_scale: f32,
-}
-var<storage, read> hit_entries: array<HitEntry>;
 
 var<uniform> camera: CameraParams;
 var<uniform> prev_camera: CameraParams;
@@ -49,13 +16,12 @@ var acc_struct: acceleration_structure;
 var out_depth: texture_storage_2d<r32float, write>;
 var out_flat_normal: texture_storage_2d<rgba8snorm, write>;
 var out_basis: texture_storage_2d<rgba8snorm, write>;
-var out_albedo: texture_storage_2d<rgba8unorm, write>;
+var out_diffuse_albedo: texture_storage_2d<rgba8unorm, write>;
+// RGB is the specular reflectance at normal incidence, alpha is the roughness
+var out_specular_f0: texture_storage_2d<rgba8unorm, write>;
+var out_emissive: texture_storage_2d<rgba16float, write>;
 var out_motion: texture_storage_2d<rg8snorm, write>;
 var out_debug: texture_storage_2d<rgba8unorm, write>;
-
-fn decode_normal(raw: u32) -> vec3<f32> {
-    return unpack4x8snorm(raw).xyz;
-}
 
 fn debug_raw_normal(pos: vec3<f32>, normal_raw: u32, rotation: vec4<f32>, debug_len: f32, color: u32) {
     let nw = normalize(qrot(rotation, decode_normal(normal_raw)));
@@ -80,7 +46,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var depth = 0.0;
     var basis = vec4<f32>(0.0);
     var flat_normal = vec3<f32>(0.0);
-    var albedo = vec3<f32>(1.0);
+    // Note: the sky is fully diffuse and white, so that the environment
+    // survives the modulation in the post-processing.
+    var material = Material(vec3<f32>(1.0), vec3<f32>(0.0), 0.0);
+    var emissive = vec3<f32>(0.0);
     var motion = vec2<f32>(0.0);
     let enable_debug = all(global_id.xy == debug.mouse_pos);
 
@@ -88,12 +57,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let entry = hit_entries[intersection.instance_custom_data + intersection.geometry_index];
         depth = intersection.t;
 
-        var indices = intersection.primitive_index * 3u + vec3<u32>(0u, 1u, 2u);
-        if (entry.index_buf != ~0u) {
-            let iptr = &index_buffers[entry.index_buf].data;
-            indices = vec3<u32>((*iptr)[indices.x], (*iptr)[indices.y], (*iptr)[indices.z]);
-        }
-
+        let indices = fetch_triangle_indices(entry, intersection.primitive_index);
         let vptr = &vertex_buffers[entry.vertex_buf].data;
         let vertices = array<Vertex, 3>(
             (*vptr)[indices.x],
@@ -109,7 +73,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         );
         flat_normal = entry.winding * normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
 
-        let barycentrics = vec3<f32>(1.0 - intersection.barycentrics.x - intersection.barycentrics.y, intersection.barycentrics);
+        let barycentrics = make_barycentrics(intersection.barycentrics);
         let position_object = vec4<f32>(positions_object * barycentrics, 1.0);
         let tex_coords = mat3x2(vertices[0].tex_coords, vertices[1].tex_coords, vertices[2].tex_coords) * barycentrics;
         let normal_geo = normalize(mat3x3(decode_normal(vertices[0].normal), decode_normal(vertices[1].normal), decode_normal(vertices[2].normal)) * barycentrics);
@@ -120,14 +84,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let geo_to_world_rot = normalize(unpack4x8snorm(entry.geometry_to_world_rotation));
         let tangent_space_geo = mat3x3(tangent_geo, bitangent_geo, normal_geo);
-        var normal_local: vec3<f32>;
-        if ((debug.texture_flags & DebugTextureFlags_NORMAL) != 0u) {
-            normal_local = vec3<f32>(0.0, 0.0, 1.0); // ignore normal map
-        } else {
-            let raw_unorm = textureSampleLevel(textures[entry.normal_texture], sampler_linear, tex_coords, lod).xy;
-            let n_xy = entry.normal_scale * (2.0 * raw_unorm - 1.0);
-            normal_local = vec3<f32>(n_xy, sqrt(max(0.0, 1.0 - dot(n_xy, n_xy))));
-        }
+        let normal_local = sample_hit_normal_map(entry, tex_coords, lod, debug.texture_flags);
         var normal = qrot(geo_to_world_rot, tangent_space_geo * normal_local);
         basis = shortest_arc_quat(vec3<f32>(0.0, 0.0, 1.0), normalize(normal));
 
@@ -166,26 +123,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             debug_line(hit_position, hit_position + debug_len * qrot(basis, vec3<f32>(0.0, 0.0, 1.0)), 0xFF0000u);
         }
 
-        let base_color_factor = unpack4x8unorm(entry.base_color_factor);
-        if ((debug.texture_flags & DebugTextureFlags_ALBEDO) != 0u) {
-            albedo = base_color_factor.xyz;
-        } else {
-            let base_color_sample = textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tex_coords, lod);
-            albedo = (base_color_factor * base_color_sample).xyz;
-        }
+        material = sample_hit_material(entry, tex_coords, lod, debug.texture_flags);
+        emissive = sample_hit_emissive(entry, tex_coords, lod, debug.texture_flags);
 
         if (WRITE_DEBUG_IMAGE) {
             if (debug.view_mode == DebugMode_DiffuseAlbedoTexture) {
-                textureStore(out_debug, global_id.xy, vec4<f32>(albedo, 0.0));
+                textureStore(out_debug, global_id.xy, vec4<f32>(material.diffuse_albedo, 0.0));
             }
             if (debug.view_mode == DebugMode_DiffuseAlbedoFactor) {
-                textureStore(out_debug, global_id.xy, base_color_factor);
+                textureStore(out_debug, global_id.xy, unpack4x8unorm(entry.base_color_factor));
             }
             if (debug.view_mode == DebugMode_NormalTexture) {
                 textureStore(out_debug, global_id.xy, vec4<f32>(normal_local, 0.0));
             }
             if (debug.view_mode == DebugMode_NormalScale) {
                 textureStore(out_debug, global_id.xy, vec4<f32>(entry.normal_scale));
+            }
+            if (debug.view_mode == DebugMode_Roughness) {
+                textureStore(out_debug, global_id.xy, vec4<f32>(material.roughness));
+            }
+            if (debug.view_mode == DebugMode_SpecularF0) {
+                textureStore(out_debug, global_id.xy, vec4<f32>(material.specular_f0, 0.0));
+            }
+            if (debug.view_mode == DebugMode_Emissive) {
+                textureStore(out_debug, global_id.xy, vec4<f32>(emissive, 0.0));
             }
             if (debug.view_mode == DebugMode_GeometryNormal) {
                 textureStore(out_debug, global_id.xy, vec4<f32>(normal_geo, 0.0));
@@ -220,6 +181,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     textureStore(out_depth, global_id.xy, vec4<f32>(depth, 0.0, 0.0, 0.0));
     textureStore(out_basis, global_id.xy, basis);
     textureStore(out_flat_normal, global_id.xy, vec4<f32>(flat_normal, 0.0));
-    textureStore(out_albedo, global_id.xy, vec4<f32>(albedo, 0.0));
+    textureStore(out_diffuse_albedo, global_id.xy, vec4<f32>(material.diffuse_albedo, 0.0));
+    textureStore(out_specular_f0, global_id.xy, vec4<f32>(material.specular_f0, material.roughness));
+    textureStore(out_emissive, global_id.xy, vec4<f32>(emissive, 0.0));
     textureStore(out_motion, global_id.xy, vec4<f32>(motion * MOTION_SCALE, 0.0, 0.0));
 }

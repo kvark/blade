@@ -73,6 +73,8 @@ impl AsteroidField {
                         vertices,
                         indices,
                         base_color_factor: color,
+                        roughness_factor: 0.7,
+                        ..Default::default()
                     }],
                 );
                 variants.push(handle);
@@ -503,8 +505,6 @@ pub fn setup_game(engine: &mut blade_engine::Engine) -> GameState {
             y: 0.02,
             z: 0.03,
         },
-        roughness: 0.7,
-        metallic: 0.0,
         space_sky: true,
     });
 
