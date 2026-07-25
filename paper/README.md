@@ -108,8 +108,8 @@ era; later ones cross placement with scope.
 | `20260725T160725Z-matrix` | matrix | Intel Xe (RPL-U) | 16-pass matrix |
 | `20260725T062529Z-mac` | mac | Apple M3 | 16-pass matrix, Metal case study |
 | `20260725T185206Z-zork` | zork | NVIDIA RTX 5070 | placement crossed with scope |
-
-Plus two pass-count sweeps on zork, one GPU-timed and one timestamp-free.
+| `20260725T185508Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, GPU-timed |
+| `20260725T190100Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, timestamp-free |
 
 Still outstanding before the working-draft banner can come off: Vulkan
 command-stream captures and CPU profiles. Also outstanding, independently of

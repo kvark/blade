@@ -1,0 +1,43 @@
+# collection_id,20260725T190100Z
+# repetition,1
+# schema,blade-sync-bench-v1
+# implementation,blade
+# backend,vulkan
+# device_name,"NVIDIA GeForce RTX 5070"
+# driver_name,"NVIDIA"
+# driver_info,"595.71.05"
+# software_emulated,false
+# validation,false
+# gpu_timing,false
+sample,workload,policy,passes,elements,rounds,width,height,start_ns,record_ns,submit_ns,wait_ns,gpu_ns,gpu_pass_count
+0,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,491,1639,2073,50464,0,0
+1,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,484,1705,2141,49695,0,0
+2,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,477,1595,1896,49898,0,0
+3,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,522,1668,2110,49090,0,0
+4,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,500,1615,1899,49332,0,0
+5,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,503,1627,2103,49127,0,0
+6,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,510,1678,1892,50349,0,0
+7,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,514,1664,2122,50058,0,0
+8,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,923,1624,1891,50003,0,0
+9,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,521,1632,2135,49991,0,0
+10,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,546,1620,1928,50119,0,0
+11,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,501,1682,2070,48904,0,0
+12,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,496,1625,1889,50544,0,0
+13,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,506,1692,2098,51324,0,0
+14,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,533,1684,2341,49178,0,0
+15,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,522,1642,1890,50141,0,0
+16,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,509,1663,2085,48937,0,0
+17,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,493,1626,2428,48784,0,0
+18,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,474,1589,2613,50522,0,0
+19,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,556,1631,2074,49935,0,0
+20,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,498,1633,2085,52557,0,0
+21,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,500,1607,1993,49792,0,0
+22,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,486,1627,2193,50084,0,0
+23,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,509,1659,1897,50214,0,0
+24,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,508,1667,2107,49886,0,0
+25,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,487,1652,1895,50298,0,0
+26,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,491,1635,2151,48845,0,0
+27,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,492,1666,1927,49278,0,0
+28,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,501,1652,2119,49861,0,0
+29,compute-chain,explicit-all-scoped,2,1048576,8,1024,1024,503,1612,1905,50264,0,0
+# validation_hash,fnv1a64:e611a4cf5515cb25

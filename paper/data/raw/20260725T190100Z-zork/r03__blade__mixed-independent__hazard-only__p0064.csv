@@ -1,0 +1,43 @@
+# collection_id,20260725T190100Z
+# repetition,3
+# schema,blade-sync-bench-v1
+# implementation,blade
+# backend,vulkan
+# device_name,"NVIDIA GeForce RTX 5070"
+# driver_name,"NVIDIA"
+# driver_info,"595.71.05"
+# software_emulated,false
+# validation,false
+# gpu_timing,false
+sample,workload,policy,passes,elements,rounds,width,height,start_ns,record_ns,submit_ns,wait_ns,gpu_ns,gpu_pass_count
+0,mixed-independent,hazard-only,64,1048576,8,1024,1024,1024,50155,5817,613959,0,0
+1,mixed-independent,hazard-only,64,1048576,8,1024,1024,1082,45936,2077,611652,0,0
+2,mixed-independent,hazard-only,64,1048576,8,1024,1024,1012,45964,2288,612545,0,0
+3,mixed-independent,hazard-only,64,1048576,8,1024,1024,1093,49571,2122,611517,0,0
+4,mixed-independent,hazard-only,64,1048576,8,1024,1024,979,47082,2212,612288,0,0
+5,mixed-independent,hazard-only,64,1048576,8,1024,1024,1007,49688,2172,615121,0,0
+6,mixed-independent,hazard-only,64,1048576,8,1024,1024,1104,51859,2492,612205,0,0
+7,mixed-independent,hazard-only,64,1048576,8,1024,1024,761,47211,2977,612956,0,0
+8,mixed-independent,hazard-only,64,1048576,8,1024,1024,1002,47275,2237,612550,0,0
+9,mixed-independent,hazard-only,64,1048576,8,1024,1024,1007,47652,3557,611573,0,0
+10,mixed-independent,hazard-only,64,1048576,8,1024,1024,1027,47389,2174,613140,0,0
+11,mixed-independent,hazard-only,64,1048576,8,1024,1024,834,45878,2019,612584,0,0
+12,mixed-independent,hazard-only,64,1048576,8,1024,1024,1055,47163,2270,611493,0,0
+13,mixed-independent,hazard-only,64,1048576,8,1024,1024,1027,47569,2227,612702,0,0
+14,mixed-independent,hazard-only,64,1048576,8,1024,1024,990,47385,2902,613270,0,0
+15,mixed-independent,hazard-only,64,1048576,8,1024,1024,1059,47624,2185,612138,0,0
+16,mixed-independent,hazard-only,64,1048576,8,1024,1024,1086,47405,2681,611911,0,0
+17,mixed-independent,hazard-only,64,1048576,8,1024,1024,945,46473,3388,613479,0,0
+18,mixed-independent,hazard-only,64,1048576,8,1024,1024,1030,49730,2254,618755,0,0
+19,mixed-independent,hazard-only,64,1048576,8,1024,1024,1071,50447,2405,615665,0,0
+20,mixed-independent,hazard-only,64,1048576,8,1024,1024,1172,55168,2397,614191,0,0
+21,mixed-independent,hazard-only,64,1048576,8,1024,1024,1240,58398,4008,617663,0,0
+22,mixed-independent,hazard-only,64,1048576,8,1024,1024,1334,59943,2528,619274,0,0
+23,mixed-independent,hazard-only,64,1048576,8,1024,1024,1195,61579,2839,617649,0,0
+24,mixed-independent,hazard-only,64,1048576,8,1024,1024,1344,63602,2552,619891,0,0
+25,mixed-independent,hazard-only,64,1048576,8,1024,1024,1410,68665,3013,620668,0,0
+26,mixed-independent,hazard-only,64,1048576,8,1024,1024,1484,71153,3162,623047,0,0
+27,mixed-independent,hazard-only,64,1048576,8,1024,1024,1625,73795,3347,622912,0,0
+28,mixed-independent,hazard-only,64,1048576,8,1024,1024,1675,76589,4694,626402,0,0
+29,mixed-independent,hazard-only,64,1048576,8,1024,1024,1406,80074,3610,627642,0,0
+# validation_hash,fnv1a64:66cb7d70c35c8383

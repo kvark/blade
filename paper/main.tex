@@ -42,9 +42,9 @@ constant and is not always favourable: on a Radeon~780M the same change
 \emph{costs} $22.4\%\ci{+19.3}{+25.1}$, because sixteen concurrent render
 targets exceed what an integrated memory system can absorb. Third, the host
 side separates the two designs consistently and by a large margin: recording
-and submitting a sixteen-pass command buffer costs \blade{} $16.3\,\mu$s
-against $48.0\,\mu$s for the matched \wgpu{} program on the same device, with a
-marginal cost of $0.83\,\mu$s versus $3.39\,\mu$s per additional pass.
+and submitting a sixteen-pass command buffer costs \blade{} $15.6\,\mu$s
+against $47.4\,\mu$s for the matched \wgpu{} program on the same device, with a
+marginal cost of $1.03\,\mu$s versus $3.94\,\mu$s per additional pass.
 
 Reading RADV shows why the placement effect is real rather than incidental: a
 global \texttt{MEMORY\_WRITE} dependency over \texttt{ALL\_COMMANDS} expands to
@@ -698,16 +698,16 @@ Table~\ref{tab:sweep} sweeps the pass count on the RTX~5070 and answers RQ1.
 Both cost components are linear in the number of passes over this range, so
 each configuration is summarized by a marginal cost per pass.
 
-On the host side, a redundant global barrier costs \blade{} $0.47\,\mu$s per
-pass for compute ($0.83$ against $0.36$) and $0.37\,\mu$s for graphics ($1.29$
-against $0.92$). The matched \wgpu{} program costs $3.39$ and $4.28\,\mu$s per
-pass, which is $4.1\times$ and $3.3\times$ \blade's automatic policy and
-$9.4\times$ and $4.7\times$ \blade{} with no barrier at all. At sixteen passes
-the absolute gap is $16.3$ against $48.0\,\mu$s.
+On the host side, a redundant global barrier costs \blade{} $0.62\,\mu$s per
+pass for compute ($1.03$ against $0.41$) and $0.44\,\mu$s for graphics ($1.36$
+against $0.92$). The matched \wgpu{} program costs $3.94$ and $4.28\,\mu$s per
+pass, which is $3.8\times$ and $3.1\times$ \blade's automatic policy and
+$9.6\times$ and $4.7\times$ \blade{} with no barrier at all. At sixteen passes
+the absolute gap is $15.6$ against $47.4\,\mu$s.
 
-On the device side, each redundant barrier costs $2.59\,\mu$s of GPU span for
-compute ($11.06$ against $8.47$ per pass) and $2.31\,\mu$s for graphics ($8.80$
-against $6.49$). Against a pass that performs roughly $11\,\mu$s and
+On the device side, each redundant barrier costs $2.78\,\mu$s of GPU span for
+compute ($11.26$ against $8.48$ per pass) and $2.33\,\mu$s for graphics ($8.81$
+against $6.48$). Against a pass that performs roughly $11\,\mu$s and
 $9\,\mu$s of work respectively, that is a quarter of a pass lost per boundary.
 The ratio is what makes the effect visible at any pass count: it is a property
 of the pass, not of the graph size.
