@@ -444,21 +444,25 @@ end-to-end comparison because the APIs and runtime guarantees differ.
 \begin{table}[t]
 \centering
 \small
-\begin{tabular}{lllll}
+\begin{tabular}{llll}
 \toprule
-ID & Tracking & Placement & Stage/access & Layout \\
+ID & Tracking & Placement & Stage/access \\
 \midrule
-B-auto & none & every pass & \texttt{ALL\_COMMANDS} & general \\
-B-scoped & none & every pass & pass kind & general \\
-B-hazard & none & hazards & \texttt{ALL\_COMMANDS} & general \\
-B-explicit-all & none & every pass & \texttt{ALL\_COMMANDS} & general \\
-W-wgpu & tracked & derived & per resource & backend \\
+B-auto & none & every pass & \texttt{ALL\_COMMANDS} \\
+B-hazard & none & hazards & \texttt{ALL\_COMMANDS} \\
+B-explicit-all & none & every pass & \texttt{ALL\_COMMANDS} \\
+\addlinespace
+B-auto-scoped & none & every pass & pass kind \\
+B-hazard-scoped & none & hazards & pass kind \\
+B-explicit-scoped & none & every pass & pass kind \\
+\addlinespace
+W-wgpu & tracked & derived & per resource \\
 \bottomrule
 \end{tabular}
 \caption{Evaluation configurations. Every \texttt{B-*} row uses a global
-memory barrier that names no resource. \texttt{B-scoped} differs from
-\texttt{B-auto} only in the declared stages and accesses, and
-\texttt{B-hazard} differs only in placement, so the two axes are separated.}
+memory barrier that names no resource and keeps images in \texttt{GENERAL};
+placement is crossed with stage/access scope, so neither is a default for the
+other and each can be read off alone.}
 \label{tab:configs}
 \end{table}
 
@@ -708,12 +712,13 @@ $9\,\mu$s of work respectively, that is a quarter of a pass lost per boundary.
 The ratio is what makes the effect visible at any pass count: it is a property
 of the pass, not of the graph size.
 
-The sweep also shows why host claims need the timestamp-free collection. At 128
-passes the same host measurement is $102.9\,\mu$s without GPU timing and
-$428.9\,\mu$s with it, and \wgpu{} inflates similarly; both implementations
-become super-linear there for reasons we have not isolated and which are not
-attributable to synchronization. Table~\ref{tab:sweep} therefore stops at 64
-passes, and the raw collection retains the rest.
+The sweep is also why host claims are taken from the timestamp-free
+collection. The same measurement is larger with GPU timing enabled, on both
+implementations, by a margin that grows with the pass count. Neither
+implementation is being measured unfairly --- the effect is present in both ---
+but the absolute host numbers in a GPU-timed collection are not the recording
+cost of the workload, which is why Table~\ref{tab:host-matrix} is used for
+direction and Table~\ref{tab:sweep} for magnitude.
 
 \subsection{Host cost across devices}
 

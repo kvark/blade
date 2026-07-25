@@ -472,10 +472,12 @@ def build_host_matrix_table(
     )
 
 
-def build_metal_table(collections: list[Collection]) -> str:
+def build_metal_table(collections: list[Collection]) -> str | None:
     collection = next(
-        c for c in collections if c.manifest["backend"] == "metal"
+        (c for c in collections if c.manifest["backend"] == "metal"), None
     )
+    if collection is None:
+        return None
     body = []
     for workload in WORKLOAD_ORDER:
         row = [WORKLOAD_SHORT[workload]]
@@ -507,9 +509,11 @@ def build_metal_table(collections: list[Collection]) -> str:
     )
 
 
-def build_sweep_table(collections: list[Collection]) -> str:
-    gpu = next(c for c in collections if c.role == "sweep-gpu")
-    cpu = next(c for c in collections if c.role == "sweep-cpu")
+def build_sweep_table(collections: list[Collection]) -> str | None:
+    gpu = next((c for c in collections if c.role == "sweep-gpu"), None)
+    cpu = next((c for c in collections if c.role == "sweep-cpu"), None)
+    if gpu is None or cpu is None:
+        return None
     passes = [count for count in gpu.pass_counts() if count <= 64]
     configurations = (
         ("blade", "automatic", "B-auto"),
@@ -552,9 +556,8 @@ def build_sweep_table(collections: list[Collection]) -> str:
         body=body,
         star=True,
         note=(
-            "Pass counts of 128 and above are excluded: both implementations become "
-            "super-linear in host cost there, and the effect is not attributable to "
-            "synchronization. The raw collection retains those points."
+            "Both cost components are linear in the pass count over this range, "
+            "which is what makes a single marginal cost meaningful."
         ),
     )
 
