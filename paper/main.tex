@@ -69,10 +69,10 @@ disables FMASK compression, so multisampled colour is the surviving exception.
 \parbox{\dimexpr\columnwidth-2\fboxsep\relax}{%
 \textbf{Working draft.} All numbers below are measured and reproduced by the
 scripts in this directory. One result gate from \texttt{experiments.md} is
-still open: no Vulkan command-stream captures or CPU profiles have been
-collected, so every \blade{}-versus-\wgpu{} explanation is labelled as a
-hypothesis rather than as evidence. Application workloads are also still
-outstanding.}}
+partly open: CPU profiles are collected and reported
+(Section~\ref{sec:profile}), but Vulkan command-stream captures are not, so the
+description of the barriers each implementation generates is still read from
+source rather than observed. Application workloads are also outstanding.}}
 
 \section{Introduction}
 
@@ -807,12 +807,46 @@ workload, both graphics and compute.
 
 The difference is end-to-end and must not be attributed to tracking alone:
 \wgpu{} also validates, manages lifetimes, resolves bind groups, and builds an
-intermediate command representation. What can be said without a profile is that
-the gap is not a barrier-count effect. On the independent workloads \wgpu{}
-must be emitting \emph{fewer} inter-pass dependencies than \texttt{B-auto},
-since its GPU span on \texttt{graphics-independent} is lower than
-\texttt{B-auto}'s and lower than its own \texttt{graphics-chain} span; it
-nevertheless costs two to twelve times more host time.
+intermediate command representation. It is also not a barrier-count effect. On
+the independent workloads \wgpu{} must be emitting \emph{fewer} inter-pass
+dependencies than \texttt{B-auto}, since its GPU span on
+\texttt{graphics-independent} is lower than \texttt{B-auto}'s and lower than
+its own \texttt{graphics-chain} span; it nevertheless costs two to twelve times
+more host time.
+
+\subsection{Where the host time goes}
+\label{sec:profile}
+
+\input{data/derived/tables/profile}
+
+Table~\ref{tab:profile} attributes each implementation's CPU time to the crate
+or library that spent it, on a workload deliberately shaped so the process
+stays in the recording path rather than blocking on the GPU.
+
+The result is a correction to the obvious reading of
+Table~\ref{tab:host-matrix}. Resource state tracking is $6.8\%$ of \wgpu's
+process CPU time on \texttt{compute-independent} and $3.1\%$ on
+\texttt{graphics-independent} --- real, and the largest single \wgpu{}
+component after command recording, but nowhere near enough to explain a gap of
+two to twelve times. Summing every \wgpu{} row gives $15.4\%$ and $15.8\%$
+and $15.7\%$. Even if tracking were free, \wgpu{} would remain far more
+expensive on this axis than \blade.
+
+What actually dominates both implementations is the kernel and the driver:
+$90$--$92\%$ of \blade's profile and $69$--$71\%$ of \wgpu's. These workloads submit
+a command buffer per iteration with very little GPU work in it, so submission
+cost is the bulk of the process. That also means the two totals are not
+comparable --- \texttt{task-clock} charges a blocking fence wait to the process
+whenever the driver spins inside it, and \blade{} and \wgpu{} wait differently
+--- which is why the table reports shares within a process rather than times
+between processes.
+
+Two limits on this evidence. Self time is charged to the symbol a sample landed
+in, so tracker work that the optimizer inlined into its callers is charged to
+them; the tracker row is a lower bound. And the profile explains where the time
+goes, not why one design needs more of it: the answer to that is spread across
+\wgpu's command recording, allocation, and driver interaction rather than
+concentrated anywhere this table can point at.
 
 \subsection{End-to-end \blade{} versus \wgpu}
 

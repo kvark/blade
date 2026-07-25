@@ -105,7 +105,13 @@ def discover_collections(raw: Path) -> list[Collection]:
     """
     collections = []
     for root in sorted(raw.iterdir()):
-        if not (root / "manifest.json").is_file():
+        manifest = root / "manifest.json"
+        if not manifest.is_file():
+            continue
+        schema = json.loads(manifest.read_text()).get("schema", "")
+        if schema != "blade-sync-study-v1":
+            # Profiles and captures live alongside the timing collections but
+            # are read by their own table builders.
             continue
         label, role = KNOWN_COLLECTIONS.get(root.name, (None, None))
         collections.append(Collection(root, label, role))
@@ -690,6 +696,86 @@ def build_scope_table(
     )
 
 
+def build_profile_table(raw: Path) -> str | None:
+    """Where each implementation's host CPU time goes, from `profile-hosts.py`.
+
+    Reported as a share of the process, not as absolute time between
+    implementations: `task-clock` counts a blocking fence wait as CPU time when
+    the driver spins in it, so the two totals are not comparable. The share of
+    a single process among its own components is unaffected by that.
+    """
+    directories = sorted(raw.glob("*-profile"))
+    if not directories:
+        return None
+    latest = directories[-1]
+    buckets = latest / "buckets.csv"
+    if not buckets.is_file():
+        return None
+    shares: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
+    for row in csv.DictReader(buckets.open()):
+        shares[row["workload"], row["implementation"]][row["bucket"]] = float(
+            row["self_percent"]
+        )
+    workloads = sorted({key[0] for key in shares})
+    order = (
+        "kernel",
+        "driver",
+        "wgpu tracker",
+        "wgpu init tracker",
+        "wgpu command",
+        "wgpu-hal",
+        "wgpu device/resource",
+        "wgpu validation",
+        "wgpu other",
+        "blade",
+        "allocator",
+        "libc / runtime",
+        "other",
+    )
+    body = []
+    for bucket in order:
+        cells = [bucket.replace("_", "\\_")]
+        present = False
+        for workload in workloads:
+            for implementation in ("blade", "wgpu"):
+                value = shares.get((workload, implementation), {}).get(bucket)
+                if value is None or value < 0.05:
+                    cells.append("---")
+                else:
+                    cells.append(f"{value:.1f}")
+                    present = True
+        if present:
+            body.append(cells)
+    header = ["Component"]
+    for workload in workloads:
+        header.extend(
+            [f"\\textsc{{b}} {WORKLOAD_SHORT.get(workload, workload)}",
+             f"\\textsc{{w}} {WORKLOAD_SHORT.get(workload, workload)}"]
+        )
+    return latex_table(
+        caption=(
+            "Share of process CPU time by component, from a flat "
+            "\\texttt{perf} profile on \\texttt{zork}. \\textsc{b} is Blade and "
+            "\\textsc{w} the matched \\wgpu{} program. The profiled workload is "
+            "shaped for the host --- tiny dispatches, small targets, many passes, "
+            "no timestamp queries --- so the process stays in the recording path."
+        ),
+        label="tab:profile",
+        column_spec="l" + "r" * (len(header) - 1),
+        header=header,
+        body=body,
+        note=(
+            "Shares within a process, not times between processes: "
+            "\\texttt{task-clock} charges a blocking fence wait to the process "
+            "whenever the driver spins inside it, which inflates the "
+            "\\emph{driver} row differently for the two implementations. Self "
+            "time is attributed to the symbol a sample landed in, so inlined "
+            "tracker work is charged to its caller and the tracker row is a "
+            "lower bound."
+        ),
+    )
+
+
 def build_summary_csv(collections: list[Collection], path: Path) -> None:
     with path.open("w", encoding="utf-8", newline="") as destination:
         writer = csv.writer(destination)
@@ -764,6 +850,7 @@ def main() -> None:
         "metal.tex": build_metal_table(collections),
         "sweep.tex": build_sweep_table(collections),
         "scope.tex": build_scope_table(collections, arguments.bootstrap_samples),
+        "profile.tex": build_profile_table(arguments.raw),
     }
     written = 0
     for name, content in outputs.items():

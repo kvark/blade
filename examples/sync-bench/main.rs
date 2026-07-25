@@ -259,6 +259,7 @@ struct Config {
     allow_software: bool,
     gpu_timing: bool,
     list_adapters: bool,
+    capture: bool,
 }
 
 impl Default for Config {
@@ -278,6 +279,7 @@ impl Default for Config {
             allow_software: false,
             gpu_timing: true,
             list_adapters: false,
+            capture: false,
         }
     }
 }
@@ -326,6 +328,7 @@ impl Config {
                 "--allow-software" => config.allow_software = true,
                 "--no-gpu-timing" => config.gpu_timing = false,
                 "--list-adapters" => config.list_adapters = true,
+                "--capture" => config.capture = true,
                 "--help" | "-h" => {
                     print_usage();
                     process::exit(0);
@@ -394,6 +397,9 @@ Options:
   --allow-software    permit a software Vulkan device (correctness only)
   --no-gpu-timing     disable timestamp queries for CPU-only collection
   --list-adapters     list selectable adapters and exit
+  --capture           wrap one measured iteration in a RenderDoc capture
+                      (requires librenderdoc.so to be loaded, e.g. via
+                      LD_PRELOAD; see paper/capture-streams.py)
   -h, --help          show this help
 "
     );
@@ -839,6 +845,66 @@ struct HostTimes {
     wait: Duration,
 }
 
+/// Wraps one measured iteration in a RenderDoc capture, when the library is
+/// present in the process.
+///
+/// RenderDoc normally delimits captures at swapchain presents, and this
+/// benchmark is headless, so the capture has to be requested explicitly. The
+/// library has to be loaded already, which `paper/capture-streams.py` arranges
+/// with `LD_PRELOAD`; without it `RenderDoc::new` fails and the run continues
+/// uncaptured rather than aborting a measurement.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+struct Capture(Option<renderdoc::RenderDoc<renderdoc::V141>>);
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+impl Capture {
+    fn new(enabled: bool, template: &str) -> Self {
+        if !enabled {
+            return Self(None);
+        }
+        match renderdoc::RenderDoc::<renderdoc::V141>::new() {
+            Ok(mut api) => {
+                api.set_capture_file_path_template(template);
+                Self(Some(api))
+            }
+            Err(error) => {
+                eprintln!(
+                    "warning: --capture requested but RenderDoc is not loaded ({error}); \
+                     preload librenderdoc.so to capture"
+                );
+                Self(None)
+            }
+        }
+    }
+
+    fn begin(&mut self) {
+        if let Some(ref mut api) = self.0 {
+            api.start_frame_capture(std::ptr::null(), std::ptr::null());
+        }
+    }
+
+    fn end(&mut self) {
+        if let Some(ref mut api) = self.0 {
+            api.end_frame_capture(std::ptr::null(), std::ptr::null());
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+struct Capture;
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+impl Capture {
+    fn new(enabled: bool, _template: &str) -> Self {
+        if enabled {
+            eprintln!("warning: --capture is not supported on this platform");
+        }
+        Self
+    }
+    fn begin(&mut self) {}
+    fn end(&mut self) {}
+}
+
 fn duration_ns(duration: Duration) -> u64 {
     duration.as_nanos().min(u128::from(u64::MAX)) as u64
 }
@@ -961,8 +1027,23 @@ fn main() {
     });
 
     let iteration_count = config.warmups + config.samples;
+    // Capture a single warmed iteration: the first one after the warmups, so
+    // pipelines and descriptor pools are established and the command stream is
+    // the steady-state one the timings describe.
+    let capture_iteration = config.warmups;
+    let mut capture = Capture::new(
+        config.capture,
+        &format!(
+            "sync-bench__{}__{}",
+            config.workload.as_str(),
+            config.policy.as_str()
+        ),
+    );
     let mut previous_host_times: Option<HostTimes> = None;
     for iteration in 0..=iteration_count {
+        if config.capture && iteration == capture_iteration {
+            capture.begin();
+        }
         let start_begin = Instant::now();
         encoder.start();
         let start_time = start_begin.elapsed();
@@ -1020,6 +1101,10 @@ fn main() {
             submit: submit_time,
             wait: wait_time,
         });
+
+        if config.capture && iteration == capture_iteration {
+            capture.end();
+        }
     }
 
     let validation_hash = bench.validate(&context, config.workload, config.passes);

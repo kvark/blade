@@ -126,7 +126,12 @@ The two `rubik` directories come from one invocation: the collector runs every
 enumerated adapter in turn.
 
 Still outstanding before the working-draft banner can come off: Vulkan
-command-stream captures and CPU profiles.
+command-stream captures. `capture-streams.py` automates them but has not been
+run (the `renderdoc` package was absent), and covers Blade only until the
+matched wgpu benchmark gains a `--capture` flag.
+
+CPU profiles are done: `profile-hosts.py` and Section "Where the host time
+goes".
 
 Also outstanding, independently of the banner:
 

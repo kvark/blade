@@ -335,9 +335,13 @@ The paper can lose its `RESULTS PENDING` banner only after:
   (all 216 matrix runs and 768 sweep runs agree on the per-workload hash);
 - [x] the paper consistently labels Blade-versus-wgpu results as end-to-end and
   reserves causal claims for the within-Blade barrier-placement control;
-- [ ] representative Vulkan captures and CPU profiles support the explanation of
-  tracked-versus-coarse behavior — **outstanding**; the Intel end-to-end gap is
-  currently reported as unexplained rather than attributed;
+- [~] representative Vulkan captures and CPU profiles support the explanation
+  of tracked-versus-coarse behavior. CPU profiles are collected
+  (`profile-hosts.py`) and reported: resource tracking is 3-7% of wgpu's
+  process CPU time, which rules it out as the explanation for a 2-12x host-cost
+  gap. Command-stream captures are **outstanding**: `capture-streams.py` exists
+  and is untested for want of the `renderdoc` package, and it captures Blade
+  only until the matched wgpu benchmark gains the same flag;
 - [x] at least the minimum hardware matrix is complete (NVIDIA and discrete
   AMD on Linux, plus two AMD integrated parts, Intel, and Apple as sensitivity
   cases);

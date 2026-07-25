@@ -406,6 +406,29 @@ costs more and needs frame pointers to be reliable.
 
 ## GPU captures
 
+`paper/capture-streams.py` captures the Vulkan command stream of each
+configuration, so the barriers the paper describes from source can be checked
+against what reaches the driver.
+
+```sh
+sudo apt install renderdoc
+python3 paper/capture-streams.py
+```
+
+The benchmark is headless, so there is no swapchain present for RenderDoc to
+delimit a capture at; `sync-bench --capture` calls the in-application API
+around one warmed iteration instead, and the script preloads
+`librenderdoc.so` so that API is available. Without the preload the benchmark
+warns and runs uncaptured rather than failing a measurement.
+
+Two gaps. This has not been run --- the package was not installed on the
+machine it was written on --- so expect to fix something on first use. And it
+captures Blade only: the matched wgpu benchmark has no `--capture` flag, and
+adding one that wraps the same warmed iteration would make the comparison
+symmetric.
+
+## Manual captures and profilers
+
 Build the wgpu benchmark with Tracy scopes enabled:
 
 ```sh

@@ -89,8 +89,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--percent-limit",
         type=float,
-        default=0.05,
-        help="drop symbols below this self-time percentage (default: 0.05)",
+        default=0.0,
+        help="drop symbols below this self-time percentage (default: keep all)",
     )
     parser.add_argument(
         "--skip-build",
@@ -117,7 +117,13 @@ def check_perf() -> None:
         )
 
 
-def classify(dso: str, symbol: str) -> str:
+def classify(dso: str, symbol: str, binding: str = ".") -> str:
+    # perf marks kernel samples with a `[k]` binding. Trust that over the
+    # symbol name: `kptr_restrict` hides kernel symbols from unprivileged
+    # users, so they arrive as bare addresses in an `[unknown]` object and no
+    # name-based rule can catch them.
+    if binding == "k":
+        return "kernel"
     subject = f"{dso} {symbol}"
     for name, pattern in BUCKETS:
         if re.search(pattern, subject):
@@ -126,12 +132,42 @@ def classify(dso: str, symbol: str) -> str:
 
 
 REPORT_LINE = re.compile(
-    r"^\s*(?P<percent>\d+\.\d+)%\s+(?P<dso>\S+)\s+(?P<symbol>.+?)\s*$"
+    r"^\s*(?P<percent>\d+\.\d+)%\s+(?P<dso>\S+)\s+"
+    r"(?:\[(?P<binding>[.kgutH])\]\s*)?(?P<symbol>.+?)\s*$"
+)
+EVENT_HEADER = re.compile(
+    r"^#\s*Samples:\s.*of event '(?P<event>[^']+)'", re.MULTILINE
+)
+EVENT_COUNT = re.compile(
+    r"^#\s*Event count \(approx\.\):\s*(?P<count>\d+)", re.MULTILINE
 )
 
 
-def parse_report(text: str) -> list[tuple[float, str, str]]:
-    """Rows of (self percent, dso, symbol) from `perf report --stdio`."""
+def total_cpu_ms(text: str) -> float:
+    """Total CPU time in the report.
+
+    `task-clock` counts nanoseconds, so the event count is the process's CPU
+    time directly. Percentages alone cannot be compared between two programs
+    that ran for different lengths of time, which is the whole point here.
+    """
+    match = EVENT_COUNT.search(text)
+    return float(match.group("count")) / 1e6 if match else 0.0
+
+
+def parse_report(text: str) -> list[tuple[float, str, str, str]]:
+    """Rows of (self percent, dso, symbol, binding) from `perf report --stdio`.
+
+    Raises if the report contains more than one event. A hybrid CPU records
+    `cpu_atom` and `cpu_core` separately and `perf report` gives each its own
+    100% scale, so summing across them silently produces totals above 100%.
+    """
+    events = EVENT_HEADER.findall(text)
+    if len(set(events)) > 1:
+        raise RuntimeError(
+            "perf report contains several events "
+            f"({', '.join(sorted(set(events)))}); their percentages are on "
+            "separate scales and must not be combined. Record a single event."
+        )
     rows = []
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -139,10 +175,14 @@ def parse_report(text: str) -> list[tuple[float, str, str]]:
         match = REPORT_LINE.match(line)
         if not match:
             continue
-        symbol = match.group("symbol")
-        # `perf report` prefixes the symbol with its binding, e.g. "[.] name".
-        symbol = re.sub(r"^\[[.k]\]\s*", "", symbol)
-        rows.append((float(match.group("percent")), match.group("dso"), symbol))
+        rows.append(
+            (
+                float(match.group("percent")),
+                match.group("dso"),
+                match.group("symbol"),
+                match.group("binding") or ".",
+            )
+        )
     return rows
 
 
@@ -188,6 +228,11 @@ def profile_one(
             "perf",
             "record",
             "--quiet",
+            # A software event, so a hybrid CPU reports one scale rather than
+            # one per core type, and so the unit is CPU time rather than cycles
+            # that mean different things on P and E cores.
+            "-e",
+            "task-clock",
             "-F",
             str(arguments.frequency),
             "-o",
@@ -216,7 +261,7 @@ def profile_one(
         arguments.blade,
     )
     (output / f"{label}__{workload}.report.txt").write_text(report, encoding="utf-8")
-    return parse_report(report)
+    return parse_report(report), total_cpu_ms(report)
 
 
 def main() -> None:
@@ -250,6 +295,7 @@ def main() -> None:
             raise SystemExit(f"missing benchmark binary: {path}")
 
     rows: list[dict[str, object]] = []
+    totals_cpu_ms: dict[tuple[str, str], float] = {}
     for workload in arguments.workloads.split(","):
         workload = workload.strip()
         if not workload:
@@ -260,7 +306,7 @@ def main() -> None:
                 environment["WGPU_BACKEND"] = arguments.backend
                 if arguments.wgpu_adapter_name:
                     environment["WGPU_ADAPTER_NAME"] = arguments.wgpu_adapter_name
-            samples = profile_one(
+            samples, cpu_ms = profile_one(
                 binary=binary,
                 label=label,
                 workload=workload,
@@ -269,17 +315,19 @@ def main() -> None:
                 output=output,
                 environment=environment,
             )
-            for percent, dso, symbol in samples:
+            for percent, dso, symbol, binding in samples:
                 rows.append(
                     {
                         "implementation": label,
                         "workload": workload,
-                        "bucket": classify(dso, symbol),
+                        "bucket": classify(dso, symbol, binding),
                         "dso": dso,
                         "symbol": symbol,
                         "self_percent": percent,
+                        "self_ms": round(percent / 100.0 * cpu_ms, 4),
                     }
                 )
+            totals_cpu_ms[label, workload] = cpu_ms
 
     with (output / "symbols.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
@@ -291,20 +339,30 @@ def main() -> None:
                 "dso",
                 "symbol",
                 "self_percent",
+                "self_ms",
             ),
         )
         writer.writeheader()
         writer.writerows(rows)
 
-    totals: dict[tuple[str, str, str], float] = {}
+    totals: dict[tuple[str, str, str], list[float]] = {}
     for row in rows:
         key = (row["implementation"], row["workload"], row["bucket"])
-        totals[key] = totals.get(key, 0.0) + float(row["self_percent"])
+        entry = totals.setdefault(key, [0.0, 0.0])
+        entry[0] += float(row["self_percent"])
+        entry[1] += float(row["self_ms"])
     with (output / "buckets.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(("implementation", "workload", "bucket", "self_percent"))
-        for key in sorted(totals, key=lambda k: (k[0], k[1], -totals[k])):
-            writer.writerow((*key, f"{totals[key]:.2f}"))
+        writer.writerow(
+            ("implementation", "workload", "bucket", "self_percent", "self_ms")
+        )
+        for key in sorted(totals, key=lambda k: (k[0], k[1], -totals[k][1])):
+            percent, milliseconds = totals[key]
+            writer.writerow((*key, f"{percent:.2f}", f"{milliseconds:.2f}"))
+        for (label, workload), milliseconds in sorted(totals_cpu_ms.items()):
+            writer.writerow(
+                (label, workload, "TOTAL (process CPU time)", "100.00", f"{milliseconds:.2f}")
+            )
 
     (output / "manifest.json").write_text(
         json.dumps(
