@@ -576,6 +576,29 @@ def build_sweep_table(collections: list[Collection]) -> str | None:
     )
 
 
+def control_floor(collection: Collection, bootstrap_samples: int) -> float:
+    """Largest disagreement between `explicit-all` and `automatic` at global
+    scope, over the workloads in this collection.
+
+    Those two produce identical command streams, so this is what the device and
+    the collection can resolve. Nothing smaller should be claimed on it.
+    """
+    worst = 0.0
+    for workload in WORKLOAD_ORDER:
+        baseline = collection.values("blade", "automatic", workload, 16, "gpu_ns")
+        control = collection.values("blade", "explicit-all", workload, 16, "gpu_ns")
+        if not baseline or not control:
+            continue
+        difference, _, _ = relative_difference(
+            baseline,
+            control,
+            bootstrap_samples,
+            (collection.root.name, workload, "control"),
+        )
+        worst = max(worst, abs(difference))
+    return worst
+
+
 def build_scope_table(
     collections: list[Collection], bootstrap_samples: int
 ) -> str | None:
@@ -591,6 +614,7 @@ def build_scope_table(
         device = DEVICE_SHORT.get(
             collection.devices.get("blade", ""), collection.devices.get("blade", "?")
         )
+        floor = control_floor(collection, bootstrap_samples)
         if index:
             rows.append([RULE])
         first = True
@@ -602,6 +626,7 @@ def build_scope_table(
                 device if first else "",
                 WORKLOAD_SHORT[workload],
                 f"{median_us(baseline):.1f}",
+                f"{floor:.1f}" if first else "",
             ]
             first = False
             for policy in ("automatic-scoped", "hazard-only", "hazard-only-scoped"):
@@ -618,22 +643,6 @@ def build_scope_table(
                 cells.append(signed(difference))
                 cells.append(interval(low, high))
             rows.append(cells)
-            # Only the Global pair is a control. At PassKind scope an
-            # explicitly placed barrier cannot name its consumer, so
-            # `explicit-all-scoped` is a different command stream from
-            # `automatic-scoped` rather than the same one.
-            explicit = collection.values("blade", "explicit-all", workload, 16, "gpu_ns")
-            if explicit:
-                controls.append(
-                    abs(
-                        relative_difference(
-                            baseline,
-                            explicit,
-                            bootstrap_samples,
-                            (collection.root.name, workload, "control"),
-                        )[0]
-                    )
-                )
     note = (
         "The two axes are crossed, so neither is a default for the other. "
         "Columns differ from \\texttt{B-auto} by scope only, by placement only, "
@@ -643,12 +652,12 @@ def build_scope_table(
         "where it is written and cannot name a consumer that has not been "
         "declared yet."
     )
-    if controls:
-        note += (
-            f" The instrumentation control, \\texttt{{explicit-all}} against "
-            f"\\texttt{{automatic}} at global scope, deviates by at most "
-            f"{max(controls):.1f}\\% across these cells."
-        )
+    note += (
+        " ``ctrl'' is the largest disagreement between \\texttt{explicit-all} "
+        "and \\texttt{automatic} at global scope on that device. Those two "
+        "emit identical commands, so it is the smallest effect the device and "
+        "collection can resolve; a difference below it means nothing."
+    )
     if dirty:
         note += (
             " These runs were collected from a modified worktree and are a "
@@ -661,11 +670,12 @@ def build_scope_table(
             "differences from it with 95\\% bootstrap intervals."
         ),
         label="tab:scope",
-        column_spec="llrrlrlrl",
+        column_spec="llrrrlrlrl",
         header=(
             "Device",
             "Workload",
             "B-auto",
+            "ctrl",
             "\\multicolumn{2}{c}{scope \\%}",
             "\\multicolumn{2}{c}{placement \\%}",
             "\\multicolumn{2}{c}{both \\%}",

@@ -150,8 +150,10 @@ uncertainty.
    logging for performance runs.
 5. Run a separate correctness pass with Vulkan validation and synchronization
    validation enabled. Check output hashes or numeric results.
-6. Lock clocks or a stable power state where supported. Record the command and
-   setting; never silently discard throttled samples.
+6. Lock clocks or force a stable performance level; see COLLECTING.md for the
+   per-vendor commands. Record the command and setting; never silently discard
+   throttled samples. Check the per-device control floor before interpreting
+   any effect.
 7. Warm each configuration for at least 10 iterations. Collect at least 30
    measured iterations, increasing the count for sub-microsecond effects.
 8. Counterbalance configuration order across repetitions. Retain order in the
@@ -287,19 +289,24 @@ paper is transcribed by hand.
 5. Only `zork` has a timestamp-free collection, so host-cost claims are
    established there and merely corroborated elsewhere.
 
-## Per-device control deviation
+## Per-device control floor
 
 The instrumentation control (`explicit-all` against `automatic` at global
-scope) bounds what each device can resolve. Nothing smaller than these should
-be claimed on the device in question:
+scope) emits identical commands, so its disagreement bounds what each device
+and collection can resolve. Nothing smaller may be claimed on that device.
+`build-tables.py` computes this and prints it as the `ctrl` column of the scope
+table. With default power management:
 
-| Device | max control deviation |
-|---|---:|
-| AMD Raphael iGPU | 0.1% |
-| NVIDIA RTX 5070 | 2.1% |
-| AMD Radeon 780M | 2.6% |
-| AMD RX 7900 XT | 6.5% |
-| Intel Xe (RPL-U) | 37.4% (one cell; rejected) |
+| Device | control floor | usable for |
+|---|---:|---|
+| AMD Raphael iGPU | 0.1% | anything |
+| NVIDIA RTX 5070 | 2.1% | effects above ~2% |
+| AMD Radeon 780M | 3.1% | effects above ~3% |
+| AMD RX 7900 XT | 6.5% | effects above ~10%; cannot resolve barrier scope |
+| Intel Xe (RPL-U) | 48.3% | nothing; device time unusable |
+
+Clock-locking is now part of the protocol precisely because of this table. The
+collections above predate it.
 
 ## Correctness rules
 

@@ -35,9 +35,10 @@ cargo run --release --example sync-bench -- \
   --policy automatic
 ```
 
-Raw measurements belong under `data/raw/`. Generated summaries, tables, and
-figures belong under `data/derived/`. Every result used by the paper must retain
-the raw rows and machine metadata from which it was derived.
+Raw measurements belong under `data/raw/` and generated tables under
+`data/derived/`. Neither is tracked by git -- see [data/README.md](data/README.md).
+Every result used by the paper must retain the raw rows and machine metadata
+from which it was derived, which the collection directory does.
 
 With Blade and the benchmark wgpu branch checked out as sibling directories,
 run the randomized, repeated matched matrix after committing both artifacts:
@@ -105,8 +106,8 @@ era; later ones cross placement with scope.
 | `20260725T191617Z-zork` | zork | NVIDIA RTX 5070 | matrix, placement × scope |
 | `20260725T193736Z-rubik-amd-radeon-rx-7900-xt-radv-n` | rubik | AMD RX 7900 XT | matrix, placement × scope |
 | `20260725T193736Z-rubik-amd-ryzen-5-9600x-6-core-pro` | rubik | AMD Raphael iGPU | matrix, placement × scope |
-| `20260725T060322Z-k6` | k6 | AMD Radeon 780M | matrix, three policies |
-| `20260725T160725Z-matrix` | matrix | Intel Xe (RPL-U) | matrix, three policies |
+| `20260725T204342Z-k6` | k6 | AMD Radeon 780M | matrix, placement × scope |
+| `20260725T204044Z-matrix` | matrix | Intel Xe (RPL-U) | matrix, placement × scope (control floor 48%; unusable for device time) |
 | `20260725T062529Z-mac` | mac | Apple M3 | matrix, Metal case study |
 | `20260725T060107Z-zork` | zork | NVIDIA RTX 5070 | superseded by `191617` |
 | `20260725T185508Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, GPU-timed |
@@ -118,10 +119,15 @@ The two `rubik` directories come from one invocation: the collector runs every
 enumerated adapter in turn.
 
 Still outstanding before the working-draft banner can come off: Vulkan
-command-stream captures and CPU profiles. Also outstanding, independently of
-the banner: application workloads, a clock-locked repeat of the RX 7900 XT
-collection (its short workloads vary by up to 16% between repetitions), and
-the crossed placement/scope matrix on the 780M, Intel, and Apple machines.
+command-stream captures and CPU profiles.
+
+Also outstanding, independently of the banner:
+
+- clock-locked repeats of the RX 7900 XT and Intel collections. Their control
+  floors are 6.5% and 48%; the first cannot resolve the barrier-scope effect it
+  is meant to test, and the second cannot resolve anything. See the top of
+  [COLLECTING.md](COLLECTING.md) for the commands.
+- application workloads on heterogeneous frames.
 
 ## Current scope
 

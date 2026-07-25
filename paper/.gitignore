@@ -10,6 +10,13 @@ main.synctex.gz
 __pycache__/
 *.pyc
 
+# Measurements stay on the collecting machine. They are large, they grow with
+# every rerun, and git is the wrong place for them; the manifests already pin
+# the source revision, so a collection can be reproduced rather than shipped.
+# Keep them under data/raw/ locally and move them to a study artifact when the
+# paper is circulated.
+data/raw/
+
 # Regenerated from data/raw by analyze.py and build-tables.py. The paper
 # inputs data/derived/tables/*.tex, so run build-tables.py before latexmk.
 data/derived/

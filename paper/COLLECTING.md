@@ -295,6 +295,37 @@ Do not pass `--allow-dirty` for final data. It exists only for local pilots.
 The collector refuses an existing output directory and retains stderr from any
 run that emits it.
 
+## Lock the clocks first
+
+Every collection in this study so far ran with default power management, and
+the cost is a control floor -- the disagreement between two configurations
+that emit identical commands -- ranging from 0.1% to 48% depending on the
+machine. A device whose floor exceeds the effect you are chasing cannot answer
+the question, and a short workload on a large idle GPU is the worst case: the
+RX 7900 XT never leaves its idle clock state during a 200-microsecond command
+buffer.
+
+On AMD, before collecting:
+
+```sh
+for card in /sys/class/drm/card*/device/power_dpm_force_performance_level; do
+  echo high | sudo tee "$card"
+done
+```
+
+On NVIDIA:
+
+```sh
+sudo nvidia-smi --lock-gpu-clocks=tdp --mode=1
+```
+
+On Intel, `intel_gpu_frequency -s <MHz>` from `intel-gpu-tools` sets a fixed
+frequency. Restore with `auto` / `--reset-gpu-clocks` afterwards, and record
+which command was used next to the collection.
+
+Then check the floor before believing anything: `build-tables.py` prints a
+`ctrl` column per device, and any effect smaller than it is not a result.
+
 ## Barrier policies and workloads
 
 On Vulkan the collector runs four Blade policies per workload:

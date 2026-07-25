@@ -1,9 +1,0 @@
-$ rustc --version --verbose
-exit_code=0
-rustc 1.93.1 (01f6ddf75 2026-02-11) (Homebrew)
-binary: rustc
-commit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf
-commit-date: 2026-02-11
-host: aarch64-apple-darwin
-release: 1.93.1
-LLVM version: 21.1.8

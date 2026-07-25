@@ -1,9 +1,0 @@
-$ rustc --version --verbose
-exit_code=0
-rustc 1.94.0 (4a4ef493e 2026-03-02)
-binary: rustc
-commit-hash: 4a4ef493e3a1488c6e321570238084b38948f6db
-commit-date: 2026-03-02
-host: x86_64-unknown-linux-gnu
-release: 1.94.0
-LLVM version: 21.1.8
