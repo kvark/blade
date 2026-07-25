@@ -12,7 +12,10 @@ mod unified_image_layouts {
     use std::ffi;
 
     pub const NAME: &ffi::CStr = c"VK_KHR_unified_image_layouts";
-    const STRUCTURE_TYPE: i32 = 1000466000;
+    // VK_KHR_unified_image_layouts is registered extension 528.
+    // Keep this in sync with
+    // VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR.
+    const STRUCTURE_TYPE: i32 = 1000527000;
 
     #[repr(C)]
     pub struct PhysicalDeviceFeatures {
