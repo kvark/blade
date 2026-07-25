@@ -1,0 +1,334 @@
+\documentclass[10pt,twocolumn]{article}
+
+\usepackage[margin=0.75in]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+
+\newcommand{\blade}{\textsc{Blade}}
+\newcommand{\wgpu}{\textsc{wgpu}}
+\newcommand{\pending}[1]{\textcolor{red}{\textbf{RESULTS PENDING: #1}}}
+
+\title{Do Fine-Grained GPU Resource States Pay for Themselves?\\
+A Cross-Vendor Study with \blade}
+\author{Author information to be finalized}
+\date{Draft of July 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Modern explicit graphics APIs make applications describe memory dependencies,
+resource access scopes, and image layouts in detail. Portable APIs such as
+WebGPU reconstruct and validate this state at run time, while render graphs
+derive it from a declared workload. \blade{} explores a different point in the
+design space: its Vulkan backend keeps ordinary images in
+\texttt{GENERAL}, does not maintain per-resource states, and places a global
+memory barrier at pass boundaries.
+
+This paper asks when such coarse synchronization is competitive with precise
+tracking and where it fails. We combine a controlled within-\blade{}
+comparison of barrier placement with matched end-to-end \wgpu{} workloads,
+CPU profiles, and captured Vulkan command streams. This design avoids
+reimplementing a resource tracker in \blade{}, while making clear which
+differences are causal and which belong to the complete abstraction. The
+evaluation covers synthetic dependency graphs and representative compute and
+graphics workloads on AMD and NVIDIA Vulkan implementations.
+\pending{Replace this paragraph with quantitative findings, confidence
+intervals, and the observed decision boundary before circulation.}
+\end{abstract}
+
+\noindent\colorbox{yellow!25}{%
+\parbox{\dimexpr\columnwidth-2\fboxsep\relax}{%
+\textbf{Working draft.} The methodology is specified, but result claims and
+figures have deliberately not been filled with provisional measurements.}}
+
+\section{Introduction}
+
+Explicit GPU APIs expose synchronization so applications can preserve
+parallelism and avoid unnecessary cache operations. That control has a cost:
+the application or an abstraction layer must know how every buffer and image
+subresource is used, maintain state across command buffers, validate conflicts,
+and generate transitions. This machinery sits on a CPU-critical command
+recording path. The \wgpu{} implementation describes its trackers as some of
+the hottest code in its codebase~\cite{wgpu-trackers}.
+
+\blade{}~\cite{blade} tests the opposite engineering hypothesis. Its public API has no
+resource-state objects. On Vulkan, ordinary images remain in
+\texttt{VK\_IMAGE\_LAYOUT\_GENERAL}; a broad memory barrier orders writes
+before later reads and writes at pass boundaries. The design sacrifices
+opportunities for overlap and resource-specific cache control in exchange for
+a smaller API and negligible tracking work.
+
+The question is newly relevant because
+\texttt{VK\_KHR\_unified\_image\_layouts} guarantees, when enabled, that
+\texttt{GENERAL} is as efficient as specialized layouts in most
+uses~\cite{vulkan-unified-layouts}. The extension removes one reason for
+tracking image state, but explicitly leaves barrier granularity as a separate
+performance question.
+
+This paper is organized around the following research questions:
+
+\begin{description}
+  \item[RQ1:] How does host cost scale with resources, passes, and dependency
+  density for tracking-free and tracked command recording?
+  \item[RQ2:] When do global barriers reduce device overlap or cause observable
+  cache and pipeline stalls?
+  \item[RQ3:] How do matched \blade{} and \wgpu{} implementations differ
+  end-to-end, and which costs are visible in tracker profiles and generated
+  Vulkan commands?
+  \item[RQ4:] How do the answers differ between compute, graphics, and mixed
+  workloads, and between AMD and NVIDIA architectures?
+\end{description}
+
+The intended contributions are:
+
+\begin{itemize}
+  \item a cost model that distinguishes tracking, barrier precision, barrier
+  placement, and image layouts without claiming that every factor is
+  independently controlled;
+  \item a controlled within-\blade{} evaluation of automatic versus
+  application-declared barrier placement;
+  \item matched \blade{} and \wgpu{} workloads with profiles and Vulkan
+  captures for end-to-end comparison;
+  \item a reproducible cross-vendor evaluation over dependency-controlled
+  microbenchmarks and application workloads; and
+  \item practical guidance identifying the workload envelope in which
+  tracking-free synchronization is appropriate.
+\end{itemize}
+
+\section{Background}
+
+\subsection{Execution and memory dependencies}
+
+A Vulkan barrier describes both an execution dependency between pipeline
+stages and a memory dependency between access types. Resource-specific
+barriers can additionally identify the affected buffer or image range.
+Narrow scopes may preserve unrelated work, whereas overly broad scopes can
+drain the pipeline~\cite{amd-barriers,nvidia-vulkan-tips}. A global memory
+barrier is nevertheless attractive when many resources share the same
+dependency because it combines them in one command and often maps to hardware
+operations whose granularity is already coarse.
+
+These dimensions must not be collapsed into a single ``barrier quality''
+variable. A system may:
+
+\begin{enumerate}
+  \item place barriers only at true hazards or at every pass boundary;
+  \item use global or resource-specific memory scopes;
+  \item use broad or precise pipeline stages and access masks; and
+  \item transition images between specialized layouts or retain one layout.
+\end{enumerate}
+
+\subsection{Image layouts}
+
+Vulkan image layouts communicate usage information that may select compression
+metadata, attachment paths, or transfer representations. Vendor guidance has
+historically recommended specialized layouts, particularly on
+AMD~\cite{amd-rdna-guide}. The unified-image-layouts extension reflects a
+hardware and driver trend in which most layouts are physically identical. It
+allows \texttt{GENERAL} in most positions and promises optimal performance,
+while retaining exceptions such as initialization from
+\texttt{UNDEFINED}, presentation, and some video interactions
+~\cite{vulkan-unified-layouts}.
+
+Consequently, this work uses ``no layout tracking'' to mean no steady-state
+tracking for ordinary application images. It does not claim that all layout
+transitions or image-specific synchronization disappear.
+
+\subsection{WebGPU and \wgpu}
+
+WebGPU defines usage scopes that reject conflicting uses and provide a safe,
+portable programming contract~\cite{webgpu-spec}. \wgpu{} represents buffer
+and texture states in dense trackers, merges per-scope usage, and generates
+transitions between command buffers~\cite{wgpu-trackers}. This work does not
+treat that work as accidental overhead: it implements guarantees that
+\blade's unsafe API intentionally does not provide.
+
+The comparison instead asks what those guarantees and their precision cost,
+and whether a narrower native contract is useful for applications that already
+know their dependency structure.
+
+\section{\blade{} Synchronization Model}
+
+\blade{} exposes transfer, compute, and render passes within a command encoder.
+It does not attach a current state to resource handles. The Vulkan backend
+places the following conceptual dependency before each pass:
+
+\begin{verbatim}
+srcStage  = ALL_COMMANDS
+dstStage  = ALL_COMMANDS
+srcAccess = MEMORY_WRITE
+dstAccess = MEMORY_READ | MEMORY_WRITE
+\end{verbatim}
+
+Images are initialized from \texttt{UNDEFINED} to \texttt{GENERAL} and remain
+in \texttt{GENERAL} for ordinary rendering, sampling, storage, and copies.
+Presentation images still transition to the presentation layout. An encoder
+option disables automatic pass barriers; the application may then call the
+same global barrier only where its dependency graph requires one.
+
+The evaluated contract is deliberately limited:
+
+\begin{itemize}
+  \item synchronization within one Vulkan queue and command stream;
+  \item explicit host and cross-queue synchronization outside the pass model;
+  \item explicit initialization and presentation transitions; and
+  \item native validation during correctness testing, but no safe-API
+  guarantee in production.
+\end{itemize}
+
+\section{Experimental Design}
+
+\subsection{Configurations}
+
+Table~\ref{tab:configs} separates the controlled \blade{} configurations from
+the realistic tracked baseline. \texttt{B-explicit-all} checks that manual and
+automatic insertion produce equivalent command streams. \texttt{W-wgpu} uses
+the same shaders, resources, pass graph, and output checks, but remains an
+end-to-end comparison because the APIs and runtime guarantees differ.
+
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{lllll}
+\toprule
+ID & Tracking & Placement & Scope & Layout \\
+\midrule
+B-auto & none & every pass & global & general \\
+B-hazard & none & hazards & global & general \\
+B-explicit-all & none & every pass & global & general \\
+W-wgpu & tracked & derived & resource & backend \\
+\bottomrule
+\end{tabular}
+\caption{Evaluation configurations; only the \texttt{B-*} rows share an
+implementation and support controlled attribution.}
+\label{tab:configs}
+\end{table*}
+
+\wgpu{} is reported as an end-to-end tracked baseline because its validation,
+lifetime, binding, and command models differ from \blade. CPU profiles identify
+time spent in its trackers, while Vulkan captures report the barriers and
+layouts those trackers generate. Direct \texttt{wgpu-hal} measurements are
+optional diagnostics for separating frontend work; they are not required for
+the main comparison and are not presented as another tracking implementation.
+
+\subsection{Workloads}
+
+Synthetic workloads vary pass count, resource count, resource size, operation
+intensity, and dependency density. Graph families include serial chains,
+independent passes, bounded-width pipelines, fan-out/fan-in, and randomized
+directed acyclic graphs. Operations cover compute-to-compute,
+transfer-to-compute, compute-to-graphics, attachment-to-sampling, and
+graphics-to-graphics dependencies.
+
+The application set will include a draw-call stress test, a multi-pass
+renderer, a particle simulation with compute-to-graphics dependencies, and a
+compute pipeline representative of matrix or tensor processing.
+\pending{Freeze exact revisions, scenes, resolutions, and input hashes.}
+
+\subsection{Platforms}
+
+The primary matrix includes at least two AMD and two NVIDIA architecture
+generations where available. Each result records GPU and CPU model, operating
+system, kernel, Vulkan loader, driver, API version, enabled extensions, clocks,
+power policy, and the exact repository revision.
+
+Metal is not pooled into the Vulkan layout comparison. Its API hides image
+layouts and may perform framework-level hazard tracking, so Apple results
+require a separate tracked-versus-untracked methodology.
+
+\subsection{Metrics and statistics}
+
+We separately measure command recording, submission, host waiting, and GPU
+execution. Driver profiling supplies barrier stalls, cache operations,
+compression state where exposed, and overlap on the GPU timeline. Memory use
+and barrier counts are also recorded.
+
+Each configuration is warmed before measurement and sampled repeatedly in a
+counterbalanced order. We report medians, distributions, and bootstrap
+confidence intervals rather than a subjective workload threshold. Validation
+layers are enabled for correctness runs and disabled for performance runs, as
+recommended by vendor guidance~\cite{nvidia-vulkan-tips}.
+
+\section{Results}
+
+\subsection{Host-side scaling}
+\pending{Plot recording time against passes and resources; attribute tracker
+merge and transition-generation cost separately.}
+
+\subsection{Barrier placement and dependency density}
+\pending{Plot automatic-pass versus hazard-only global barriers over graph
+width and dependency density. Include GPU timelines for representative
+crossovers.}
+
+\subsection{Matched \blade{} versus \wgpu{}}
+\pending{Report end-to-end host and GPU differences. Use tracker profiles and
+captured command streams as explanatory evidence, without attributing the
+whole difference to tracking alone.}
+
+\subsection{Generated barriers and image layouts}
+\pending{Compare captured barrier counts, scopes, and image layouts. Stratify
+observed performance by unified-image-layout support, image use, format, MSAA,
+and architecture generation; do not claim independent layout causality.}
+
+\subsection{Application workloads}
+\pending{Report CPU and GPU deltas with absolute frame or job times. Explain
+which synthetic regime predicts each application result.}
+
+\section{Discussion}
+
+The final analysis should produce a decision boundary, not a universal winner.
+Expected explanatory variables include dependency density, opportunities for
+stage overlap, the number of resources touched per pass, image compression
+behavior, and whether synchronization is CPU- or GPU-critical.
+
+Three outcomes are all actionable. First, negligible device cost with
+measurable host savings would support a tracking-free contract for constrained
+workloads. Second, architecture-specific layout or cache penalties would
+motivate capability-gated policies. Third, losses on wide graphs but not serial
+chains would suggest placing a render-graph or scheduling layer above a coarse
+low-level API rather than requiring the low-level API itself to track states.
+
+\section{Threats to Validity}
+
+GPU timestamps and profiling can perturb short workloads. We therefore compare
+instrumented measurements with externally captured timelines and amortized
+throughput runs. Driver heuristics may recognize repeated synthetic work, so
+inputs and resources vary while preserving the graph shape. Results from one
+driver version cannot establish permanent vendor behavior; all raw metadata is
+retained.
+
+The controlled \blade{} variants isolate barrier placement but not global
+versus resource-specific scope or persistent \texttt{GENERAL} versus
+usage-specific layouts. Those dimensions are observed through the matched
+\wgpu{} comparison and captured command streams, so causal claims about them
+are deliberately limited. End-to-end \wgpu{} differences cannot be attributed
+solely to tracking and are labeled as such.
+
+\section{Related Work}
+
+The Vulkan specification defines explicit execution and memory dependencies
+and application-controlled image layouts~\cite{vulkan-spec}. AMD and NVIDIA
+have published architecture-specific synchronization guidance
+~\cite{amd-barriers,amd-rdna-guide,nvidia-vulkan-tips}. The
+unified-image-layouts extension standardizes the observation that specialized
+layouts no longer correspond to distinct representations on many modern
+implementations~\cite{vulkan-unified-layouts}.
+
+WebGPU specifies portable usage-scope validation~\cite{webgpu-spec}; \wgpu{}
+implements it using optimized dense resource trackers~\cite{wgpu-trackers}.
+\blade{} occupies a different point in this design space by exposing an unsafe
+native contract and relying on application-declared pass dependencies.
+
+\section{Conclusion}
+
+\pending{State the measured workload envelope, quantified trade-offs, and
+recommendations. Do not conclude that tracking is universally unnecessary.}
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}
