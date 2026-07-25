@@ -60,6 +60,11 @@ and every policy produces the same output hash. Validation earned its place
 here: it caught that Blade's `extra_sync_*_access` driver workarounds add
 transfer accesses that a narrowed stage mask does not support.
 
+Result so far: the narrowing pays on NVIDIA (up to -5.3% of GPU span at fixed
+placement) and not on either AMD device, which is the opposite of what the
+RADV reading predicted. Reading a driver establishes which commands are
+emitted, not what they cost.
+
 Blade emits a barrier when finishing every encoder, including in manual mode;
 its destination scope is always wide because it has to reach the next
 submission and the host. That barrier is common to all six Blade
@@ -262,17 +267,39 @@ paper is transcribed by hand.
 
 ## Known deviations in the current collections
 
-1. `20260725T155439Z-rubik` ran Blade on the Raphael integrated GPU and wgpu on
-   the RX 7900 XT. Its within-Blade cells are valid; its cross-implementation
-   cells are void. The collector now aborts on this condition.
+1. The first `rubik` collection ran Blade on the Raphael integrated GPU and
+   wgpu on the RX 7900 XT. The collector now aborts on this condition and
+   collects every enumerated adapter in turn; `rubik` has been recollected as
+   one collection per GPU with both implementations pinned. The defective
+   collection is superseded and no longer retained.
 2. Metal GPU timestamps are per pass rather than a span in Blade, and were
    returned as zero by wgpu for three of the four workloads. Metal device time
    is not reported; host wall time is used instead.
 3. `20260725T160725Z-matrix` fails its own `B-explicit-all` control on
    `graphics-independent` (-37.4%, repetition medians spanning 3.2-5.6 ms for an
    identical command stream). The cell is reported and rejected, not deleted.
-4. Only `zork` has a timestamp-free collection, so host-cost claims are
+4. The RX 7900 XT's compute and mixed workloads run for about 200 microseconds,
+   which is too short for its clocks to settle: repetition medians for an
+   identical command stream vary by up to 16%, and its control reaches 6.5%.
+   Only effects above roughly 10% are claimable on those cells. Its graphics
+   workloads are stable to under 1%. Clock-locking or a longer workload would
+   fix this and has not been done.
+5. Only `zork` has a timestamp-free collection, so host-cost claims are
    established there and merely corroborated elsewhere.
+
+## Per-device control deviation
+
+The instrumentation control (`explicit-all` against `automatic` at global
+scope) bounds what each device can resolve. Nothing smaller than these should
+be claimed on the device in question:
+
+| Device | max control deviation |
+|---|---:|
+| AMD Raphael iGPU | 0.1% |
+| NVIDIA RTX 5070 | 2.1% |
+| AMD Radeon 780M | 2.6% |
+| AMD RX 7900 XT | 6.5% |
+| Intel Xe (RPL-U) | 37.4% (one cell; rejected) |
 
 ## Correctness rules
 
@@ -297,11 +324,13 @@ The paper can lose its `RESULTS PENDING` banner only after:
 - [ ] representative Vulkan captures and CPU profiles support the explanation of
   tracked-versus-coarse behavior — **outstanding**; the Intel end-to-end gap is
   currently reported as unexplained rather than attributed;
-- [x] at least the minimum hardware matrix is complete (NVIDIA and AMD on
-  Linux, plus Intel and Apple as sensitivity cases);
+- [x] at least the minimum hardware matrix is complete (NVIDIA and discrete
+  AMD on Linux, plus two AMD integrated parts, Intel, and Apple as sensitivity
+  cases);
 - [x] raw data and analysis scripts reproduce every table (`build-tables.py`);
 - [x] negative and architecture-specific results are described alongside wins
-  (the Radeon 780M regression is reported in the abstract);
+  (the Radeon 780M regression and the failed RADV scope prediction are both
+  reported in the abstract);
 - [x] the abstract contains absolute effects and uncertainty, not only ratios.
 
 Application workloads remain outstanding independently of the banner.

@@ -102,19 +102,26 @@ era; later ones cross placement with scope.
 
 | Collection | Machine | Device measured by Blade | Role |
 |---|---|---|---|
-| `20260725T060107Z-zork` | zork | NVIDIA RTX 5070 | 16-pass matrix |
-| `20260725T155439Z-rubik` | rubik | AMD Raphael iGPU | 16-pass matrix (wgpu ran on the RX 7900 XT; cross-implementation cells are void) |
-| `20260725T060322Z-k6` | k6 | AMD Radeon 780M | 16-pass matrix |
-| `20260725T160725Z-matrix` | matrix | Intel Xe (RPL-U) | 16-pass matrix |
-| `20260725T062529Z-mac` | mac | Apple M3 | 16-pass matrix, Metal case study |
-| `20260725T191617Z-zork` | zork | NVIDIA RTX 5070 | placement crossed with scope |
+| `20260725T191617Z-zork` | zork | NVIDIA RTX 5070 | matrix, placement × scope |
+| `20260725T193736Z-rubik-amd-radeon-rx-7900-xt-radv-n` | rubik | AMD RX 7900 XT | matrix, placement × scope |
+| `20260725T193736Z-rubik-amd-ryzen-5-9600x-6-core-pro` | rubik | AMD Raphael iGPU | matrix, placement × scope |
+| `20260725T060322Z-k6` | k6 | AMD Radeon 780M | matrix, three policies |
+| `20260725T160725Z-matrix` | matrix | Intel Xe (RPL-U) | matrix, three policies |
+| `20260725T062529Z-mac` | mac | Apple M3 | matrix, Metal case study |
+| `20260725T060107Z-zork` | zork | NVIDIA RTX 5070 | superseded by `191617` |
 | `20260725T185508Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, GPU-timed |
 | `20260725T190100Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, timestamp-free |
 
+`build-tables.py` keeps only the most recent matrix collection per machine and
+device, so a retest supersedes an earlier run rather than appearing beside it.
+The two `rubik` directories come from one invocation: the collector runs every
+enumerated adapter in turn.
+
 Still outstanding before the working-draft banner can come off: Vulkan
 command-stream captures and CPU profiles. Also outstanding, independently of
-the banner: application workloads, a discrete AMD part running Blade, and the
-crossed placement/scope matrix on anything other than NVIDIA.
+the banner: application workloads, a clock-locked repeat of the RX 7900 XT
+collection (its short workloads vary by up to 16% between repetitions), and
+the crossed placement/scope matrix on the 780M, Intel, and Apple machines.
 
 ## Current scope
 

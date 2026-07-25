@@ -1,0 +1,43 @@
+# collection_id,20260725T193736Z
+# repetition,1
+# schema,blade-sync-bench-v1
+# implementation,blade
+# backend,vulkan
+# device_name,"AMD Ryzen 5 9600X 6-Core Processor (RADV RAPHAEL_MENDOCINO)"
+# driver_name,"radv"
+# driver_info,"Mesa 26.0.3-1ubuntu1"
+# software_emulated,false
+# validation,false
+# gpu_timing,true
+sample,workload,policy,passes,elements,rounds,width,height,start_ns,record_ns,submit_ns,wait_ns,gpu_ns,gpu_pass_count
+0,graphics-independent,explicit-all,16,1048576,8,1024,1024,1450,25041,5010,5363938,5314200,16
+1,graphics-independent,explicit-all,16,1048576,8,1024,1024,1420,24980,4960,5392118,5313640,16
+2,graphics-independent,explicit-all,16,1048576,8,1024,1024,1490,25220,4830,5363898,5313920,16
+3,graphics-independent,explicit-all,16,1048576,8,1024,1024,1470,25100,4950,5364028,5314520,16
+4,graphics-independent,explicit-all,16,1048576,8,1024,1024,1470,25030,4710,5365698,5314720,16
+5,graphics-independent,explicit-all,16,1048576,8,1024,1024,1440,24930,4950,5364668,5314920,16
+6,graphics-independent,explicit-all,16,1048576,8,1024,1024,1730,25060,4730,5374919,5315120,16
+7,graphics-independent,explicit-all,16,1048576,8,1024,1024,1600,24850,4710,5364588,5314840,16
+8,graphics-independent,explicit-all,16,1048576,8,1024,1024,1450,25050,5240,5364428,5314320,16
+9,graphics-independent,explicit-all,16,1048576,8,1024,1024,1600,25060,4620,5360058,5309520,16
+10,graphics-independent,explicit-all,16,1048576,8,1024,1024,1500,25090,4740,5361358,5307120,16
+11,graphics-independent,explicit-all,16,1048576,8,1024,1024,1470,25151,4520,5395278,5315280,16
+12,graphics-independent,explicit-all,16,1048576,8,1024,1024,1650,24960,4600,5365148,5314160,16
+13,graphics-independent,explicit-all,16,1048576,8,1024,1024,1440,24820,4650,5367128,5315360,16
+14,graphics-independent,explicit-all,16,1048576,8,1024,1024,1480,24950,4820,5365138,5313960,16
+15,graphics-independent,explicit-all,16,1048576,8,1024,1024,1470,25120,4690,5366278,5314120,16
+16,graphics-independent,explicit-all,16,1048576,8,1024,1024,1480,24990,4590,5359648,5311400,16
+17,graphics-independent,explicit-all,16,1048576,8,1024,1024,1460,25310,4660,5364239,5313160,16
+18,graphics-independent,explicit-all,16,1048576,8,1024,1024,1760,25220,4660,5364738,5313960,16
+19,graphics-independent,explicit-all,16,1048576,8,1024,1024,1430,25030,4680,5360258,5310000,16
+20,graphics-independent,explicit-all,16,1048576,8,1024,1024,1420,25160,4820,5366148,5315680,16
+21,graphics-independent,explicit-all,16,1048576,8,1024,1024,1420,25110,5040,5350008,5313400,16
+22,graphics-independent,explicit-all,16,1048576,8,1024,1024,1430,25120,4740,5364688,5314760,16
+23,graphics-independent,explicit-all,16,1048576,8,1024,1024,1440,25160,4870,5365608,5315560,16
+24,graphics-independent,explicit-all,16,1048576,8,1024,1024,1420,24880,4850,5366408,5316080,16
+25,graphics-independent,explicit-all,16,1048576,8,1024,1024,1410,25291,4850,5364698,5314680,16
+26,graphics-independent,explicit-all,16,1048576,8,1024,1024,1420,25520,4530,5366108,5315360,16
+27,graphics-independent,explicit-all,16,1048576,8,1024,1024,1480,25150,5020,5366548,5315800,16
+28,graphics-independent,explicit-all,16,1048576,8,1024,1024,1420,25120,4990,5368098,5318160,16
+29,graphics-independent,explicit-all,16,1048576,8,1024,1024,1420,25330,4930,5365399,5315120,16
+# validation_hash,fnv1a64:161975f4e03e1a92

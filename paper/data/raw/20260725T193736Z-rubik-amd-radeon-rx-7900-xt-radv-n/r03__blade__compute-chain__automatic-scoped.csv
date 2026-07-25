@@ -1,0 +1,43 @@
+# collection_id,20260725T193736Z
+# repetition,3
+# schema,blade-sync-bench-v1
+# implementation,blade
+# backend,vulkan
+# device_name,"AMD Radeon RX 7900 XT (RADV NAVI31)"
+# driver_name,"radv"
+# driver_info,"Mesa 26.0.3-1ubuntu1"
+# software_emulated,false
+# validation,false
+# gpu_timing,true
+sample,workload,policy,passes,elements,rounds,width,height,start_ns,record_ns,submit_ns,wait_ns,gpu_ns,gpu_pass_count
+0,compute-chain,automatic-scoped,16,1048576,8,1024,1024,1040,5040,4200,262501,232360,16
+1,compute-chain,automatic-scoped,16,1048576,8,1024,1024,980,5030,4290,258982,232000,16
+2,compute-chain,automatic-scoped,16,1048576,8,1024,1024,990,4920,4220,263201,232280,16
+3,compute-chain,automatic-scoped,16,1048576,8,1024,1024,990,4950,4270,262812,231920,16
+4,compute-chain,automatic-scoped,16,1048576,8,1024,1024,1130,4900,4220,258851,231800,16
+5,compute-chain,automatic-scoped,16,1048576,8,1024,1024,980,4990,4400,260972,232520,16
+6,compute-chain,automatic-scoped,16,1048576,8,1024,1024,990,4860,4370,263111,232280,16
+7,compute-chain,automatic-scoped,16,1048576,8,1024,1024,980,4870,4110,264081,232200,16
+8,compute-chain,automatic-scoped,16,1048576,8,1024,1024,991,4960,4210,262861,231720,16
+9,compute-chain,automatic-scoped,16,1048576,8,1024,1024,960,4990,4440,260221,232160,16
+10,compute-chain,automatic-scoped,16,1048576,8,1024,1024,970,5020,4340,318512,228960,16
+11,compute-chain,automatic-scoped,16,1048576,8,1024,1024,990,4870,4280,254161,227800,16
+12,compute-chain,automatic-scoped,16,1048576,8,1024,1024,990,4910,4400,254242,226800,16
+13,compute-chain,automatic-scoped,16,1048576,8,1024,1024,960,4960,4320,251591,225480,16
+14,compute-chain,automatic-scoped,16,1048576,8,1024,1024,990,4830,4340,237571,209840,16
+15,compute-chain,automatic-scoped,16,1048576,8,1024,1024,990,4950,4490,241962,216800,16
+16,compute-chain,automatic-scoped,16,1048576,8,1024,1024,970,5060,4580,236571,209800,16
+17,compute-chain,automatic-scoped,16,1048576,8,1024,1024,970,4990,4220,235811,207160,16
+18,compute-chain,automatic-scoped,16,1048576,8,1024,1024,1000,4830,4480,223142,195520,16
+19,compute-chain,automatic-scoped,16,1048576,8,1024,1024,1010,4940,4280,222981,195280,16
+20,compute-chain,automatic-scoped,16,1048576,8,1024,1024,1090,5060,4410,222931,195200,16
+21,compute-chain,automatic-scoped,16,1048576,8,1024,1024,990,5060,4860,223131,195560,16
+22,compute-chain,automatic-scoped,16,1048576,8,1024,1024,990,4950,4280,213991,189000,16
+23,compute-chain,automatic-scoped,16,1048576,8,1024,1024,980,5050,4840,216011,189000,16
+24,compute-chain,automatic-scoped,16,1048576,8,1024,1024,1050,4871,4650,216541,189080,16
+25,compute-chain,automatic-scoped,16,1048576,8,1024,1024,1000,4920,4490,215401,189160,16
+26,compute-chain,automatic-scoped,16,1048576,8,1024,1024,980,4960,4500,212101,184480,16
+27,compute-chain,automatic-scoped,16,1048576,8,1024,1024,970,4870,4550,208111,181120,16
+28,compute-chain,automatic-scoped,16,1048576,8,1024,1024,1000,5000,4260,208811,181240,16
+29,compute-chain,automatic-scoped,16,1048576,8,1024,1024,970,5100,4840,208451,181160,16
+# validation_hash,fnv1a64:1051691fc9daa325

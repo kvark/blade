@@ -1,0 +1,43 @@
+# collection_id,20260725T193736Z
+# repetition,3
+# schema,blade-sync-bench-v1
+# implementation,blade
+# backend,vulkan
+# device_name,"AMD Radeon RX 7900 XT (RADV NAVI31)"
+# driver_name,"radv"
+# driver_info,"Mesa 26.0.3-1ubuntu1"
+# software_emulated,false
+# validation,false
+# gpu_timing,true
+sample,workload,policy,passes,elements,rounds,width,height,start_ns,record_ns,submit_ns,wait_ns,gpu_ns,gpu_pass_count
+0,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,980,4600,4390,271501,243400,16
+1,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,1020,4721,4260,272561,243800,16
+2,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,1000,4640,4230,271981,243680,16
+3,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4601,4300,272211,243720,16
+4,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,970,4650,4380,271822,243720,16
+5,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4570,4370,271891,243560,16
+6,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4700,4320,271672,243320,16
+7,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,960,4640,4240,271441,243320,16
+8,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4650,4650,261041,230000,16
+9,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4530,4250,254452,225000,16
+10,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,980,4680,4560,255091,225160,16
+11,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4670,4390,249511,225080,16
+12,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4680,4210,239722,216360,16
+13,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,1000,4590,4380,240491,215440,16
+14,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,970,4650,4210,240441,215360,16
+15,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,1120,4620,4170,239892,215040,16
+16,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,960,4730,4130,226771,203080,16
+17,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,970,4780,4170,227931,202120,16
+18,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,1000,4730,4090,228521,202160,16
+19,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4581,4200,228201,202280,16
+20,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4680,4310,283931,188840,16
+21,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,960,4630,4650,214591,188920,16
+22,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,1000,4710,4460,214281,188720,16
+23,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4660,4431,214241,188520,16
+24,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,1130,4650,4600,209421,183600,16
+25,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,960,4500,4070,205421,180640,16
+26,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4710,4570,205851,180360,16
+27,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4690,4540,206241,180720,16
+28,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,990,4640,4420,206201,180680,16
+29,compute-independent,explicit-all-scoped,16,1048576,8,1024,1024,970,4600,4361,199841,176680,16
+# validation_hash,fnv1a64:f0047a40f9cd8b25

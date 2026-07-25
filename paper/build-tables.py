@@ -45,15 +45,7 @@ analyze = load_analyze()
 # the order in which the paper presents the fixed matrix. Anything else found
 # under `data/raw/` is discovered and classified automatically, so a retest on
 # a new machine needs no edit here.
-KNOWN_COLLECTIONS = {
-    "20260725T060107Z-zork": ("zork", "matrix"),
-    "20260725T155439Z-rubik": ("rubik", "matrix"),
-    "20260725T060322Z-k6": ("k6", "matrix"),
-    "20260725T160725Z-matrix": ("matrix", "matrix"),
-    "20260725T062529Z-mac": ("mac", "matrix"),
-    "20260725T162334Z-zork-sweep": ("zork", "sweep-gpu"),
-    "20260725T162544Z-zork-sweep-cpu": ("zork", "sweep-cpu"),
-}
+KNOWN_COLLECTIONS: dict[str, tuple[str, str]] = {}
 MATRIX_ORDER = ("zork", "rubik", "k6", "matrix", "mac")
 
 DEVICE_SHORT = {
@@ -106,28 +98,43 @@ def parse_arguments() -> argparse.Namespace:
 def discover_collections(raw: Path) -> list[Collection]:
     """Every collection under `raw`, classified by what it actually contains.
 
-    `sweep-*` collections vary the pass count; `scope` collections contain the
-    `automatic-scoped` policy; everything else is a fixed matrix. Matrix
-    collections are ordered by `MATRIX_ORDER` first, then alphabetically, so a
-    newly collected machine appears at the end rather than reshuffling the
-    paper.
+    A collection that varies the pass count is a sweep; anything else is a
+    fixed matrix. Machines are ordered by `MATRIX_ORDER` first, then
+    alphabetically, so a newly collected machine appears at the end rather than
+    reshuffling the paper.
     """
     collections = []
     for root in sorted(raw.iterdir()):
         if not (root / "manifest.json").is_file():
             continue
         label, role = KNOWN_COLLECTIONS.get(root.name, (None, None))
-        collection = Collection(root, label, role)
-        collections.append(collection)
+        collections.append(Collection(root, label, role))
 
     def sort_key(collection: Collection) -> tuple:
         try:
             rank = MATRIX_ORDER.index(collection.label)
         except ValueError:
             rank = len(MATRIX_ORDER)
-        return (rank, collection.root.name)
+        return (rank, collection.device_name, collection.root.name)
 
     return sorted(collections, key=sort_key)
+
+
+def newest_per_device(collections: list[Collection]) -> list[Collection]:
+    """One matrix collection per machine and device: the most recent.
+
+    A retest supersedes an earlier run of the same hardware rather than
+    appearing beside it, so the tables never show one device twice.
+    """
+    best: dict[tuple[str, str], Collection] = {}
+    for collection in collections:
+        if collection.role != "matrix":
+            continue
+        key = (collection.label, collection.device_name)
+        previous = best.get(key)
+        if previous is None or collection.collected_utc > previous.collected_utc:
+            best[key] = collection
+    return [c for c in collections if best.get((c.label, c.device_name)) is c]
 
 
 class Collection:
@@ -172,9 +179,20 @@ class Collection:
         if len(self.pass_counts()) > 1:
             gpu_timing = self.manifest.get("parameters", {}).get("gpu_timing", True)
             return "sweep-gpu" if gpu_timing else "sweep-cpu"
-        if any(key[1] == "automatic-scoped" for key in self.samples):
-            return "scope"
         return "matrix"
+
+    @property
+    def has_scope_axis(self) -> bool:
+        return any(key[1] == "automatic-scoped" for key in self.samples)
+
+    @property
+    def collected_utc(self) -> str:
+        return str(self.manifest.get("created_utc", ""))
+
+    @property
+    def blade_revision(self) -> str:
+        repositories = self.manifest.get("repositories", {})
+        return str(repositories.get("blade", {}).get("revision", ""))[:7]
 
     @property
     def is_dirty(self) -> bool:
@@ -288,9 +306,7 @@ def vulkan_facts(root: Path) -> tuple[str, str]:
 
 def build_platform_table(collections: list[Collection]) -> str:
     body = []
-    for collection in collections:
-        if collection.role not in ("matrix", "scope"):
-            continue
+    for collection in newest_per_device(collections):
         label = collection.label
         manifest = collection.manifest
         run = manifest["runs"][0]["metadata"]
@@ -354,9 +370,7 @@ def matrix_rows(
 ) -> list[list[str]]:
     """One block of rows per machine, separated by `\\addlinespace`."""
     blocks: list[list[list[str]]] = []
-    for collection in collections:
-        if collection.role != "matrix":
-            continue
+    for collection in newest_per_device(collections):
         directory = collection.root.name
         if vulkan_only and collection.manifest["backend"] != "vulkan":
             continue
@@ -566,7 +580,7 @@ def build_scope_table(
     collections: list[Collection], bootstrap_samples: int
 ) -> str | None:
     """Stage/access scope at fixed placement, plus placement for reference."""
-    scoped = [c for c in collections if c.role == "scope"]
+    scoped = [c for c in newest_per_device(collections) if c.has_scope_axis]
     if not scoped:
         return None
     rows: list[list[str]] = []
