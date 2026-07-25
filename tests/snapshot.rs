@@ -9,6 +9,41 @@ const C1: f64 = 6.5025; // (0.01 * 255)^2
 const C2: f64 = 58.5225; // (0.03 * 255)^2
 const BLOCK: usize = 8;
 
+/// Read a shader from the renderer's code directory, expanding the `#include` directives.
+///
+/// Unlike the asset pipeline, this works regardless of the backend
+/// the tests are built for, at the cost of not supporting `#use`.
+pub fn shader_source(name: &str) -> String {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("blade-render")
+        .join("code");
+    expand_includes(&dir.join(name), &dir)
+}
+
+fn expand_includes(path: &Path, dir: &Path) -> String {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("Unable to read '{}': {e}", path.display()));
+    let mut out = String::new();
+    for line in text.lines() {
+        if line.starts_with("#include") {
+            let include = line
+                .split('"')
+                .nth(1)
+                .unwrap_or_else(|| panic!("Unable to extract the include path from: {line}"));
+            out += &expand_includes(&dir.join(include), dir);
+        } else {
+            assert!(
+                !line.starts_with("#use"),
+                "'{}' needs host expansions, load it via the asset hub instead",
+                path.display()
+            );
+            out += line;
+        }
+        out.push('\n');
+    }
+    out
+}
+
 pub struct OffscreenTarget {
     pub texture: gpu::Texture,
     pub view: gpu::TextureView,
@@ -137,6 +172,25 @@ fn compute_ssim(a: &[u8], b: &[u8], width: usize, height: usize) -> f64 {
     }
 
     ssim_sum / (blocks_x * blocks_y) as f64
+}
+
+/// Read a reference image, for cross-checking two renderers against each other.
+pub fn load(name: &str) -> (Vec<u8>, gpu::Extent) {
+    load_reference(&Path::new(REFERENCE_DIR).join(format!("{name}.png")))
+}
+
+/// Mean absolute difference of the color channels, in 0..255 units.
+pub fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
+    assert_eq!(a.len(), b.len());
+    let mut sum = 0.0;
+    let mut count = 0;
+    for (texel_a, texel_b) in a.chunks(4).zip(b.chunks(4)) {
+        for (component_a, component_b) in texel_a[..3].iter().zip(texel_b[..3].iter()) {
+            sum += (*component_a as f64 - *component_b as f64).abs();
+            count += 1;
+        }
+    }
+    sum / count as f64
 }
 
 pub fn check(name: &str, pixels: &[u8], size: gpu::Extent) {

@@ -5,10 +5,12 @@ enable wgpu_ray_query;
 #include "debug.inc.wgsl"
 #include "debug-param.inc.wgsl"
 #include "camera.inc.wgsl"
+#include "brdf.inc.wgsl"
+#include "sampling.inc.wgsl"
+#include "env-light.inc.wgsl"
 #include "surface.inc.wgsl"
 #include "gbuf.inc.wgsl"
 
-const PI: f32 = 3.1415926;
 const MAX_RESERVOIRS: u32 = 4u;
 // See "DECOUPLING SHADING AND REUSE" in
 // "Rearchitecting Spatiotemporal Resampling for Production"
@@ -51,23 +53,36 @@ struct StoredReservoir {
 var<storage, read_write> reservoirs: array<StoredReservoir>;
 var<storage, read> prev_reservoirs: array<StoredReservoir>;
 
-struct LightSample {
-    radiance: vec3<f32>,
-    pdf: f32,
-    uv: vec2<f32>,
+// Reflected light, separated into the lobes that we estimate
+// and denoise independently.
+//
+// Note: the diffuse part is demodulated, it has to be multiplied
+// by the diffuse albedo of the surface.
+struct Radiance {
+    diffuse: vec3<f32>,
+    specular: vec3<f32>,
+}
+
+fn zero_radiance() -> Radiance {
+    return Radiance(vec3<f32>(0.0), vec3<f32>(0.0));
+}
+fn reflect_light(brdf: BrdfLobes, light: vec3<f32>) -> Radiance {
+    return Radiance(brdf.diffuse * light, brdf.specular * light);
 }
 
 struct LiveReservoir {
     selected_uv: vec2<f32>,
     selected_light_index: u32,
     selected_target_score: f32,
-    selected_radiance: vec3<f32>,
+    selected_radiance: Radiance,
     weight_sum: f32,
     history: f32,
 }
 
-fn compute_target_score(radiance: vec3<f32>) -> f32 {
-    return dot(radiance, vec3<f32>(0.3, 0.4, 0.3));
+// Note: the target function includes both of the lobes, so the diffuse albedo
+// of the surface is needed to bring the diffuse one back into radiance.
+fn compute_target_score(radiance: Radiance, diffuse_albedo: vec3<f32>) -> f32 {
+    return compute_luminocity(diffuse_albedo * radiance.diffuse + radiance.specular);
 }
 
 fn get_reservoir_index(pixel: vec2<i32>, camera: CameraParams) -> i32 {
@@ -87,13 +102,13 @@ fn get_pixel_from_reservoir_index(index: i32, camera: CameraParams) -> vec2<i32>
 fn bump_reservoir(r: ptr<function, LiveReservoir>, history: f32) {
     (*r).history += history;
 }
-fn make_reservoir(ls: LightSample, light_index: u32, brdf: vec3<f32>) -> LiveReservoir {
+fn make_reservoir(ls: LightSample, light_index: u32, brdf: BrdfLobes, diffuse_albedo: vec3<f32>) -> LiveReservoir {
     var r: LiveReservoir;
-    r.selected_radiance = ls.radiance * brdf;
+    r.selected_radiance = reflect_light(brdf, ls.radiance);
     r.selected_uv = ls.uv;
     r.selected_light_index = light_index;
-    r.selected_target_score = compute_target_score(r.selected_radiance);
-    r.weight_sum = r.selected_target_score / ls.pdf;
+    r.selected_target_score = compute_target_score(r.selected_radiance, diffuse_albedo);
+    r.weight_sum = select(0.0, r.selected_target_score / ls.pdf, ls.pdf > 0.0);
     r.history = 1.0;
     return r;
 }
@@ -117,7 +132,7 @@ fn normalize_reservoir(r: ptr<function, LiveReservoir>, history: f32) {
         (*r).history = history;
     }
 }
-fn unpack_reservoir(f: StoredReservoir, max_confidence: f32, radiance: vec3<f32>) -> LiveReservoir {
+fn unpack_reservoir(f: StoredReservoir, max_confidence: f32, radiance: Radiance) -> LiveReservoir {
     var r: LiveReservoir;
     r.selected_light_index = f.light_index;
     r.selected_uv = f.light_uv;
@@ -149,69 +164,25 @@ var t_basis: texture_2d<f32>;
 var t_prev_basis: texture_2d<f32>;
 var t_flat_normal: texture_2d<f32>;
 var t_prev_flat_normal: texture_2d<f32>;
+var t_diffuse_albedo: texture_2d<f32>;
+var t_prev_diffuse_albedo: texture_2d<f32>;
+var t_specular_f0: texture_2d<f32>;
+var t_prev_specular_f0: texture_2d<f32>;
 var t_motion: texture_2d<f32>;
 var out_diffuse: texture_storage_2d<rgba16float, write>;
+var out_specular: texture_storage_2d<rgba16float, write>;
 var out_debug: texture_storage_2d<rgba8unorm, write>;
-
-fn sample_circle(random: f32) -> vec2<f32> {
-    let angle = 2.0 * PI * random;
-    return vec2<f32>(cos(angle), sin(angle));
-}
-
-fn square(v: f32) -> f32 {
-    return v * v;
-}
-
-fn map_equirect_dir_to_uv(dir: vec3<f32>) -> vec2<f32> {
-    //Note: Y axis is up
-    let yaw = asin(dir.y);
-    let pitch = atan2(dir.x, dir.z);
-    return vec2<f32>(pitch + PI, -2.0 * yaw + PI) / (2.0 * PI);
-}
-fn map_equirect_uv_to_dir(uv: vec2<f32>) -> vec3<f32> {
-    let yaw = PI * (0.5 - uv.y);
-    let pitch = 2.0 * PI * (uv.x - 0.5);
-    return vec3<f32>(cos(yaw) * sin(pitch), sin(yaw), cos(yaw) * cos(pitch));
-}
-
-fn evaluate_environment(dir: vec3<f32>) -> vec3<f32> {
-    let uv = map_equirect_dir_to_uv(dir);
-    return textureSampleLevel(env_map, sampler_linear, uv, 0.0).xyz;
-}
-
-fn sample_light_from_sphere(rng: ptr<function, RandomState>) -> LightSample {
-    let a = random_gen(rng);
-    let h = 1.0 - 2.0 * random_gen(rng); // make sure to allow h==1
-    let tangential = sqrt(1.0 - square(h)) * sample_circle(a);
-    let dir = vec3<f32>(tangential.x, h, tangential.y);
-    var ls = LightSample();
-    ls.uv = map_equirect_dir_to_uv(dir);
-    ls.pdf = 1.0 / (4.0 * PI);
-    ls.radiance = textureSampleLevel(env_map, sampler_linear, ls.uv, 0.0).xyz;
-    return ls;
-}
-
-fn sample_light_from_environment(rng: ptr<function, RandomState>) -> LightSample {
-    let dim = textureDimensions(env_map, 0);
-    let es = generate_environment_sample(rng, dim);
-    var ls = LightSample();
-    ls.pdf = es.pdf;
-    // sample the incoming radiance
-    ls.radiance = textureLoad(env_map, es.pixel, 0).xyz;
-    // for determining direction - offset randomly within the texel
-    // this offset has to be uniformly distributed across the surface of the texel
-    let u = (f32(es.pixel.x) + random_gen(rng)) / f32(dim.x);
-    let bounds = compute_latitude_area_bounds(es.pixel.y, dim.y);
-    let v = acos(mix(bounds.x, bounds.y, random_gen(rng))) / PI;
-    ls.uv = vec2<f32>(u, v);
-    return ls;
-}
 
 fn read_surface(pixel: vec2<i32>) -> Surface {
     var surface: Surface;
     surface.basis = normalize(textureLoad(t_basis, pixel, 0));
     surface.flat_normal = normalize(textureLoad(t_flat_normal, pixel, 0).xyz);
     surface.depth = textureLoad(t_depth, pixel, 0).x;
+    surface.view_dir = -get_ray_direction(camera, pixel);
+    surface.diffuse_albedo = textureLoad(t_diffuse_albedo, pixel, 0).xyz;
+    let specular = textureLoad(t_specular_f0, pixel, 0);
+    surface.specular_f0 = specular.xyz;
+    surface.roughness = specular.w;
     return surface;
 }
 
@@ -220,14 +191,64 @@ fn read_prev_surface(pixel: vec2<i32>) -> Surface {
     surface.basis = normalize(textureLoad(t_prev_basis, pixel, 0));
     surface.flat_normal = normalize(textureLoad(t_prev_flat_normal, pixel, 0).xyz);
     surface.depth = textureLoad(t_prev_depth, pixel, 0).x;
+    surface.view_dir = -get_ray_direction(prev_camera, pixel);
+    surface.diffuse_albedo = textureLoad(t_prev_diffuse_albedo, pixel, 0).xyz;
+    let specular = textureLoad(t_prev_specular_f0, pixel, 0);
+    surface.specular_f0 = specular.xyz;
+    surface.roughness = specular.w;
     return surface;
 }
 
-fn evaluate_brdf(surface: Surface, dir: vec3<f32>) -> f32 {
-    let lambert_brdf = 1.0 / PI;
-    let lambert_term = qrot(qinv(surface.basis), dir).z;
-    //Note: albedo not modulated
-    return lambert_brdf * max(0.0, lambert_term);
+fn surface_normal(surface: Surface) -> vec3<f32> {
+    return qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
+}
+
+fn surface_material(surface: Surface) -> Material {
+    return Material(surface.diffuse_albedo, surface.specular_f0, surface.roughness);
+}
+
+// Note: the diffuse lobe isn't modulated by the albedo here,
+// see `Radiance` for the reasoning.
+fn evaluate_surface_brdf(surface: Surface, dir: vec3<f32>) -> BrdfLobes {
+    return evaluate_brdf(surface_material(surface), surface_normal(surface), surface.view_dir, dir);
+}
+
+// Portion of the candidates that follow the BRDF instead of the light.
+//
+// Rough diffuse surfaces are served well by sampling the light, while
+// a narrow or dominant specular lobe needs to be sampled directly.
+fn compute_brdf_sampling_ratio(surface: Surface) -> f32 {
+    let mat = surface_material(surface);
+    let smoothness = 1.0 - clamp(mat.roughness, 0.0, 1.0);
+    return clamp(max(specular_sampling_ratio(mat), smoothness * smoothness), 0.1, 0.9);
+}
+
+// Draw a candidate following either the light distribution or the BRDF.
+//
+// The returned density is the one of the mixture of both strategies,
+// which is the balance heuristic MIS weight for a single sample.
+fn sample_incoming_light(surface: Surface, rng: ptr<function, RandomState>) -> LightSample {
+    let importance = parameters.environment_importance_sampling != 0u;
+    let mat = surface_material(surface);
+    let normal = surface_normal(surface);
+    let brdf_ratio = compute_brdf_sampling_ratio(surface);
+
+    var ls: LightSample;
+    if (random_gen(rng) < brdf_ratio) {
+        let bs = sample_bsdf(mat, normal, surface.view_dir, rng);
+        ls.uv = map_equirect_dir_to_uv(bs.dir);
+        ls.radiance = evaluate_environment(bs.dir);
+    } else {
+        ls = sample_light(importance, rng);
+    }
+
+    let dir = map_equirect_uv_to_dir(ls.uv);
+    ls.pdf = mix(
+        compute_light_pdf(ls.uv, importance),
+        compute_bsdf_pdf(mat, normal, surface.view_dir, dir),
+        brdf_ratio,
+    );
+    return ls;
 }
 
 var<private> debug_len: f32;
@@ -249,18 +270,17 @@ fn check_ray_occluded(acs: acceleration_structure, position: vec3<f32>, directio
     return occluded;
 }
 
-fn evaluate_reflected_light(surface: Surface, light_index: u32, light_uv: vec2<f32>) -> vec3<f32> {
+fn evaluate_reflected_light(surface: Surface, light_index: u32, light_uv: vec2<f32>) -> Radiance {
     if (light_index != 0u) {
-        return vec3<f32>(0.0);
+        return zero_radiance();
     }
     let direction = map_equirect_uv_to_dir(light_uv);
-    let brdf = evaluate_brdf(surface, direction);
-    if (brdf <= 0.0) {
-        return vec3<f32>(0.0);
+    let brdf = evaluate_surface_brdf(surface, direction);
+    if (is_brdf_black(brdf)) {
+        return zero_radiance();
     }
-    // Note: returns radiance not modulated by albedo
     let radiance = textureSampleLevel(env_map, sampler_nearest, light_uv, 0.0).xyz;
-    return radiance * brdf;
+    return reflect_light(brdf, radiance);
 }
 
 fn get_prev_pixel(pixel: vec2<i32>, pos_world: vec3<f32>) -> vec2<f32> {
@@ -273,12 +293,16 @@ fn get_prev_pixel(pixel: vec2<i32>, pos_world: vec3<f32>) -> vec2<f32> {
 }
 
 struct TargetScore {
-    color: vec3<f32>,
+    radiance: Radiance,
     score: f32,
 }
 
-fn make_target_score(color: vec3<f32>) -> TargetScore {
-    return TargetScore(color, compute_target_score(color));
+fn zero_target_score() -> TargetScore {
+    return TargetScore(zero_radiance(), 0.0);
+}
+
+fn make_target_score(radiance: Radiance, diffuse_albedo: vec3<f32>) -> TargetScore {
+    return TargetScore(radiance, compute_target_score(radiance, diffuse_albedo));
 }
 
 fn estimate_target_score_with_occlusion(
@@ -286,44 +310,46 @@ fn estimate_target_score_with_occlusion(
     debug_len: f32, debug_color: u32,
 ) -> TargetScore {
     if (light_index != 0u) {
-        return TargetScore();
+        return zero_target_score();
     }
     let direction = map_equirect_uv_to_dir(light_uv);
     if (dot(direction, surface.flat_normal) <= 0.0) {
-        return TargetScore();
+        return zero_target_score();
     }
-    let brdf = evaluate_brdf(surface, direction);
-    if (brdf <= 0.0) {
-        return TargetScore();
+    let brdf = evaluate_surface_brdf(surface, direction);
+    if (is_brdf_black(brdf)) {
+        return zero_target_score();
     }
 
     if (check_ray_occluded(acs, position, direction, debug_len, debug_color)) {
-        return TargetScore();
+        return zero_target_score();
     } else {
         //Note: same as `evaluate_reflected_light`
         let radiance = textureSampleLevel(env_map, sampler_nearest, light_uv, 0.0).xyz;
-        return make_target_score(brdf * radiance);
+        return make_target_score(reflect_light(brdf, radiance), surface.diffuse_albedo);
     }
 }
 
-fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debug_len: f32, debug_color: u32) -> f32 {
+fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debug_len: f32, debug_color: u32) -> BrdfLobes {
     let dir = map_equirect_uv_to_dir(ls.uv);
     if (dot(dir, surface.flat_normal) <= 0.0) {
-        return 0.0;
+        return zero_brdf();
     }
 
-    let brdf = evaluate_brdf(surface, dir);
-    if (brdf <= 0.0) {
-        return 0.0;
+    let brdf = evaluate_surface_brdf(surface, dir);
+    if (is_brdf_black(brdf)) {
+        return zero_brdf();
     }
 
-    let target_score = compute_target_score(ls.radiance);
+    // Don't spend a ray on the samples that can't contribute much.
+    // Note: this is the weight the sample would get in the reservoir.
+    let target_score = compute_target_score(reflect_light(brdf, ls.radiance), surface.diffuse_albedo);
     if (target_score < 0.01 * ls.pdf) {
-        return 0.0;
+        return zero_brdf();
     }
 
     if (check_ray_occluded(acc_struct, start_pos, dir, debug_len, debug_color)) {
-        return 0.0;
+        return zero_brdf();
     }
 
     return brdf;
@@ -334,7 +360,7 @@ fn ratio(a: f32, b: f32) -> f32 {
 }
 
 struct RestirOutput {
-    radiance: vec3<f32>,
+    radiance: Radiance,
 }
 
 fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomState>, enable_debug: bool) -> RestirOutput {
@@ -342,32 +368,27 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     let pixel_index = get_reservoir_index(pixel, camera);
     if (surface.depth == 0.0) {
         reservoirs[pixel_index] = StoredReservoir();
-        let env = evaluate_environment(ray_dir);
-        return RestirOutput(env);
+        // Note: the diffuse albedo of the sky is 1.0, so the environment
+        // survives the modulation in the post-processing.
+        let env = evaluate_environment_background(ray_dir);
+        return RestirOutput(Radiance(env, vec3<f32>(0.0)));
     }
 
     if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Depth) {
         textureStore(out_debug, pixel, vec4<f32>(1.0 / surface.depth));
     }
     let position = camera.position + surface.depth * ray_dir;
-    let normal = qrot(surface.basis, vec3<f32>(0.0, 0.0, 1.0));
     let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
 
     var canonical = LiveReservoir();
     for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
-        var ls: LightSample;
-        if (parameters.environment_importance_sampling != 0u) {
-            ls = sample_light_from_environment(rng);
-        } else {
-            ls = sample_light_from_sphere(rng);
-        }
-
+        let ls = sample_incoming_light(surface, rng);
         let brdf = evaluate_sample(ls, surface, position, debug_len, 0x00FF00u);
-        if (brdf > 0.0) {
-            let other = make_reservoir(ls, 0u, vec3<f32>(brdf));
-            merge_reservoir(&canonical, other, random_gen(rng));
-        } else {
+        if (is_brdf_black(brdf)) {
             bump_reservoir(&canonical, 1.0);
+        } else {
+            let other = make_reservoir(ls, 0u, brdf, surface.diffuse_albedo);
+            merge_reservoir(&canonical, other, random_gen(rng));
         }
     }
 
@@ -381,7 +402,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
 
     for (var tap = 0u; tap < num_candidates && accepted_count < max_samples; tap += 1u) {
         let radius = parameters.tap_radius * random_gen(rng);
-        let offset = radius * sample_circle(random_gen(rng));
+        let offset = radius * sample_circle_uniform(random_gen(rng));
         let other_pixel = vec2<i32>(center_coord + offset);
 
         let other_index = get_reservoir_index(other_pixel, prev_camera);
@@ -413,7 +434,8 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
 
     // Next, evaluate the MIS of each of the samples versus the canonical one.
     var reservoir = LiveReservoir();
-    var color_and_weight = vec4<f32>(0.0);
+    var shaded = zero_radiance();
+    var shaded_weight = 0.0;
     let mis_scale = 1.0 / (f32(accepted_count) + parameters.defensive_mis);
     var mis_canonical = select(mis_scale * parameters.defensive_mis, 1.0, accepted_count == 0u || parameters.use_pairwise_mis == 0u);
     let inv_count = 1.0 / f32(accepted_count);
@@ -448,7 +470,7 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
             other.selected_light_index = neighbor.light_index;
             other.selected_uv = neighbor.light_uv;
             other.selected_target_score = t_neighbor_at_canonical.score;
-            other.selected_radiance = t_neighbor_at_canonical.color;
+            other.selected_radiance = t_neighbor_at_canonical.radiance;
             other.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor;
         } else {
             let radiance = evaluate_reflected_light(surface, neighbor.light_index, neighbor.light_uv);
@@ -456,8 +478,10 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
         }
 
         if (DECOUPLED_SHADING) {
-            let color = neighbor.contribution_weight * other.selected_radiance;
-            color_and_weight += other.weight_sum * vec4<f32>(color, 1.0);
+            let scale = other.weight_sum * neighbor.contribution_weight;
+            shaded.diffuse += scale * other.selected_radiance.diffuse;
+            shaded.specular += scale * other.selected_radiance.specular;
+            shaded_weight += other.weight_sum;
         }
         if (other.weight_sum <= 0.0) {
             bump_reservoir(&reservoir, other.history);
@@ -472,7 +496,10 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     }
     if (DECOUPLED_SHADING) {
         let cw = canonical.weight_sum / max(canonical.selected_target_score, 0.1);
-        color_and_weight += canonical.weight_sum * vec4<f32>(cw * canonical.selected_radiance, 1.0);
+        let scale = canonical.weight_sum * cw;
+        shaded.diffuse += scale * canonical.selected_radiance.diffuse;
+        shaded.specular += scale * canonical.selected_radiance.specular;
+        shaded_weight += canonical.weight_sum;
     }
     merge_reservoir(&reservoir, canonical, random_gen(rng));
 
@@ -481,9 +508,11 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     reservoirs[pixel_index] = stored;
     var ro = RestirOutput();
     if (DECOUPLED_SHADING) {
-        ro.radiance = color_and_weight.xyz / max(color_and_weight.w, 0.001);
+        let denom = max(shaded_weight, 0.001);
+        ro.radiance = Radiance(shaded.diffuse / denom, shaded.specular / denom);
     } else {
-        ro.radiance = stored.contribution_weight * reservoir.selected_radiance;
+        let cw = stored.contribution_weight;
+        ro.radiance = Radiance(cw * reservoir.selected_radiance.diffuse, cw * reservoir.selected_radiance.specular);
     }
     return ro;
 }
@@ -502,11 +531,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u && enable_debug;
     let ro = compute_restir(surface, vec2<i32>(global_id.xy), &rng, enable_restir_debug);
 
-    let color = ro.radiance;
     if (enable_debug) {
+        // Note: the variance is tracked on the fully modulated color
+        let color = surface.diffuse_albedo * ro.radiance.diffuse + ro.radiance.specular;
         debug_buf.variance.color_sum += color;
         debug_buf.variance.color2_sum += color * color;
         debug_buf.variance.count += 1u;
     }
-    textureStore(out_diffuse, global_id.xy, vec4<f32>(color, 1.0));
+    textureStore(out_diffuse, global_id.xy, vec4<f32>(ro.radiance.diffuse, 1.0));
+    textureStore(out_specular, global_id.xy, vec4<f32>(ro.radiance.specular, 1.0));
 }

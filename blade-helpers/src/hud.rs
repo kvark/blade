@@ -34,6 +34,26 @@ impl ExposeHud for blade_render::RayConfig {
     }
 }
 
+impl ExposeHud for blade_render::PathTraceConfig {
+    fn populate_hud(&mut self, ui: &mut egui::Ui) {
+        ui.add(
+            egui::Slider::new(&mut self.samples_per_frame, 1..=64u32)
+                .text("Samples per frame")
+                .logarithmic(true),
+        );
+        ui.add(egui::widgets::Slider::new(&mut self.max_bounces, 0..=16).text("Max bounces"));
+        ui.add(
+            egui::widgets::Slider::new(&mut self.t_start, 0.001..=0.5)
+                .text("T min")
+                .logarithmic(true),
+        );
+        ui.checkbox(
+            &mut self.environment_importance_sampling,
+            "Env importance sampling",
+        );
+    }
+}
+
 impl ExposeHud for blade_render::DenoiserConfig {
     fn populate_hud(&mut self, ui: &mut egui::Ui) {
         ui.add(egui::Slider::new(&mut self.temporal_weight, 0.0..=1.0f32).text("Temporal weight"));
@@ -81,9 +101,6 @@ impl ExposeHud for blade_render::RasterConfig {
                     );
                 });
         });
-
-        ui.add(egui::Slider::new(&mut self.roughness, 0.0..=1.0).text("Roughness"));
-        ui.add(egui::Slider::new(&mut self.metallic, 0.0..=1.0).text("Metallic"));
 
         ui.label("Light direction");
         ui.horizontal(|ui| {

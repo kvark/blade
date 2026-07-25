@@ -1,19 +1,24 @@
+#include "brdf.inc.wgsl"
+
 struct RasterFrameParams {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
+    // direction towards the light
     light_dir: vec4<f32>,
     light_color: vec4<f32>,
+    // w component is a flag for the procedural space sky
     ambient_color: vec4<f32>,
-    material: vec4<f32>,
+    // x: environment map enabled
+    settings: vec4<f32>,
 }
-
-const PI: f32 = 3.1415926;
 
 struct RasterDrawParams {
     model: mat4x4<f32>,
     normal_quat: vec4<f32>,
     base_color_factor: vec4<f32>,
+    emissive_factor: vec4<f32>,
+    // x: normal scale, y: metallic factor, z: roughness factor
     material: vec4<f32>,
 }
 
@@ -44,6 +49,9 @@ var<storage, read> vertices: VertexBuffer;
 var samp: sampler;
 var base_color_tex: texture_2d<f32>;
 var normal_tex: texture_2d<f32>;
+// green channel is roughness, blue channel is metallic
+var metallic_roughness_tex: texture_2d<f32>;
+var emissive_tex: texture_2d<f32>;
 
 fn decode_normal(raw: u32) -> vec3<f32> {
     return unpack4x8snorm(raw).xyz;
@@ -70,41 +78,21 @@ fn raster_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return out;
 }
 
-fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
-    return f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - cos_theta, 5.0);
-}
-
 fn map_equirect_dir_to_uv(dir: vec3<f32>) -> vec2<f32> {
     let yaw = atan2(dir.x, dir.z);
     let pitch = asin(clamp(dir.y, -1.0, 1.0));
     return vec2<f32>((yaw / PI + 1.0) * 0.5, pitch / PI + 0.5);
 }
 
-fn distribution_ggx(n: vec3<f32>, h: vec3<f32>, roughness: f32) -> f32 {
-    let a = roughness * roughness;
-    let a2 = a * a;
-    let n_dot_h = max(dot(n, h), 0.0);
-    let denom = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
-    return a2 / (PI * denom * denom);
-}
-
-fn geometry_schlick_ggx(n_dot_v: f32, roughness: f32) -> f32 {
-    let r = roughness + 1.0;
-    let k = (r * r) / 8.0;
-    return n_dot_v / (n_dot_v * (1.0 - k) + k);
-}
-
-fn geometry_smith(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, roughness: f32) -> f32 {
-    let n_dot_v = max(dot(n, v), 0.0);
-    let n_dot_l = max(dot(n, l), 0.0);
-    let ggx1 = geometry_schlick_ggx(n_dot_v, roughness);
-    let ggx2 = geometry_schlick_ggx(n_dot_l, roughness);
-    return ggx1 * ggx2;
-}
-
 @fragment
 fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let albedo = textureSample(base_color_tex, samp, input.uv).rgb * draw_params.base_color_factor.rgb;
+    let mr_sample = textureSample(metallic_roughness_tex, samp, input.uv);
+    let base_color = textureSample(base_color_tex, samp, input.uv).rgb * draw_params.base_color_factor.rgb;
+    let mat = material_from_metallic_roughness(
+        base_color,
+        clamp(draw_params.material.y * mr_sample.z, 0.0, 1.0),
+        clamp(draw_params.material.z * mr_sample.y, 0.0, 1.0),
+    );
 
     var n = normalize(input.normal);
     let normal_scale = draw_params.material.x;
@@ -119,33 +107,17 @@ fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
     let v = normalize(frame_params.camera_pos.xyz - input.world_pos);
     let l = normalize(frame_params.light_dir.xyz);
-    let h = normalize(v + l);
 
-    let roughness = clamp(frame_params.material.x, 0.04, 1.0);
-    let metallic = clamp(frame_params.material.y, 0.0, 1.0);
-    let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let brdf = evaluate_brdf(mat, n, v, l);
+    let light = (mat.diffuse_albedo * brdf.diffuse + brdf.specular) * frame_params.light_color.xyz;
+    let ambient = evaluate_ambient(mat) * frame_params.ambient_color.xyz;
+    let emissive = draw_params.emissive_factor.rgb * textureSample(emissive_tex, samp, input.uv).rgb;
+    let color = ambient + light + emissive;
 
-    let n_dot_l = max(dot(n, l), 0.0);
-    let n_dot_v = max(dot(n, v), 0.0);
-    let d = distribution_ggx(n, h, roughness);
-    let g = geometry_smith(n, v, l, roughness);
-    let f = fresnel_schlick(max(dot(h, v), 0.0), f0);
-
-    let numerator = d * g * f;
-    let denominator = max(4.0 * n_dot_v * n_dot_l, 0.001);
-    let specular = numerator / denominator;
-
-    let k_s = f;
-    let k_d = (vec3<f32>(1.0) - k_s) * (1.0 - metallic);
-    let diffuse = k_d * albedo / PI;
-
-    let light = (diffuse + specular) * frame_params.light_color.xyz * n_dot_l;
-    let ambient = albedo * frame_params.ambient_color.xyz;
-    let color = ambient + light;
-
+    // Note: the result stays linear, like the one of the ray tracer.
+    // Encoding it for the display is up to the surface, see `ColorSpace`.
     let mapped = color / (color + vec3<f32>(1.0));
-    let gamma = pow(mapped, vec3<f32>(1.0 / 2.2));
-    return vec4<f32>(gamma, 1.0);
+    return vec4<f32>(mapped, 1.0);
 }
 
 struct SkyOutput {
@@ -179,7 +151,7 @@ fn raster_sky_fs(input: SkyOutput) -> @location(0) vec4<f32> {
     let world = sky_params.inv_view_proj * ndc;
     let world_pos = world.xyz / world.w;
     let dir = normalize(world_pos - sky_params.camera_pos.xyz);
-    let env_enabled = sky_params.material.z > 0.5;
+    let env_enabled = sky_params.settings.x > 0.5;
     var color = vec3<f32>(0.0);
     if (env_enabled) {
         let uv = map_equirect_dir_to_uv(dir);
@@ -241,7 +213,8 @@ fn raster_sky_fs(input: SkyOutput) -> @location(0) vec4<f32> {
             color = mix(horizon, zenith, t);
         }
     }
+    // Note: the result stays linear, like the one of the ray tracer.
+    // Encoding it for the display is up to the surface, see `ColorSpace`.
     let mapped = color / (color + vec3<f32>(1.0));
-    let gamma = pow(mapped, vec3<f32>(1.0 / 2.2));
-    return vec4<f32>(gamma, 1.0);
+    return vec4<f32>(mapped, 1.0);
 }

@@ -20,6 +20,17 @@ const META_NORMAL: crate::texture::Meta = crate::texture::Meta {
     generate_mips: false,
     y_flip: false,
 };
+//Note: the metallic-roughness values are linear, so no sRGB here
+const META_METALLIC_ROUGHNESS: crate::texture::Meta = crate::texture::Meta {
+    format: blade_graphics::TextureFormat::Bc1Unorm,
+    generate_mips: true,
+    y_flip: false,
+};
+const META_EMISSIVE: crate::texture::Meta = crate::texture::Meta {
+    format: blade_graphics::TextureFormat::Bc1UnormSrgb,
+    generate_mips: true,
+    y_flip: false,
+};
 
 fn pack4x8snorm(v: [f32; 4]) -> u32 {
     v.iter().rev().fold(0u32, |u, f| {
@@ -41,13 +52,41 @@ pub struct Geometry {
     pub material_index: usize,
 }
 
+/// Surface appearance, following the glTF 2.0 metallic-roughness model.
+///
+/// Each of the textures is modulated by the corresponding factor,
+/// so a material without textures is fully described by the factors.
 //TODO: move out into a separate asset type
 pub struct Material {
     pub base_color_texture: Option<blade_asset::Handle<crate::Texture>>,
     pub base_color_factor: [f32; 4],
     pub normal_texture: Option<blade_asset::Handle<crate::Texture>>,
     pub normal_scale: f32,
+    /// Green channel is roughness, blue channel is metallic.
+    pub metallic_roughness_texture: Option<blade_asset::Handle<crate::Texture>>,
+    pub metallic_factor: f32,
+    pub roughness_factor: f32,
+    pub emissive_texture: Option<blade_asset::Handle<crate::Texture>>,
+    /// Emitted radiance, with `KHR_materials_emissive_strength` folded in.
+    pub emissive_factor: [f32; 3],
     pub transparent: bool,
+}
+
+impl Default for Material {
+    fn default() -> Self {
+        Self {
+            base_color_texture: None,
+            base_color_factor: [1.0; 4],
+            normal_texture: None,
+            normal_scale: 0.0,
+            metallic_roughness_texture: None,
+            metallic_factor: 0.0,
+            roughness_factor: 0.5,
+            emissive_texture: None,
+            emissive_factor: [0.0; 3],
+            transparent: false,
+        }
+    }
 }
 
 pub struct Model {
@@ -75,6 +114,11 @@ struct CookedMaterial<'a> {
     base_color_factor: [f32; 4],
     normal: TextureReference<'a>,
     normal_scale: f32,
+    metallic_roughness: TextureReference<'a>,
+    metallic_factor: f32,
+    roughness_factor: f32,
+    emissive: TextureReference<'a>,
+    emissive_factor: [f32; 3],
     transparent: bool,
 }
 
@@ -478,11 +522,32 @@ impl Baker {
 }
 
 /// Description of a procedural model geometry.
+///
+/// Each geometry gets a texture-less material of its own,
+/// described by the PBR factors here.
 pub struct ProceduralGeometry {
     pub name: String,
     pub vertices: Vec<crate::Vertex>,
     pub indices: Vec<u32>,
     pub base_color_factor: [f32; 4],
+    pub metallic_factor: f32,
+    pub roughness_factor: f32,
+    pub emissive_factor: [f32; 3],
+}
+
+impl Default for ProceduralGeometry {
+    fn default() -> Self {
+        let material = Material::default();
+        Self {
+            name: String::new(),
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            base_color_factor: material.base_color_factor,
+            metallic_factor: material.metallic_factor,
+            roughness_factor: material.roughness_factor,
+            emissive_factor: material.emissive_factor,
+        }
+    }
 }
 
 impl Baker {
@@ -520,6 +585,8 @@ impl Baker {
         let mut transform_offset = 0u64;
         let mut model_geometries = Vec::with_capacity(geometries.len());
         let mut materials = Vec::with_capacity(geometries.len());
+        let mut meshes = Vec::with_capacity(geometries.len());
+        let vertex_stride = mem::size_of::<crate::Vertex>() as u32;
 
         for geo in geometries.iter() {
             index_offset = crate::util::align_to(
@@ -561,11 +628,23 @@ impl Baker {
 
             let material_index = materials.len();
             materials.push(Material {
-                base_color_texture: None,
                 base_color_factor: geo.base_color_factor,
-                normal_texture: None,
-                normal_scale: 0.0,
-                transparent: false,
+                metallic_factor: geo.metallic_factor,
+                roughness_factor: geo.roughness_factor,
+                emissive_factor: geo.emissive_factor,
+                ..Material::default()
+            });
+
+            meshes.push(blade_graphics::AccelerationStructureMesh {
+                vertex_data: vertex_buffer.at(start_vertex as u64 * vertex_stride as u64),
+                vertex_format: blade_graphics::VertexFormat::F32Vec3,
+                vertex_stride,
+                vertex_count: geo.vertices.len() as u32,
+                index_data: index_buffer.at(index_offset),
+                index_type,
+                triangle_count,
+                transform_data: transform_buffer.at(transform_offset),
+                is_opaque: true,
             });
 
             model_geometries.push(Geometry {
@@ -591,8 +670,48 @@ impl Baker {
             vertex_buffer,
             index_buffer,
             transform_buffer,
-            acceleration_structure: blade_graphics::AccelerationStructure::default(),
+            acceleration_structure: self.build_blas(name, meshes),
         }
+    }
+
+    /// Schedule building of a bottom level acceleration structure for the given meshes.
+    ///
+    /// Returns a null acceleration structure if ray tracing isn't supported.
+    fn build_blas(
+        &self,
+        name: &str,
+        meshes: Vec<blade_graphics::AccelerationStructureMesh>,
+    ) -> blade_graphics::AccelerationStructure {
+        if self.gpu_context.capabilities().ray_query.is_empty() {
+            return blade_graphics::AccelerationStructure::default();
+        }
+
+        let sizes = self
+            .gpu_context
+            .get_bottom_level_acceleration_structure_sizes(&meshes);
+        let acceleration_structure = self.gpu_context.create_acceleration_structure(
+            blade_graphics::AccelerationStructureDesc {
+                name,
+                ty: blade_graphics::AccelerationStructureType::BottomLevel,
+                size: sizes.data,
+            },
+        );
+        let scratch = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
+            name: "BLAS scratch",
+            size: sizes.scratch,
+            memory: blade_graphics::Memory::Device,
+        });
+
+        self.pending_operations
+            .lock()
+            .unwrap()
+            .blas_constructs
+            .push(BlasConstruct {
+                meshes,
+                scratch,
+                dst: acceleration_structure,
+            });
+        acceleration_structure
     }
 }
 
@@ -652,6 +771,7 @@ impl blade_asset::Baker for Baker {
                 };
                 for g_material in document.materials() {
                     let pbr = g_material.pbr_metallic_roughness();
+                    let emissive_strength = g_material.emissive_strength().unwrap_or(1.0);
                     model.materials.push(CookedMaterial {
                         base_color: TextureReference {
                             source_index: match pbr.base_color_texture() {
@@ -679,6 +799,35 @@ impl blade_asset::Baker for Baker {
                             ..Default::default()
                         },
                         normal_scale: g_material.normal_texture().map_or(0.0, |info| info.scale()),
+                        metallic_roughness: TextureReference {
+                            source_index: match pbr.metallic_roughness_texture() {
+                                Some(info) => sources.insert(self.cook_texture(
+                                    info.texture(),
+                                    META_METALLIC_ROUGHNESS,
+                                    &cooker,
+                                    &buffers,
+                                )),
+                                None => !0,
+                            },
+                            ..Default::default()
+                        },
+                        metallic_factor: pbr.metallic_factor(),
+                        roughness_factor: pbr.roughness_factor(),
+                        emissive: TextureReference {
+                            source_index: match g_material.emissive_texture() {
+                                Some(info) => sources.insert(self.cook_texture(
+                                    info.texture(),
+                                    META_EMISSIVE,
+                                    &cooker,
+                                    &buffers,
+                                )),
+                                None => !0,
+                            },
+                            ..Default::default()
+                        },
+                        emissive_factor: g_material
+                            .emissive_factor()
+                            .map(|c| c * emissive_strength),
                         transparent: g_material.alpha_mode() != gltf::material::AlphaMode::Opaque,
                     });
                 }
@@ -728,6 +877,8 @@ impl blade_asset::Baker for Baker {
                     for material in model.materials.iter_mut() {
                         material.base_color.complete(&sources);
                         material.normal.complete(&sources);
+                        material.metallic_roughness.complete(&sources);
+                        material.emissive.complete(&sources);
                     }
                     cooker.finish(model);
                 });
@@ -751,6 +902,19 @@ impl blade_asset::Baker for Baker {
                 base_color_factor: material.base_color_factor,
                 normal_texture: self.serve_texture(&material.normal, META_NORMAL, exe_context),
                 normal_scale: material.normal_scale,
+                metallic_roughness_texture: self.serve_texture(
+                    &material.metallic_roughness,
+                    META_METALLIC_ROUGHNESS,
+                    exe_context,
+                ),
+                metallic_factor: material.metallic_factor,
+                roughness_factor: material.roughness_factor,
+                emissive_texture: self.serve_texture(
+                    &material.emissive,
+                    META_EMISSIVE,
+                    exe_context,
+                ),
+                emissive_factor: material.emissive_factor,
                 transparent: material.transparent,
             });
         }
@@ -870,51 +1034,25 @@ impl blade_asset::Baker for Baker {
         assert!(index_offset <= total_index_size);
         assert_eq!(transform_offset, total_transform_size);
 
-        let ray_tracing_enabled = !self.gpu_context.capabilities().ray_query.is_empty();
-        let (acceleration_structure, scratch) = if ray_tracing_enabled {
-            let sizes = self
-                .gpu_context
-                .get_bottom_level_acceleration_structure_sizes(&meshes);
-            let acceleration_structure = self.gpu_context.create_acceleration_structure(
-                blade_graphics::AccelerationStructureDesc {
-                    name: str::from_utf8(model.name).unwrap(),
-                    ty: blade_graphics::AccelerationStructureType::BottomLevel,
-                    size: sizes.data,
-                },
-            );
-            let scratch = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
-                name: "BLAS scratch",
-                size: sizes.scratch,
-                memory: blade_graphics::Memory::Device,
+        {
+            let mut pending_ops = self.pending_operations.lock().unwrap();
+            pending_ops.transfers.push(Transfer {
+                stage: vertex_stage,
+                dst: vertex_buffer,
+                size: total_vertex_size,
             });
-            (acceleration_structure, Some(scratch))
-        } else {
-            (blade_graphics::AccelerationStructure::default(), None)
-        };
-
-        let mut pending_ops = self.pending_operations.lock().unwrap();
-        pending_ops.transfers.push(Transfer {
-            stage: vertex_stage,
-            dst: vertex_buffer,
-            size: total_vertex_size,
-        });
-        pending_ops.transfers.push(Transfer {
-            stage: index_stage,
-            dst: index_buffer,
-            size: total_index_size,
-        });
-        pending_ops.transfers.push(Transfer {
-            stage: transform_stage,
-            dst: transform_buffer,
-            size: total_transform_size,
-        });
-        if let Some(scratch) = scratch {
-            pending_ops.blas_constructs.push(BlasConstruct {
-                meshes,
-                scratch,
-                dst: acceleration_structure,
+            pending_ops.transfers.push(Transfer {
+                stage: index_stage,
+                dst: index_buffer,
+                size: total_index_size,
+            });
+            pending_ops.transfers.push(Transfer {
+                stage: transform_stage,
+                dst: transform_buffer,
+                size: total_transform_size,
             });
         }
+        let acceleration_structure = self.build_blas(str::from_utf8(model.name).unwrap(), meshes);
 
         Model {
             name: String::from_utf8_lossy(model.name).into_owned(),

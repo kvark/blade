@@ -101,7 +101,7 @@ impl From<blade_asset::Handle<Model>> for Object {
 
 #[cfg(not(any(gles, target_arch = "wasm32")))]
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Clone, Copy, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 struct CameraParams {
     position: [f32; 3],
     depth: f32,

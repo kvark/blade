@@ -34,7 +34,11 @@ blade-macros = { workspace = true }
 bytemuck = { workspace = true }
 choir = { workspace = true }
 exr = { version = "1.6", optional = true }
-gltf = { workspace = true, features = ["names", "utils"], optional = true }
+gltf = { workspace = true, features = [
+    "names",
+    "utils",
+    "KHR_materials_emissive_strength",
+], optional = true }
 glam = { workspace = true }
 log = { workspace = true }
 mikktspace = { package = "bevy_mikktspace", version = "0.15.0-rc.3", optional = true }

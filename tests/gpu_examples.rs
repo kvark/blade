@@ -14,9 +14,15 @@ use std::slice;
 #[path = "../examples/bunnymark/example.rs"]
 mod bunnymark_example;
 #[cfg(not(gles))]
+mod pbr_scene;
+#[cfg(not(gles))]
 #[path = "../examples/ray-query/example.rs"]
 mod ray_query_example;
 mod snapshot;
+
+/// Directory with the renderer shaders, needed by the asset hub.
+#[cfg(not(gles))]
+const SHADER_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/blade-render/code");
 
 // --- Sky snapshot test structs ---
 
@@ -29,7 +35,7 @@ struct SkyFrameParams {
     light_dir: [f32; 4],
     light_color: [f32; 4],
     ambient_color: [f32; 4],
-    material: [f32; 4],
+    settings: [f32; 4],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -534,7 +540,8 @@ fn snapshot_space_sky() {
         height: 300,
         depth: 1,
     };
-    let format = gpu::TextureFormat::Rgba8Unorm;
+    // The sky is rendered in linear space, so let the hardware encode it
+    let format = gpu::TextureFormat::Rgba8UnormSrgb;
 
     // Create offscreen target
     let target = snapshot::OffscreenTarget::new(&context, size, format);
@@ -574,8 +581,9 @@ fn snapshot_space_sky() {
     });
 
     // Compile the raster shader and create sky pipeline (no depth attachment)
+    let source = snapshot::shader_source("raster.wgsl");
     let shader = context.create_shader(gpu::ShaderDesc {
-        source: include_str!("../blade-render/code/raster.wgsl"),
+        source: &source,
         naga_module: None,
     });
     let sky_layout = <SkyTestData as gpu::ShaderData>::layout();
@@ -611,7 +619,7 @@ fn snapshot_space_sky() {
         light_dir: [0.0, -1.0, 0.0, 0.0],
         light_color: [1.0, 1.0, 1.0, 0.0],
         ambient_color: [0.0, 0.0, 0.0, 1.0], // w=1.0 -> space_sky mode
-        material: [0.4, 0.0, 0.0, 0.0],      // material.z=0 -> env_enabled=false
+        settings: [0.0, 0.0, 0.0, 0.0],      // settings.x=0 -> env_enabled=false
     };
 
     // Render
@@ -670,4 +678,453 @@ fn snapshot_space_sky() {
     context.destroy_texture(dummy_tex);
     context.destroy_command_encoder(&mut command_encoder);
     target.destroy(&context);
+}
+
+/// Number of accumulated frames for the ray traced snapshot.
+///
+/// ReSTIR needs a bit of history to converge, but the cost is paid
+/// by the software rasterizers used in CI.
+#[cfg(not(gles))]
+const RAY_TRACE_FRAMES: usize = 8;
+
+/// Frames and samples per frame of the canonical renderer.
+///
+/// A uniform environment converges quickly, and the cost is paid
+/// by the software rasterizers used in CI.
+#[cfg(not(gles))]
+const CANONICAL_FRAMES: usize = 32;
+#[cfg(not(gles))]
+const CANONICAL_SAMPLES: u32 = 4;
+/// How far the real-time result may land from the canonical one,
+/// as a mean absolute difference of the 8-bit channels.
+#[cfg(not(gles))]
+const CANONICAL_MAX_DIFFERENCE: f64 = 12.0;
+
+#[cfg(not(gles))]
+struct PbrHarness {
+    context: std::sync::Arc<gpu::Context>,
+    choir: std::sync::Arc<choir::Choir>,
+    workers: Vec<choir::WorkerHandle>,
+    asset_hub: blade_render::AssetHub,
+    shaders: blade_render::Shaders,
+}
+
+#[cfg(not(gles))]
+impl PbrHarness {
+    /// Bring up the asset hub and cook the renderer shaders.
+    fn new(context: gpu::Context, cache_name: &str, ray_tracing: bool) -> Self {
+        let context = std::sync::Arc::new(context);
+        let choir = choir::Choir::new();
+        let workers = (0..2)
+            .map(|i| choir.add_worker(&format!("{cache_name}-{i}")))
+            .collect();
+        let cache_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-assets")
+            .join(cache_name);
+        let asset_hub = blade_render::AssetHub::new(&cache_path, &choir, &context);
+        let (shaders, shader_task) =
+            blade_render::Shaders::load(SHADER_DIR.as_ref(), &asset_hub, ray_tracing);
+        shader_task.join();
+        Self {
+            context,
+            choir,
+            workers,
+            asset_hub,
+            shaders,
+        }
+    }
+
+    fn create_grid_model(
+        &self,
+        roughness_range: [f32; 2],
+    ) -> blade_asset::Handle<blade_render::Model> {
+        let geometries = pbr_scene::material_grid(roughness_range);
+        let model = self
+            .asset_hub
+            .models
+            .baker
+            .create_model("pbr-material-grid", geometries);
+        self.asset_hub.models.insert(model)
+    }
+
+    fn destroy(mut self) {
+        self.asset_hub.destroy();
+        // let the workers finish before the choir goes away
+        self.workers.clear();
+        drop(self.choir);
+    }
+}
+
+/// Rasterize a grid of spheres covering the metallic-roughness space,
+/// plus a row of emissive materials.
+#[cfg(not(gles))]
+#[test]
+#[ignore = "requires a working GPU context"]
+fn snapshot_pbr_raster() {
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    let size = gpu::Extent {
+        width: 400,
+        height: 300,
+        depth: 1,
+    };
+    // The renderers write linear values, so let the hardware encode them
+    let format = gpu::TextureFormat::Rgba8UnormSrgb;
+
+    let harness = PbrHarness::new(context, "pbr-raster", false);
+    let context = std::sync::Arc::clone(&harness.context);
+    let target = snapshot::OffscreenTarget::new(&context, size, format);
+
+    let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "snapshot-pbr-raster",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    command_encoder.start();
+
+    let mut rasterizer = blade_render::Rasterizer::new(
+        &mut command_encoder,
+        &context,
+        harness.shaders.clone(),
+        &harness.asset_hub.shaders,
+        &blade_render::RenderConfig {
+            surface_size: size,
+            surface_info: gpu::SurfaceInfo {
+                format,
+                alpha: gpu::AlphaMode::Ignored,
+            },
+            max_debug_lines: 16,
+        },
+    );
+
+    let objects = vec![blade_render::Object::from(
+        harness.create_grid_model([0.05, 1.0]),
+    )];
+    let mut temp_buffers = Vec::new();
+    harness
+        .asset_hub
+        .flush(&mut command_encoder, &mut temp_buffers);
+
+    command_encoder.init_texture(target.texture);
+    command_encoder.init_texture(rasterizer.depth_texture());
+    if let mut pass = command_encoder.render(
+        "raster-pbr",
+        gpu::RenderTargetSet {
+            colors: &[gpu::RenderTarget {
+                view: target.view,
+                init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
+                finish_op: gpu::FinishOp::Store,
+            }],
+            depth_stencil: Some(gpu::RenderTarget {
+                view: rasterizer.depth_view(),
+                init_op: gpu::InitOp::Clear(gpu::TextureColor::White),
+                finish_op: gpu::FinishOp::Discard,
+            }),
+        },
+    ) {
+        rasterizer.render(
+            &mut pass,
+            &pbr_scene::camera(),
+            &objects,
+            &harness.asset_hub,
+            None,
+            blade_render::RasterConfig {
+                light_dir: mint::Vector3 {
+                    x: 0.4,
+                    y: 0.5,
+                    z: 1.0,
+                },
+                ..Default::default()
+            },
+        );
+    }
+
+    let pixels = target.read_pixels(&context, &mut command_encoder);
+    snapshot::check("pbr-raster", &pixels, size);
+
+    for buffer in temp_buffers {
+        context.destroy_buffer(buffer);
+    }
+    rasterizer.destroy(&context);
+    context.destroy_command_encoder(&mut command_encoder);
+    target.destroy(&context);
+    harness.destroy();
+}
+
+/// The material grid, lit by a uniform white environment.
+///
+/// This is a white furnace test: an energy conserving BRDF keeps the spheres
+/// close to their base color, with the darkening coming from the roughness
+/// and from the occlusion between the neighbors.
+#[cfg(not(gles))]
+const RAY_TRACE_SIZE: gpu::Extent = gpu::Extent {
+    width: 256,
+    height: 192,
+    depth: 1,
+};
+/// The post processing writes linear values, so let the hardware encode them.
+#[cfg(not(gles))]
+const RAY_TRACE_FORMAT: gpu::TextureFormat = gpu::TextureFormat::Rgba8UnormSrgb;
+
+#[cfg(not(gles))]
+enum RayTraceMode {
+    /// The real-time path: ReSTIR with a denoiser.
+    Restir,
+    /// The canonical path: accumulated brute force paths.
+    Canonical,
+}
+
+/// Render the material grid with the ray tracer, if the GPU can do it.
+#[cfg(not(gles))]
+fn render_ray_traced_grid(cache_name: &str, mode: RayTraceMode) -> Option<Vec<u8>> {
+    // Metal acceleration structure APIs can throw uncatchable ObjC exceptions
+    // in CI environments, even when the device reports ray tracing support.
+    if cfg!(target_os = "macos") {
+        println!("Skipping: ray tracing snapshot not supported on macOS CI");
+        return None;
+    }
+
+    let context = unsafe {
+        match gpu::Context::init(gpu::ContextDesc {
+            ray_tracing: true,
+            ..Default::default()
+        }) {
+            Ok(c) => c,
+            Err(e) => {
+                println!("Skipping: GPU context with ray tracing not available: {e:?}");
+                return None;
+            }
+        }
+    };
+    if !context
+        .capabilities()
+        .ray_query
+        .contains(gpu::ShaderVisibility::COMPUTE)
+    {
+        println!("Skipping: ray_query compute not supported");
+        return None;
+    }
+
+    let size = RAY_TRACE_SIZE;
+    let harness = PbrHarness::new(context, cache_name, true);
+    let context = std::sync::Arc::clone(&harness.context);
+    let target = snapshot::OffscreenTarget::new(&context, size, RAY_TRACE_FORMAT);
+
+    let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "snapshot-ray-traced-grid",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    command_encoder.start();
+
+    let mut renderer = blade_render::RayTracer::new(
+        &mut command_encoder,
+        &context,
+        harness.shaders.clone(),
+        &harness.asset_hub.shaders,
+        &blade_render::RenderConfig {
+            surface_size: size,
+            surface_info: gpu::SurfaceInfo {
+                format: RAY_TRACE_FORMAT,
+                alpha: gpu::AlphaMode::Ignored,
+            },
+            max_debug_lines: 16,
+        },
+    );
+
+    // A narrow specular lobe is hard on the real-time estimator,
+    // so the smoothest materials are left out of these.
+    let objects = vec![blade_render::Object::from(
+        harness.create_grid_model([0.3, 1.0]),
+    )];
+    let mut temp = blade_render::FrameResources::default();
+    harness
+        .asset_hub
+        .flush(&mut command_encoder, &mut temp.buffers);
+
+    let camera = pbr_scene::camera();
+    let debug_config = blade_render::DebugConfig::default();
+    let ray_config = blade_render::RayConfig {
+        num_environment_samples: 4,
+        // the dummy environment map has no importance sampling data
+        environment_importance_sampling: false,
+        tap_count: 2,
+        tap_radius: 16,
+        tap_confidence_near: 8,
+        tap_confidence_far: 4,
+        t_start: 0.01,
+        pairwise_mis: true,
+        defensive_mis: 0.1,
+    };
+    let denoiser_config = blade_render::DenoiserConfig {
+        num_passes: 3,
+        temporal_weight: 0.1,
+    };
+    let canonical_config = blade_render::PathTraceConfig {
+        samples_per_frame: CANONICAL_SAMPLES,
+        max_bounces: 3,
+        t_start: 0.01,
+        environment_importance_sampling: false,
+    };
+
+    let frame_count = match mode {
+        RayTraceMode::Restir => RAY_TRACE_FRAMES,
+        RayTraceMode::Canonical => CANONICAL_FRAMES,
+    };
+    for frame_index in 0..frame_count {
+        renderer.build_scene(
+            &mut command_encoder,
+            &objects,
+            None,
+            &harness.asset_hub,
+            &context,
+            &mut temp,
+        );
+        renderer.prepare(
+            &mut command_encoder,
+            &camera,
+            blade_render::FrameConfig {
+                frozen: false,
+                debug_draw: false,
+                reset_variance: frame_index == 0,
+                reset_reservoirs: frame_index == 0,
+                reset_accumulation: frame_index == 0,
+            },
+        );
+        match mode {
+            RayTraceMode::Restir => {
+                renderer.ray_trace(&mut command_encoder, debug_config, ray_config);
+                renderer.denoise(&mut command_encoder, denoiser_config);
+            }
+            RayTraceMode::Canonical => {
+                renderer.path_trace(&mut command_encoder, canonical_config);
+            }
+        }
+    }
+
+    command_encoder.init_texture(target.texture);
+    if let mut pass = command_encoder.render(
+        "ray-traced-grid",
+        gpu::RenderTargetSet {
+            colors: &[gpu::RenderTarget {
+                view: target.view,
+                init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
+                finish_op: gpu::FinishOp::Store,
+            }],
+            depth_stencil: None,
+        },
+    ) {
+        renderer.post_proc(
+            &mut pass,
+            debug_config,
+            blade_render::PostProcConfig::default(),
+            &[],
+            &[],
+        );
+    }
+
+    let pixels = target.read_pixels(&context, &mut command_encoder);
+
+    for buffer in temp.buffers {
+        context.destroy_buffer(buffer);
+    }
+    for acceleration_structure in temp.acceleration_structures {
+        context.destroy_acceleration_structure(acceleration_structure);
+    }
+    renderer.destroy(&context);
+    context.destroy_command_encoder(&mut command_encoder);
+    target.destroy(&context);
+    harness.destroy();
+    Some(pixels)
+}
+
+#[cfg(not(gles))]
+#[test]
+#[ignore = "requires a working GPU context with ray tracing"]
+fn snapshot_pbr_ray_trace() {
+    if let Some(pixels) = render_ray_traced_grid("pbr-ray-trace", RayTraceMode::Restir) {
+        snapshot::check("pbr-ray-trace", &pixels, RAY_TRACE_SIZE);
+    }
+}
+
+/// Render the same grid with the canonical renderer, and confirm that the
+/// real-time one lands in the same place.
+#[cfg(not(gles))]
+#[test]
+#[ignore = "requires a working GPU context with ray tracing"]
+fn snapshot_pbr_canonical() {
+    let Some(pixels) = render_ray_traced_grid("pbr-canonical", RayTraceMode::Canonical) else {
+        return;
+    };
+    snapshot::check("pbr-canonical", &pixels, RAY_TRACE_SIZE);
+
+    // The real-time estimator is noisy and blurred, but it must not be
+    // systematically brighter or darker than the ground truth.
+    let (restir, restir_size) = snapshot::load("pbr-ray-trace");
+    assert_eq!(restir_size, RAY_TRACE_SIZE);
+    let difference = snapshot::mean_abs_diff(&pixels, &restir);
+    println!("pbr-canonical: mean difference from ReSTIR = {difference:.2}/255");
+    assert!(
+        difference < CANONICAL_MAX_DIFFERENCE,
+        "the real-time result is {difference:.2}/255 away from the canonical one"
+    );
+}
+
+/// Cook and serve a glTF model, checking that the PBR factors survive the trip.
+#[cfg(not(gles))]
+#[test]
+#[ignore = "requires a working GPU context"]
+fn gltf_material_test() {
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    let harness = PbrHarness::new(context, "gltf-material", false);
+    let context = std::sync::Arc::clone(&harness.context);
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("scene")
+        .join("data")
+        .join("monkey.gltf");
+    let (handle, task) = harness.asset_hub.models.load(
+        &path,
+        blade_render::model::Meta {
+            generate_tangents: true,
+            front_face: blade_render::model::FrontFace::CounterClockwise,
+        },
+    );
+    task.clone().join();
+
+    // The uploads have to be flushed before the buffers can be destroyed.
+    let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "gltf-material",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    command_encoder.start();
+    let mut temp_buffers = Vec::new();
+    harness
+        .asset_hub
+        .flush(&mut command_encoder, &mut temp_buffers);
+    let sync_point = context.submit(&mut command_encoder);
+    assert!(context.wait_for(&sync_point, 5000).unwrap());
+
+    let model = &harness.asset_hub.models[handle];
+    assert!(!model.geometries.is_empty());
+    assert_eq!(model.materials.len(), 2);
+    for material in model.materials.iter() {
+        // Matching "pbrMetallicRoughness" of the source
+        assert_eq!(material.metallic_factor, 0.0);
+        assert_eq!(material.roughness_factor, 0.5);
+        assert_eq!(material.base_color_factor[3], 1.0);
+        assert!((material.base_color_factor[0] - 0.8).abs() < 0.01);
+        // The model has no textures and doesn't emit light
+        assert!(material.metallic_roughness_texture.is_none());
+        assert!(material.emissive_texture.is_none());
+        assert_eq!(material.emissive_factor, [0.0; 3]);
+    }
+
+    for buffer in temp_buffers {
+        context.destroy_buffer(buffer);
+    }
+    context.destroy_command_encoder(&mut command_encoder);
+    harness.destroy();
 }

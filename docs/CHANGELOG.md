@@ -2,6 +2,27 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- render: physically based materials, authored as glTF metallic-roughness, shaded in the specular workflow
+  - `Material` carries metallic-roughness and emissive, both as factors and textures, cooked from glTF (including `KHR_materials_emissive_strength`)
+  - internally, a material is a diffuse albedo, a specular reflectance at normal incidence, and a roughness; the conversion happens in `material_from_metallic_roughness` when the textures are sampled
+  - shared BRDF in `brdf.inc.wgsl`: GGX distribution, height-correlated Smith visibility, Schlick Fresnel, used by the ray tracer as well as the rasterizer
+  - shared lobe sampling in `sampling.inc.wgsl` and environment sampling in `env-light.inc.wgsl`
+  - ray tracing: material G-buffer, separate diffuse and specular lighting, light samples drawn from the BRDF as well as the environment with MIS between them
+  - `ProceduralGeometry` gained the PBR factors, and now builds an acceleration structure, so it can be ray traced
+  - breaking: `RasterConfig` no longer overrides the roughness and metallic of all the materials
+  - breaking: the cooked model format has changed, the asset caches need to be cleared
+  - new debug views for roughness, specular reflectance, and emissive
+- render: canonical rendering mode
+  - `RayTracer::path_trace` traces full paths with BSDF sampling and next event estimation on the environment, combined by MIS, accumulating the result over the frames with no reuse and no denoising
+  - configured by `PathTraceConfig`, reset by `FrameConfig::reset_accumulation` or by moving the camera
+  - available in the scene example and in `blade-engine` as "Canonical"
+- fix the rasterizer encoding gamma in the shader, which double corrected the
+  colors on a surface configured with the default `ColorSpace::Linear`; both of
+  the render paths now produce linear values and leave the encoding to the surface
+- vk: pick an sRGB XR swapchain format for `ColorSpace::Linear` and a plain one
+  for `ColorSpace::Srgb`, since an XR swapchain can't declare its color space
+- fix `fill-gbuf.wgsl` missing the `wgpu_binding_array` enable directive
+- tests: validate the renderer shaders, snapshot the PBR material grid in both of the render paths
 - vk: support `VK_EXT_external_memory_host` — enable the extension, query memory-type compatibility via `vkGetMemoryHostPointerPropertiesEXT`, and round allocation size to `minImportedHostPointerAlignment` so `Memory::External(HostAllocation)` imports succeed on drivers that expose the extension
 
 ## blade-egui-0.8.2, blade-util-0.4.1 (25 Apr 2026)

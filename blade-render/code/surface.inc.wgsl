@@ -2,6 +2,15 @@ struct Surface {
     basis: vec4<f32>,
     flat_normal: vec3<f32>,
     depth: f32,
+    // Direction towards the viewer, unit length.
+    // Only filled in by the passes that do shading.
+    view_dir: vec3<f32>,
+    // Material properties, only filled in by the passes that do shading.
+    // Note: matching the fields of `Material` in "brdf.inc.wgsl", which
+    // isn't available to all the users of this file.
+    diffuse_albedo: vec3<f32>,
+    specular_f0: vec3<f32>,
+    roughness: f32,
 }
 
 const SIGMA_N: f32 = 4.0;
