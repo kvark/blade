@@ -22,6 +22,7 @@ const FACTOR_CANDIDATES: u32 = 3u;
 struct MainParams {
     frame_index: u32,
     num_environment_samples: u32,
+    num_brdf_samples: u32,
     environment_importance_sampling: u32,
     tap_count: u32,
     tap_radius: f32,
@@ -213,41 +214,32 @@ fn evaluate_surface_brdf(surface: Surface, dir: vec3<f32>) -> BrdfLobes {
     return evaluate_brdf(surface_material(surface), surface_normal(surface), surface.view_dir, dir);
 }
 
-// Portion of the candidates that follow the BRDF instead of the light.
+// Draw a candidate, following either the light or the material distribution.
 //
-// Rough diffuse surfaces are served well by sampling the light, while
-// a narrow or dominant specular lobe needs to be sampled directly.
-fn compute_brdf_sampling_ratio(surface: Surface) -> f32 {
-    let mat = surface_material(surface);
-    let smoothness = 1.0 - clamp(mat.roughness, 0.0, 1.0);
-    return clamp(max(specular_sampling_ratio(mat), smoothness * smoothness), 0.1, 0.9);
-}
-
-// Draw a candidate following either the light distribution or the BRDF.
-//
-// The returned density is the one of the mixture of both strategies,
-// which is the balance heuristic MIS weight for a single sample.
-fn sample_incoming_light(surface: Surface, rng: ptr<function, RandomState>) -> LightSample {
+// A narrow specular lobe can't be resolved by sampling the light alone, so
+// both of the strategies contribute their share of the candidates. The
+// returned density is that of their mixture, weighted by the sample counts,
+// which makes the estimator a multi-sample MIS one.
+fn sample_incoming_light(surface: Surface, from_light: bool, rng: ptr<function, RandomState>) -> LightSample {
     let importance = parameters.environment_importance_sampling != 0u;
     let mat = surface_material(surface);
     let normal = surface_normal(surface);
-    let brdf_ratio = compute_brdf_sampling_ratio(surface);
 
     var ls: LightSample;
-    if (random_gen(rng) < brdf_ratio) {
+    if (from_light) {
+        ls = sample_light(importance, rng);
+    } else {
         let bs = sample_bsdf(mat, normal, surface.view_dir, rng);
         ls.uv = map_equirect_dir_to_uv(bs.dir);
         ls.radiance = evaluate_environment(bs.dir);
-    } else {
-        ls = sample_light(importance, rng);
     }
 
     let dir = map_equirect_uv_to_dir(ls.uv);
-    ls.pdf = mix(
-        compute_light_pdf(ls.uv, importance),
-        compute_bsdf_pdf(mat, normal, surface.view_dir, dir),
-        brdf_ratio,
-    );
+    let num_light = f32(parameters.num_environment_samples);
+    let num_brdf = f32(parameters.num_brdf_samples);
+    ls.pdf = (num_light * compute_light_pdf(ls.uv, importance)
+        + num_brdf * compute_bsdf_pdf(mat, normal, surface.view_dir, dir))
+        / max(num_light + num_brdf, 1.0);
     return ls;
 }
 
@@ -381,8 +373,9 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     let debug_len = select(0.0, surface.depth * 0.2, enable_debug);
 
     var canonical = LiveReservoir();
-    for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
-        let ls = sample_incoming_light(surface, rng);
+    let num_initial = parameters.num_environment_samples + parameters.num_brdf_samples;
+    for (var i = 0u; i < num_initial; i += 1u) {
+        let ls = sample_incoming_light(surface, i < parameters.num_environment_samples, rng);
         let brdf = evaluate_sample(ls, surface, position, debug_len, 0x00FF00u);
         if (is_brdf_black(brdf)) {
             bump_reservoir(&canonical, 1.0);

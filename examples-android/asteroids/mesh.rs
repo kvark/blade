@@ -296,7 +296,7 @@ pub fn generate_planet_model(
             vertices: ocean_verts,
             indices: ocean_idxs,
             base_color_factor: ocean_color,
-            roughness_factor: 0.7,
+            roughness: 0.7,
             ..Default::default()
         });
     }
@@ -306,7 +306,7 @@ pub fn generate_planet_model(
             vertices: land_verts,
             indices: land_idxs,
             base_color_factor: land_color,
-            roughness_factor: 0.7,
+            roughness: 0.7,
             ..Default::default()
         });
     }
@@ -316,7 +316,7 @@ pub fn generate_planet_model(
             vertices: ice_verts,
             indices: ice_idxs,
             base_color_factor: ice_color,
-            roughness_factor: 0.7,
+            roughness: 0.7,
             ..Default::default()
         });
     }
@@ -370,7 +370,7 @@ fn generate_ring_band(
         vertices,
         indices,
         base_color_factor: color,
-        roughness_factor: 0.7,
+        roughness: 0.7,
         ..Default::default()
     }
 }
@@ -441,7 +441,7 @@ pub fn generate_comet_model(
             vertices: verts,
             indices: idxs,
             base_color_factor: [0.9, 0.95, 1.0, 1.0],
-            roughness_factor: 0.7,
+            roughness: 0.7,
             ..Default::default()
         }],
     )

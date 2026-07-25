@@ -7,6 +7,7 @@ impl super::Surface {
         crate::SurfaceInfo {
             format: self.swapchain.format,
             alpha: self.swapchain.alpha,
+            color_space: self.swapchain.color_space,
         }
     }
 
@@ -176,6 +177,14 @@ impl super::XrSurface {
         self.swapchain.format
     }
 
+    pub fn info(&self) -> crate::SurfaceInfo {
+        crate::SurfaceInfo {
+            format: self.swapchain.format,
+            alpha: self.swapchain.alpha,
+            color_space: self.swapchain.color_space,
+        }
+    }
+
     pub fn swapchain(&self) -> &xr::Swapchain<xr::Vulkan> {
         &self.raw
     }
@@ -262,6 +271,7 @@ impl super::Context {
                 raw: vk::SwapchainKHR::null(),
                 format: crate::TextureFormat::Rgba8Unorm,
                 alpha: crate::AlphaMode::Ignored,
+                color_space: crate::ColorSpace::Srgb,
                 target_size: [0; 2],
             },
             full_screen_exclusive: fullscreen_exclusive_ext.full_screen_exclusive_supported != 0,
@@ -524,6 +534,7 @@ impl super::Context {
             raw: raw_swapchain,
             format,
             alpha,
+            color_space: crate::SurfaceInfo::derive_color_space(format, config.color_space),
             target_size,
         };
     }
@@ -587,6 +598,7 @@ impl super::Context {
                     raw: vk::SwapchainKHR::null(),
                     format,
                     alpha: crate::AlphaMode::Ignored,
+                    color_space: crate::SurfaceInfo::passthrough_color_space(format),
                     target_size: [config.size.width as u16, config.size.height as u16],
                 },
                 view_count: config.view_count.max(1),
@@ -725,6 +737,7 @@ impl super::Context {
             raw: vk::SwapchainKHR::null(),
             format,
             alpha: crate::AlphaMode::Ignored,
+            color_space: crate::SurfaceInfo::passthrough_color_space(format),
             target_size,
         };
         surface.view_count = config.view_count.max(1);
@@ -783,12 +796,9 @@ fn select_xr_swapchain_format(
             }
         }
     }
-    // Unlike a window surface, an XR swapchain has no way to declare the color
-    // space of its contents: the runtime linearizes the sRGB formats and passes
-    // the plain ones through. So the format has to match what the app produces.
     match color_space {
-        crate::ColorSpace::Linear => srgb_candidate.or(linear_candidate),
-        crate::ColorSpace::Srgb => linear_candidate.or(srgb_candidate),
+        crate::ColorSpace::Linear => linear_candidate.or(srgb_candidate),
+        crate::ColorSpace::Srgb => srgb_candidate.or(linear_candidate),
     }
     .expect("No compatible XR swapchain format available")
 }

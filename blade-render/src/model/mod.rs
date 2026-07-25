@@ -62,10 +62,10 @@ pub struct Material {
     pub base_color_factor: [f32; 4],
     pub normal_texture: Option<blade_asset::Handle<crate::Texture>>,
     pub normal_scale: f32,
-    /// Green channel is roughness, blue channel is metallic.
+    /// Green channel is roughness, blue channel is metalness.
     pub metallic_roughness_texture: Option<blade_asset::Handle<crate::Texture>>,
-    pub metallic_factor: f32,
-    pub roughness_factor: f32,
+    pub metalness: f32,
+    pub roughness: f32,
     pub emissive_texture: Option<blade_asset::Handle<crate::Texture>>,
     /// Emitted radiance, with `KHR_materials_emissive_strength` folded in.
     pub emissive_factor: [f32; 3],
@@ -80,8 +80,8 @@ impl Default for Material {
             normal_texture: None,
             normal_scale: 0.0,
             metallic_roughness_texture: None,
-            metallic_factor: 0.0,
-            roughness_factor: 0.5,
+            metalness: 0.0,
+            roughness: 0.5,
             emissive_texture: None,
             emissive_factor: [0.0; 3],
             transparent: false,
@@ -115,8 +115,8 @@ struct CookedMaterial<'a> {
     normal: TextureReference<'a>,
     normal_scale: f32,
     metallic_roughness: TextureReference<'a>,
-    metallic_factor: f32,
-    roughness_factor: f32,
+    metalness: f32,
+    roughness: f32,
     emissive: TextureReference<'a>,
     emissive_factor: [f32; 3],
     transparent: bool,
@@ -530,8 +530,8 @@ pub struct ProceduralGeometry {
     pub vertices: Vec<crate::Vertex>,
     pub indices: Vec<u32>,
     pub base_color_factor: [f32; 4],
-    pub metallic_factor: f32,
-    pub roughness_factor: f32,
+    pub metalness: f32,
+    pub roughness: f32,
     pub emissive_factor: [f32; 3],
 }
 
@@ -543,8 +543,8 @@ impl Default for ProceduralGeometry {
             vertices: Vec::new(),
             indices: Vec::new(),
             base_color_factor: material.base_color_factor,
-            metallic_factor: material.metallic_factor,
-            roughness_factor: material.roughness_factor,
+            metalness: material.metalness,
+            roughness: material.roughness,
             emissive_factor: material.emissive_factor,
         }
     }
@@ -629,8 +629,8 @@ impl Baker {
             let material_index = materials.len();
             materials.push(Material {
                 base_color_factor: geo.base_color_factor,
-                metallic_factor: geo.metallic_factor,
-                roughness_factor: geo.roughness_factor,
+                metalness: geo.metalness,
+                roughness: geo.roughness,
                 emissive_factor: geo.emissive_factor,
                 ..Material::default()
             });
@@ -811,8 +811,8 @@ impl blade_asset::Baker for Baker {
                             },
                             ..Default::default()
                         },
-                        metallic_factor: pbr.metallic_factor(),
-                        roughness_factor: pbr.roughness_factor(),
+                        metalness: pbr.metallic_factor(),
+                        roughness: pbr.roughness_factor(),
                         emissive: TextureReference {
                             source_index: match g_material.emissive_texture() {
                                 Some(info) => sources.insert(self.cook_texture(
@@ -907,8 +907,8 @@ impl blade_asset::Baker for Baker {
                     META_METALLIC_ROUGHNESS,
                     exe_context,
                 ),
-                metallic_factor: material.metallic_factor,
-                roughness_factor: material.roughness_factor,
+                metalness: material.metalness,
+                roughness: material.roughness,
                 emissive_texture: self.serve_texture(
                     &material.emissive,
                     META_EMISSIVE,

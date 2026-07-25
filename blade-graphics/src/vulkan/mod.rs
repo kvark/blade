@@ -109,6 +109,8 @@ struct Swapchain {
     raw: vk::SwapchainKHR,
     format: crate::TextureFormat,
     alpha: crate::AlphaMode,
+    /// Color space the contents are interpreted in, see `SurfaceInfo`.
+    color_space: crate::ColorSpace,
     target_size: [u16; 2],
 }
 

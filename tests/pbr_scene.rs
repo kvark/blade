@@ -1,6 +1,6 @@
 //! A grid of spheres exercising the PBR material model.
 //!
-//! The columns vary the roughness, the rows vary the metallic factor,
+//! The columns vary the roughness, the rows vary the metalness,
 //! and the last row is emissive. Both the rasterizer and the ray tracer
 //! render it, so their results can be compared side by side.
 #![cfg(not(gles))]
@@ -9,7 +9,7 @@
 use std::f32::consts::PI;
 
 pub const COLUMNS: usize = 5;
-/// 3 rows of metallic values, plus one emissive row.
+/// 3 rows of metalness values, plus one emissive row.
 pub const ROWS: usize = 4;
 const SPACING: f32 = 1.5;
 const RADIUS: f32 = 0.5;
@@ -17,7 +17,7 @@ const SEGMENTS: usize = 32;
 const RINGS: usize = 16;
 /// Gold-ish, so that the metals are clearly tinted.
 const BASE_COLOR: [f32; 4] = [0.95, 0.72, 0.35, 1.0];
-const METALLIC_ROW: [f32; 3] = [0.0, 0.5, 1.0];
+const METALNESS_ROW: [f32; 3] = [0.0, 0.5, 1.0];
 const EMISSIVE_COLORS: [[f32; 3]; COLUMNS] = [
     [1.0, 0.15, 0.1],
     [0.15, 1.0, 0.2],
@@ -75,8 +75,8 @@ fn sphere(center: [f32; 3], radius: f32) -> (Vec<blade_render::Vertex>, Vec<u32>
 pub fn material_grid(roughness_range: [f32; 2]) -> Vec<blade_render::ProceduralGeometry> {
     let mut geometries = Vec::with_capacity(COLUMNS * ROWS);
     for row in 0..ROWS {
-        // the row past the metallic ones is the emissive one
-        let metallic = METALLIC_ROW.get(row).copied();
+        // the row past the metals is the emissive one
+        let metalness = METALNESS_ROW.get(row).copied();
         for (column, &emissive) in EMISSIVE_COLORS.iter().enumerate() {
             let center = [
                 (column as f32 - 0.5 * (COLUMNS - 1) as f32) * SPACING,
@@ -89,14 +89,13 @@ pub fn material_grid(roughness_range: [f32; 2]) -> Vec<blade_render::ProceduralG
                 name: format!("sphere[{row}][{column}]"),
                 vertices,
                 indices,
-                base_color_factor: match metallic {
+                base_color_factor: match metalness {
                     Some(_) => BASE_COLOR,
                     None => [0.0, 0.0, 0.0, 1.0],
                 },
-                metallic_factor: metallic.unwrap_or_default(),
-                roughness_factor: roughness_range[0]
-                    + ratio * (roughness_range[1] - roughness_range[0]),
-                emissive_factor: match metallic {
+                metalness: metalness.unwrap_or_default(),
+                roughness: roughness_range[0] + ratio * (roughness_range[1] - roughness_range[0]),
+                emissive_factor: match metalness {
                     Some(_) => [0.0; 3],
                     None => emissive,
                 },

@@ -360,8 +360,8 @@ impl Rasterizer {
                                 ],
                                 material: [
                                     normal_scale,
-                                    material.metallic_factor,
-                                    material.roughness_factor,
+                                    material.metalness,
+                                    material.roughness,
                                     0.0,
                                 ],
                             },
@@ -545,7 +545,13 @@ impl Rasterizer {
                 let c = config.ambient_color;
                 [c.x, c.y, c.z, config.space_sky as u32 as f32]
             },
-            settings: [env_map_enabled as u32 as f32, 0.0, 0.0, 0.0],
+            settings: [
+                env_map_enabled as u32 as f32,
+                // the surface may expect us to encode the values ourselves
+                (self.surface_info.color_space == gpu::ColorSpace::Srgb) as u32 as f32,
+                0.0,
+                0.0,
+            ],
         }
     }
 }

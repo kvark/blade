@@ -540,8 +540,8 @@ fn snapshot_space_sky() {
         height: 300,
         depth: 1,
     };
-    // The sky is rendered in linear space, so let the hardware encode it
-    let format = gpu::TextureFormat::Rgba8UnormSrgb;
+    // A plain format, like an XR swapchain: the shader has to encode
+    let format = gpu::TextureFormat::Rgba8Unorm;
 
     // Create offscreen target
     let target = snapshot::OffscreenTarget::new(&context, size, format);
@@ -619,7 +619,8 @@ fn snapshot_space_sky() {
         light_dir: [0.0, -1.0, 0.0, 0.0],
         light_color: [1.0, 1.0, 1.0, 0.0],
         ambient_color: [0.0, 0.0, 0.0, 1.0], // w=1.0 -> space_sky mode
-        settings: [0.0, 0.0, 0.0, 0.0],      // settings.x=0 -> env_enabled=false
+        // x=0: no environment map, y=1: encode for a non-sRGB surface
+        settings: [0.0, 1.0, 0.0, 0.0],
     };
 
     // Render
@@ -687,14 +688,12 @@ fn snapshot_space_sky() {
 #[cfg(not(gles))]
 const RAY_TRACE_FRAMES: usize = 8;
 
-/// Frames and samples per frame of the canonical renderer.
+/// Frames accumulated by the canonical renderer.
 ///
 /// A uniform environment converges quickly, and the cost is paid
 /// by the software rasterizers used in CI.
 #[cfg(not(gles))]
 const CANONICAL_FRAMES: usize = 32;
-#[cfg(not(gles))]
-const CANONICAL_SAMPLES: u32 = 4;
 /// How far the real-time result may land from the canonical one,
 /// as a mean absolute difference of the 8-bit channels.
 #[cfg(not(gles))]
@@ -792,6 +791,8 @@ fn snapshot_pbr_raster() {
             surface_info: gpu::SurfaceInfo {
                 format,
                 alpha: gpu::AlphaMode::Ignored,
+                // matching an sRGB surface: the hardware does the encoding
+                color_space: gpu::ColorSpace::Linear,
             },
             max_debug_lines: 16,
         },
@@ -927,6 +928,7 @@ fn render_ray_traced_grid(cache_name: &str, mode: RayTraceMode) -> Option<Vec<u8
             surface_info: gpu::SurfaceInfo {
                 format: RAY_TRACE_FORMAT,
                 alpha: gpu::AlphaMode::Ignored,
+                color_space: gpu::ColorSpace::Linear,
             },
             max_debug_lines: 16,
         },
@@ -945,9 +947,17 @@ fn render_ray_traced_grid(cache_name: &str, mode: RayTraceMode) -> Option<Vec<u8
     let camera = pbr_scene::camera();
     let debug_config = blade_render::DebugConfig::default();
     let ray_config = blade_render::RayConfig {
-        num_environment_samples: 4,
+        // The canonical mode takes these at every vertex of every path,
+        // so it needs fewer of them to stay affordable.
+        num_environment_samples: match mode {
+            RayTraceMode::Restir => 4,
+            RayTraceMode::Canonical => 1,
+        },
+        num_brdf_samples: 4,
         // the dummy environment map has no importance sampling data
         environment_importance_sampling: false,
+        max_bounces: 3,
+        max_accumulated_samples: 0,
         tap_count: 2,
         tap_radius: 16,
         tap_confidence_near: 8,
@@ -960,13 +970,6 @@ fn render_ray_traced_grid(cache_name: &str, mode: RayTraceMode) -> Option<Vec<u8
         num_passes: 3,
         temporal_weight: 0.1,
     };
-    let canonical_config = blade_render::PathTraceConfig {
-        samples_per_frame: CANONICAL_SAMPLES,
-        max_bounces: 3,
-        t_start: 0.01,
-        environment_importance_sampling: false,
-    };
-
     let frame_count = match mode {
         RayTraceMode::Restir => RAY_TRACE_FRAMES,
         RayTraceMode::Canonical => CANONICAL_FRAMES,
@@ -991,15 +994,16 @@ fn render_ray_traced_grid(cache_name: &str, mode: RayTraceMode) -> Option<Vec<u8
                 reset_accumulation: frame_index == 0,
             },
         );
-        match mode {
-            RayTraceMode::Restir => {
-                renderer.ray_trace(&mut command_encoder, debug_config, ray_config);
-                renderer.denoise(&mut command_encoder, denoiser_config);
-            }
-            RayTraceMode::Canonical => {
-                renderer.path_trace(&mut command_encoder, canonical_config);
-            }
-        }
+        renderer.render(
+            &mut command_encoder,
+            match mode {
+                RayTraceMode::Restir => blade_render::RenderMode::RealTime,
+                RayTraceMode::Canonical => blade_render::RenderMode::Canonical,
+            },
+            debug_config,
+            ray_config,
+            Some(denoiser_config),
+        );
     }
 
     command_encoder.init_texture(target.texture);
@@ -1112,8 +1116,8 @@ fn gltf_material_test() {
     assert_eq!(model.materials.len(), 2);
     for material in model.materials.iter() {
         // Matching "pbrMetallicRoughness" of the source
-        assert_eq!(material.metallic_factor, 0.0);
-        assert_eq!(material.roughness_factor, 0.5);
+        assert_eq!(material.metalness, 0.0);
+        assert_eq!(material.roughness, 0.5);
         assert_eq!(material.base_color_factor[3], 1.0);
         assert!((material.base_color_factor[0] - 0.8).abs() < 0.01);
         // The model has no textures and doesn't emit light

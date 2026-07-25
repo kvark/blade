@@ -1,4 +1,5 @@
 #include "brdf.inc.wgsl"
+#include "color.inc.wgsl"
 
 struct RasterFrameParams {
     view_proj: mat4x4<f32>,
@@ -9,7 +10,7 @@ struct RasterFrameParams {
     light_color: vec4<f32>,
     // w component is a flag for the procedural space sky
     ambient_color: vec4<f32>,
-    // x: environment map enabled
+    // x: environment map enabled, y: the surface needs sRGB encoding
     settings: vec4<f32>,
 }
 
@@ -18,7 +19,7 @@ struct RasterDrawParams {
     normal_quat: vec4<f32>,
     base_color_factor: vec4<f32>,
     emissive_factor: vec4<f32>,
-    // x: normal scale, y: metallic factor, z: roughness factor
+    // x: normal scale, y: metalness, z: roughness
     material: vec4<f32>,
 }
 
@@ -49,7 +50,7 @@ var<storage, read> vertices: VertexBuffer;
 var samp: sampler;
 var base_color_tex: texture_2d<f32>;
 var normal_tex: texture_2d<f32>;
-// green channel is roughness, blue channel is metallic
+// green channel is roughness, blue channel is metalness
 var metallic_roughness_tex: texture_2d<f32>;
 var emissive_tex: texture_2d<f32>;
 
@@ -114,10 +115,8 @@ fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let emissive = draw_params.emissive_factor.rgb * textureSample(emissive_tex, samp, input.uv).rgb;
     let color = ambient + light + emissive;
 
-    // Note: the result stays linear, like the one of the ray tracer.
-    // Encoding it for the display is up to the surface, see `ColorSpace`.
     let mapped = color / (color + vec3<f32>(1.0));
-    return vec4<f32>(mapped, 1.0);
+    return vec4<f32>(encode_surface_color(mapped, frame_params.settings.y > 0.5), 1.0);
 }
 
 struct SkyOutput {
@@ -213,8 +212,6 @@ fn raster_sky_fs(input: SkyOutput) -> @location(0) vec4<f32> {
             color = mix(horizon, zenith, t);
         }
     }
-    // Note: the result stays linear, like the one of the ray tracer.
-    // Encoding it for the display is up to the surface, see `ColorSpace`.
     let mapped = color / (color + vec3<f32>(1.0));
-    return vec4<f32>(mapped, 1.0);
+    return vec4<f32>(encode_surface_color(mapped, sky_params.settings.y > 0.5), 1.0);
 }

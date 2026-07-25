@@ -1399,6 +1399,34 @@ pub enum AlphaMode {
 pub struct SurfaceInfo {
     pub format: TextureFormat,
     pub alpha: AlphaMode,
+    /// Color space that the contents of the surface are interpreted in,
+    /// which is what the renderers have to produce.
+    ///
+    /// It's `Linear` when the platform does the encoding for us, either
+    /// via an sRGB format or via a linear display color space. It's `Srgb`
+    /// when the values are passed through and have to be encoded by us,
+    /// which is notably the case for a plain XR swapchain format.
+    pub color_space: ColorSpace,
+}
+
+impl SurfaceInfo {
+    /// Color space of the contents of a surface that declares one, given the
+    /// format we ended up with and the space the user asked to work in.
+    pub(crate) fn derive_color_space(format: TextureFormat, requested: ColorSpace) -> ColorSpace {
+        if format.is_srgb() {
+            // the format does the encoding for us
+            ColorSpace::Linear
+        } else {
+            requested
+        }
+    }
+
+    /// Color space of the contents of a surface that has no way to declare one,
+    /// such as an XR swapchain: an sRGB format converts for us, while anything
+    /// else is passed through to the display and has to be encoded already.
+    pub(crate) fn passthrough_color_space(format: TextureFormat) -> ColorSpace {
+        Self::derive_color_space(format, ColorSpace::Srgb)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
