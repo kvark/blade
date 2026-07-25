@@ -220,6 +220,8 @@ impl Example {
         let render_config = blade_render::RenderConfig {
             surface_size,
             surface_info,
+            // matching what `make_surface_config` asks the surface for
+            color_space: gpu::ColorSpace::Linear,
             max_debug_lines: 1000,
         };
         let renderer = blade_render::RayTracer::new(

@@ -790,11 +790,7 @@ impl super::Context {
             surface: surface_window,
             wl_window: new_wl_window,
             extent: size,
-            info: crate::SurfaceInfo {
-                format,
-                alpha,
-                color_space: crate::SurfaceInfo::passthrough_color_space(format),
-            },
+            info: crate::SurfaceInfo { format, alpha },
             swap_interval,
         });
     }
@@ -922,11 +918,7 @@ impl super::Context {
             surface: window_surface,
             wl_window: new_wl_window,
             extent: size,
-            info: crate::SurfaceInfo {
-                format,
-                alpha,
-                color_space: crate::SurfaceInfo::passthrough_color_space(format),
-            },
+            info: crate::SurfaceInfo { format, alpha },
             swap_interval,
         };
 

@@ -171,6 +171,7 @@ pub struct Rasterizer {
     depth_view: gpu::TextureView,
     surface_size: gpu::Extent,
     surface_info: gpu::SurfaceInfo,
+    color_space: gpu::ColorSpace,
 }
 
 impl Rasterizer {
@@ -219,6 +220,7 @@ impl Rasterizer {
             depth_view,
             surface_size: config.surface_size,
             surface_info: config.surface_info,
+            color_space: config.color_space,
         }
     }
 
@@ -548,7 +550,7 @@ impl Rasterizer {
             settings: [
                 env_map_enabled as u32 as f32,
                 // the surface may expect us to encode the values ourselves
-                (self.surface_info.color_space == gpu::ColorSpace::Srgb) as u32 as f32,
+                (self.color_space == gpu::ColorSpace::Srgb) as u32 as f32,
                 0.0,
                 0.0,
             ],

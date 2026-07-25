@@ -791,9 +791,9 @@ fn snapshot_pbr_raster() {
             surface_info: gpu::SurfaceInfo {
                 format,
                 alpha: gpu::AlphaMode::Ignored,
-                // matching an sRGB surface: the hardware does the encoding
-                color_space: gpu::ColorSpace::Linear,
             },
+            // matching an sRGB surface: the hardware does the encoding
+            color_space: gpu::ColorSpace::Linear,
             max_debug_lines: 16,
         },
     );
@@ -928,8 +928,8 @@ fn render_ray_traced_grid(cache_name: &str, mode: RayTraceMode) -> Option<Vec<u8
             surface_info: gpu::SurfaceInfo {
                 format: RAY_TRACE_FORMAT,
                 alpha: gpu::AlphaMode::Ignored,
-                color_space: gpu::ColorSpace::Linear,
             },
+            color_space: gpu::ColorSpace::Linear,
             max_debug_lines: 16,
         },
     );

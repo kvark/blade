@@ -17,12 +17,16 @@ Changelog for *Blade* project
   - accumulation is reset by `FrameConfig::reset_accumulation` or by moving the camera, and can be capped by `RayConfig::max_accumulated_samples`
   - breaking: `RayTracer::ray_trace` and `denoise` are replaced by `RayTracer::render`, which takes the mode
   - breaking: `RayConfig` describes the sampling of both of the modes: `num_environment_samples` and `num_brdf_samples` are the light and material samples taken at a shading point, combined by multi-sample MIS, while `max_bounces` limits the path length
-- `SurfaceInfo` now reports the `color_space` of the surface contents, which is
-  what the renderers have to produce. An sRGB format or a linear display space
-  means linear values, while a plain format that the platform passes straight
-  through - notably an XR swapchain - means we encode them ourselves. Both of
-  the render paths honor it, instead of the rasterizer always encoding and the
-  ray tracer never doing so.
+- both of the render paths now produce the color space that the surface was
+  configured with, taken as `RenderConfig::color_space`, instead of the
+  rasterizer always encoding gamma and the ray tracer never doing so
+- vk: an XR swapchain honors the requested color space through its format,
+  since it has no way to declare one: `Linear` picks an sRGB format for the
+  runtime to convert, `Srgb` picks a plain one that is passed through. The
+  recommended configuration asks for `Srgb`, which is what the plain format
+  the runtimes prefer actually needs.
+- vk: `xr_recommended_surface_config` and `create_xr_surface_configured` are
+  public, so that an application knows the configuration of its XR surface
 - fix `fill-gbuf.wgsl` missing the `wgpu_binding_array` enable directive
 - tests: validate the renderer shaders, snapshot the PBR material grid in both of the render paths
 - vk: support `VK_EXT_external_memory_host` — enable the extension, query memory-type compatibility via `vkGetMemoryHostPointerPropertiesEXT`, and round allocation size to `minImportedHostPointerAlignment` so `Memory::External(HostAllocation)` imports succeed on drivers that expose the extension

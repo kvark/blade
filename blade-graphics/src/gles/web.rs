@@ -107,8 +107,6 @@ impl super::Context {
             info: crate::SurfaceInfo {
                 format: crate::TextureFormat::Rgba8Unorm,
                 alpha: crate::AlphaMode::PreMultiplied,
-                // the canvas expects the values to be encoded
-                color_space: crate::ColorSpace::Srgb,
             },
             extent: crate::Extent::default(),
         };

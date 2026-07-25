@@ -6,7 +6,6 @@ use objc2_quartz_core::CAMetalLayer;
 const SURFACE_INFO: crate::SurfaceInfo = crate::SurfaceInfo {
     format: crate::TextureFormat::Rgba8Unorm,
     alpha: crate::AlphaMode::Ignored,
-    color_space: crate::ColorSpace::Srgb,
 };
 
 impl super::Surface {
@@ -116,7 +115,6 @@ impl super::Context {
         };
         surface.info = crate::SurfaceInfo {
             format,
-            color_space: crate::SurfaceInfo::derive_color_space(format, config.color_space),
             alpha: if config.transparent {
                 crate::AlphaMode::PostMultiplied
             } else {
