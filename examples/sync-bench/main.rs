@@ -808,6 +808,11 @@ impl Bench {
             Self::Graphics(ref bench) => bench.validate(context),
             Self::Mixed(ref compute_bench, ref graphics_bench) => {
                 let compute_hash = compute_bench.validate(context, compute_passes);
+                // A mixed workload short enough to contain no render pass has
+                // an untouched target, which is not evidence of anything.
+                if workload.graphics_pass_count(passes) == 0 {
+                    return compute_hash;
+                }
                 let graphics_hash = graphics_bench.validate(context);
                 fnv1a64(&[compute_hash.to_le_bytes(), graphics_hash.to_le_bytes()].concat())
             }

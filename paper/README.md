@@ -95,6 +95,11 @@ commands, and is explicitly reported as an end-to-end comparison.
 
 ## Collected so far
 
+`build-tables.py` discovers collections under `data/raw/` and classifies them
+by what they contain, so a retest lands in the tables without editing any
+script. Collections named `<timestamp>-<hostname>` come from the four-policy
+era; later ones cross placement with scope.
+
 | Collection | Machine | Device measured by Blade | Role |
 |---|---|---|---|
 | `20260725T060107Z-zork` | zork | NVIDIA RTX 5070 | 16-pass matrix |
@@ -102,12 +107,14 @@ commands, and is explicitly reported as an end-to-end comparison.
 | `20260725T060322Z-k6` | k6 | AMD Radeon 780M | 16-pass matrix |
 | `20260725T160725Z-matrix` | matrix | Intel Xe (RPL-U) | 16-pass matrix |
 | `20260725T062529Z-mac` | mac | Apple M3 | 16-pass matrix, Metal case study |
-| `20260725T162334Z-zork-sweep` | zork | NVIDIA RTX 5070 | pass-count sweep, GPU-timed |
-| `20260725T162544Z-zork-sweep-cpu` | zork | NVIDIA RTX 5070 | pass-count sweep, timestamp-free |
+| `20260725T185206Z-zork` | zork | NVIDIA RTX 5070 | placement crossed with scope |
+
+Plus two pass-count sweeps on zork, one GPU-timed and one timestamp-free.
 
 Still outstanding before the working-draft banner can come off: Vulkan
-command-stream captures and CPU profiles, application workloads, and a discrete
-AMD part running Blade.
+command-stream captures and CPU profiles. Also outstanding, independently of
+the banner: application workloads, a discrete AMD part running Blade, and the
+crossed placement/scope matrix on anything other than NVIDIA.
 
 ## Current scope
 
