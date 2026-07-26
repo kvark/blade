@@ -147,7 +147,12 @@ fn quad(center: [f32; 3], right: [f32; 3], up: [f32; 3]) -> (Vec<blade_render::V
     (vertices, vec![0, 1, 2, 0, 2, 3])
 }
 
-fn wall(name: &str, center: [f32; 3], right: [f32; 3], up: [f32; 3]) -> blade_render::ProceduralGeometry {
+fn wall(
+    name: &str,
+    center: [f32; 3],
+    right: [f32; 3],
+    up: [f32; 3],
+) -> blade_render::ProceduralGeometry {
     let (vertices, indices) = quad(center, right, up);
     blade_render::ProceduralGeometry {
         name: name.to_string(),
@@ -454,7 +459,10 @@ fn measure_gi_ceiling() {
     if let Some(ref dir) = dump {
         std::fs::create_dir_all(dir).unwrap();
     }
-    println!("{frames} accumulated paths per render, {}x{}\n", SIZE.width, SIZE.height);
+    println!(
+        "{frames} accumulated paths per render, {}x{}\n",
+        SIZE.width, SIZE.height
+    );
 
     let harness = Harness::new(context);
     let context = std::sync::Arc::clone(&harness.context);
@@ -492,13 +500,15 @@ fn measure_gi_ceiling() {
                 .models
                 .baker
                 .create_model(scene.name, scene.geometries);
-            (scene.name, scene.note, harness.asset_hub.models.insert(model))
+            (
+                scene.name,
+                scene.note,
+                harness.asset_hub.models.insert(model),
+            )
         })
         .collect::<Vec<_>>();
     let mut flush_buffers = Vec::new();
-    harness
-        .asset_hub
-        .flush(&mut encoder, &mut flush_buffers);
+    harness.asset_hub.flush(&mut encoder, &mut flush_buffers);
     encoder.init_texture(target.texture);
     let sync_point = context.submit(&mut encoder);
     assert!(context.wait_for(&sync_point, 10_000).unwrap());
