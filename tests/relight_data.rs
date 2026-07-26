@@ -111,7 +111,7 @@ fn sun(
     let dir = direction_from_angles(azimuth, elevation);
     Box::new(move |d: glam::Vec3| {
         let cosine = d.dot(dir);
-        let t = ((cosine - 0.975) / 0.02).clamp(0.0, 1.0);
+        let t = ((cosine - 0.9986) / 0.0012).clamp(0.0, 1.0);
         [
             sky[0] + (color[0] - sky[0]) * t,
             sky[1] + (color[1] - sky[1]) * t,
@@ -121,6 +121,11 @@ fn sun(
 }
 
 fn environments() -> Vec<Environment> {
+    // Radiance, not display values. A real sun is orders of magnitude brighter
+    // than the sky it sits in, and that contrast is the whole of what makes a
+    // specular highlight identifiable: a lobe narrow enough to be worth
+    // recovering only shows up when there is something bright and small for it
+    // to reflect. Eight bit environments cannot carry it.
     vec![
         Environment {
             name: "uniform",
@@ -128,11 +133,11 @@ fn environments() -> Vec<Environment> {
         },
         Environment {
             name: "sun-east",
-            radiance: sun(60.0, 35.0, [1.0, 0.95, 0.85], [0.10, 0.12, 0.16]),
+            radiance: sun(60.0, 35.0, [120.0, 114.0, 102.0], [0.10, 0.12, 0.16]),
         },
         Environment {
             name: "sun-west",
-            radiance: sun(-75.0, 25.0, [1.0, 0.90, 0.75], [0.10, 0.12, 0.16]),
+            radiance: sun(-75.0, 25.0, [150.0, 135.0, 112.0], [0.10, 0.12, 0.16]),
         },
         Environment {
             // Overcast sky over dark ground: nearly all the light comes from
@@ -153,12 +158,12 @@ fn environments() -> Vec<Environment> {
                 let key = direction_from_angles(45.0, 20.0);
                 let fill = direction_from_angles(-120.0, 10.0);
                 Box::new(move |d: glam::Vec3| {
-                    let kw = d.dot(key).max(0.0).powf(6.0);
-                    let fw = d.dot(fill).max(0.0).powf(4.0);
+                    let kw = d.dot(key).max(0.0).powf(200.0);
+                    let fw = d.dot(fill).max(0.0).powf(60.0);
                     [
-                        0.03 + 1.00 * kw + 0.30 * fw,
-                        0.03 + 0.85 * kw + 0.45 * fw,
-                        0.04 + 0.60 * kw + 0.90 * fw,
+                        0.03 + 40.0 * kw + 6.0 * fw,
+                        0.03 + 34.0 * kw + 9.0 * fw,
+                        0.04 + 24.0 * kw + 18.0 * fw,
                     ]
                 })
             },
@@ -166,12 +171,8 @@ fn environments() -> Vec<Environment> {
     ]
 }
 
-/// Quantise an environment into the `Rgba8Unorm` the procedural texture baker
-/// produces.
-///
-/// The values are linear, matching how the shader samples them, so this is a
-/// plain scale and not a transfer encoding.
-fn bake_environment(env: &Environment) -> Vec<[u8; 4]> {
+/// Sample an environment into the float texels the renderer will light with.
+fn bake_environment(env: &Environment) -> Vec<[f32; 4]> {
     let (width, height) = ENV_SIZE;
     let mut texels = Vec::with_capacity((width * height) as usize);
     for y in 0..height {
@@ -179,11 +180,33 @@ fn bake_environment(env: &Environment) -> Vec<[u8; 4]> {
             let u = (x as f32 + 0.5) / width as f32;
             let v = (y as f32 + 0.5) / height as f32;
             let rgb = (env.radiance)(env_direction(u, v));
-            let q = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
-            texels.push([q(rgb[0]), q(rgb[1]), q(rgb[2]), 255]);
+            texels.push([rgb[0], rgb[1], rgb[2], 1.0]);
         }
     }
     texels
+}
+
+/// A look at an environment, for eyes rather than for the solver.
+///
+/// Reinhard rather than a clamp, so a sun a hundred times brighter than the
+/// sky is still distinguishable from one a thousand times brighter.
+fn environment_preview(texels: &[[f32; 4]]) -> Vec<u8> {
+    texels
+        .iter()
+        .flat_map(|texel| {
+            let mut out = [255u8; 4];
+            for i in 0..3 {
+                let mapped = texel[i] / (1.0 + texel[i]);
+                let encoded = if mapped <= 0.003_130_8 {
+                    12.92 * mapped
+                } else {
+                    1.055 * mapped.powf(1.0 / 2.4) - 0.055
+                };
+                out[i] = (encoded.clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+            out
+        })
+        .collect()
 }
 
 // ----------------------------------------------------------------------- scene
@@ -548,9 +571,17 @@ fn generate_relighting_dataset() {
         .iter()
         .map(|env| {
             let texels = bake_environment(env);
+            // The radiance as floats, for whatever consumes the dataset, and a
+            // tone mapped picture next to it for looking at. A PNG cannot be
+            // the source of truth here: the sun is a hundred times brighter
+            // than the sky and would clip to the same white.
+            write_f32(
+                &out_dir.join("env").join(format!("{}.f32", env.name)),
+                bytemuck::cast_slice(&texels),
+            );
             snapshot::save_image(
                 &out_dir.join("env").join(format!("{}.png", env.name)),
-                bytemuck::cast_slice(&texels),
+                &environment_preview(&texels),
                 gpu::Extent {
                     width: ENV_SIZE.0,
                     height: ENV_SIZE.1,
@@ -561,7 +592,7 @@ fn generate_relighting_dataset() {
                 .asset_hub
                 .textures
                 .baker
-                .create_texture(env.name, ENV_SIZE.0, ENV_SIZE.1, &texels);
+                .create_texture_hdr(env.name, ENV_SIZE.0, ENV_SIZE.1, &texels);
             harness.asset_hub.textures.insert(texture)
         })
         .collect::<Vec<_>>();
@@ -596,12 +627,12 @@ fn generate_relighting_dataset() {
          material = \"rgba32f: diffuse albedo rgb, roughness a\"\n\
          geometry = \"rgba32f: shading normal xyz, ray distance a (negative on a miss)\"\n\
          specular = \"rgba32f: specular reflectance at normal incidence, rgb\"\n\
-         environment = \"linear rgba8, equirectangular, matches map_equirect_uv_to_dir\"\n\n",
+         environment = \"linear rgba32f, equirectangular, matches map_equirect_uv_to_dir\"\n\n",
     );
     for env in &envs {
         manifest.push_str(&format!(
-            "[[environment]]\nname = \"{}\"\nfile = \"env/{}.png\"\n\n",
-            env.name, env.name
+            "[[environment]]\nname = \"{}\"\nradiance = \"env/{}.f32\"\npreview = \"env/{}.png\"\n\n",
+            env.name, env.name, env.name
         ));
     }
 

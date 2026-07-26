@@ -105,10 +105,54 @@ impl Baker {
     /// Create a texture directly from RGBA u8 pixel data (4 bytes per pixel).
     /// Uses `Rgba8Unorm` format which supports linear filtering on all GPUs.
     pub fn create_texture(&self, name: &str, width: u32, height: u32, data: &[[u8; 4]]) -> Texture {
+        self.create_texture_raw(
+            name,
+            width,
+            height,
+            blade_graphics::TextureFormat::Rgba8Unorm,
+            unsafe {
+                std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
+            },
+        )
+    }
+
+    /// Same, from RGBA f32 pixel data, as `Rgba32Float`.
+    ///
+    /// An eight bit texture cannot hold a light source: the sun is orders of
+    /// magnitude brighter than the sky around it, and quantising that into
+    /// `[0, 1]` throws away the very contrast that makes a highlight a
+    /// highlight.
+    pub fn create_texture_hdr(
+        &self,
+        name: &str,
+        width: u32,
+        height: u32,
+        data: &[[f32; 4]],
+    ) -> Texture {
+        self.create_texture_raw(
+            name,
+            width,
+            height,
+            blade_graphics::TextureFormat::Rgba32Float,
+            unsafe {
+                std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
+            },
+        )
+    }
+
+    /// Create a texture from pixel data already in the layout `format` expects.
+    fn create_texture_raw(
+        &self,
+        name: &str,
+        width: u32,
+        height: u32,
+        format: blade_graphics::TextureFormat,
+        byte_data: &[u8],
+    ) -> Texture {
         use blade_graphics as gpu;
 
-        assert_eq!(data.len(), (width * height) as usize);
-        let format = gpu::TextureFormat::Rgba8Unorm;
+        let texel_size = format.block_info().size as u32;
+        assert_eq!(byte_data.len(), (width * height * texel_size) as usize);
         let extent = gpu::Extent {
             width,
             height,
@@ -135,9 +179,6 @@ impl Baker {
             },
         );
 
-        let byte_data = unsafe {
-            std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
-        };
         let stage = self.gpu_context.create_buffer(gpu::BufferDesc {
             name: &format!("{name}/stage"),
             size: byte_data.len() as u64,
@@ -147,7 +188,7 @@ impl Baker {
             ptr::copy_nonoverlapping(byte_data.as_ptr(), stage.data(), byte_data.len());
         }
 
-        let bytes_per_row = width * 4;
+        let bytes_per_row = width * texel_size;
         let mut pending_ops = self.pending_operations.lock().unwrap();
         pending_ops
             .initializations
