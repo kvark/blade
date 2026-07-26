@@ -829,6 +829,32 @@ def main() -> None:
     if not collections:
         raise ValueError(f"no collections found under {arguments.raw}")
 
+    # The prose names devices; the tables are generated. If a machine's raw
+    # data is not on this disk the tables lose its rows silently while the text
+    # keeps citing them, which is the one failure mode of keeping measurements
+    # out of git.
+    present = {
+        DEVICE_SHORT.get(name, name)
+        for collection in collections
+        for name in collection.devices.values()
+    }
+    cited = set()
+    paper = HERE / "main.tex"
+    if paper.is_file():
+        text = paper.read_text()
+        for device in DEVICE_SHORT.values():
+            if device.replace(" ", "~") in text or device in text:
+                cited.add(device)
+    missing = sorted(cited - present)
+    if missing:
+        print(
+            "WARNING: main.tex cites devices with no data under data/raw:\n  "
+            + "\n  ".join(missing)
+            + "\n  Their table rows will be absent while the text still refers "
+            "to them.\n  Copy those collections back before building the PDF.",
+            file=sys.stderr,
+        )
+
     for collection in collections:
         print(f"{collection.root.name}: {collection.label} ({collection.role})")
         if collection.mismatched_devices:

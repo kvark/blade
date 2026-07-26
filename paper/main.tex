@@ -734,6 +734,11 @@ loose one. Reading the driver was still worth doing --- it is what produced the
 configuration in the first place, and it explains the NVIDIA and Intel results
 after the fact --- but it generated a hypothesis, not a result.
 
+Section~\ref{sec:generated} closes this argument with captures: the command
+streams submitted on all three drivers are byte-identical, so the spread from
+$5.3\%$ to nothing is entirely in how each driver answers, not in what it was
+asked.
+
 \textbf{Noise is a property of the cell, not the device.} The \texttt{ctrl}
 column makes this legible. The RX~7900~XT is often described in this paper as
 the noisy machine, and its compute cells earn that at $3.6\%$ and $6.5\%$; its
@@ -998,10 +1003,35 @@ than a per-pass cost. Any layout effect in the end-to-end numbers is therefore
 a property of \texttt{GENERAL} versus \texttt{COLOR\_ATTACHMENT\_OPTIMAL} as
 states, not of moving between them.
 
-\pending{Repeat the captures on a RADV driver to confirm the same commands are
-emitted there, and on a workload with MSAA, where
+\subsubsection*{The same commands on every driver}
+
+Repeating the captures on RADV and on Intel's driver settles what varies and
+what does not. Normalizing each capture to a table of one row per barrier ---
+implementation, workload, policy, stage and access masks, barrier kind,
+layouts --- the three machines produce 85 rows each and the tables are
+identical. Not similar: the same SHA-256.
+
+That is worth stating plainly because it removes an entire class of
+explanation. Every vendor difference in Sections~\ref{sec:placement}
+and~\ref{sec:scope-results} is a difference in how a driver and a GPU
+\emph{respond} to commands, not a difference in the commands they were given.
+When narrowing the barrier scope is worth $5.3\%$ on the RTX~5070, about $3\%$
+on the Intel part, and nothing on either AMD device, the submitted stream in
+all six cases is the same stream.
+
+It also puts the failed prediction of Section~\ref{sec:scope-results} on a
+firmer footing. That section argues from RADV's source that a narrowed scope
+sheds specific cache and drain operations, and finds no time saved. The
+captures confirm the input to that argument was right --- the commands do change
+exactly as described, on RADV as everywhere else --- so what failed was the
+inference from commands to cost, not the reading of the driver. A command
+stream bounds what the driver is asked to do. Only a measurement says what the
+asking costs.
+
+\pending{Repeat on a workload with MSAA, where
 Section~\ref{sec:radv-barriers} predicts \texttt{GENERAL} costs FMASK
-compression.}
+compression. Every workload here is single-sampled, which is the case the
+prediction is weakest for.}
 
 The one layout claim this draft does make is negative and comes from the
 sources rather than the measurements: on RADV, a persistent \texttt{GENERAL}
@@ -1030,7 +1060,10 @@ abstraction layer that tracks resources precisely but still cannot express
 ``these passes are unrelated'' is leaving most of the benefit on the table.
 
 \textbf{The device decides, and reading the driver does not substitute for
-asking it.} Two predictions we made from mechanism were wrong in the same
+asking it.} The captures show that all three drivers receive an identical
+command stream (Section~\ref{sec:generated}), so every vendor difference in
+this paper is a difference in response rather than in request. Against that
+fixed input, two predictions we made from mechanism were wrong in the same
 direction. Redundant barriers between independent render passes cost $30\%$ on
 NVIDIA and nothing on either AMD device, despite AMD being the architecture
 whose vendor guidance warns hardest about broad barriers. Narrowing the barrier

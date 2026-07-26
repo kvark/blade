@@ -115,8 +115,8 @@ era; later ones cross placement with scope.
 | Collection | Machine | Device measured by Blade | Role |
 |---|---|---|---|
 | `20260725T191617Z-zork` | zork | NVIDIA RTX 5070 | matrix, placement × scope |
-| `20260725T193736Z-rubik-amd-radeon-rx-7900-xt-radv-n` | rubik | AMD RX 7900 XT | matrix, placement × scope |
-| `20260725T193736Z-rubik-amd-ryzen-5-9600x-6-core-pro` | rubik | AMD Raphael iGPU | matrix, placement × scope |
+| `*-rubik-amd-radeon-rx-7900-xt-radv-n` | rubik | AMD RX 7900 XT | matrix, placement × scope |
+| `*-rubik-amd-ryzen-5-9600x-6-core-pro` | rubik | AMD Raphael iGPU | matrix, placement × scope |
 | `20260725T204342Z-k6` | k6 | AMD Radeon 780M | matrix, placement × scope |
 | `20260725T204044Z-matrix` | matrix | Intel Xe (RPL-U) | matrix, placement × scope (chain cells clean; independent-target cells noisy) |
 | `20260725T062529Z-mac` | mac | Apple M3 | matrix, Metal case study |
@@ -128,6 +128,12 @@ era; later ones cross placement with scope.
 device, so a retest supersedes an earlier run rather than appearing beside it.
 The two `rubik` directories come from one invocation: the collector runs every
 enumerated adapter in turn.
+
+Because `data/raw/` is not in git, a collection is only where it was copied.
+`build-tables.py` warns when `main.tex` cites a device whose data is not on the
+current disk, since otherwise its table rows vanish while the prose keeps
+referring to them. If that warning appears, copy the named collections back
+before building the PDF.
 
 The result gates of [experiments.md](experiments.md) are met. CPU profiles
 (`profile-hosts.py`) and command-stream captures of both implementations
