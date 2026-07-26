@@ -166,6 +166,61 @@ def write_command_capture(
     (output / name).write_text(content, encoding="utf-8")
 
 
+# Sysfs knobs that decide whether a device holds one clock for the length of a
+# collection. A cell whose device changed clock state mid-block cannot resolve
+# anything, and that is not visible in the timings afterwards -- only in the
+# control floor, and only as an unexplained number. Recording the state makes a
+# locked collection distinguishable from an unlocked one after the fact.
+POWER_STATE_PATHS = (
+    # amdgpu: `auto` is the default, `high` pins the top DPM level.
+    "/sys/class/drm/card*/device/power_dpm_force_performance_level",
+    # i915: min == max is a locked frequency.
+    "/sys/class/drm/card*/gt_min_freq_mhz",
+    "/sys/class/drm/card*/gt_max_freq_mhz",
+    "/sys/class/drm/card*/gt_boost_freq_mhz",
+    "/sys/class/drm/card*/gt_RP0_freq_mhz",
+    # xe: the same idea under a different tree.
+    "/sys/class/drm/card*/device/tile*/gt*/freq0/min_freq",
+    "/sys/class/drm/card*/device/tile*/gt*/freq0/max_freq",
+    "/sys/class/drm/card*/device/tile*/gt*/freq0/rp0_freq",
+    "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",
+    "/sys/devices/system/cpu/intel_pstate/no_turbo",
+)
+
+
+def read_power_state() -> dict[str, str]:
+    """Every readable clock-management knob, keyed by path."""
+    if sys.platform != "linux":
+        return {}
+    state: dict[str, str] = {}
+    for pattern in POWER_STATE_PATHS:
+        for path in sorted(Path("/").glob(pattern.lstrip("/"))):
+            try:
+                state[str(path)] = path.read_text().strip()
+            except OSError:
+                continue
+    return state
+
+
+def unlocked_devices(state: dict[str, str]) -> list[str]:
+    """Devices whose clocks are still under automatic management."""
+    unlocked = []
+    for path, value in state.items():
+        if path.endswith("power_dpm_force_performance_level") and value == "auto":
+            unlocked.append(f"{path} = auto")
+    for path, value in state.items():
+        if not path.endswith(("gt_min_freq_mhz", "freq0/min_freq")):
+            continue
+        maximum = state.get(
+            path.replace("gt_min_freq_mhz", "gt_max_freq_mhz").replace(
+                "freq0/min_freq", "freq0/max_freq"
+            )
+        )
+        if maximum is not None and maximum != value:
+            unlocked.append(f"{path} = {value}, max = {maximum}")
+    return unlocked
+
+
 def parse_metadata(output: str) -> dict[str, str]:
     metadata: dict[str, str] = {}
     for line in output.splitlines():
@@ -397,6 +452,26 @@ def collect_device(
         if sys.platform == "win32":
             write_command_capture(
                 output, "systeminfo.txt", ["systeminfo"], blade, timeout=60
+            )
+
+    power_state = read_power_state()
+    manifest["power_state"] = power_state
+    manifest["clocks_locked"] = bool(power_state) and not unlocked_devices(power_state)
+    if power_state:
+        (output / "power-state.txt").write_text(
+            "".join(f"{path} = {value}\n" for path, value in power_state.items()),
+            encoding="utf-8",
+        )
+        unlocked = unlocked_devices(power_state)
+        if unlocked:
+            print(
+                "warning: GPU clocks are under automatic management:\n  "
+                + "\n  ".join(unlocked)
+                + "\n  Short command buffers on an idle device then change clock "
+                "state mid-block, which raises the control floor until the cell "
+                "answers nothing. See the clock-locking section of "
+                "COLLECTING.md.",
+                file=sys.stderr,
             )
 
     blade_policies = (

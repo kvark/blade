@@ -298,15 +298,23 @@ run that emits it.
 ## Lock the clocks first
 
 Every collection in this study so far ran with default power management, and
-the cost is a control floor -- the disagreement between two configurations that
-emit identical commands -- ranging from 0.0% to 48% depending on the cell. A
-cell whose floor exceeds the effect you are chasing cannot answer the question.
+the cost is a control floor -- the largest disagreement between two
+configurations that emit identical commands that the cell is consistent with --
+ranging from 0.0% to 71.3% depending on the cell. A cell whose floor exceeds the
+effect you are chasing cannot answer the question, in either direction.
 
-Short workloads on large idle GPUs are the worst case: the RX 7900 XT never
-leaves its idle clock state during a 200-microsecond command buffer, so its
-compute cells land at 3.6-6.5% while its graphics cells, which run longer, land
-at 0.1-0.8%. Locking clocks is the cheap fix; raising `--rounds` or `--passes`
-until the device settles is the other.
+The mechanism is visible in the raw samples on the machine it hurts most. The
+Intel part's independent-target blocks are bimodal, two clusters roughly 80%
+apart, because a short command buffer on an idle device sometimes runs before
+the clock ramps and sometimes after. A median then lands wherever the split
+fell. Locking clocks is the cheap fix; raising `--rounds` or `--passes` until
+the device settles into one state is the other.
+
+**Lock to a frequency the device can hold, not to its peak.** On a
+power-limited mobile part, pinning to `RP0` or `high` invites the package limit
+to throttle mid-collection, which reintroduces exactly the two-state behaviour
+the locking was meant to remove. A mid-range fixed frequency that the part
+sustains for the whole run is worth more than a higher one it cannot.
 
 On AMD, before collecting:
 
@@ -323,11 +331,24 @@ sudo nvidia-smi --lock-gpu-clocks=tdp --mode=1
 ```
 
 On Intel, `intel_gpu_frequency -s <MHz>` from `intel-gpu-tools` sets a fixed
-frequency. Restore with `auto` / `--reset-gpu-clocks` afterwards, and record
-which command was used next to the collection.
+frequency; equivalently write the same value to `gt_min_freq_mhz` and
+`gt_max_freq_mhz` under `/sys/class/drm/card*/`, or to `freq0/min_freq` and
+`freq0/max_freq` under the `xe` driver's tile tree. Restore with `auto` /
+`--reset-gpu-clocks` afterwards.
+
+The CPU governor matters for host cost and not for device span. Where host
+numbers are wanted, `sudo cpupower frequency-set -g performance` and a quiet
+machine; `k6`'s host row is unusable not because of its GPU but because its
+median 16-pass host block spread 61% of its own median while its device blocks
+stayed clean.
+
+`run-study-matrix.py` reads these knobs itself, writes them to
+`power-state.txt`, records them in the manifest as `power_state` with a
+`clocks_locked` summary, and warns before collecting if a GPU is still under
+automatic management. Nothing has to be remembered or written down by hand.
 
 Then check the floor before believing anything: `build-tables.py` prints a
-`ctrl` column per device, and any effect smaller than it is not a result.
+`ctrl` column per cell, and any effect smaller than it is not a result.
 
 ## Barrier policies and workloads
 
