@@ -160,6 +160,15 @@ pub struct PostProcConfig {
     pub average_luminocity: f32,
     pub exposure_key_value: f32,
     pub white_level: f32,
+    /// Compress the radiance into displayable range.
+    ///
+    /// Clearing this leaves the composed linear radiance as it is, which is
+    /// what a target that can hold it wants: a floating point offscreen
+    /// texture for capture, analysis, or a neural post-process. The exposure
+    /// and white level above are then unused. Note that an unbounded value
+    /// written to a fixed point target still clamps, so the target format has
+    /// to be a floating point one for this to mean anything.
+    pub tone_map: bool,
 }
 impl Default for PostProcConfig {
     fn default() -> Self {
@@ -167,8 +176,41 @@ impl Default for PostProcConfig {
             average_luminocity: 1.0,
             exposure_key_value: 1.0,
             white_level: 1.0,
+            tone_map: true,
         }
     }
+}
+
+/// Views of the ray tracer's geometry and material buffer.
+///
+/// Handed out by [`RayTracer::view_gbuffer`]. Every one is readable as a
+/// sampled texture; the renderer owns them, so nothing here needs destroying.
+#[derive(Clone, Copy, Debug)]
+pub struct GBufferViews {
+    /// `R32Float`. Distance from the camera along the ray, not a projected
+    /// depth, so it is in world units and needs no unprojection.
+    pub depth: blade_graphics::TextureView,
+    /// `Rgba8Snorm`. The shading tangent frame as a quaternion, which is where
+    /// normal mapping ends up. The shading normal is the quaternion applied to
+    /// `+Z`: `v + 2 * cross(q.xyz, cross(q.xyz, v) + q.w * v)` for
+    /// `v = (0, 0, 1)`, matching `qrot` in `quaternion.inc.wgsl`.
+    pub basis: blade_graphics::TextureView,
+    /// `Rgba8Snorm`. The geometric normal in XYZ, straight from the triangle,
+    /// with no normal map applied. Cheaper to consume than [`basis`] when the
+    /// mapped detail is not wanted.
+    ///
+    /// [`basis`]: Self::basis
+    pub flat_normal: blade_graphics::TextureView,
+    /// `Rgba8Unorm`. Base color with the specularly reflected part taken out.
+    pub diffuse_albedo: blade_graphics::TextureView,
+    /// `Rgba8Unorm`. Specular reflectance at normal incidence in RGB, and the
+    /// roughness in alpha.
+    pub specular_f0: blade_graphics::TextureView,
+    /// Emitted radiance, in the renderer's radiance format.
+    pub emissive: blade_graphics::TextureView,
+    /// `Rg8Snorm`. Screen space motion since the previous frame, scaled by
+    /// `MOTION_SCALE` from `gbuf.inc.wgsl`.
+    pub motion: blade_graphics::TextureView,
 }
 
 pub struct SelectionInfo {
@@ -1012,6 +1054,36 @@ impl RayTracer {
         self.env_map.weight_view
     }
 
+    /// The geometry and material buffer of the frame that was last prepared.
+    ///
+    /// A post process that knows what the renderer knows can do things a post
+    /// process working from the color alone cannot: exact silhouettes from the
+    /// depth and the normals, texture detail separated from lighting by the
+    /// albedo, and the width of a specular highlight from the roughness. This
+    /// hands those out so a consumer outside the renderer — a neural upscaler,
+    /// a capture tool, an analysis pass — can read them.
+    ///
+    /// The views are only valid until the next [`resize_screen`], and they
+    /// describe the frame that [`prepare`] last filled: call it after
+    /// `prepare`, and read before the next one overwrites them.
+    ///
+    /// [`resize_screen`]: Self::resize_screen
+    /// [`prepare`]: Self::prepare
+    pub fn view_gbuffer(&self) -> GBufferViews {
+        // The geometry targets are double buffered for temporal reuse, and
+        // `prepare` advanced the frame index, so the current one is here.
+        let cur = self.frame_index % 2;
+        GBufferViews {
+            depth: self.targets.depth.views[cur],
+            basis: self.targets.basis.views[cur],
+            flat_normal: self.targets.flat_normal.views[cur],
+            diffuse_albedo: self.targets.diffuse_albedo.views[cur],
+            specular_f0: self.targets.specular_f0.views[cur],
+            emissive: self.targets.emissive.views[0],
+            motion: self.targets.motion.views[0],
+        }
+    }
+
     #[profiling::function]
     pub fn resize_screen(
         &mut self,
@@ -1575,7 +1647,7 @@ impl RayTracer {
                     t_accumulation: self.targets.accumulation.views[0],
                     t_debug: self.targets.debug.views[0],
                     post_proc_params: PostProcParams {
-                        tone_map_enabled: 1,
+                        tone_map_enabled: pp_config.tone_map as u32,
                         average_lum: pp_config.average_luminocity,
                         key_value: pp_config.exposure_key_value,
                         white_level: pp_config.white_level,

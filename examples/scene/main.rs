@@ -269,6 +269,7 @@ impl Example {
                 average_luminocity: 1.0,
                 exposure_key_value: 1.0 / 9.6,
                 white_level: 1.0,
+                tone_map: true,
             },
             debug_blit: None,
             debug_blit_input: DebugBlitInput::None,
