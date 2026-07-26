@@ -15,6 +15,10 @@ var out_material: texture_storage_2d<rgba32float, write>;
 // ray left the scene, so a consumer can build a coverage mask from it without
 // a separate channel.
 var out_geometry: texture_storage_2d<rgba32float, write>;
+// Specular reflectance at normal incidence in RGB. Not derivable from the
+// diffuse albedo: a metal keeps its base colour here and loses it there, and
+// the two cannot be told apart from the diffuse channel alone.
+var out_specular: texture_storage_2d<rgba32float, write>;
 
 // Matches `qrot` in the renderer's quaternion.inc.wgsl.
 fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
@@ -49,4 +53,5 @@ fn probe(@builtin(global_invocation_id) id: vec3<u32>) {
         shading_normal,
         select(-1.0, depth, hit),
     ));
+    textureStore(out_specular, texel, vec4<f32>(specular.xyz, 0.0));
 }

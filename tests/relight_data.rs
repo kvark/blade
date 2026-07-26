@@ -62,7 +62,9 @@ fn parsed<T: std::str::FromStr>(name: &str, fallback: T) -> T {
 
 fn output_size() -> gpu::Extent {
     let spec = env_var("RELIGHT_SIZE").unwrap_or_else(|| "320x240".to_string());
-    let (w, h) = spec.split_once('x').expect("RELIGHT_SIZE must look like WxH");
+    let (w, h) = spec
+        .split_once('x')
+        .expect("RELIGHT_SIZE must look like WxH");
     gpu::Extent {
         width: w.parse().expect("bad width"),
         height: h.parse().expect("bad height"),
@@ -80,11 +82,7 @@ fn output_size() -> gpu::Extent {
 fn env_direction(u: f32, v: f32) -> glam::Vec3 {
     let yaw = std::f32::consts::PI * (0.5 - v);
     let pitch = 2.0 * std::f32::consts::PI * (u - 0.5);
-    glam::Vec3::new(
-        yaw.cos() * pitch.sin(),
-        yaw.sin(),
-        yaw.cos() * pitch.cos(),
-    )
+    glam::Vec3::new(yaw.cos() * pitch.sin(), yaw.sin(), yaw.cos() * pitch.cos())
 }
 
 fn direction_from_angles(azimuth_deg: f32, elevation_deg: f32) -> glam::Vec3 {
@@ -311,6 +309,7 @@ struct RelightGBufferData {
     t_specular_f0: gpu::TextureView,
     out_material: gpu::TextureView,
     out_geometry: gpu::TextureView,
+    out_specular: gpu::TextureView,
 }
 
 /// A storage texture the probe writes into, plus the buffer it reads back to.
@@ -501,6 +500,7 @@ fn generate_relighting_dataset() {
     let hdr = snapshot::OffscreenTarget::new(&context, size, HDR_FORMAT);
     let material = ProbeTarget::new(&context, size, "relight-material");
     let geometry = ProbeTarget::new(&context, size, "relight-geometry");
+    let specular = ProbeTarget::new(&context, size, "relight-specular");
 
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "relight-data",
@@ -557,12 +557,11 @@ fn generate_relighting_dataset() {
                     depth: 1,
                 },
             );
-            let texture = harness.asset_hub.textures.baker.create_texture(
-                env.name,
-                ENV_SIZE.0,
-                ENV_SIZE.1,
-                &texels,
-            );
+            let texture = harness
+                .asset_hub
+                .textures
+                .baker
+                .create_texture(env.name, ENV_SIZE.0, ENV_SIZE.1, &texels);
             harness.asset_hub.textures.insert(texture)
         })
         .collect::<Vec<_>>();
@@ -572,6 +571,7 @@ fn generate_relighting_dataset() {
     encoder.init_texture(hdr.texture);
     encoder.init_texture(material.texture);
     encoder.init_texture(geometry.texture);
+    encoder.init_texture(specular.texture);
     let sync_point = context.submit(&mut encoder);
     assert!(context.wait_for(&sync_point, 30_000).unwrap());
 
@@ -595,6 +595,7 @@ fn generate_relighting_dataset() {
         "radiance = \"linear rgba32f, tone map off, alpha unused\"\n\
          material = \"rgba32f: diffuse albedo rgb, roughness a\"\n\
          geometry = \"rgba32f: shading normal xyz, ray distance a (negative on a miss)\"\n\
+         specular = \"rgba32f: specular reflectance at normal incidence, rgb\"\n\
          environment = \"linear rgba8, equirectangular, matches map_equirect_uv_to_dir\"\n\n",
     );
     for env in &envs {
@@ -724,6 +725,7 @@ fn generate_relighting_dataset() {
                     t_specular_f0: views.specular_f0,
                     out_material: material.view,
                     out_geometry: geometry.view,
+                    out_specular: specular.view,
                 },
             );
             commands.dispatch([size.width.div_ceil(8), size.height.div_ceil(8), 1]);
@@ -742,11 +744,19 @@ fn generate_relighting_dataset() {
                 size.width * 16,
                 size,
             );
+            transfer.copy_texture_to_buffer(
+                specular.texture.into(),
+                specular.readback.into(),
+                size.width * 16,
+                size,
+            );
         }
         let sync_point = context.submit(&mut encoder);
-        assert!(context
-            .wait_for(&sync_point, snapshot::READBACK_TIMEOUT_MS)
-            .unwrap());
+        assert!(
+            context
+                .wait_for(&sync_point, snapshot::READBACK_TIMEOUT_MS)
+                .unwrap()
+        );
 
         for buffer in gbuffer_temp.buffers {
             context.destroy_buffer(buffer);
@@ -759,6 +769,7 @@ fn generate_relighting_dataset() {
         let geometry_data = geometry.read();
         write_f32(&dir.join("material.f32"), &material_data);
         write_f32(&dir.join("geometry.f32"), &geometry_data);
+        write_f32(&dir.join("specular.f32"), &specular.read());
 
         let covered = geometry_data
             .chunks_exact(4)
@@ -770,7 +781,8 @@ fn generate_relighting_dataset() {
             "[[view]]\nindex = {index}\nposition = [{:.6}, {:.6}, {:.6}]\n\
              orientation = [{:.6}, {:.6}, {:.6}, {:.6}]\nfov_y = {:.6}\n\
              coverage = {:.4}\nmaterial = \"view_{index:03}/material.f32\"\n\
-             geometry = \"view_{index:03}/geometry.f32\"\nradiance = [\n{}\n]\n\n",
+             geometry = \"view_{index:03}/geometry.f32\"\n\
+             specular = \"view_{index:03}/specular.f32\"\nradiance = [\n{}\n]\n\n",
             position[0],
             position[1],
             position[2],
@@ -799,6 +811,7 @@ fn generate_relighting_dataset() {
     context.destroy_command_encoder(&mut encoder);
     material.destroy(&context);
     geometry.destroy(&context);
+    specular.destroy(&context);
     hdr.destroy(&context);
     harness.destroy();
 }
