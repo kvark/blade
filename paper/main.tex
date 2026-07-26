@@ -824,24 +824,27 @@ or library that spent it, on a workload deliberately shaped so the process
 stays in the recording path rather than blocking on the GPU.
 
 The result is a correction to the obvious reading of
-Table~\ref{tab:host-matrix}. Resource state tracking is $6.8\%$ of \wgpu's
-process CPU time on \texttt{compute-independent} and $3.1\%$ on
+Table~\ref{tab:host-matrix}. Resource state tracking is about $6\%$ of \wgpu's
+process CPU time on \texttt{compute-independent} and about $3\%$ on
 \texttt{graphics-independent} --- real, and the largest single \wgpu{}
 component after command recording, but nowhere near enough to explain a gap of
-two to twelve times. Summing every \wgpu{} row gives $15.4\%$ and $15.8\%$
-and $15.7\%$. Even if tracking were free, \wgpu{} would remain far more
+two to twelve times. Every \wgpu{} row together comes to about $15\%$ on
+both. Even if tracking were free, \wgpu{} would remain far more
 expensive on this axis than \blade.
 
 What actually dominates both implementations is the kernel and the driver:
-$90$--$92\%$ of \blade's profile and $69$--$71\%$ of \wgpu's. These workloads submit
-a command buffer per iteration with very little GPU work in it, so submission
+about $90\%$ of \blade's profile and $67$--$71\%$ of \wgpu's. These workloads
+submit a command buffer per iteration with very little GPU work in it, so submission
 cost is the bulk of the process. That also means the two totals are not
 comparable --- \texttt{task-clock} charges a blocking fence wait to the process
 whenever the driver spins inside it, and \blade{} and \wgpu{} wait differently
 --- which is why the table reports shares within a process rather than times
 between processes.
 
-Two limits on this evidence. Self time is charged to the symbol a sample landed
+Three limits on this evidence. Repeating the profile of one configuration
+moves its shares by around a percentage point, so these are quoted to the
+nearest whole percent and small differences between rows are not meaningful.
+Self time is charged to the symbol a sample landed
 in, so tracker work that the optimizer inlined into its callers is charged to
 them; the tracker row is a lower bound. And the profile explains where the time
 goes, not why one design needs more of it: the answer to that is spread across
