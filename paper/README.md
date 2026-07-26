@@ -139,14 +139,23 @@ The result gates of [experiments.md](experiments.md) are met. CPU profiles
 (`profile-hosts.py`) and command-stream captures of both implementations
 (`capture-streams.py`) are collected and reported.
 
-Outstanding before circulation, as breadth rather than kind:
+The workload set is closed; see [experiments.md](experiments.md) for what was
+considered and declined, and why. What remains is filling the existing grid:
 
-- application workloads on heterogeneous frames.
-- captures repeated on a RADV driver, and on an MSAA workload where the RADV
-  sources predict `GENERAL` costs FMASK compression.
-- optionally, clock-locked repeats to recover the eight cells (of thirty) whose
-  control floor exceeds 2%. Not a blocker: the conclusions rest on cells whose
-  floor is below 1.5%. See the top of [COLLECTING.md](COLLECTING.md).
+| machine | matrix | profile | captures |
+|---|:--:|:--:|:--:|
+| zork | yes | yes | yes |
+| rubik | yes | yes | yes |
+| k6 | yes | — | — |
+| matrix | yes | yes | yes |
+| mac | yes | n/a | n/a |
+
+`python3 paper/collect.py --wgpu ../wgpu` fills a row. Apple has neither a
+`perf` nor a RenderDoc path, so its row is complete as it stands.
+
+Optional: clock-locked repeats to recover the cells whose control floor exceeds
+the effect in them. Not a blocker — the conclusions rest on cells whose floor is
+below 1.5%, and the `ctrl` column of the scope table says which is which.
 
 ## Current scope
 

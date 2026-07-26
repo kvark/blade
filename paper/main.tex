@@ -68,13 +68,13 @@ disables FMASK compression, so multisampled colour is the surviving exception.
 \noindent\colorbox{yellow!25}{%
 \parbox{\dimexpr\columnwidth-2\fboxsep\relax}{%
 \textbf{Working draft.} All numbers below are measured and reproduced by the
-scripts in this directory. The result gates of \texttt{experiments.md} are met:
-CPU profiles (Section~\ref{sec:profile}) and command-stream captures of both
-implementations (Section~\ref{sec:generated}) are collected and reported.
-What remains before circulation is breadth rather than kind --- application
-workloads on heterogeneous frames, and captures repeated on a second driver ---
-so claims are stated for the device-driver pairs measured and not
-generalized.}}
+scripts in this directory, and the result gates of \texttt{experiments.md} are
+met: CPU profiles (Section~\ref{sec:profile}) and command-stream captures of
+both implementations on three drivers (Section~\ref{sec:generated}). The
+workload set is final. Claims are stated for the device-driver pairs measured,
+and the cases deliberately left uncovered --- multisampled targets, application
+frames --- are named where they bound a claim rather than listed as future
+work.}}
 
 \section{Introduction}
 
@@ -524,9 +524,14 @@ different output hashes. All 216 runs of the fixed matrix, and all 768 runs of
 the two sweeps, produced matching hashes per workload across every device and
 both implementations.
 
-The application set is still outstanding.
-\pending{Bunnymark, the \blade{} particle system, a fixed multi-pass renderer
-scene, and a compute pipeline, with frozen scenes and input hashes.}
+These six are the whole workload set, deliberately. They vary one factor ---
+whether consecutive passes carry a dependency --- across the three pass kinds a
+synchronization policy can distinguish, and that is what the study is about.
+Application frames would add heterogeneity of a kind these do not have, and
+Section~\ref{sec:threats} states what that costs the conclusions; they would
+also add scene, content, and driver-heuristic variation that this design exists
+to exclude. We report a bounded claim about a controlled workload rather than
+an unbounded one about renderers.
 
 \subsection{Platforms}
 
@@ -871,14 +876,15 @@ so an application that declares its own graph beats the tracker by a wide
 margin on the same hardware. Precise tracking recovers part of the available
 overlap; explicit knowledge recovers more.
 
-On the AMD parts the sign flips. \wgpu{} is faster than \texttt{B-auto} on all
-four shared workloads on the RX~7900~XT, by $2.4\%$ to $27.5\%$, and faster on
-both graphics workloads on the Raphael iGPU while being $13$--$14\%$ slower on
-both compute ones. The largest of these, $27.5\%$ on
-\texttt{compute-independent}, sits on one of that device's noisy cells but is
-far outside its $6.5\%$ control band and reproduces across all three
-repetitions. So the tracked implementation is not uniformly paying for its
-precision on the device side --- on this AMD part it is collecting on it.
+On the AMD parts the sign flips. \wgpu{} is faster than \texttt{B-auto} on
+three of the four shared workloads on the RX~7900~XT --- $30.5\%$ on
+\texttt{compute-independent}, $5.5\%$ on \texttt{graphics-chain},
+$3.8\%$ on \texttt{compute-chain} --- and faster on both graphics workloads on
+the Raphael iGPU while being $13$--$14\%$ slower on both compute ones. The
+largest of these reproduces on two independent collections and is far outside
+its cell's control floor. So the tracked implementation is not uniformly paying
+for its precision on the device side; on this AMD part it is collecting on
+it.
 
 We cannot yet explain any of these, in either direction. On the Intel device
 \wgpu's GPU span is $26$--$84\%$ \emph{larger} than \texttt{B-auto}'s, and
@@ -1028,10 +1034,14 @@ inference from commands to cost, not the reading of the driver. A command
 stream bounds what the driver is asked to do. Only a measurement says what the
 asking costs.
 
-\pending{Repeat on a workload with MSAA, where
-Section~\ref{sec:radv-barriers} predicts \texttt{GENERAL} costs FMASK
-compression. Every workload here is single-sampled, which is the case the
-prediction is weakest for.}
+One case is deliberately not covered. Every workload here is single-sampled,
+and Section~\ref{sec:radv-barriers} reads from RADV that \texttt{GENERAL}
+disables FMASK compression unconditionally, so multisampled colour is the one
+configuration where a persistent \texttt{GENERAL} layout should cost real
+bandwidth on AMD. We state that from the driver source and do not test it. The
+honest summary is that this paper establishes the layout question for
+single-sampled targets and leaves the multisampled case where it found it: a
+documented exception in a driver, not a measurement.
 
 The one layout claim this draft does make is negative and comes from the
 sources rather than the measurements: on RADV, a persistent \texttt{GENERAL}
@@ -1130,7 +1140,7 @@ submit both to the same queue.
 \emph{Then measure, because the restructuring is not always a win.} On the
 Radeon~780M, letting sixteen independent render passes overlap cost $20.2\%$
 and the mixed equivalent $16.4\%$, while on the RX~7900~XT the same change on
-render passes bought nothing at all and the compute equivalent bought a fifth
+render passes bought nothing at all and the compute equivalent bought a quarter
 of the frame. The passes worth
 grouping are the ones with complementary bottlenecks --- ray tracing next to
 rasterization, a depth prepass next to a compute simulation --- not several
@@ -1150,6 +1160,7 @@ multisampled colour, where RADV disables FMASK compression in
 by either barrier axis.
 
 \section{Threats to Validity}
+\label{sec:threats}
 
 GPU timestamps perturb the measurement: the same host cost is larger with them
 enabled, by a margin that grows with the pass count. We therefore separate
@@ -1175,12 +1186,20 @@ End-to-end \wgpu{} differences are labelled as such throughout, and the ones we
 cannot account for --- the Intel gap in one direction, the RX~7900~XT gap in
 the other --- are left unexplained rather than attributed.
 
-The workloads are microbenchmarks with sixteen homogeneous passes. Real frames
-have heterogeneous passes, which is precisely the regime in which the field
+The workloads are microbenchmarks of sixteen passes each. Two of the six
+alternate compute and render work, so heterogeneity is represented, but only
+the synthetic kind: two pass types in a fixed alternation, with identical work
+in every instance of each. Real frames vary the cost, the resources, and the
+bottleneck from pass to pass, which is precisely the regime in which the field
 report saw a benefit and our \texttt{graphics-independent} workload saw a loss
-on one device. Until the application workloads are collected, the boundary in
-Section~\ref{sec:discussion} is a hypothesis supported by microbenchmarks and
-one field report, not a validated rule.
+on one device. The boundary proposed in Section~\ref{sec:discussion} is
+therefore a hypothesis supported by microbenchmarks --- including mixed ones ---
+and one field report, not a validated rule. We chose not to close that gap with
+application workloads: doing so would trade a controlled comparison for a
+plausible one, since scenes, content, and driver heuristics vary in ways this
+design exists to hold still. A reader who needs the rule validated on their own
+frame should measure their own frame, which is the recommendation
+Section~\ref{sec:amd-advice} makes anyway.
 
 The AMD evidence is now a discrete RDNA3 part, a mobile RDNA3 iGPU, a very
 small desktop iGPU, the driver sources, and a user report --- but the discrete
@@ -1230,10 +1249,10 @@ and none of the API surface. It should be presented as a profiled optimization
 rather than a default, because on at least one real device it makes things
 worse.
 
-Before circulation, this draft still needs command-stream captures and CPU
-profiles to explain the end-to-end \wgpu{} differences, application workloads
-to test the boundary on heterogeneous frames, and a clock-locked repeat of the
-discrete AMD collection.
+What this draft does not have, and has decided not to pursue, is stated rather
+than promised: application frames, multisampled targets, and clock-locked
+repeats of the cells whose control floor exceeds the effect in them. Each is a
+bound on a specific claim, named where that claim is made.
 
 \bibliographystyle{plain}
 \bibliography{references}

@@ -118,20 +118,25 @@ implement them, and the collector runs wgpu on the four shared workloads only.
 `mixed-chain` is the cleanest single-factor test of barrier scope, because
 `B-hazard` places exactly the same barriers there as `B-auto`.
 
-Required extensions:
+**The workload set is closed.** These six vary one factor — whether
+consecutive passes carry a dependency — across the three pass kinds a
+synchronization policy can distinguish, and the matched wgpu program covers the
+four it can. Extensions considered and declined, with what each costs:
 
-- dependency-density DAGs between these extremes;
-- transfer→compute and compute→graphics stage transitions;
-- attachment→sample, attachment→storage, and copy layout changes;
-- resource-count sweeps independent of pass count;
-- texture format, depth, MSAA, mip, and array-subresource sweeps;
-- mixed graphics/compute workloads with known overlap opportunities.
-- matched wgpu versions of the frozen workloads, using the same WGSL, resource
-  sizes, pass graph, initialization, output checks, and iteration schedule.
+- *Application frames* (Bunnymark, the particle system, a multi-pass scene).
+  Would test the decision boundary on real heterogeneity. Declined: scenes,
+  content, and driver heuristics vary in ways this design exists to hold still,
+  so it trades a controlled comparison for a plausible one. The boundary stays
+  labelled a hypothesis.
+- *MSAA targets.* The one case where RADV disables a compression path for
+  `GENERAL`, so the one place a persistent-layout policy should cost bandwidth
+  on AMD. Declined as niche in current renderers; the paper states the
+  exception from driver source and does not test it.
+- *Dependency-density DAGs, resource-count sweeps, format/depth/mip/array
+  sweeps.* Each adds a factor the study does not claim about.
 
-Application workloads should include Bunnymark, the Blade particle system, a
-fixed multi-pass renderer scene, and a compute pipeline. Freeze all scenes,
-inputs, resolutions, and shader hashes before the final collection.
+Adding any of these means reopening the collection on every machine. The bar
+for doing so is a claim the paper wants to make and cannot.
 
 ## Metrics
 
