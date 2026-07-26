@@ -75,6 +75,8 @@ WORKLOADS = (
     "mixed-independent",
     "mixed-chain",
 )
+# The mixed families exist only in Blade's benchmark.
+SHARED_WORKLOADS = frozenset(WORKLOADS) - {"mixed-independent", "mixed-chain"}
 POLICIES = ("automatic", "automatic-scoped", "hazard-only")
 
 
@@ -82,6 +84,7 @@ def parse_arguments() -> argparse.Namespace:
     blade_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser()
     parser.add_argument("--blade", type=Path, default=blade_root)
+    parser.add_argument("--wgpu", type=Path, default=blade_root.parent / "wgpu")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--library", type=Path, help="path to librenderdoc.so")
     parser.add_argument(
@@ -98,6 +101,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--workloads", default=",".join(WORKLOADS))
     parser.add_argument("--policies", default=",".join(POLICIES))
     parser.add_argument("--blade-device-id", type=lambda v: int(v, 0))
+    parser.add_argument("--wgpu-adapter-name")
+    parser.add_argument("--backend", default="vulkan")
     parser.add_argument("--skip-build", action="store_true")
     return parser.parse_args()
 
@@ -272,7 +277,9 @@ def field(element, name: str) -> int | None:
     return None
 
 
-def extract_barriers(xml_path: Path, workload: str, policy: str) -> list[dict]:
+def extract_barriers(
+    xml_path: Path, implementation: str, workload: str, policy: str
+) -> list[dict]:
     """One row per `vkCmdPipelineBarrier` in the capture.
 
     This is the point of capturing: the paper describes these masks from
@@ -293,7 +300,7 @@ def extract_barriers(xml_path: Path, workload: str, policy: str) -> list[dict]:
         source_access = destination_access = 0
         old_layout = new_layout = None
         for container in chunk:
-            if container.get("name") == "pMemoryBarriers":
+            if container.get("name") in ("pMemoryBarriers", "pBufferMemoryBarriers"):
                 for structure in container:
                     source_access |= field(structure, "srcAccessMask") or 0
                     destination_access |= field(structure, "dstAccessMask") or 0
@@ -305,6 +312,7 @@ def extract_barriers(xml_path: Path, workload: str, policy: str) -> list[dict]:
                     new_layout = field(structure, "newLayout")
         rows.append(
             {
+                "implementation": implementation,
                 "workload": workload,
                 "policy": policy,
                 "index": index,
@@ -338,7 +346,9 @@ def convert_and_extract(output: Path, library: Path, runs: list[dict]) -> int:
     environment = os.environ | {"LD_LIBRARY_PATH": str(root / "lib")}
     rows: list[dict] = []
     for capture in sorted(output.glob("*.rdc")):
-        stem = capture.stem.removeprefix("sync-bench__").removesuffix("_capture")
+        stem = capture.stem.removesuffix("_capture")
+        implementation = "wgpu" if stem.startswith("wgpu-sync-bench__") else "blade"
+        stem = stem.removeprefix("wgpu-sync-bench__").removeprefix("sync-bench__")
         workload, _, policy = stem.rpartition("__")
         xml_path = capture.with_suffix(".xml")
         result = subprocess.run(
@@ -349,7 +359,7 @@ def convert_and_extract(output: Path, library: Path, runs: list[dict]) -> int:
         if result.returncode != 0 or not xml_path.is_file():
             print(f"could not convert {capture.name}", file=sys.stderr)
             continue
-        rows.extend(extract_barriers(xml_path, workload, policy))
+        rows.extend(extract_barriers(xml_path, implementation, workload, policy))
         xml_path.unlink()
     if not rows:
         return 0
@@ -377,66 +387,111 @@ def main() -> None:
         raise SystemExit(f"refusing to reuse output directory: {output}")
     output.mkdir(parents=True)
 
+    wgpu = arguments.wgpu.resolve()
     if not arguments.skip_build:
         subprocess.run(
             ["cargo", "build", "--release", "--example", "sync-bench"],
             cwd=blade,
             check=True,
         )
-    binary = blade / "target/release/examples/sync-bench"
-    if not binary.is_file():
-        raise SystemExit(f"missing benchmark binary: {binary}")
+        subprocess.run(
+            ["cargo", "build", "--release", "-p", "wgpu-sync-bench"],
+            cwd=wgpu,
+            check=True,
+        )
+    binaries = {
+        "blade": blade / "target/release/examples/sync-bench",
+        "wgpu": wgpu / "target/release/wgpu-sync-bench",
+    }
+    for label, path in binaries.items():
+        if not path.is_file():
+            raise SystemExit(f"missing benchmark binary: {path}")
+
+    # wgpu has one configuration; Blade has one per policy. Pair them so both
+    # command streams come from the same workload and the same machine state.
+    configurations = [
+        ("blade", workload, policy)
+        for workload in (w.strip() for w in arguments.workloads.split(",") if w.strip())
+        for policy in (p.strip() for p in arguments.policies.split(",") if p.strip())
+    ]
+    configurations += [
+        ("wgpu", workload, "tracked")
+        for workload in (w.strip() for w in arguments.workloads.split(",") if w.strip())
+        if workload in SHARED_WORKLOADS
+    ]
 
     runs = []
-    for workload in (w.strip() for w in arguments.workloads.split(",") if w.strip()):
-        for policy in (p.strip() for p in arguments.policies.split(",") if p.strip()):
-            command = [
-                str(binary),
-                "--workload",
-                workload,
-                "--policy",
-                policy,
-                "--capture",
-                *CAPTURE_SHAPE,
-            ]
+    for implementation, workload, policy in configurations:
+        binary = binaries[implementation]
+        command = [
+            str(binary),
+            "--workload",
+            workload,
+            "--policy",
+            policy,
+            "--capture",
+            *CAPTURE_SHAPE,
+        ]
+        if implementation == "blade":
             if arguments.blade_device_id is not None:
                 command += ["--device-id", str(arguments.blade_device_id)]
-            environment = os.environ.copy()
-            # RenderDoc has to be resident before the Vulkan loader initialises,
-            # so it is preloaded rather than dlopened by the benchmark.
-            preload = environment.get("LD_PRELOAD")
-            environment["LD_PRELOAD"] = (
-                f"{library}:{preload}" if preload else str(library)
+        else:
+            # wgpu takes no --policy; its single configuration is implied.
+            index = command.index("--policy")
+            del command[index : index + 2]
+        environment = os.environ.copy()
+        if implementation == "wgpu":
+            environment["WGPU_BACKEND"] = arguments.backend
+            if arguments.wgpu_adapter_name:
+                environment["WGPU_ADAPTER_NAME"] = arguments.wgpu_adapter_name
+        # RenderDoc has to be resident before the Vulkan loader initialises,
+        # so it is preloaded rather than dlopened by the benchmark.
+        preload = environment.get("LD_PRELOAD")
+        environment["LD_PRELOAD"] = (
+            f"{library}:{preload}" if preload else str(library)
+        )
+        environment.update(layer_environment(library))
+        print(
+            f"capturing {implementation} / {workload} / {policy}",
+            file=sys.stderr,
+            flush=True,
+        )
+        result = subprocess.run(
+            command, cwd=output, env=environment, text=True, capture_output=True
+        )
+        (output / f"{implementation}__{workload}__{policy}.log").write_text(
+            result.stdout + result.stderr, encoding="utf-8"
+        )
+        if result.returncode != 0:
+            raise SystemExit(
+                f"{implementation}/{workload}/{policy} failed with "
+                f"{result.returncode}\n"
+                f"{result.stdout}{result.stderr}"
             )
-            environment.update(layer_environment(library))
-            print(f"capturing {workload} / {policy}", file=sys.stderr, flush=True)
-            result = subprocess.run(
-                command, cwd=output, env=environment, text=True, capture_output=True
+        if "RenderDoc is not loaded" in result.stderr:
+            raise SystemExit(
+                "the benchmark ran but RenderDoc was not loaded; check that "
+                f"{library} matches this architecture and that LD_PRELOAD is "
+                "not being stripped."
             )
-            (output / f"{workload}__{policy}.log").write_text(
-                result.stdout + result.stderr, encoding="utf-8"
+        if not list(output.glob("*.rdc")):
+            raise SystemExit(
+                f"{implementation}/{workload}/{policy} produced no capture. "
+                "RenderDoc's "
+                "in-application API was reachable, so the library loaded, "
+                "but its Vulkan layer did not intercept anything. Check "
+                "that VK_ADD_IMPLICIT_LAYER_PATH reaches this loader "
+                f"({environment.get('VK_ADD_IMPLICIT_LAYER_PATH')}) and "
+                "that the manifest's library_path is correct."
             )
-            if result.returncode != 0:
-                raise SystemExit(
-                    f"{workload}/{policy} failed with {result.returncode}\n"
-                    f"{result.stdout}{result.stderr}"
-                )
-            if "RenderDoc is not loaded" in result.stderr:
-                raise SystemExit(
-                    "the benchmark ran but RenderDoc was not loaded; check that "
-                    f"{library} matches this architecture and that LD_PRELOAD is "
-                    "not being stripped."
-                )
-            if not list(output.glob("*.rdc")):
-                raise SystemExit(
-                    f"{workload}/{policy} produced no capture. RenderDoc's "
-                    "in-application API was reachable, so the library loaded, "
-                    "but its Vulkan layer did not intercept anything. Check "
-                    "that VK_ADD_IMPLICIT_LAYER_PATH reaches this loader "
-                    f"({environment.get('VK_ADD_IMPLICIT_LAYER_PATH')}) and "
-                    "that the manifest's library_path is correct."
-                )
-            runs.append({"workload": workload, "policy": policy, "command": command})
+        runs.append(
+            {
+                "implementation": implementation,
+                "workload": workload,
+                "policy": policy,
+                "command": command,
+            }
+        )
 
     captures = sorted(p.name for p in output.glob("*.rdc"))
     if not captures:
@@ -463,11 +518,7 @@ def main() -> None:
                 "capture_shape": list(CAPTURE_SHAPE),
                 "captures": captures,
                 "runs": runs,
-                "note": (
-                    "Blade only. The matched wgpu benchmark has no --capture "
-                    "flag; adding one that calls the same RenderDoc API around "
-                    "one warmed iteration would make the comparison symmetric."
-                ),
+                "backend": arguments.backend,
             },
             indent=2,
             sort_keys=True,

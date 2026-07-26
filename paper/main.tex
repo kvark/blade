@@ -68,12 +68,13 @@ disables FMASK compression, so multisampled colour is the surviving exception.
 \noindent\colorbox{yellow!25}{%
 \parbox{\dimexpr\columnwidth-2\fboxsep\relax}{%
 \textbf{Working draft.} All numbers below are measured and reproduced by the
-scripts in this directory. The last result gate from \texttt{experiments.md} is
-nearly closed: CPU profiles are collected and reported
-(Section~\ref{sec:profile}), and command-stream captures confirm \blade's
-generated barriers and layouts, but the matched \wgpu{} program has not been
-captured, so statements about \emph{its} generated commands remain
-source-derived. Application workloads are also outstanding.}}
+scripts in this directory. The result gates of \texttt{experiments.md} are met:
+CPU profiles (Section~\ref{sec:profile}) and command-stream captures of both
+implementations (Section~\ref{sec:generated}) are collected and reported.
+What remains before circulation is breadth rather than kind --- application
+workloads on heterogeneous frames, and captures repeated on a second driver ---
+so claims are stated for the device-driver pairs measured and not
+generalized.}}
 
 \section{Introduction}
 
@@ -808,12 +809,10 @@ workload, both graphics and compute.
 
 The difference is end-to-end and must not be attributed to tracking alone:
 \wgpu{} also validates, manages lifetimes, resolves bind groups, and builds an
-intermediate command representation. It is also not a barrier-count effect. On
-the independent workloads \wgpu{} must be emitting \emph{fewer} inter-pass
-dependencies than \texttt{B-auto}, since its GPU span on
-\texttt{graphics-independent} is lower than \texttt{B-auto}'s and lower than
-its own \texttt{graphics-chain} span; it nevertheless costs two to twelve times
-more host time.
+intermediate command representation. It is also not a barrier-count effect:
+Section~\ref{sec:generated} counts \wgpu{} emitting one barrier where
+\texttt{B-auto} emits five on the independent workloads, and it still costs two
+to twelve times more host time.
 
 \subsection{Where the host time goes}
 \label{sec:profile}
@@ -941,6 +940,7 @@ that opting out only forces the application to rebuild what the driver already
 knew.
 
 \subsection{Generated barriers and image layouts}
+\label{sec:generated}
 
 RenderDoc captures of all six workloads under three policies confirm what
 Sections~\ref{sec:radv-barriers} and~\ref{sec:scoped} describe from source. The
@@ -969,9 +969,36 @@ in any configuration. And no image layout transition appears at all --- images
 are moved to \texttt{GENERAL} at initialization and stay there, which is the
 layout claim the paper makes, observed rather than asserted.
 
-\pending{Capture the matched \wgpu{} program for the same comparison; it needs
-a \texttt{-{}-capture} flag equivalent to \blade's. Repeat on a RADV driver to
-confirm the same commands are emitted there.}
+The matched \wgpu{} program was captured the same way, which settles two
+factors this study could previously only argue about.
+
+\emph{Placement.} \wgpu{} emits exactly as many barriers as
+\texttt{B-hazard}: one on the independent workloads, four on the chains, where
+\texttt{B-auto} emits five. The tracker derives precisely the placement the
+application declares by hand. Section~\ref{sec:placement} inferred this from
+GPU spans; it is now counted.
+
+\emph{Memory scope.} Every \blade{} barrier is a global memory barrier and
+every \wgpu{} barrier is resource-scoped --- a \texttt{VkBufferMemoryBarrier}
+for the compute workloads, a \texttt{VkImageMemoryBarrier} for the graphics
+ones. Neither implementation emits a barrier of the other's kind in any
+configuration. This is factor~2, which the experiment contract lists as
+observed-only, and it is now observed rather than read from source.
+
+\emph{Layouts.} The most useful thing the captures say is negative. \wgpu's
+image barriers carry \texttt{COLOR\_ATTACHMENT\_OPTIMAL} on \emph{both} sides:
+they are execution and memory dependencies, not layout transitions. \blade{}
+emits no image barrier at all. So neither implementation performs a
+steady-state layout transition on these workloads, and the layout difference
+between them is static --- which layout the driver sees the image in --- rather
+than a per-pass cost. Any layout effect in the end-to-end numbers is therefore
+a property of \texttt{GENERAL} versus \texttt{COLOR\_ATTACHMENT\_OPTIMAL} as
+states, not of moving between them.
+
+\pending{Repeat the captures on a RADV driver to confirm the same commands are
+emitted there, and on a workload with MSAA, where
+Section~\ref{sec:radv-barriers} predicts \texttt{GENERAL} costs FMASK
+compression.}
 
 The one layout claim this draft does make is negative and comes from the
 sources rather than the measurements: on RADV, a persistent \texttt{GENERAL}

@@ -432,9 +432,10 @@ masks decoded to names, barrier counts by kind, and any image layout
 transition. That is what makes the captures checkable rather than merely
 archived.
 
-One gap remains: it captures Blade only. The matched wgpu benchmark has no
-`--capture` flag, and adding one that wraps the same warmed iteration would
-make the comparison symmetric.
+Both implementations are captured: the matched wgpu benchmark takes the same
+`--capture` flag and wraps the same warmed iteration, so the two command
+streams come from the same workload on the same machine state. wgpu is skipped
+for the mixed workloads, which exist only in Blade's benchmark.
 
 A note for anyone extending this: RenderDoc hooks Vulkan through a layer, not
 through the preloaded library alone, and the manifest shipped in the tarball

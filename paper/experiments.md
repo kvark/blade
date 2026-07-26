@@ -14,11 +14,23 @@ The evaluation separates four factors that are often conflated:
    producing and consuming stages/accesses.
 4. Image policy: persistent `GENERAL` versus usage-specific optimal layouts.
 
-The within-Blade benchmark varies only factor 1. Factors 2–4 are observed in a
-matched wgpu implementation and its generated Vulkan commands. Because that
-comparison also changes validation, lifetime management, bindings, and command
-representation, it supports an end-to-end design comparison and explanatory
-profiling—not single-factor causal attribution.
+The within-Blade benchmark controls factors 1 and 3 directly (placement, and
+stage/access scope via `BarrierScope`). Factors 2 and 4 are observed in the
+matched wgpu implementation and in captures of the commands both actually
+emit. Because that comparison also changes validation, lifetime management,
+bindings, and command representation, it supports an end-to-end design
+comparison and explanatory profiling—not single-factor causal attribution.
+
+What the captures established (see `capture-streams.py`, output `barriers.csv`):
+
+- factor 1: wgpu emits exactly as many barriers as `B-hazard` — one on the
+  independent workloads, four on the chains, against `B-auto`'s five.
+- factor 2: every Blade barrier is a global `VkMemoryBarrier`; every wgpu
+  barrier is a `VkBufferMemoryBarrier` or `VkImageMemoryBarrier`. Neither emits
+  the other's kind anywhere.
+- factor 4: no steady-state layout transition occurs in either. Blade emits no
+  image barrier at all; wgpu's carry `COLOR_ATTACHMENT_OPTIMAL` on both sides.
+  The layout difference is static, not a per-pass cost.
 
 ## Configuration IDs
 
@@ -339,11 +351,11 @@ The paper can lose its `RESULTS PENDING` banner only after:
   of tracked-versus-coarse behavior. CPU profiles are collected
   (`profile-hosts.py`) and reported: resource tracking is 3-7% of wgpu's
   process CPU time, which rules it out as the explanation for a 2-12x host-cost
-  gap. Command-stream captures are collected for Blade (`capture-streams.py`,
-  which downloads RenderDoc if none is installed) and confirm the emitted
-  masks, counts, and the absence of any steady-state layout transition. The
-  matched wgpu program is **outstanding**: it needs a `--capture` flag
-  equivalent to Blade's;
+  gap. Command-stream captures of both implementations (`capture-streams.py`,
+  which downloads RenderDoc if none is installed) confirm the emitted masks and
+  counts, and settle factors 2 and 4: every Blade barrier is global and every
+  wgpu barrier is resource-scoped, and neither performs a steady-state layout
+  transition;
 - [x] at least the minimum hardware matrix is complete (NVIDIA and discrete
   AMD on Linux, plus two AMD integrated parts, Intel, and Apple as sensitivity
   cases);

@@ -125,17 +125,15 @@ device, so a retest supersedes an earlier run rather than appearing beside it.
 The two `rubik` directories come from one invocation: the collector runs every
 enumerated adapter in turn.
 
-Still outstanding before the working-draft banner can come off: Vulkan
-command-stream captures. `capture-streams.py` automates them but has not been
-run (the `renderdoc` package was absent), and covers Blade only until the
-matched wgpu benchmark gains a `--capture` flag.
+The result gates of [experiments.md](experiments.md) are met. CPU profiles
+(`profile-hosts.py`) and command-stream captures of both implementations
+(`capture-streams.py`) are collected and reported.
 
-CPU profiles are done: `profile-hosts.py` and Section "Where the host time
-goes".
-
-Also outstanding, independently of the banner:
+Outstanding before circulation, as breadth rather than kind:
 
 - application workloads on heterogeneous frames.
+- captures repeated on a RADV driver, and on an MSAA workload where the RADV
+  sources predict `GENERAL` costs FMASK compression.
 - optionally, clock-locked repeats to recover the eight cells (of thirty) whose
   control floor exceeds 2%. Not a blocker: the conclusions rest on cells whose
   floor is below 1.5%. See the top of [COLLECTING.md](COLLECTING.md).
