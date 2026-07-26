@@ -32,6 +32,15 @@ Changelog for *Blade* project
   - accumulation is reset by `FrameConfig::reset_accumulation` or by moving the camera, and can be capped by `RayConfig::max_accumulated_samples`
   - breaking: `RayTracer::ray_trace` and `denoise` are replaced by `RayTracer::render`, which takes the mode
   - breaking: `RayConfig` describes the sampling of both of the modes: `num_environment_samples` and `num_brdf_samples` are the light and material samples taken at a shading point, combined by multi-sample MIS, while `max_bounces` limits the path length
+  - the light found at the last vertex of a path is no longer partly thrown
+    away: next event estimation there was weighted against a BSDF sample that
+    the path never goes on to take, so the balance heuristic held back a share
+    of the contribution and nothing ever supplied it. The weight is the whole
+    of it whenever the path ends. Longer paths hide the loss in the throughput
+    they have left, so the material grid at three bounces moves by SSIM 0.9998,
+    while `max_bounces` of zero — direct lighting and nothing else — was
+    missing enough that a white furnace sphere rendered visibly darker than
+    the environment it has to disappear into, and now matches it exactly.
 - both of the render paths now produce the color space that the surface was
   configured with, taken as `RenderConfig::color_space`, instead of the
   rasterizer always encoding gamma and the ray tracer never doing so
