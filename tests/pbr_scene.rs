@@ -26,13 +26,13 @@ const EMISSIVE_COLORS: [[f32; 3]; COLUMNS] = [
     [0.3, 0.3, 0.3],
 ];
 
-fn encode_normal(v: [f32; 3]) -> u32 {
+pub fn encode_normal(v: [f32; 3]) -> u32 {
     let quantize = |f: f32| ((f.clamp(-1.0, 1.0) * 127.0 + 0.5) as i8) as u8 as u32;
     quantize(v[0]) | (quantize(v[1]) << 8) | (quantize(v[2]) << 16)
 }
 
 /// Produce a UV sphere with normals and tangents.
-fn sphere(center: [f32; 3], radius: f32) -> (Vec<blade_render::Vertex>, Vec<u32>) {
+pub fn sphere(center: [f32; 3], radius: f32) -> (Vec<blade_render::Vertex>, Vec<u32>) {
     let mut vertices = Vec::with_capacity((SEGMENTS + 1) * (RINGS + 1));
     for ring in 0..=RINGS {
         let theta = PI * ring as f32 / RINGS as f32;
@@ -119,4 +119,76 @@ pub fn camera() -> blade_render::Camera {
         depth: 100.0,
         fov: None,
     }
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    [v[0] / length, v[1] / length, v[2] / length]
+}
+
+/// A flat quad spanned by `right` and `up`, facing along their cross product.
+///
+/// Wound counter-clockwise as seen from the facing side, like the sphere
+/// above, so the ray tracer's flat normals agree with the shading ones.
+pub fn quad(
+    center: [f32; 3],
+    right: [f32; 3],
+    up: [f32; 3],
+) -> (Vec<blade_render::Vertex>, Vec<u32>) {
+    let normal = normalize(cross(right, up));
+    let tangent = normalize(right);
+    let corner = |sr: f32, su: f32, tex_coords: [f32; 2]| blade_render::Vertex {
+        position: [
+            center[0] + sr * right[0] + su * up[0],
+            center[1] + sr * right[1] + su * up[1],
+            center[2] + sr * right[2] + su * up[2],
+        ],
+        bitangent_sign: 1.0,
+        tex_coords,
+        normal: encode_normal(normal),
+        tangent: encode_normal(tangent),
+    };
+    let vertices = vec![
+        corner(-1.0, -1.0, [0.0, 0.0]),
+        corner(1.0, -1.0, [1.0, 0.0]),
+        corner(1.0, 1.0, [1.0, 1.0]),
+        corner(-1.0, 1.0, [0.0, 1.0]),
+    ];
+    (vertices, vec![0, 1, 2, 0, 2, 3])
+}
+
+/// A diffuse quad, for the surfaces that are only there to bounce light.
+pub fn wall(
+    name: &str,
+    center: [f32; 3],
+    right: [f32; 3],
+    up: [f32; 3],
+    albedo: f32,
+) -> blade_render::ProceduralGeometry {
+    let (vertices, indices) = quad(center, right, up);
+    blade_render::ProceduralGeometry {
+        name: name.to_string(),
+        vertices,
+        indices,
+        base_color_factor: [albedo, albedo, albedo, 1.0],
+        metalness: 0.0,
+        roughness: 1.0,
+        emissive_factor: [0.0; 3],
+    }
+}
+
+/// The lit part of the material grid, without the emissive row.
+pub fn material_spheres(roughness_range: [f32; 2]) -> Vec<blade_render::ProceduralGeometry> {
+    material_grid(roughness_range)
+        .into_iter()
+        .filter(|geometry| geometry.emissive_factor == [0.0; 3])
+        .collect()
 }

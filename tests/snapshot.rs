@@ -263,7 +263,7 @@ fn load_reference(path: &Path) -> (Vec<u8>, gpu::Extent) {
     (buf, size)
 }
 
-fn save_image(path: &Path, data: &[u8], size: gpu::Extent) {
+pub fn save_image(path: &Path, data: &[u8], size: gpu::Extent) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap();
     }
