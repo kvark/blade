@@ -138,6 +138,31 @@ four it can. Extensions considered and declined, with what each costs:
 Adding any of these means reopening the collection on every machine. The bar
 for doing so is a claim the paper wants to make and cannot.
 
+## Implementation changes considered
+
+Two came out of reading RADV alongside the results, and neither is measured
+here.
+
+- *Skip a pass-boundary barrier when nothing has been recorded since the last
+  one.* `barrier_before` always emits. `since_barrier` is empty only
+  immediately after an explicit `barrier()` with no pass in between, and an
+  explicit barrier's destination scope is always `ALL_COMMANDS`, so skipping
+  in that case is safe in both scopes and needs no resource state — one more
+  bit on the encoder, not a table. It is not measured because no configuration
+  in this study can reach the case: `manual_barriers` is on for exactly the
+  policies that call `barrier()`, so automatic and explicit barriers never mix
+  in the benchmark. Worth doing on its merits; it will not move any number
+  here.
+- *Avoiding RADV's global-barrier pessimism* — the unconditional
+  `FLUSH_AND_INV_CB_META` / `FLUSH_AND_INV_DB_META`, and the coherence check
+  that a memory barrier cannot use. Both are cleared only when the barrier
+  carries an image, which is the state the design declines to keep. Measuring
+  the narrowed scope already put an upper bound on what this is worth on AMD,
+  and that bound is zero.
+
+The remaining AMD lever is barrier placement, which is application knowledge
+and is already exposed by `manual_barriers`.
+
 ## Metrics
 
 Collect separately:
@@ -222,12 +247,13 @@ stretch target, not a requirement for an AMD/NVIDIA-scoped paper.
 
 ## Statistical analysis
 
-The practical-equivalence region was **not** preregistered. It is derived after
-the fact from the `B-explicit-all` control, whose command stream is identical to
-`B-auto`: excluding the one cell that the control itself rejects, the largest
-control deviation observed on any device is 2.6%. GPU-span differences within
-±3% are therefore reported as practically equivalent, and the derivation is
-stated wherever the region is used. A future collection should preregister it.
+No practical-equivalence region is used, and none was preregistered. An
+earlier version of this document derived a single ±3% band from the worst
+`B-explicit-all` control deviation; with every machine collected, control
+floors run from 0.0% to 71.3%, so no single band describes them. Each claim is
+compared instead against the control floor of the cell it is made in, which the
+scope table reports beside it. A future collection should preregister the rule,
+not the number.
 
 - Preserve every valid raw sample.
 - Plot distributions and time-ordered samples before aggregation.
@@ -237,10 +263,11 @@ stated wherever the region is used. A future collection should preregister it.
   does not yet do this: it pools samples across repetitions and bootstraps
   unpaired. The repetition index is the blocking factor that captures clock
   state, so a paired estimator would tighten the noisy cells; it has not been
-  needed for the claims made so far, because those rest on cells whose control
-  floor is already below 1.5%.
+  needed for the claims made so far, because each is checked against its own
+  cell's floor and the ones that fail are reported as failing.
 - Report absolute nanoseconds/milliseconds alongside percentages.
-- Define a practical-equivalence region before interpreting “no difference.”
+- Compare “no difference” against the control floor of that cell, never
+  against a global band.
 - Correct for multiple comparisons when making device/workload-wide claims.
 - Treat profiler counters as explanatory evidence, not independent benchmark
   repetitions.
@@ -318,19 +345,28 @@ scope) emits identical commands, so its disagreement bounds what can be
 resolved. Nothing smaller may be claimed. `build-tables.py` computes it and
 prints it as the `ctrl` column of the scope table.
 
-It must be read **per cell, not per device**. Noise here is a property of the
-workload on the device, not of the device: on the RX 7900 XT the compute cells
-are worth 3.6-6.5% while the graphics and mixed cells are 0.1-0.8%, and on the
-Intel part `graphics-chain` is 0.0% while `mixed-independent` is 48%. An
-earlier version of this analysis took the worst cell per device as the device's
-floor, which discarded every usable AMD and Intel cell and turned two
-answerable questions into open ones.
+Two things about how it is computed have each been got wrong once.
 
-The pattern behind the bad cells is short workloads on large idle GPUs: a
-200-microsecond command buffer never takes the device out of its idle clock
-state. Clock-locking (see COLLECTING.md) raises the number of usable cells and
-is part of the protocol; it is not a precondition for a result whose cell floor
-is already low.
+It must be read **per cell, not per device**. Noise here is a property of the
+workload on the device, not of the device: on the RX 7900 XT one compute cell
+resolves to 0.1% and the other to 10.9%, and on the Intel part
+`graphics-chain` is 1.7% while `mixed-independent` is 49.7%. An earlier version
+took the worst cell per device as the device's floor, which discarded every
+usable AMD and Intel cell and turned two answerable questions into open ones.
+
+It is the **far end of the control's bootstrap interval, not its point
+estimate**. On the Intel part's `compute-independent` cell the two identical
+configurations agree to 2.8% on the median and their interval reaches 71.3%,
+because that machine's independent-target samples are bimodal between two clock
+states roughly 80% apart and a median lands wherever the split falls. The point
+estimate would have licensed a 14% placement reading from that cell; the
+interval says the cell cannot resolve 14%. Switching to the interval moved the
+count of cells with floors above 2% from 9 to 16 and withdrew one claim.
+
+Clock-locking (see COLLECTING.md) is the single change that would most improve
+a repetition of this study: it is what the four worst cells need. It is part of
+the protocol and is not a precondition for a result whose own cell floor is
+below its effect.
 
 ## Correctness rules
 

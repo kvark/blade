@@ -1,24 +1,37 @@
 # Blade synchronization paper
 
 This directory contains the working technical report and its experiment
-protocol. The draft is intentionally explicit about which claims still require
-measurements. It is not ready to cite or upload while `RESULTS PENDING` markers
-remain.
+protocol. Every measured number in the draft is generated from the raw
+collections, so the prose cannot drift from the data; what remains open is
+stated where it bounds a claim rather than left implicit.
 
 ## Draft
 
-Every table in the paper is generated from the raw collections, so regenerate
-them before building:
+Regenerate the tables before building, because both the tables and the numbers
+the prose cites come out of the same script:
 
 ```bash
 python3 build-tables.py
-latexmk -pdf main.tex
+latexmk -pdf main.tex     # or: tectonic -X compile main.tex
 ```
 
 `build-tables.py` writes `data/derived/tables/*.tex`, which `main.tex` pulls in
 with `\input`. It uses only the standard library and re-uses `analyze.py` for
 bootstrap intervals. It also prints a warning for any collection whose two
 implementations selected different devices.
+
+`numbers.tex` is the part that keeps the prose honest: it defines every
+measured quantity the text quotes as a LaTeX macro keyed by device, workload,
+and comparison, so `\bmagci{rx7900xt}{compute-independent}{placement}` in a
+sentence and the corresponding table cell are the same bootstrap of the same
+samples. Citing a key the collections do not supply is a build error rather
+than a blank. The unsigned forms (`\bmag`, `\bmagci`) are deliberately
+undefined for cells whose interval spans zero, so "worth X%" cannot be written
+about a cell that does not support it.
+
+A full build needs `booktabs` and `xcolor`, which Debian's `texlive-latex-base`
+does not include; `texlive-latex-recommended` or a `tectonic` binary covers
+them.
 
 The source uses a generic two-column article layout so that the work is not
 tied to a venue before the evaluation is complete. It can later be moved to a
@@ -117,7 +130,7 @@ era; later ones cross placement with scope.
 | `20260725T191617Z-zork` | zork | NVIDIA RTX 5070 | matrix, placement × scope |
 | `*-rubik-amd-radeon-rx-7900-xt-radv-n` | rubik | AMD RX 7900 XT | matrix, placement × scope |
 | `*-rubik-amd-ryzen-5-9600x-6-core-pro` | rubik | AMD Raphael iGPU | matrix, placement × scope |
-| `20260725T204342Z-k6` | k6 | AMD Radeon 780M | matrix, placement × scope |
+| `20260726T071814Z-k6` | k6 | AMD Radeon 780M | matrix, placement × scope |
 | `20260725T204044Z-matrix` | matrix | Intel Xe (RPL-U) | matrix, placement × scope (chain cells clean; independent-target cells noisy) |
 | `20260725T062529Z-mac` | mac | Apple M3 | matrix, Metal case study |
 | `20260725T060107Z-zork` | zork | NVIDIA RTX 5070 | superseded by `191617` |
@@ -146,16 +159,24 @@ considered and declined, and why. What remains is filling the existing grid:
 |---|:--:|:--:|:--:|
 | zork | yes | yes | yes |
 | rubik | yes | yes | yes |
-| k6 | yes | — | — |
-| matrix | yes | yes | yes |
+| k6 | yes | no `perf` | yes |
+| matrix | yes | no `perf` | yes |
 | mac | yes | n/a | n/a |
 
-`python3 paper/collect.py --wgpu ../wgpu` fills a row. Apple has neither a
-`perf` nor a RenderDoc path, so its row is complete as it stands.
+`python3 paper/collect.py --wgpu ../wgpu` fills a row; the profile step needs a
+permissive `kernel.perf_event_paranoid` and says so when it skips. Apple has
+neither a `perf` nor a RenderDoc path, so its row is complete as it stands. Two
+profiles are enough for what the profile table claims, which is a range rather
+than a value.
 
-Optional: clock-locked repeats to recover the cells whose control floor exceeds
-the effect in them. Not a blocker — the conclusions rest on cells whose floor is
-below 1.5%, and the `ctrl` column of the scope table says which is which.
+The one collection change that would materially improve the study is locking
+GPU clocks. 16 of the 30 scope cells have a control floor above 2%, and the
+four worst — all on `matrix` — are above 30% because that device's samples are
+bimodal between two clock states. Those cells answer nothing in either
+direction. The `ctrl` column of the scope table says which is which, and the
+floor is the far end of the control's bootstrap interval, not its point
+estimate: a cell can agree to 2.8% on the median and still be consistent with
+71%.
 
 ## Current scope
 

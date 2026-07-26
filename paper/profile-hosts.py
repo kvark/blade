@@ -33,6 +33,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
 
 # Ordered: the first pattern that matches a (dso, symbol) pair wins, so put the
@@ -49,8 +50,19 @@ BUCKETS: tuple[tuple[str, str], ...] = (
     ("wgpu other", r"wgpu_core\d*::|wgpu\d*::|wgt::"),
     ("wgpu-hal", r"wgpu_hal"),
     ("blade", r"blade_graphics|blade_macros|sync_bench"),
-    ("ash / loader", r"^ash::|libvulkan"),
-    ("driver", r"libnvidia|libGLX|nvidia|radeonsi|vulkan_radeon|vulkan_intel|libdrm|iris_dri"),
+    # Before the loader bucket, and deliberately so: a Mesa ICD is named
+    # `libvulkan_radeon.so` or `libvulkan_intel.so`, which a `libvulkan`
+    # pattern also matches. With the loader first, every Mesa driver sample
+    # was filed as loader overhead -- 76% of one column on an RADV machine.
+    (
+        "driver",
+        r"libnvidia|libGLX|nvidia|radeonsi|libvulkan_|vulkan_radeon|vulkan_intel"
+        r"|libdrm|iris_dri|libVkLayer",
+    ),
+    # The ICD loader proper is `libvulkan.so.1`; `ash` is the Rust binding
+    # both implementations call through. The pattern is matched against
+    # "<dso> <symbol>", so `ash::` needs a word boundary rather than `^`.
+    ("ash / loader", r"\bash::|libvulkan\.so"),
     ("allocator", r"malloc|calloc|realloc|\bfree\b|_int_malloc|_int_free|arena|tcache|operator new"),
     ("libc / runtime", r"libc\.so|ld-linux|libstdc\+\+|libgcc|__memmove|__memcpy|__memset"),
     ("kernel", r"^\[kernel|^\[unknown\]$|vmlinux"),
@@ -97,6 +109,21 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="profile the binaries as they are, without rebuilding with symbols",
     )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="check the bucket patterns against known symbol shapes and exit",
+    )
+    parser.add_argument(
+        "--reclassify",
+        type=Path,
+        metavar="DIR",
+        help=(
+            "rebuild the CSVs of an existing profile from its retained perf "
+            "reports, without recording anything. Use after changing BUCKETS, "
+            "including for collections made on machines that are not this one."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -129,6 +156,55 @@ def classify(dso: str, symbol: str, binding: str = ".") -> str:
         if re.search(pattern, subject):
             return name
     return "other"
+
+
+# Cases that have been got wrong at least once. `BUCKETS` is ordered, so any
+# reordering can silently move a large share of one machine's samples into the
+# wrong row; `--self-test` is how that gets caught before the paper quotes it.
+CLASSIFICATION_CASES: tuple[tuple[str, str, str, str], ...] = (
+    # A Mesa ICD is a driver, not the loader, and its name contains the
+    # loader's. This misfiled 76% of one column on an RADV machine.
+    ("libvulkan_radeon.so", "radv_CmdPipelineBarrier2", ".", "driver"),
+    ("libvulkan_intel.so", "anv_QueueSubmit", ".", "driver"),
+    ("libvulkan.so.1", "vkQueueSubmit", ".", "ash / loader"),
+    ("sync-bench", "ash::vk::cmd_pipeline_barrier", ".", "ash / loader"),
+    ("libnvidia-glcore.so.580.95", "[unknown]", ".", "driver"),
+    # `kptr_restrict` hides kernel symbols, so they arrive as bare addresses
+    # in an `[unknown]` object and only the binding identifies them.
+    ("[unknown]", "0xffffffffa610c0c9", "k", "kernel"),
+    # The same shape without the kernel binding is an unresolved userspace
+    # address, which is genuinely unattributable rather than kernel time.
+    ("[unknown]", "0x00007f2c1a4b2d10", ".", "other"),
+    # Lazy zero-initialisation, not resource state tracking. Matching this
+    # after the tracker pattern inflates the number the profile exists for.
+    ("wgpu-sync-bench", "wgpu_core::init_tracker::InitTracker::check", ".", "wgpu init tracker"),
+    ("wgpu-sync-bench", "wgpu_core::track::buffer::BufferTracker::set_single", ".", "wgpu tracker"),
+    ("wgpu-sync-bench", "wgpu_core::command::compute::run", ".", "wgpu command"),
+    ("wgpu-sync-bench", "wgpu_core::device::queue::submit", ".", "wgpu device/resource"),
+    ("wgpu-sync-bench", "wgpu_hal::vulkan::command::transition", ".", "wgpu-hal"),
+    ("sync-bench", "blade_graphics::vulkan::command::barrier", ".", "blade"),
+    ("libc.so.6", "_int_malloc", ".", "allocator"),
+    ("libc.so.6", "__memmove_avx_unaligned_erms", ".", "libc / runtime"),
+    ("libexpat.so.1.11.2", "XML_ParseBuffer", ".", "other"),
+)
+
+
+def self_test() -> int:
+    failures = 0
+    for dso, symbol, binding, expected in CLASSIFICATION_CASES:
+        actual = classify(dso, symbol, binding)
+        if actual != expected:
+            failures += 1
+            print(
+                f"FAIL {dso} {symbol}\n  expected {expected!r}, got {actual!r}",
+                file=sys.stderr,
+            )
+    print(
+        f"{len(CLASSIFICATION_CASES) - failures}/{len(CLASSIFICATION_CASES)} "
+        "classification cases pass",
+        file=sys.stderr,
+    )
+    return 1 if failures else 0
 
 
 REPORT_LINE = re.compile(
@@ -186,6 +262,19 @@ def parse_report(text: str) -> list[tuple[float, str, str, str]]:
     return rows
 
 
+def device_name(stdout: str) -> str:
+    """The adapter the benchmark actually selected, from its CSV header.
+
+    The profiling step does not pin an adapter, so on a machine with more than
+    one GPU the two implementations can pick differently. Recording what each
+    chose is what makes that visible instead of assumed.
+    """
+    for line in stdout.splitlines():
+        if line.startswith("# device_name,"):
+            return line.split(",", 1)[1].strip().strip('"')
+    return ""
+
+
 def run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> str:
     result = subprocess.run(
         command, cwd=cwd, env=env, text=True, capture_output=True, check=False
@@ -223,7 +312,7 @@ def profile_one(
         command += ["--device-id", str(arguments.blade_device_id)]
 
     print(f"profiling {label} / {workload}", file=sys.stderr, flush=True)
-    run(
+    stdout = run(
         [
             "perf",
             "record",
@@ -261,11 +350,112 @@ def profile_one(
         arguments.blade,
     )
     (output / f"{label}__{workload}.report.txt").write_text(report, encoding="utf-8")
-    return parse_report(report), total_cpu_ms(report)
+    return parse_report(report), total_cpu_ms(report), device_name(stdout)
+
+
+SYMBOL_FIELDS = (
+    "implementation",
+    "workload",
+    "bucket",
+    "dso",
+    "symbol",
+    "self_percent",
+    "self_ms",
+)
+
+
+def bucket_rows(
+    samples: Iterable[tuple[float, str, str, str]],
+    implementation: str,
+    workload: str,
+    cpu_ms: float,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "implementation": implementation,
+            "workload": workload,
+            "bucket": classify(dso, symbol, binding),
+            "dso": dso,
+            "symbol": symbol,
+            "self_percent": percent,
+            "self_ms": round(percent / 100.0 * cpu_ms, 4),
+        }
+        for percent, dso, symbol, binding in samples
+    ]
+
+
+def write_tables(
+    output: Path,
+    rows: list[dict[str, object]],
+    totals_cpu_ms: dict[tuple[str, str], float],
+) -> None:
+    """Write `symbols.csv` and the `buckets.csv` the paper's table reads."""
+    with (output / "symbols.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SYMBOL_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    totals: dict[tuple[str, str, str], list[float]] = {}
+    for row in rows:
+        key = (row["implementation"], row["workload"], row["bucket"])
+        entry = totals.setdefault(key, [0.0, 0.0])
+        entry[0] += float(row["self_percent"])
+        entry[1] += float(row["self_ms"])
+    with (output / "buckets.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            ("implementation", "workload", "bucket", "self_percent", "self_ms")
+        )
+        for key in sorted(totals, key=lambda k: (k[0], k[1], -totals[k][1])):
+            percent, milliseconds = totals[key]
+            writer.writerow((*key, f"{percent:.2f}", f"{milliseconds:.2f}"))
+        for (label, workload), milliseconds in sorted(totals_cpu_ms.items()):
+            writer.writerow(
+                (
+                    label,
+                    workload,
+                    "TOTAL (process CPU time)",
+                    "100.00",
+                    f"{milliseconds:.2f}",
+                )
+            )
+
+
+def reclassify(directory: Path) -> None:
+    """Rebuild a collection's CSVs from its retained `perf report` output.
+
+    `perf record` writes a binary `perf.data` that only resolves symbols
+    against the libraries of the machine that produced it, but the text report
+    is retained beside it and carries everything the buckets are derived from.
+    So a classification bug can be repaired for every machine from here,
+    without asking anyone to re-profile.
+    """
+    reports = sorted(directory.glob("*.report.txt"))
+    if not reports:
+        raise SystemExit(f"no perf reports under {directory}")
+    rows: list[dict[str, object]] = []
+    totals_cpu_ms: dict[tuple[str, str], float] = {}
+    for report in reports:
+        label, _, workload = report.name.removesuffix(".report.txt").partition("__")
+        if not workload:
+            raise SystemExit(
+                f"cannot read an implementation and workload from {report.name}"
+            )
+        text = report.read_text(encoding="utf-8", errors="replace")
+        cpu_ms = total_cpu_ms(text)
+        rows.extend(bucket_rows(parse_report(text), label, workload, cpu_ms))
+        totals_cpu_ms[label, workload] = cpu_ms
+    write_tables(directory, rows, totals_cpu_ms)
+    print(f"Reclassified {len(reports)} reports in {directory}", file=sys.stderr)
 
 
 def main() -> None:
     arguments = parse_arguments()
+    if arguments.self_test:
+        raise SystemExit(self_test())
+    if arguments.reclassify:
+        reclassify(arguments.reclassify.resolve())
+        return
     check_perf()
     blade = arguments.blade.resolve()
     wgpu = arguments.wgpu.resolve()
@@ -296,6 +486,7 @@ def main() -> None:
 
     rows: list[dict[str, object]] = []
     totals_cpu_ms: dict[tuple[str, str], float] = {}
+    devices: dict[str, str] = {}
     for workload in arguments.workloads.split(","):
         workload = workload.strip()
         if not workload:
@@ -306,7 +497,7 @@ def main() -> None:
                 environment["WGPU_BACKEND"] = arguments.backend
                 if arguments.wgpu_adapter_name:
                     environment["WGPU_ADAPTER_NAME"] = arguments.wgpu_adapter_name
-            samples, cpu_ms = profile_one(
+            samples, cpu_ms, device = profile_one(
                 binary=binary,
                 label=label,
                 workload=workload,
@@ -315,54 +506,20 @@ def main() -> None:
                 output=output,
                 environment=environment,
             )
-            for percent, dso, symbol, binding in samples:
-                rows.append(
-                    {
-                        "implementation": label,
-                        "workload": workload,
-                        "bucket": classify(dso, symbol, binding),
-                        "dso": dso,
-                        "symbol": symbol,
-                        "self_percent": percent,
-                        "self_ms": round(percent / 100.0 * cpu_ms, 4),
-                    }
-                )
+            rows.extend(bucket_rows(samples, label, workload, cpu_ms))
             totals_cpu_ms[label, workload] = cpu_ms
+            devices[f"{label}/{workload}"] = device
 
-    with (output / "symbols.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=(
-                "implementation",
-                "workload",
-                "bucket",
-                "dso",
-                "symbol",
-                "self_percent",
-                "self_ms",
-            ),
+    write_tables(output, rows, totals_cpu_ms)
+    selected = set(value for value in devices.values() if value)
+    if len(selected) > 1:
+        print(
+            "warning: the implementations profiled different adapters:\n  "
+            + "\n  ".join(f"{key} = {value}" for key, value in sorted(devices.items()))
+            + "\n  Shares within one process are still valid; anything "
+            "compared between them is not.",
+            file=sys.stderr,
         )
-        writer.writeheader()
-        writer.writerows(rows)
-
-    totals: dict[tuple[str, str, str], list[float]] = {}
-    for row in rows:
-        key = (row["implementation"], row["workload"], row["bucket"])
-        entry = totals.setdefault(key, [0.0, 0.0])
-        entry[0] += float(row["self_percent"])
-        entry[1] += float(row["self_ms"])
-    with (output / "buckets.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(
-            ("implementation", "workload", "bucket", "self_percent", "self_ms")
-        )
-        for key in sorted(totals, key=lambda k: (k[0], k[1], -totals[k][1])):
-            percent, milliseconds = totals[key]
-            writer.writerow((*key, f"{percent:.2f}", f"{milliseconds:.2f}"))
-        for (label, workload), milliseconds in sorted(totals_cpu_ms.items()):
-            writer.writerow(
-                (label, workload, "TOTAL (process CPU time)", "100.00", f"{milliseconds:.2f}")
-            )
 
     (output / "manifest.json").write_text(
         json.dumps(
@@ -373,6 +530,7 @@ def main() -> None:
                 "host": host,
                 "platform": platform.platform(),
                 "backend": arguments.backend,
+                "devices": devices,
                 "policy": arguments.policy,
                 "workloads": arguments.workloads,
                 "samples": arguments.samples,
