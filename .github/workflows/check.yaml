@@ -152,15 +152,21 @@ jobs:
           install_lavapipe: true
           cache: true
 
+      # One test at a time, as the GLES step below already does. Each of these
+      # stands up its own GPU context, and the ray traced ones also build
+      # acceleration structures and full sized render targets. Ten of those at
+      # once on a shared runner, where the "GPU" is a software rasterizer
+      # competing for the same few cores, stretches the heaviest tests by far
+      # more than the work in them costs.
       - name: Run GPU integration tests (Linux)
         if: matrix.name == 'Linux'
-        run: cargo test --test gpu_examples -- --ignored --nocapture
+        run: cargo test --test gpu_examples -- --ignored --nocapture --test-threads=1
         env:
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
 
       - name: Run GPU integration tests
         if: matrix.name != 'Linux'
-        run: cargo test --test gpu_examples -- --ignored --nocapture
+        run: cargo test --test gpu_examples -- --ignored --nocapture --test-threads=1
 
       - name: Install EGL/GLES (Linux)
         if: matrix.name == 'Linux'

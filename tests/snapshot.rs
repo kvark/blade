@@ -4,6 +4,14 @@ use std::path::Path;
 
 const SSIM_THRESHOLD: f64 = 0.95;
 const REFERENCE_DIR: &str = "tests/reference";
+/// How long a snapshot readback may take before it counts as a hang.
+///
+/// This is a liveness guard, not a performance budget, so it has to be sized
+/// for the slowest thing that legitimately runs: an accumulated path trace on
+/// a software rasterizer, several tests deep in a parallel `cargo test` on a
+/// shared CI runner. That is roughly an order of magnitude slower than the same
+/// work on Lavapipe locally, and two orders slower than a real GPU.
+pub const READBACK_TIMEOUT_MS: u32 = 120_000;
 // SSIM constants for 8-bit images: C1 = (K1*L)^2, C2 = (K2*L)^2 where L=255
 const C1: f64 = 6.5025; // (0.01 * 255)^2
 const C2: f64 = 58.5225; // (0.03 * 255)^2
@@ -102,7 +110,7 @@ impl OffscreenTarget {
         }
         let sync_point = context.submit(encoder);
         assert!(
-            context.wait_for(&sync_point, 5000).unwrap(),
+            context.wait_for(&sync_point, READBACK_TIMEOUT_MS).unwrap(),
             "GPU timed out during snapshot readback"
         );
         let byte_count = (self.size.width * self.size.height * 4) as usize;
