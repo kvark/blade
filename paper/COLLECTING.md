@@ -295,26 +295,53 @@ Do not pass `--allow-dirty` for final data. It exists only for local pilots.
 The collector refuses an existing output directory and retains stderr from any
 run that emits it.
 
-## Lock the clocks first
+## Let the device reach a steady clock first
 
-Every collection in this study so far ran with default power management, and
-the cost is a control floor -- the largest disagreement between two
-configurations that emit identical commands that the cell is consistent with --
-ranging from 0.0% to 71.3% depending on the cell. A cell whose floor exceeds the
-effect you are chasing cannot answer the question, in either direction.
+Every collection in this study so far ran with default warm-up, and the cost is
+a control floor -- the largest disagreement between two configurations that emit
+identical commands that the cell is consistent with -- ranging from 0.0% to
+71.3% depending on the cell. A cell whose floor exceeds the effect you are
+chasing cannot answer the question, in either direction.
 
-The mechanism is visible in the raw samples on the machine it hurts most. The
-Intel part's independent-target blocks are bimodal, two clusters roughly 80%
-apart, because a short command buffer on an idle device sometimes runs before
-the clock ramps and sometimes after. A median then lands wherever the split
-fell. Locking clocks is the cheap fix; raising `--rounds` or `--passes` until
-the device settles into one state is the other.
+The mechanism is in the time-ordered samples, not in the aggregate. One block is
+one process launch: ten warm-up iterations, then thirty measured ones. The
+device idles between blocks and accelerates again inside each. An RX 7900 XT
+`compute-chain` block opens at 245 microseconds, holds for fourteen iterations,
+then steps down through 225, 217, 205 to 193 and is still descending when the
+block ends. Its median is then a fact about where the steps fell.
 
-**Lock to a frequency the device can hold, not to its peak.** On a
-power-limited mobile part, pinning to `RP0` or `high` invites the package limit
-to throttle mid-collection, which reintroduces exactly the two-state behaviour
-the locking was meant to remove. A mid-range fixed frequency that the part
-sustains for the whole run is worth more than a higher one it cannot.
+Compare the median of a block's first third against its last third and the
+machines separate the same way their control floors do:
+
+| machine | median block drift | worst block |
+|---|---:|---:|
+| `zork` RTX 5070 | -0.1% | -3.9% |
+| `rubik` Raphael | +0.0% | -0.1% |
+| `matrix` Intel Xe | -0.5% | -55.3% |
+| `k6` Radeon 780M | -7.0% | -27.9% |
+| `rubik` RX 7900 XT | -18.4% | -44.7% |
+
+`build-tables.py` prints these, so check them before believing a floor.
+
+**Warm up until the drift stops.** This is the lever that works and it is a
+flag, not a change:
+
+```sh
+python3 paper/collect.py --wgpu ../wgpu --warmups 2000
+```
+
+The RX 7900 XT had not finished accelerating after the forty iterations a block
+contains, so ten is far too few. Two thousand warm-ups of a 250-microsecond
+workload is half a second per block -- about a minute across a whole collection.
+Raise `--rounds` or `--passes` instead, or as well, if you would rather the
+device settle in fewer iterations.
+
+**Pinning clocks helps and does not suffice.** The RX 7900 XT collection ran
+with `power_dpm_force_performance_level = high` on both of its devices --
+`rocm-smi` recorded `Performance Level: high` -- and drifted 18% at the median
+block regardless. The same capture shows a 35 MHz shader clock at idle
+underneath the setting: `high` raises the ceiling, it does not hold the floor.
+Set it anyway, and do not treat it as sufficient.
 
 On AMD, before collecting:
 
@@ -335,6 +362,10 @@ frequency; equivalently write the same value to `gt_min_freq_mhz` and
 `gt_max_freq_mhz` under `/sys/class/drm/card*/`, or to `freq0/min_freq` and
 `freq0/max_freq` under the `xe` driver's tile tree. Restore with `auto` /
 `--reset-gpu-clocks` afterwards.
+
+On a power-limited mobile part, lock to a frequency the device sustains rather
+than to its peak: pinning to `RP0` invites the package limit to throttle
+mid-collection, which puts a step back into the block.
 
 The CPU governor matters for host cost and not for device span. Where host
 numbers are wanted, `sudo cpupower frequency-set -g performance` and a quiet

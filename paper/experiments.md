@@ -329,12 +329,12 @@ paper is transcribed by hand.
 3. `20260725T160725Z-matrix` fails its own `B-explicit-all` control on
    `graphics-independent` (-37.4%, repetition medians spanning 3.2-5.6 ms for an
    identical command stream). The cell is reported and rejected, not deleted.
-4. The RX 7900 XT's compute and mixed workloads run for about 200 microseconds,
-   which is too short for its clocks to settle: repetition medians for an
-   identical command stream vary by up to 16%, and its control reaches 6.5%.
-   Only effects above roughly 10% are claimable on those cells. Its graphics
-   workloads are stable to under 1%. Clock-locking or a longer workload would
-   fix this and has not been done.
+4. The RX 7900 XT accelerates while it is being measured. Its clocks were
+   pinned with `power_dpm_force_performance_level = high` -- `rocm-smi` in the
+   collection records it, and also records a 35 MHz shader clock at idle
+   underneath -- and its median block still runs 18.4% faster in its last
+   third than in its first. Every one of its floors is above 2%. More warm-up,
+   not more pinning, is what this needs.
 5. Only `zork` has a timestamp-free collection, so host-cost claims are
    established there and merely corroborated elsewhere.
 
@@ -357,16 +357,28 @@ usable AMD and Intel cell and turned two answerable questions into open ones.
 It is the **far end of the control's bootstrap interval, not its point
 estimate**. On the Intel part's `compute-independent` cell the two identical
 configurations agree to 2.8% on the median and their interval reaches 71.3%,
-because that machine's independent-target samples are bimodal between two clock
-states roughly 80% apart and a median lands wherever the split falls. The point
+because that machine's independent-target blocks step down by nearly half
+partway through the measurement and a median records when the step happened.
+The point
 estimate would have licensed a 14% placement reading from that cell; the
 interval says the cell cannot resolve 14%. Switching to the interval moved the
 count of cells with floors above 2% from 9 to 16 and withdrew one claim.
 
-Clock-locking (see COLLECTING.md) is the single change that would most improve
-a repetition of this study: it is what the four worst cells need. It is part of
-the protocol and is not a precondition for a result whose own cell floor is
-below its effect.
+What the disqualified cells have in common was found by asking what the
+control was reacting to. A block is one process launch, and the device
+accelerates inside it: an RX 7900 XT `compute-chain` block opens at 245
+microseconds, holds fourteen iterations, then steps down through 225, 217, 205
+to 193 and is still descending when the block ends. Comparing the median of a
+block's first third against its last third separates the machines the same way
+the floors do -- -0.1% on the RTX 5070 and +0.0% on Raphael against -18.4% on
+the RX 7900 XT and -55.3% in the worst Intel block. `build-tables.py` reports
+it.
+
+The single change that would most improve a repetition of this study is
+therefore warm-up, and it is a flag rather than a code change: `--warmups 2000`
+costs about a minute across a whole collection, against ten warm-ups today that
+leave the RX 7900 XT still accelerating forty iterations later. Pinning clocks
+is worth doing and is not sufficient on its own.
 
 ## Correctness rules
 

@@ -181,10 +181,26 @@ class Collection:
             lambda: defaultdict(list)
         )
         self.devices: dict[str, str] = {}
+        # Per-block clock drift, keyed by metric. One block is one process
+        # launch, so the device idles between blocks and ramps again inside
+        # each; pooling the samples hides that, which is why it is measured
+        # here while the file is still in order.
+        self.drift: dict[str, list[float]] = defaultdict(list)
         for path in sorted(root.glob("r*.csv")):
             run = analyze.read_run(path)
             implementation = run.metadata["implementation"]
             self.devices[implementation] = run.metadata["device_name"]
+            for metric in ("gpu_ns", "wait_ns"):
+                ordered = [
+                    float(row[metric]) for row in run.rows if int(row["passes"]) == 16
+                ]
+                third = len(ordered) // 3
+                if third < 3:
+                    continue
+                first = statistics.median(ordered[:third])
+                last = statistics.median(ordered[-third:])
+                if first:
+                    self.drift[metric].append(100.0 * (last - first) / first)
             for row in run.rows:
                 key = (
                     implementation,
@@ -1100,6 +1116,12 @@ def numbers_macros(
             spread = collection.dispersion(metric)
             if spread is not None:
                 values[f"dispersion/{slug}/{name}"] = f"{spread:.0f}"
+        # How far the device moves during a measurement block. Negative means
+        # it sped up: the clock was still ramping while it was being measured.
+        drift = collection.drift.get("gpu_ns")
+        if drift:
+            values[f"drift/{slug}/median"] = f"{statistics.median(drift):+.1f}"
+            values[f"drift/{slug}/worst"] = f"{min(drift):+.1f}"
         for workload in WORKLOAD_ORDER:
             for metric, prefix in (
                 ("gpu_ns", ""),

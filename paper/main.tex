@@ -664,28 +664,46 @@ four workloads. Metal device time is therefore not reported at all, and
 Section~\ref{sec:metal} uses host wall time. The machine also had macOS Low
 Power Mode enabled, which is recorded in the collection but not controlled.
 
-\textbf{Unlocked clocks.} No machine in this study had its GPU clocks locked,
-and the cost is uneven rather than uniform. Table~\ref{tab:scope} carries a
+\textbf{Clocks that move during a measurement.} Table~\ref{tab:scope} carries a
 control floor for every cell: the disagreement between two configurations that
 emit identical commands. Of the \bladenum{floor/count} cells,
 \bladenum{floor/above2} have floors above $2\%$ and \bladenum{floor/above30}
 above $30\%$; the largest of the rest is $\bladenum{floor/below2max}\%$. Any
 effect smaller than its cell's floor is not a result and is not treated as one.
 
-The cause, where we can see it, is the device changing clock state during a
-block. The Intel part's independent-target samples are visibly bimodal --- two
-clusters about $80\%$ apart --- so the median of a block depends on where the
-split fell, and all \bladenum{floor/above30} of the worst floors are on that
-machine. The RX~7900~XT is unstable in a less legible way: its compute
-workloads occupy the device for about
-$\bladenum{rx7900xt/compute-independent/autous}\,\mu$s, and of those two cells
-one has the best floor on the machine
-($\bfloor{rx7900xt}{compute-independent}$) and the other one of the worst
-($\bfloor{rx7900xt}{compute-chain}$), in the same session. Locking clocks would
-raise the number of usable cells and the protocol now calls for it; it is not a
-precondition for the conclusions drawn here, because every conclusion is
-checked against the floor of the cell it comes from, but it is the single
-change that would most improve a repetition of this study.
+The cause is visible in the time-ordered samples, and it is not what we first
+wrote down. Each block --- one workload, one policy, one repetition --- is a
+separate process launch of thirty measured iterations after ten warm-ups, so
+the device idles between blocks and ramps its clock again inside each one. On
+the RX~7900~XT a \texttt{compute-chain} block begins at $245\,\mu$s, holds for
+fourteen iterations, then steps down through $225$, $217$, $205$ to
+$193\,\mu$s at the last sample, and is still descending when measurement
+stops. The block never reaches steady state, so its median is a function of
+where the steps fell rather than of the configuration under test.
+
+Comparing the median of a block's first third with its last third makes this a
+number. It separates the machines exactly as the control floors do: the
+RTX~5070 drifts $\bladenum{drift/rtx5070/median}\%$ at the median block and the
+Raphael iGPU $\bladenum{drift/raphael/median}\%$, and both have floors at or
+below $\bfloor{rtx5070}{graphics-chain}$ in their best cells. The RX~7900~XT
+drifts $\bladenum{drift/rx7900xt/median}\%$, the Radeon~780M
+$\bladenum{drift/radeon780m/median}\%$, and the Intel part
+$\bladenum{drift/intelxe/median}\%$ at the median block but
+$\bladenum{drift/intelxe/worst}\%$ in its worst --- a single step of that size
+partway through a block, which is what makes its pooled samples look bimodal
+and its floors reach $\bladenum{floor/max}\%$. Whether a given block ramps
+depends on how long the device idled before it, which is why two blocks of the
+same cell can disagree so much more than the samples within either.
+
+This matters for what to do about it. The RX~7900~XT collection was taken with
+\texttt{power\_dpm\_force\_performance\_level} set to \texttt{high} on both of
+its devices, recorded in the collection, and it drifted anyway: the setting
+raises the ceiling and does not stop the ramp, and the driver still reports a
+$35\,$MHz shader clock at idle underneath it. Pinning clocks is therefore not
+the fix we assumed it was. Warming up until the device stops moving is, and it
+is a parameter rather than a change: the ramp here needs more than the forty
+iterations a block contains. Both are cheap, and a repetition of this study
+should do both and check the drift before believing the floor.
 
 \textbf{Host measurements on \texttt{\bladenum{host/excluded/machines}}.} These
 are reported in Table~\ref{tab:host-matrix} and used for nothing. At the median
@@ -732,6 +750,12 @@ and not about the configurations. A control that only ever confirmed the clean
 cells would not have been worth running; this one disqualifies
 \bladenum{floor/above2} of \bladenum{floor/count} cells and licenses the rest.
 
+It also earns its keep as a diagnostic rather than only as a gate.
+Section~\ref{sec:deviations} identifies what the disqualified cells have in
+common, and the answer --- a device still accelerating while it is being
+measured --- was found by asking what the control was reacting to, not by
+suspecting it in advance.
+
 \subsection{Barrier placement and dependency structure}
 \label{sec:placement}
 
@@ -762,11 +786,12 @@ $\bfloor{rx7900xt}{compute-independent}$, is a quarter of the effect.
 
 The Intel part reads $\bpct{intelxe}{compute-independent}{placement}$ in the
 same cell and we do not claim it. Its control floor there is
-$\bfloor{intelxe}{compute-independent}$, because the samples on that machine's
-independent-target workloads are bimodal between two clock states and the
-median lands wherever the split falls. All \bladenum{floor/above30} cells with
-floors above $30\%$ are on that machine, and nothing is read from them in
-either direction, including their large apparent effects.
+$\bfloor{intelxe}{compute-independent}$, because that machine's
+independent-target blocks step down by nearly half partway through the
+measurement as the device finishes accelerating, so a block's median records
+when the step happened. All \bladenum{floor/above30} cells with floors above
+$30\%$ are on that machine, and nothing is read from them in either direction,
+including their large apparent effects.
 
 For independent \emph{render} passes the same change is worth
 $\bmagci{rtx5070}{graphics-independent}{placement}$ on the RTX~5070 and
@@ -903,7 +928,7 @@ $\bfloor{rx7900xt}{mixed-chain}$. Two earlier versions of this analysis got
 this wrong in opposite directions: one took the worst cell per device as that
 device's floor, which discarded every usable AMD and Intel cell; the other took
 the control's point estimate rather than its interval, which licensed a
-$14\%$ reading from a cell whose two clock states are $80\%$ apart.
+$14\%$ reading from a cell that moves by nearly half while it is being read.
 
 \textbf{Manual placement forfeits the scope saving.} The third column is not
 the sum of the first two. Combining hazard-only placement with the narrow
@@ -1456,10 +1481,11 @@ it is saturated by a single pass; the discrete part carries the largest AMD
 claims and has the widest intervals behind them, at floors of
 $\bfloor{rx7900xt}{compute-independent}$ and
 $\bfloor{rx7900xt}{mixed-independent}$ for the two cells where placement pays.
-Those two should be repeated with a longer or clock-locked collection before
-being leaned on, and the third AMD part disagrees with them in sign on the
-render workloads, which is itself part of the result rather than a
-contradiction of it.
+Those two should be repeated with enough warm-up for the device to stop
+accelerating before being leaned on --- its clocks were already pinned as far
+as the driver allows, and that was not enough --- and the third AMD part
+disagrees with them in sign on the render workloads, which is itself part of
+the result rather than a contradiction of it.
 
 \section{Related Work}
 
@@ -1506,9 +1532,10 @@ rather than a default, because on at least one real device it makes things
 worse.
 
 What this draft does not have, and has decided not to pursue, is stated rather
-than promised: application frames, multisampled targets, and clock-locked
-repeats of the cells whose control floor exceeds the effect in them. Each is a
-bound on a specific claim, named where that claim is made.
+than promised: application frames, multisampled targets, and repeats --- with
+enough warm-up to reach a steady clock --- of the cells whose control floor
+exceeds the effect in them. Each is a bound on a specific claim, named where
+that claim is made.
 
 \bibliographystyle{plain}
 \bibliography{references}
