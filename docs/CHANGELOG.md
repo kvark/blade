@@ -2,6 +2,10 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- gfx: `Memory::Download` asks the allocator for a host-cached mapping, for
+  buffers the CPU reads after a transfer. `Shared` can land on write-combined
+  or even device-local host-visible memory, where a scan of the range runs
+  three orders of magnitude slower and copying it out first does not help.
 - render: `RayTracer::view_gbuffer` hands out the geometry and material buffer
   of the frame that was last prepared, as `GBufferViews`. A post process that
   knows what the renderer knows can take silhouettes from the depth and the
