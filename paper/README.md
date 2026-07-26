@@ -41,19 +41,30 @@ Every result used by the paper must retain the raw rows and machine metadata
 from which it was derived, which the collection directory does.
 
 With Blade and the benchmark wgpu branch checked out as sibling directories,
-run the randomized, repeated matched matrix after committing both artifacts:
+one command collects everything this machine can contribute:
 
 ```bash
-python3 paper/run-study-matrix.py \
-  --wgpu ../wgpu \
-  --backend vulkan \
-  --blade-device-id <id> \
-  --wgpu-adapter-name "<name>" \
-  --output paper/data/raw/<collection-id>
+python3 paper/collect.py --wgpu ../wgpu
 ```
 
-Add `--pass-list 1,2,4,8,16,32,64,128` to sweep the pass count instead of
-measuring a single point.
+That runs the timing matrix over every adapter, then a host CPU profile, then
+RenderDoc captures of both implementations. The last two need `perf` and
+RenderDoc respectively; if either is unavailable it says so and carries on,
+because a machine that can only contribute timings should still contribute
+them. Add `--sweeps` for the pass-count sweeps, which take roughly another half
+hour. Unrecognized arguments pass through to the matrix runner.
+
+The three steps can also be run on their own:
+
+```bash
+python3 paper/run-study-matrix.py --wgpu ../wgpu     # timings
+python3 paper/profile-hosts.py    --wgpu ../wgpu     # host CPU profile
+python3 paper/capture-streams.py  --wgpu ../wgpu     # command streams
+```
+
+Add `--pass-list 1,2,4,8,16,32,64,128` to the matrix runner to sweep the pass
+count instead of measuring a single point, and `--blade-device-id` /
+`--wgpu-adapter-name` to pin one adapter instead of collecting all of them.
 
 See [COLLECTING.md](COLLECTING.md) for adapter discovery, correctness runs,
 separate CPU/GPU collections, Linux, Windows, and macOS commands, profiling,
@@ -62,13 +73,6 @@ runner; it is not the final matched collector.
 `tools/metal-hazard-bench.swift` is the standalone Metal tracked-versus-untracked
 harness; its results live in
 [`../docs/metal-hazard-tracking.md`](../docs/metal-hazard-tracking.md).
-
-Attribute host CPU time to the crate that spent it (needs `perf` and
-`kernel.perf_event_paranoid <= 2`):
-
-```bash
-python3 paper/profile-hosts.py --wgpu ../wgpu
-```
 
 Summarize a collection with deterministic bootstrap intervals:
 
