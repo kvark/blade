@@ -277,6 +277,73 @@ fn dispatch_gpu_test() {
     context.destroy_buffer(input);
 }
 
+/// Big enough for the weight chain to have several levels, so a mistake in the
+/// mip math has somewhere to show up.
+const ENV_TEST_SIZE: gpu::Extent = gpu::Extent {
+    width: 64,
+    height: 32,
+    depth: 1,
+};
+
+/// An equirectangular map with a bright spot in it.
+///
+/// Uniform content would make the importance sampling degenerate, and the
+/// point of the weight chain is to concentrate on where the light actually is.
+/// Returns the staging buffer as well, for the caller to destroy after submit.
+fn make_environment(
+    encoder: &mut gpu::CommandEncoder,
+    context: &gpu::Context,
+) -> (gpu::Texture, gpu::TextureView, gpu::Buffer) {
+    let format = gpu::TextureFormat::Rgba8Unorm;
+    let texel_count = (ENV_TEST_SIZE.width * ENV_TEST_SIZE.height) as usize;
+    let texture = context.create_texture(gpu::TextureDesc {
+        name: "env-test",
+        format,
+        size: ENV_TEST_SIZE,
+        dimension: gpu::TextureDimension::D2,
+        array_layer_count: 1,
+        mip_level_count: 1,
+        usage: gpu::TextureUsage::COPY | gpu::TextureUsage::RESOURCE,
+        sample_count: 1,
+        external: None,
+    });
+    let view = context.create_texture_view(
+        texture,
+        gpu::TextureViewDesc {
+            name: "env-test",
+            format,
+            dimension: gpu::ViewDimension::D2,
+            subresources: &Default::default(),
+        },
+    );
+
+    let mut texels = vec![[16u8, 16, 24, 255]; texel_count];
+    for y in 8..12 {
+        for x in 40..46 {
+            texels[y * ENV_TEST_SIZE.width as usize + x] = [255, 250, 235, 255];
+        }
+    }
+    let stage = context.create_buffer(gpu::BufferDesc {
+        name: "env-test/stage",
+        size: (texel_count * 4) as u64,
+        memory: gpu::Memory::Upload,
+    });
+    unsafe {
+        std::ptr::copy_nonoverlapping(texels.as_ptr() as *const u8, stage.data(), texel_count * 4);
+    }
+
+    encoder.init_texture(texture);
+    if let mut transfer = encoder.transfer("env-test-upload") {
+        transfer.copy_buffer_to_texture(
+            stage.at(0),
+            ENV_TEST_SIZE.width * 4,
+            texture.into(),
+            ENV_TEST_SIZE,
+        );
+    }
+    (texture, view, stage)
+}
+
 #[test]
 #[ignore = "requires a working GPU context"]
 fn env_map_gpu_test() {
@@ -300,9 +367,18 @@ fn env_map_gpu_test() {
 
     let mut dummy = blade_render::DummyResources::new(&mut command_encoder, &context);
     let mut env_map = blade_render::EnvironmentMap::new(&shader_prepare, &dummy, &context);
-    env_map.assign(dummy.white_view, dummy.size, &mut command_encoder, &context);
 
-    let env_sampler = EnvMapSampler::new(dummy.size, &shader_sample, &context);
+    // A map of its own rather than `dummy.white_view`: `EnvironmentMap::new`
+    // starts out holding that view, so assigning it again returns immediately
+    // and the weight chain this test goes on to sample is never built.
+    let (env_texture, env_view, env_stage) = make_environment(&mut command_encoder, &context);
+    env_map.assign(env_view, ENV_TEST_SIZE, &mut command_encoder, &context);
+    assert!(
+        !env_map.weight_mips.is_empty(),
+        "assigning a map has to build the importance sampling chain"
+    );
+
+    let env_sampler = EnvMapSampler::new(ENV_TEST_SIZE, &shader_sample, &context);
     env_sampler.accumulate(
         &mut command_encoder,
         env_map.main_view,
@@ -338,7 +414,10 @@ fn env_map_gpu_test() {
     );
 
     context.destroy_buffer(readback);
+    context.destroy_buffer(env_stage);
     env_map.destroy(&context);
+    context.destroy_texture_view(env_view);
+    context.destroy_texture(env_texture);
     dummy.destroy(&context);
     env_sampler.destroy(&context);
     context.destroy_command_encoder(&mut command_encoder);
