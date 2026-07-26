@@ -54,17 +54,20 @@ impl ExposeHud for blade_render::DenoiserConfig {
 
 impl ExposeHud for blade_render::PostProcConfig {
     fn populate_hud(&mut self, ui: &mut egui::Ui) {
-        ui.add(
-            egui::Slider::new(&mut self.average_luminocity, 0.1f32..=1_000f32)
-                .text("Average luminocity")
-                .logarithmic(true),
-        );
-        ui.add(
-            egui::Slider::new(&mut self.exposure_key_value, 0.01f32..=10f32)
-                .text("Key value")
-                .logarithmic(true),
-        );
-        ui.add(egui::Slider::new(&mut self.white_level, 0.1f32..=2f32).text("White level"));
+        ui.checkbox(&mut self.tone_map, "Tone map");
+        ui.add_enabled_ui(self.tone_map, |ui| {
+            ui.add(
+                egui::Slider::new(&mut self.average_luminocity, 0.1f32..=1_000f32)
+                    .text("Average luminocity")
+                    .logarithmic(true),
+            );
+            ui.add(
+                egui::Slider::new(&mut self.exposure_key_value, 0.01f32..=10f32)
+                    .text("Key value")
+                    .logarithmic(true),
+            );
+            ui.add(egui::Slider::new(&mut self.white_level, 0.1f32..=2f32).text("White level"));
+        });
     }
 }
 

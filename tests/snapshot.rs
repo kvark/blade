@@ -57,10 +57,13 @@ pub struct OffscreenTarget {
     pub view: gpu::TextureView,
     pub readback: gpu::Buffer,
     pub size: gpu::Extent,
+    /// Bytes per texel, so a float target reads back as well as an 8-bit one.
+    texel_size: u32,
 }
 
 impl OffscreenTarget {
     pub fn new(context: &gpu::Context, size: gpu::Extent, format: gpu::TextureFormat) -> Self {
+        let texel_size = format.block_info().size as u32;
         let texture = context.create_texture(gpu::TextureDesc {
             name: "snapshot-target",
             format,
@@ -83,7 +86,7 @@ impl OffscreenTarget {
         );
         let readback = context.create_buffer(gpu::BufferDesc {
             name: "snapshot-readback",
-            size: (size.width * size.height) as u64 * 4,
+            size: (size.width * size.height * texel_size) as u64,
             memory: gpu::Memory::Shared,
         });
         Self {
@@ -91,6 +94,7 @@ impl OffscreenTarget {
             view,
             readback,
             size,
+            texel_size,
         }
     }
 
@@ -104,7 +108,7 @@ impl OffscreenTarget {
             transfer.copy_texture_to_buffer(
                 self.texture.into(),
                 self.readback.into(),
-                self.size.width * 4,
+                self.size.width * self.texel_size,
                 self.size,
             );
         }
@@ -113,7 +117,7 @@ impl OffscreenTarget {
             context.wait_for(&sync_point, READBACK_TIMEOUT_MS).unwrap(),
             "GPU timed out during snapshot readback"
         );
-        let byte_count = (self.size.width * self.size.height * 4) as usize;
+        let byte_count = (self.size.width * self.size.height * self.texel_size) as usize;
         let mut pixels = vec![0u8; byte_count];
         unsafe {
             std::ptr::copy_nonoverlapping(self.readback.data(), pixels.as_mut_ptr(), byte_count);

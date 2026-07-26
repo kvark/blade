@@ -2,6 +2,21 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- render: `RayTracer::view_gbuffer` hands out the geometry and material buffer
+  of the frame that was last prepared, as `GBufferViews`. A post process that
+  knows what the renderer knows can take silhouettes from the depth and the
+  normals, separate texture detail from lighting through the albedo, and read
+  the width of a specular highlight from the roughness, none of which is
+  recoverable from the color alone. The views belong to the renderer and stay
+  valid until the next `resize_screen`.
+- render: `PostProcConfig::tone_map` can be cleared to leave the composed
+  radiance alone, so a frame can be captured as high dynamic range data rather
+  than only as a picture. The exposure controls are unused when it is off, and
+  the display transfer function is skipped along with the curve, since it is
+  only defined over the display range. Rendering into a floating point target
+  is what makes this observable — a fixed point one still clamps.
+  - breaking: `PostProcConfig` gained a field, so it can no longer be built
+    without `..Default::default()`
 - render: physically based materials, authored as glTF metallic-roughness, shaded in the specular workflow
   - `Material` carries metallic-roughness and emissive, both as factors and textures, cooked from glTF (including `KHR_materials_emissive_strength`)
   - internally, a material is a diffuse albedo, a specular reflectance at normal incidence, and a roughness; the conversion happens in `material_from_metallic_roughness` when the textures are sampled, and is the only place aware of the metalness

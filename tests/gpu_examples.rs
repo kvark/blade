@@ -875,9 +875,44 @@ enum RayTraceMode {
     Canonical,
 }
 
+/// What the post processing should hand back.
+#[cfg(not(gles))]
+#[derive(Clone, Copy, PartialEq)]
+enum Capture {
+    /// Tone mapped and encoded for a display, in `Rgba8UnormSrgb`.
+    Display,
+    /// The composed linear radiance, untouched, in `Rgba32Float`.
+    Hdr,
+}
+
+#[cfg(not(gles))]
+impl Capture {
+    fn format(self) -> gpu::TextureFormat {
+        match self {
+            Self::Display => RAY_TRACE_FORMAT,
+            Self::Hdr => gpu::TextureFormat::Rgba32Float,
+        }
+    }
+}
+
 /// Render the material grid with the ray tracer, if the GPU can do it.
 #[cfg(not(gles))]
 fn render_ray_traced_grid(cache_name: &str, mode: RayTraceMode) -> Option<Vec<u8>> {
+    render_ray_traced_grid_as(cache_name, mode, Capture::Display, |_, _, _| {})
+}
+
+/// Render the grid, letting the caller look at the renderer's own state after
+/// the frame is rendered and before it is torn down.
+///
+/// `inspect` is where a test reaches for something the post processing does not
+/// expose, such as the G-buffer.
+#[cfg(not(gles))]
+fn render_ray_traced_grid_as(
+    cache_name: &str,
+    mode: RayTraceMode,
+    capture: Capture,
+    inspect: impl FnOnce(&blade_render::RayTracer, &gpu::Context, &mut gpu::CommandEncoder),
+) -> Option<Vec<u8>> {
     // Metal acceleration structure APIs can throw uncatchable ObjC exceptions
     // in CI environments, even when the device reports ray tracing support.
     if cfg!(target_os = "macos") {
@@ -909,7 +944,7 @@ fn render_ray_traced_grid(cache_name: &str, mode: RayTraceMode) -> Option<Vec<u8
     let size = RAY_TRACE_SIZE;
     let harness = PbrHarness::new(context, cache_name, true);
     let context = std::sync::Arc::clone(&harness.context);
-    let target = snapshot::OffscreenTarget::new(&context, size, RAY_TRACE_FORMAT);
+    let target = snapshot::OffscreenTarget::new(&context, size, capture.format());
 
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "snapshot-ray-traced-grid",
@@ -926,7 +961,7 @@ fn render_ray_traced_grid(cache_name: &str, mode: RayTraceMode) -> Option<Vec<u8
         &blade_render::RenderConfig {
             surface_size: size,
             surface_info: gpu::SurfaceInfo {
-                format: RAY_TRACE_FORMAT,
+                format: capture.format(),
                 alpha: gpu::AlphaMode::Ignored,
             },
             color_space: gpu::ColorSpace::Linear,
@@ -1006,6 +1041,8 @@ fn render_ray_traced_grid(cache_name: &str, mode: RayTraceMode) -> Option<Vec<u8
         );
     }
 
+    inspect(&renderer, &context, &mut command_encoder);
+
     command_encoder.init_texture(target.texture);
     if let mut pass = command_encoder.render(
         "ray-traced-grid",
@@ -1021,7 +1058,10 @@ fn render_ray_traced_grid(cache_name: &str, mode: RayTraceMode) -> Option<Vec<u8
         renderer.post_proc(
             &mut pass,
             debug_config,
-            blade_render::PostProcConfig::default(),
+            blade_render::PostProcConfig {
+                tone_map: capture == Capture::Display,
+                ..Default::default()
+            },
             &[],
             &[],
         );
@@ -1071,6 +1111,261 @@ fn snapshot_pbr_canonical() {
     assert!(
         difference < CANONICAL_MAX_DIFFERENCE,
         "the real-time result is {difference:.2}/255 away from the canonical one"
+    );
+}
+
+/// Clearing `PostProcConfig::tone_map` has to hand back the composed radiance
+/// as it is, with nothing compressed into display range.
+///
+/// The grid's emissive row is far brighter than white, so a path that clamps
+/// or tone maps cannot produce these values. This is what lets a capture be
+/// used as data rather than only as a picture.
+#[cfg(not(gles))]
+#[test]
+#[ignore = "requires a working GPU context with ray tracing"]
+fn hdr_capture_is_unclipped() {
+    let Some(bytes) = render_ray_traced_grid_as(
+        "pbr-hdr",
+        RayTraceMode::Canonical,
+        Capture::Hdr,
+        |_, _, _| {},
+    ) else {
+        return;
+    };
+    let pixels: &[f32] = bytemuck::cast_slice(&bytes);
+    assert_eq!(
+        pixels.len(),
+        (RAY_TRACE_SIZE.width * RAY_TRACE_SIZE.height * 4) as usize
+    );
+
+    let mut peak = 0.0f32;
+    for texel in pixels.chunks_exact(4) {
+        for &channel in &texel[..3] {
+            assert!(channel.is_finite(), "non-finite radiance {channel}");
+            assert!(channel >= 0.0, "negative radiance {channel}");
+            peak = peak.max(channel);
+        }
+    }
+    println!("hdr capture: peak radiance = {peak:.2}");
+    assert!(
+        peak > 1.0,
+        "peak radiance is {peak:.3}, so the capture was clamped into display range"
+    );
+
+    // Stronger than a range check: applying the same curve on the CPU has to
+    // reproduce the display capture. That pins the HDR path to being the same
+    // signal one stage earlier, rather than some other buffer that merely
+    // happens to be bright.
+    let Some(display) = render_ray_traced_grid_as(
+        "pbr-hdr-display",
+        RayTraceMode::Canonical,
+        Capture::Display,
+        |_, _, _| {},
+    ) else {
+        return;
+    };
+
+    // The same curve the shader applies, at PostProcConfig::default(): unit
+    // exposure and a white level of 1. Note that a white level of 1 makes the
+    // curve an identity, so what separates the two captures here is the
+    // transfer encoding and the 8-bit clamp.
+    let tone_map = |l: f32| {
+        let white = 1.0f32;
+        l * (1.0 + l / (white * white)) / (1.0 + l)
+    };
+    let encode_srgb = |v: f32| {
+        if v <= 0.0031308 {
+            12.92 * v
+        } else {
+            1.055 * v.powf(1.0 / 2.4) - 0.055
+        }
+    };
+
+    let mut worst = 0.0f32;
+    for (hdr, shown) in pixels.chunks_exact(4).zip(display.chunks_exact(4)) {
+        for (&linear, &byte) in hdr[..3].iter().zip(shown[..3].iter()) {
+            let expected = encode_srgb(tone_map(linear)).clamp(0.0, 1.0) * 255.0;
+            worst = worst.max((expected - byte as f32).abs());
+        }
+    }
+    println!("hdr capture: worst channel difference after tone mapping = {worst:.2}/255");
+    // Both passes are independent accumulations of a stochastic estimator, so
+    // they differ by sampling noise rather than being bit-identical.
+    assert!(
+        worst < 8.0,
+        "the tone mapped HDR capture is {worst:.2}/255 away from the display one"
+    );
+}
+
+#[cfg(not(gles))]
+#[derive(blade_macros::ShaderData)]
+struct GBufferProbeData {
+    t_depth: gpu::TextureView,
+    t_basis: gpu::TextureView,
+    t_flat_normal: gpu::TextureView,
+    t_diffuse_albedo: gpu::TextureView,
+    t_specular_f0: gpu::TextureView,
+    output: gpu::TextureView,
+}
+
+/// The G-buffer views have to be bindable from outside the renderer, and they
+/// have to describe the frame that was just rendered.
+///
+/// The material grid is what makes the second half checkable: its columns
+/// sweep the roughness and its rows sweep the metalness, so a buffer that came
+/// from the wrong place, or from before the scene was drawn, will not show that
+/// structure.
+#[cfg(not(gles))]
+#[test]
+#[ignore = "requires a working GPU context with ray tracing"]
+fn gbuffer_views_describe_the_rendered_frame() {
+    let size = RAY_TRACE_SIZE;
+    let mut probe = Vec::new();
+
+    let rendered = render_ray_traced_grid_as(
+        "pbr-gbuffer",
+        RayTraceMode::Restir,
+        Capture::Display,
+        |renderer, context, encoder| {
+            let format = gpu::TextureFormat::Rgba32Float;
+            let target = snapshot::OffscreenTarget::new(context, size, format);
+            // The probe writes through a storage binding rather than as a
+            // render target.
+            let storage = context.create_texture(gpu::TextureDesc {
+                name: "gbuffer-probe",
+                format,
+                size,
+                dimension: gpu::TextureDimension::D2,
+                array_layer_count: 1,
+                mip_level_count: 1,
+                usage: gpu::TextureUsage::STORAGE | gpu::TextureUsage::COPY,
+                sample_count: 1,
+                external: None,
+            });
+            let storage_view = context.create_texture_view(
+                storage,
+                gpu::TextureViewDesc {
+                    name: "gbuffer-probe",
+                    format,
+                    dimension: gpu::ViewDimension::D2,
+                    subresources: &gpu::TextureSubresources::default(),
+                },
+            );
+            encoder.init_texture(storage);
+
+            let shader = context.create_shader(gpu::ShaderDesc {
+                source: include_str!("shaders/gbuffer_probe.wgsl"),
+                naga_module: None,
+            });
+            let layout = <GBufferProbeData as gpu::ShaderData>::layout();
+            let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+                name: "gbuffer-probe",
+                data_layouts: &[&layout],
+                compute: shader.at("probe"),
+            });
+
+            let views = renderer.view_gbuffer();
+            {
+                let mut pass = encoder.compute("gbuffer-probe");
+                let mut commands = pass.with(&pipeline);
+                commands.bind(
+                    0,
+                    &GBufferProbeData {
+                        t_depth: views.depth,
+                        t_basis: views.basis,
+                        t_flat_normal: views.flat_normal,
+                        t_diffuse_albedo: views.diffuse_albedo,
+                        t_specular_f0: views.specular_f0,
+                        output: storage_view,
+                    },
+                );
+                commands.dispatch([size.width.div_ceil(8), size.height.div_ceil(8), 1]);
+            }
+
+            {
+                let mut transfer = encoder.transfer("gbuffer-probe-readback");
+                transfer.copy_texture_to_buffer(
+                    storage.into(),
+                    target.readback.into(),
+                    size.width * 16,
+                    size,
+                );
+            }
+            let sync_point = context.submit(encoder);
+            // Same budget as a snapshot readback: this waits on the same
+            // ray-traced frame, so it faces the same software rasterizer.
+            assert!(
+                context
+                    .wait_for(&sync_point, snapshot::READBACK_TIMEOUT_MS)
+                    .unwrap(),
+                "GPU timed out reading back the G-buffer probe"
+            );
+
+            let count = (size.width * size.height * 4) as usize;
+            probe = vec![0.0f32; count];
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    target.readback.data() as *const f32,
+                    probe.as_mut_ptr(),
+                    count,
+                );
+            }
+
+            // The encoder has to be live again for the caller's post processing.
+            encoder.start();
+            context.destroy_compute_pipeline(&mut pipeline);
+            context.destroy_texture_view(storage_view);
+            context.destroy_texture(storage);
+            target.destroy(context);
+        },
+    );
+    if rendered.is_none() {
+        return;
+    }
+    assert!(!probe.is_empty(), "the inspect hook did not run");
+
+    // Depth: positive wherever a ray hit something, and the grid fills enough
+    // of the frame that plenty of rays did.
+    let hits = probe.chunks_exact(4).filter(|t| t[0] > 0.0).count();
+    let total = (size.width * size.height) as usize;
+    println!("gbuffer: {hits}/{total} pixels have depth");
+    assert!(
+        hits > total / 10,
+        "only {hits} of {total} pixels carry depth, the buffer looks empty"
+    );
+
+    // Roughness: the grid sweeps it across the columns, so a G-buffer read
+    // from the right place shows a spread rather than one value.
+    let mut min_roughness = f32::INFINITY;
+    let mut max_roughness = f32::NEG_INFINITY;
+    for texel in probe.chunks_exact(4).filter(|t| t[0] > 0.0) {
+        min_roughness = min_roughness.min(texel[1]);
+        max_roughness = max_roughness.max(texel[1]);
+    }
+    println!("gbuffer: roughness spans {min_roughness:.2}..{max_roughness:.2}");
+    assert!(
+        max_roughness - min_roughness > 0.3,
+        "roughness barely varies ({min_roughness}..{max_roughness}), \
+         the grid sweeps it so this should be a wide range"
+    );
+
+    // Albedo is a unorm target, so it cannot leave [0, 1].
+    assert!(
+        probe.chunks_exact(4).all(|t| (0.0..=1.0).contains(&t[2])),
+        "albedo left the unit range"
+    );
+
+    // The spheres carry no normal map, so the shading normal should agree with
+    // the geometric one almost everywhere a ray hit.
+    let aligned = probe
+        .chunks_exact(4)
+        .filter(|t| t[0] > 0.0 && t[3] > 0.9)
+        .count();
+    println!("gbuffer: {aligned}/{hits} hits have basis aligned with the flat normal");
+    assert!(
+        aligned * 10 > hits * 9,
+        "the basis quaternion does not decode to the geometric normal, \
+         so it is not the tangent frame it is documented to be"
     );
 }
 

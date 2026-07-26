@@ -55,13 +55,16 @@ fn postfx_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
             let emissive = textureLoad(t_emissive, tc, 0).xyz;
             color = diffuse_albedo * illumination.xyz + specular + emissive;
         }
-        var mapped = color;
-        if (post_proc_params.tone_map_enabled != 0u) {
-            // Following https://blog.en.uwa4d.com/2022/07/19/physically-based-renderingg-hdr-tone-mapping/
-            let l_adjusted = post_proc_params.key_value / post_proc_params.average_lum * color;
-            let l_white = post_proc_params.white_level;
-            mapped = l_adjusted * (1.0 + l_adjusted / (l_white*l_white)) / (1.0 + l_adjusted);
+        if (post_proc_params.tone_map_enabled == 0u) {
+            // Hand back the composed radiance untouched. A display transfer
+            // function is only defined over the display range, so a value
+            // that was never brought into it doesn't get encoded.
+            return vec4<f32>(color, 1.0);
         }
+        // Following https://blog.en.uwa4d.com/2022/07/19/physically-based-renderingg-hdr-tone-mapping/
+        let l_adjusted = post_proc_params.key_value / post_proc_params.average_lum * color;
+        let l_white = post_proc_params.white_level;
+        let mapped = l_adjusted * (1.0 + l_adjusted / (l_white*l_white)) / (1.0 + l_adjusted);
         let encode = post_proc_params.encode_srgb != 0u;
         return vec4<f32>(encode_surface_color(mapped, encode), 1.0);
     } else if (debug_params.view_mode == DebugMode_Variance) {

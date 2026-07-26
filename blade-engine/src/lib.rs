@@ -644,6 +644,7 @@ impl Engine {
                     average_luminocity: 0.5,
                     exposure_key_value: 1.0 / 9.6,
                     white_level: 1.0,
+                    tone_map: true,
                 },
             },
             config::RenderBackend::Rasterizer => Renderer::Rasterizer {
