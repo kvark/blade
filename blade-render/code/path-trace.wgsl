@@ -155,6 +155,13 @@ fn trace_path(start_dir: vec3<f32>, rng: ptr<function, RandomState>) -> vec3<f32
         position = vertex.position;
         t_min = parameters.t_start;
 
+        // Whether the path will be extended by a BSDF sampled ray. When it
+        // will not, next event estimation is the only strategy that can find
+        // the light at this vertex, so it has to carry the whole contribution
+        // instead of the share the balance heuristic would leave it.
+        let will_extend = bounce < parameters.max_bounces && parameters.num_brdf_samples != 0u;
+        let bsdf_count = select(0.0, 1.0, will_extend);
+
         // Next event estimation: connect to the environment light.
         for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
             let ls = sample_light(importance, rng);
@@ -168,11 +175,11 @@ fn trace_path(start_dir: vec3<f32>, rng: ptr<function, RandomState>) -> vec3<f32
                 continue;
             }
             let other_pdf = compute_bsdf_pdf(vertex.material, vertex.normal, view_dir, light_dir);
-            let weight = mis_weight(num_light, ls.pdf, 1.0, other_pdf) / (num_light * ls.pdf);
+            let weight = mis_weight(num_light, ls.pdf, bsdf_count, other_pdf) / (num_light * ls.pdf);
             radiance += throughput * bsdf * ls.radiance * weight;
         }
 
-        if (bounce == parameters.max_bounces || parameters.num_brdf_samples == 0u) {
+        if (!will_extend) {
             // The next event estimation above was the last thing to do here.
             break;
         }
