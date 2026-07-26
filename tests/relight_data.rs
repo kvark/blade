@@ -36,6 +36,7 @@
 //!   RELIGHT_VIEWS   camera positions around the scene (default 12)
 //!   RELIGHT_FRAMES  paths accumulated per image (default 512)
 //!   RELIGHT_SIZE    "WxH" (default 320x240)
+//!   RELIGHT_BOUNCES path length, 0 for direct lighting only (default 4)
 #![cfg(not(gles))]
 #![allow(dead_code)]
 
@@ -385,8 +386,10 @@ fn ray_config() -> blade_render::RayConfig {
         // sphere sampling would find only by luck.
         environment_importance_sampling: true,
         // One bounce short of where the open scenes converge, measured by the
-        // GI ceiling harness; the floor here needs the indirect light.
-        max_bounces: 4,
+        // GI ceiling harness; the floor here needs the indirect light. Set to
+        // zero for direct lighting only, which is what a relightable model
+        // without an indirect term can actually represent.
+        max_bounces: parsed("RELIGHT_BOUNCES", 4),
         max_accumulated_samples: 0,
         tap_count: 2,
         tap_radius: 16,
