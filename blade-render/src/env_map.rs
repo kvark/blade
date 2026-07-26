@@ -71,7 +71,13 @@ impl EnvironmentMap {
         }
     }
 
-    pub fn destroy(&mut self, gpu: &blade_graphics::Context) {
+    /// Release what belongs to the map that is currently assigned.
+    ///
+    /// Kept apart from [`destroy`] because assigning a new map has to let go of
+    /// the old weights while keeping the pipeline that builds the new ones.
+    ///
+    /// [`destroy`]: Self::destroy
+    fn release_weights(&mut self, gpu: &blade_graphics::Context) {
         if let Some(weight_texture) = self.weight_texture.take() {
             gpu.destroy_texture(weight_texture);
             gpu.destroy_texture_view(self.weight_view);
@@ -79,6 +85,10 @@ impl EnvironmentMap {
         for view in self.weight_mips.drain(..) {
             gpu.destroy_texture_view(view);
         }
+    }
+
+    pub fn destroy(&mut self, gpu: &blade_graphics::Context) {
+        self.release_weights(gpu);
         gpu.destroy_compute_pipeline(&mut self.prepare_pipeline);
     }
 
@@ -94,7 +104,7 @@ impl EnvironmentMap {
         }
         self.main_view = view;
         self.size = extent;
-        self.destroy(gpu);
+        self.release_weights(gpu);
 
         let mip_level_count = extent
             .width
