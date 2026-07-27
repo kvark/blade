@@ -37,6 +37,30 @@ private struct Stats {
   var p95: Double
 }
 
+private func rawOutputPath() throws -> String {
+  let arguments = Array(CommandLine.arguments.dropFirst())
+  guard arguments.count == 2, arguments[0] == "--raw-output" else {
+    throw NSError(
+      domain: "MetalHazardBench",
+      code: 4,
+      userInfo: [
+        NSLocalizedDescriptionKey:
+          "usage: metal-hazard-bench --raw-output <new-raw.csv>"
+      ])
+  }
+  let path = arguments[1]
+  if FileManager.default.fileExists(atPath: path) {
+    throw NSError(
+      domain: "MetalHazardBench",
+      code: 5,
+      userInfo: [
+        NSLocalizedDescriptionKey:
+          "refusing to overwrite existing raw output: \(path)"
+      ])
+  }
+  return path
+}
+
 private func stats(_ input: [Double]) -> Stats {
   let values = input.sorted()
   func percentile(_ p: Double) -> Double {
@@ -213,7 +237,10 @@ private final class CaseResult {
 }
 
 do {
+  let rawPath = try rawOutputPath()
   let benchmark = try Benchmark()
+  let sessionID = UUID().uuidString.lowercased()
+  let createdUTC = ISO8601DateFormatter().string(from: Date())
   let passCounts = [1, 10, 100, 500]
   let configurations: [(Workload, Tracking)] = [
     (.independent, .tracked),
@@ -226,12 +253,23 @@ do {
   ]
 
   print("# Metal hazard tracking benchmark")
+  print("# session_id=\(sessionID)")
+  print("# created_utc=\(createdUTC)")
   print("# device=\(benchmark.device.name)")
   print("# os=\(ProcessInfo.processInfo.operatingSystemVersionString)")
   print(
     "# columns: workload,tracking,passes,samples,correct,actual_resource_mode,encode_median_us,encode_p05_us,encode_p95_us,commit_median_us,commit_p05_us,commit_p95_us,gpu_median_us,gpu_p05_us,gpu_p95_us,wall_median_us"
   )
 
+  var rawLines = [
+    "# schema,blade-metal-hazard-v1",
+    "# session_id,\(sessionID)",
+    "# created_utc,\(createdUTC)",
+    "# device,\(benchmark.device.name)",
+    "# os,\(ProcessInfo.processInfo.operatingSystemVersionString)",
+    "ordinal,sample,workload,tracking,passes,actual_resource_mode,correct,encode_us,commit_us,gpu_us,wall_us",
+  ]
+  var ordinal = 0
   for passCount in passCounts {
     let samples = passCount < 500 ? 200 : 80
     let caseResults = configurations.map { workload, tracking in
@@ -261,6 +299,26 @@ do {
         }
         result.results.append(measurement)
         result.allCorrect = result.allCorrect && correct
+        let benchmarkCase = result.benchmarkCase
+        let actualMode =
+          benchmarkCase.buffers[0].hazardTrackingMode == .tracked
+          ? "tracked"
+          : "untracked"
+        rawLines.append(
+          [
+            String(ordinal),
+            String(sample),
+            benchmarkCase.workload.rawValue,
+            benchmarkCase.tracking.rawValue,
+            String(passCount),
+            actualMode,
+            String(correct),
+            String(format: "%.6f", measurement.encodeMicroseconds),
+            String(format: "%.6f", measurement.commitMicroseconds),
+            String(format: "%.6f", measurement.gpuMicroseconds),
+            String(format: "%.6f", measurement.wallMicroseconds),
+          ].joined(separator: ","))
+        ordinal += 1
       }
     }
 
@@ -293,6 +351,12 @@ do {
         ].joined(separator: ","))
     }
   }
+  try (rawLines.joined(separator: "\n") + "\n").write(
+    toFile: rawPath,
+    atomically: true,
+    encoding: .utf8
+  )
+  print("# raw_output=\(rawPath)")
 } catch {
   fputs("metal-hazard-bench: \(error)\n", stderr)
   exit(1)

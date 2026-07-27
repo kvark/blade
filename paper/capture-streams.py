@@ -77,7 +77,29 @@ WORKLOADS = (
 )
 # The mixed families exist only in Blade's benchmark.
 SHARED_WORKLOADS = frozenset(WORKLOADS) - {"mixed-independent", "mixed-chain"}
-POLICIES = ("automatic", "automatic-scoped", "hazard-only")
+# Include the identical-request control as well as the configurations discussed
+# in the result figures. The 2026-07-27 captures predate this addition and must
+# be refreshed before the control is claimed as captured evidence.
+POLICIES = (
+    "automatic",
+    "automatic-scoped",
+    "hazard-only",
+    "hazard-only-scoped",
+    "explicit-all",
+    "explicit-all-scoped",
+)
+
+
+def parse_benchmark_metadata(output: str) -> dict[str, str]:
+    """Read the benchmark's ``# key,value`` records from captured stdout."""
+    metadata: dict[str, str] = {}
+    for line in output.splitlines():
+        if not line.startswith("#"):
+            continue
+        fields = next(csv.reader([line[1:].strip()]))
+        if len(fields) >= 2:
+            metadata[fields[0].strip()] = ",".join(fields[1:]).strip()
+    return metadata
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -277,23 +299,66 @@ def field(element, name: str) -> int | None:
     return None
 
 
+def resource_field(element, *names: str) -> str | None:
+    """Return a direct ResourceId field without coercing its opaque value."""
+    for child in element:
+        if child.tag == "ResourceId" and child.get("name") in names:
+            text = (child.text or "").strip()
+            if text:
+                return text
+    return None
+
+
 def extract_barriers(
     xml_path: Path, implementation: str, workload: str, policy: str
 ) -> list[dict]:
     """One row per `vkCmdPipelineBarrier` in the capture.
 
     This is the point of capturing: the paper describes these masks from
-    Blade's source, and this is what the driver actually received.
+    Blade's source, and this is what the driver actually received. `after_work`
+    counts submitted dispatch/draw commands preceding the barrier. RenderDoc's
+    XML lists API recording calls in host order, but wgpu records each pass and
+    transition into separate Vulkan command buffers and orders those buffers
+    only in `vkQueueSubmit`. We therefore replay commands in submission order;
+    counting preceding XML chunks would assign wgpu's barriers to the wrong
+    pass boundaries.
     """
     import xml.etree.ElementTree as ElementTree
 
-    rows = []
     root = ElementTree.parse(xml_path).getroot()
-    index = 0
+    command_events: dict[str, list[tuple[str, dict | None]]] = {}
+    submission_order: list[str] = []
+    recorded_barriers = 0
+
     for chunk in root.iter("chunk"):
         name = chunk.get("name") or ""
+
+        if name.startswith("vkQueueSubmit"):
+            # Vulkan 1.0/1.1 submission.
+            for array in chunk.iter("array"):
+                if array.get("name") == "pCommandBuffers":
+                    submission_order.extend(
+                        (child.text or "").strip()
+                        for child in array
+                        if child.tag == "ResourceId" and (child.text or "").strip()
+                    )
+                # Vulkan 1.3 `vkQueueSubmit2`.
+                elif array.get("name") == "pCommandBufferInfos":
+                    for structure in array:
+                        command_buffer = resource_field(structure, "commandBuffer")
+                        if command_buffer is not None:
+                            submission_order.append(command_buffer)
+
+        command_buffer = resource_field(chunk, "commandBuffer")
+        if command_buffer is None:
+            continue
+        events = command_events.setdefault(command_buffer, [])
+        if name.startswith(("vkCmdDispatch", "vkCmdDraw")):
+            events.append(("work", None))
+            continue
         if "PipelineBarrier" not in name:
             continue
+
         memory = field(chunk, "memoryBarrierCount") or 0
         buffers = field(chunk, "bufferMemoryBarrierCount") or 0
         images = field(chunk, "imageMemoryBarrierCount") or 0
@@ -310,24 +375,52 @@ def extract_barriers(
                     destination_access |= field(structure, "dstAccessMask") or 0
                     old_layout = field(structure, "oldLayout")
                     new_layout = field(structure, "newLayout")
-        rows.append(
-            {
-                "implementation": implementation,
-                "workload": workload,
-                "policy": policy,
-                "index": index,
-                "src_stage": decode(field(chunk, "srcStageMask") or 0, STAGE_BITS),
-                "dst_stage": decode(field(chunk, "destStageMask") or 0, STAGE_BITS),
-                "src_access": decode(source_access, ACCESS_BITS),
-                "dst_access": decode(destination_access, ACCESS_BITS),
-                "memory_barriers": memory,
-                "buffer_barriers": buffers,
-                "image_barriers": images,
-                "old_layout": LAYOUTS.get(old_layout, old_layout if old_layout is not None else ""),
-                "new_layout": LAYOUTS.get(new_layout, new_layout if new_layout is not None else ""),
-            }
+        events.append(
+            (
+                "barrier",
+                {
+                    "implementation": implementation,
+                    "workload": workload,
+                    "policy": policy,
+                    "src_stage": decode(
+                        field(chunk, "srcStageMask") or 0, STAGE_BITS
+                    ),
+                    "dst_stage": decode(
+                        field(chunk, "destStageMask") or 0, STAGE_BITS
+                    ),
+                    "src_access": decode(source_access, ACCESS_BITS),
+                    "dst_access": decode(destination_access, ACCESS_BITS),
+                    "memory_barriers": memory,
+                    "buffer_barriers": buffers,
+                    "image_barriers": images,
+                    "old_layout": LAYOUTS.get(
+                        old_layout, old_layout if old_layout is not None else ""
+                    ),
+                    "new_layout": LAYOUTS.get(
+                        new_layout, new_layout if new_layout is not None else ""
+                    ),
+                },
+            )
         )
-        index += 1
+        recorded_barriers += 1
+
+    rows: list[dict] = []
+    work_commands = 0
+    for command_buffer in submission_order:
+        for event, row in command_events.get(command_buffer, ()):
+            if event == "work":
+                work_commands += 1
+            else:
+                assert row is not None
+                row["index"] = len(rows)
+                row["after_work"] = work_commands
+                rows.append(row)
+
+    if recorded_barriers and len(rows) != recorded_barriers:
+        raise ValueError(
+            f"{xml_path}: recorded {recorded_barriers} barriers but found "
+            f"{len(rows)} in submitted command buffers"
+        )
     return rows
 
 
@@ -421,6 +514,8 @@ def main() -> None:
     ]
 
     runs = []
+    device_names: dict[str, set[str]] = {}
+    validation_hashes: dict[str, set[str]] = {}
     for implementation, workload, policy in configurations:
         binary = binaries[implementation]
         command = [
@@ -440,10 +535,15 @@ def main() -> None:
             index = command.index("--policy")
             del command[index : index + 2]
         environment = os.environ.copy()
+        relevant_environment: dict[str, str] = {}
         if implementation == "wgpu":
             environment["WGPU_BACKEND"] = arguments.backend
+            relevant_environment["WGPU_BACKEND"] = arguments.backend
             if arguments.wgpu_adapter_name:
                 environment["WGPU_ADAPTER_NAME"] = arguments.wgpu_adapter_name
+                relevant_environment["WGPU_ADAPTER_NAME"] = (
+                    arguments.wgpu_adapter_name
+                )
         # RenderDoc has to be resident before the Vulkan loader initialises,
         # so it is preloaded rather than dlopened by the benchmark.
         preload = environment.get("LD_PRELOAD")
@@ -456,6 +556,7 @@ def main() -> None:
             file=sys.stderr,
             flush=True,
         )
+        captures_before = set(output.glob("*.rdc"))
         result = subprocess.run(
             command, cwd=output, env=environment, text=True, capture_output=True
         )
@@ -474,7 +575,10 @@ def main() -> None:
                 f"{library} matches this architecture and that LD_PRELOAD is "
                 "not being stripped."
             )
-        if not list(output.glob("*.rdc")):
+        new_captures = sorted(
+            path.name for path in set(output.glob("*.rdc")) - captures_before
+        )
+        if not new_captures:
             raise SystemExit(
                 f"{implementation}/{workload}/{policy} produced no capture. "
                 "RenderDoc's "
@@ -484,12 +588,47 @@ def main() -> None:
                 f"({environment.get('VK_ADD_IMPLICIT_LAYER_PATH')}) and "
                 "that the manifest's library_path is correct."
             )
+        if len(new_captures) != 1:
+            raise SystemExit(
+                f"{implementation}/{workload}/{policy} produced "
+                f"{len(new_captures)} captures instead of one: {new_captures}"
+            )
+        metadata = parse_benchmark_metadata(result.stdout)
+        expected_metadata = {
+            "schema": "blade-sync-bench-v1",
+            "implementation": implementation,
+            "backend": arguments.backend,
+            "gpu_timing": "false",
+        }
+        for key, expected in expected_metadata.items():
+            if metadata.get(key) != expected:
+                raise SystemExit(
+                    f"{implementation}/{workload}/{policy}: metadata {key} is "
+                    f"{metadata.get(key)!r}, expected {expected!r}"
+                )
+        device_name = metadata.get("device_name")
+        if not device_name:
+            raise SystemExit(
+                f"{implementation}/{workload}/{policy}: missing device_name "
+                "metadata"
+            )
+        validation_hash = metadata.get("validation_hash")
+        if not validation_hash:
+            raise SystemExit(
+                f"{implementation}/{workload}/{policy}: missing "
+                "validation_hash metadata"
+            )
+        device_names.setdefault(implementation, set()).add(device_name)
+        validation_hashes.setdefault(workload, set()).add(validation_hash)
         runs.append(
             {
                 "implementation": implementation,
                 "workload": workload,
                 "policy": policy,
                 "command": command,
+                "environment": relevant_environment,
+                "metadata": metadata,
+                "captures": new_captures,
             }
         )
 
@@ -499,6 +638,39 @@ def main() -> None:
             "no .rdc files were produced. The benchmark reported no error, so "
             "RenderDoc loaded but did not write a capture; check its log in "
             f"{output}."
+        )
+    if len(captures) != len(configurations):
+        raise SystemExit(
+            f"expected one capture for each of {len(configurations)} "
+            f"configurations, found {len(captures)}"
+        )
+    selected_devices = {
+        name
+        for implementation_names in device_names.values()
+        for name in implementation_names
+    }
+    if len(selected_devices) != 1:
+        raise SystemExit(
+            "implementations selected different devices: "
+            + "; ".join(
+                f"{implementation}={sorted(names)}"
+                for implementation, names in sorted(device_names.items())
+            )
+            + "\nPass --blade-device-id and --wgpu-adapter-name to pin one "
+            "physical device."
+        )
+    conflicts = {
+        workload: sorted(hashes)
+        for workload, hashes in validation_hashes.items()
+        if len(hashes) != 1
+    }
+    if conflicts:
+        raise SystemExit(
+            "capture configurations produced different validation hashes: "
+            + "; ".join(
+                f"{workload}={hashes}"
+                for workload, hashes in sorted(conflicts.items())
+            )
         )
 
     (output / "manifest.json").write_text(
@@ -519,6 +691,11 @@ def main() -> None:
                 "captures": captures,
                 "runs": runs,
                 "backend": arguments.backend,
+                "selected_device": next(iter(selected_devices)),
+                "validation_hashes": {
+                    workload: next(iter(hashes))
+                    for workload, hashes in sorted(validation_hashes.items())
+                },
             },
             indent=2,
             sort_keys=True,

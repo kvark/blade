@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Attribute host CPU time in the matched benchmarks to source of work.
+"""Collect a diagnostic whole-process CPU profile of the matched benchmarks.
 
-The study reports that the matched wgpu program costs 2-12x more host time than
-Blade for the same passes, and refuses to attribute that to resource tracking
-without evidence. This produces the evidence: a flat `perf` profile of each
-implementation, with self time grouped by the crate or library it belongs to,
-so the tracker's share is a number rather than a hypothesis.
+The study reports a host-time gap but does not attribute it to resource
+tracking without interval-specific evidence. This script groups flat `perf`
+self time by crate or library. Its current benchmark still waits for GPU
+completion after every iteration, so the result is a whole-process diagnostic,
+not an attribution of the record-and-submit interval. A gated or batched
+profile is required for that stronger claim.
 
-The workload is deliberately mis-shaped for the GPU and well shaped for the
-host: tiny dispatches, small targets, many passes, no timestamp queries. That
-keeps the process out of `wait_for` and inside the recording path, which is
-what is being attributed.
+Tiny dispatches, small targets, many passes, and no timestamp queries increase
+the relative amount of host work, but they did not eliminate completion waits
+in the retained profiles.
 
 Requires `perf` and a permissive `kernel.perf_event_paranoid`; the script says
 so and stops rather than producing a misleading empty profile.
@@ -68,8 +68,8 @@ BUCKETS: tuple[tuple[str, str], ...] = (
     ("kernel", r"^\[kernel|^\[unknown\]$|vmlinux"),
 )
 
-# Small enough that the GPU finishes immediately, numerous enough that command
-# recording dominates the process.
+# Intended to emphasize command recording. The retained flat profiles show
+# that completion waits and driver activity still dominate the whole process.
 HOST_SHAPED_WORKLOAD = (
     "--elements", "4096",
     "--rounds", "1",
@@ -510,16 +510,23 @@ def main() -> None:
             totals_cpu_ms[label, workload] = cpu_ms
             devices[f"{label}/{workload}"] = device
 
-    write_tables(output, rows, totals_cpu_ms)
-    selected = set(value for value in devices.values() if value)
-    if len(selected) > 1:
-        print(
-            "warning: the implementations profiled different adapters:\n  "
-            + "\n  ".join(f"{key} = {value}" for key, value in sorted(devices.items()))
-            + "\n  Shares within one process are still valid; anything "
-            "compared between them is not.",
-            file=sys.stderr,
+    missing_devices = sorted(key for key, value in devices.items() if not value)
+    if missing_devices:
+        raise SystemExit(
+            "benchmark output did not identify an adapter for:\n  "
+            + "\n  ".join(missing_devices)
+            + "\nNo manifest or derived tables were written."
         )
+    selected = set(devices.values())
+    if len(selected) > 1:
+        raise SystemExit(
+            "the implementations profiled different adapters:\n  "
+            + "\n  ".join(f"{key} = {value}" for key, value in sorted(devices.items()))
+            + "\nPass --blade-device-id and --wgpu-adapter-name to pin one "
+            "physical device. No manifest or derived tables were written for "
+            "this unmatched profile."
+        )
+    write_tables(output, rows, totals_cpu_ms)
 
     (output / "manifest.json").write_text(
         json.dumps(
@@ -531,6 +538,10 @@ def main() -> None:
                 "platform": platform.platform(),
                 "backend": arguments.backend,
                 "devices": devices,
+                "selectors": {
+                    "blade_device_id": arguments.blade_device_id,
+                    "wgpu_adapter_name": arguments.wgpu_adapter_name,
+                },
                 "policy": arguments.policy,
                 "workloads": arguments.workloads,
                 "samples": arguments.samples,

@@ -353,12 +353,13 @@ impl super::CommandEncoder {
     }
 
     pub(super) fn finish(&mut self) -> vk::CommandBuffer {
-        // Makes every write recorded since the last barrier available to the
-        // next submission and to the host, and absorbs any barrier the
-        // application requested after its last pass. The destination scope
-        // stays wide; the source scope covers exactly the passes that still
-        // need it, which is correct even when the application skipped
-        // boundaries.
+        // Makes every write recorded since the last barrier available to a
+        // later queue consumer, and absorbs any barrier the application
+        // requested after its last pass. Host access separately relies on
+        // queue completion and the memory's host-coherency/invalidation rules.
+        // The destination scope stays wide because the next queue consumer is
+        // unknown; the source scope covers exactly the passes that still need
+        // it, which is correct even when the application skipped boundaries.
         // The encoder's own scope: an application that asked for narrow
         // barriers gets a narrow source scope here too, and one that did not
         // gets today's behaviour unchanged.
@@ -440,7 +441,11 @@ impl super::CommandEncoder {
                     | vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR
                     | vk::AccessFlags::TRANSFER_READ
                     | vk::AccessFlags::TRANSFER_WRITE
-                    | shader_reads,
+                    // Geometry input buffers are SHADER_READ at the
+                    // acceleration-structure-build stage. UNIFORM_READ and
+                    // SHADER_WRITE are not supported by that stage, so do not
+                    // reuse the compute/render access bundle here.
+                    | vk::AccessFlags::SHADER_READ,
             ),
             // `DRAW_INDIRECT` covers `dispatch_indirect`, whose argument buffer
             // is fetched before the compute stage.

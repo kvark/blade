@@ -23,8 +23,9 @@ enum Workload {
     /// Alternating compute and render passes with no dependency between them.
     MixedIndependent,
     /// Alternating compute and render passes; each pass depends on the pass of
-    /// the same kind two positions earlier, so every boundary needs a barrier
-    /// and every boundary joins two different pass kinds.
+    /// the same kind two positions earlier. The benchmark's `HazardOnly`
+    /// policy conservatively inserts at every boundary; this is not a minimal
+    /// placement for the two-pass dependency distance.
     MixedChain,
 }
 
@@ -114,17 +115,21 @@ impl Workload {
 enum Placement {
     /// Blade places one at every pass boundary.
     Automatic,
-    /// The application places one only where the workload has a real hazard.
+    /// The application places barriers only in dependent workloads. This is
+    /// minimal for the single-kind chains, but deliberately conservative for
+    /// `MixedChain`, where same-kind dependencies are two passes apart.
     HazardOnly,
-    /// The application places one at every pass boundary. Command-for-command
-    /// equal to `Automatic` at the same scope, so it is the instrumentation
-    /// control rather than a distinct strategy.
+    /// The application places one before every pass. At global scope this is
+    /// command-for-command equal to `Automatic` and is the instrumentation
+    /// control. At pass-kind scope an explicit barrier has a wide destination
+    /// because its consumer is unknown, so that combination is not a control.
     ExplicitAll,
 }
 
 /// The full barrier configuration: a placement crossed with a scope. Every
-/// combination is measured, so neither axis is confounded with the other and
-/// neither has a privileged default.
+/// combination is measured. Automatic barriers can derive both source and
+/// destination pass kinds; explicit barriers can derive only their source, an
+/// intentional interaction rather than a fully symmetric factorial axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BarrierPolicy {
     placement: Placement,
@@ -185,7 +190,7 @@ impl BarrierPolicy {
 
 #[cfg(test)]
 mod tests {
-    use super::{BarrierPolicy, Placement, Workload};
+    use super::{BarrierPolicy, Placement, Workload, fnv1a64};
     use blade_graphics as gpu;
 
     fn policy(placement: Placement, scope: gpu::BarrierScope) -> BarrierPolicy {
@@ -240,6 +245,12 @@ mod tests {
         assert_eq!(Workload::ComputeChain.graphics_pass_count(16), 0);
         assert_eq!(Workload::GraphicsChain.compute_pass_count(16), 0);
         assert_eq!(Workload::GraphicsChain.graphics_pass_count(16), 16);
+    }
+
+    #[test]
+    fn validation_hash_is_fnv1a64() {
+        // Published FNV-1a-64 test vector for the ASCII string "hello".
+        assert_eq!(fnv1a64(b"hello"), 0xa430_d846_80aa_bd0b);
     }
 }
 
@@ -512,12 +523,13 @@ impl ComputeBench {
     }
 
     fn validate(&self, context: &gpu::Context, compute_passes: usize) -> u64 {
-        let output = if self.independent {
-            self.buffers[compute_passes]
+        let outputs: Vec<gpu::Buffer> = if self.independent {
+            self.buffers[1..=compute_passes].to_vec()
         } else {
-            self.buffers[compute_passes % 2]
+            vec![self.buffers[compute_passes % 2]]
         };
-        let readback_size = u64::from(self.element_count.min(1024)) * 4;
+        let output_size = u64::from(self.element_count.min(1024)) * 4;
+        let readback_size = output_size * outputs.len() as u64;
         let readback = context.create_buffer(gpu::BufferDesc {
             name: "sync-bench-compute-readback",
             size: readback_size,
@@ -532,16 +544,27 @@ impl ComputeBench {
         encoder.start();
         {
             let mut transfer = encoder.transfer("read compute output");
-            transfer.copy_buffer_to_buffer(output.into(), readback.into(), readback_size);
+            for (index, &output) in outputs.iter().enumerate() {
+                transfer.copy_buffer_to_buffer(
+                    output.into(),
+                    gpu::BufferPiece {
+                        buffer: readback,
+                        offset: index as u64 * output_size,
+                    },
+                    output_size,
+                );
+            }
         }
         let sync_point = context.submit(&mut encoder);
         assert!(context.wait_for(&sync_point, !0).unwrap());
 
         let bytes = unsafe { std::slice::from_raw_parts(readback.data(), readback_size as usize) };
-        assert!(
-            bytes.iter().any(|&byte| byte != 0),
-            "compute output validation produced only zero bytes"
-        );
+        for (index, output) in bytes.chunks_exact(output_size as usize).enumerate() {
+            assert!(
+                output.iter().any(|&byte| byte != 0),
+                "compute output {index} validation produced only zero bytes"
+            );
+        }
         let hash = fnv1a64(bytes);
         context.destroy_command_encoder(&mut encoder);
         context.destroy_buffer(readback);
@@ -705,10 +728,17 @@ impl GraphicsBench {
     }
 
     fn validate(&self, context: &gpu::Context) -> u64 {
-        let bytes_per_row = self.extent.width * 4;
+        let output_count = if self.independent {
+            self.textures.len()
+        } else {
+            1
+        };
+        let valid_bytes_per_row = self.extent.width * 4;
+        let bytes_per_row = valid_bytes_per_row.div_ceil(256) * 256;
+        let readback_size = u64::from(bytes_per_row) * output_count as u64;
         let readback = context.create_buffer(gpu::BufferDesc {
             name: "sync-bench-graphics-readback",
-            size: u64::from(bytes_per_row),
+            size: readback_size,
             memory: gpu::Memory::Shared,
         });
         let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
@@ -720,26 +750,36 @@ impl GraphicsBench {
         encoder.start();
         {
             let mut transfer = encoder.transfer("read graphics output");
-            transfer.copy_texture_to_buffer(
-                self.textures[0].into(),
-                readback.into(),
-                bytes_per_row,
-                gpu::Extent {
-                    width: self.extent.width,
-                    height: 1,
-                    depth: 1,
-                },
-            );
+            for (index, &texture) in self.textures[..output_count].iter().enumerate() {
+                transfer.copy_texture_to_buffer(
+                    texture.into(),
+                    gpu::BufferPiece {
+                        buffer: readback,
+                        offset: index as u64 * u64::from(bytes_per_row),
+                    },
+                    bytes_per_row,
+                    gpu::Extent {
+                        width: self.extent.width,
+                        height: 1,
+                        depth: 1,
+                    },
+                );
+            }
         }
         let sync_point = context.submit(&mut encoder);
         assert!(context.wait_for(&sync_point, !0).unwrap());
 
-        let bytes = unsafe { std::slice::from_raw_parts(readback.data(), bytes_per_row as usize) };
-        assert!(
-            bytes.iter().any(|&byte| byte != 0),
-            "graphics output validation produced only zero bytes"
-        );
-        let hash = fnv1a64(bytes);
+        let bytes = unsafe { std::slice::from_raw_parts(readback.data(), readback_size as usize) };
+        let mut logical_bytes = Vec::with_capacity(valid_bytes_per_row as usize * output_count);
+        for (index, row) in bytes.chunks_exact(bytes_per_row as usize).enumerate() {
+            let output = &row[..valid_bytes_per_row as usize];
+            assert!(
+                output.iter().any(|&byte| byte != 0),
+                "graphics output {index} validation produced only zero bytes"
+            );
+            logical_bytes.extend_from_slice(output);
+        }
+        let hash = fnv1a64(&logical_bytes);
         context.destroy_command_encoder(&mut encoder);
         context.destroy_buffer(readback);
         hash
@@ -911,7 +951,7 @@ fn duration_ns(duration: Duration) -> u64 {
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x1000_0000_01b3)
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
     })
 }
 
@@ -1108,7 +1148,7 @@ fn main() {
     }
 
     let validation_hash = bench.validate(&context, config.workload, config.passes);
-    println!("# validation_hash,fnv1a64:{validation_hash:016x}");
+    println!("# validation_hash,fnv1a64-standard:{validation_hash:016x}");
     context.destroy_command_encoder(&mut encoder);
     bench.destroy(&context);
 }

@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """Collect everything the paper needs from one machine, in one command.
 
-Three things are collected, in decreasing order of importance:
+Four things are collected:
 
-1. the timing matrix (`run-study-matrix.py`) --- every device, every workload,
+1. a small correctness matrix (`run-study-matrix.py --validation`) --- output
+   hashes must match, and Vulkan synchronization validation must report no
+   errors. This is required unless explicitly skipped.
+2. the timing matrix (`run-study-matrix.py`) --- every device, every workload,
    every policy. This is the study; without it the machine contributes nothing.
-2. a host CPU profile (`profile-hosts.py`) --- needs `perf` and a permissive
+3. a host CPU profile (`profile-hosts.py`) --- needs `perf` and a permissive
    `kernel.perf_event_paranoid`.
-3. RenderDoc captures of both implementations (`capture-streams.py`) --- needs
+4. RenderDoc captures of both implementations (`capture-streams.py`) --- needs
    RenderDoc, which it downloads if the machine has none.
 
-Steps 2 and 3 are optional and independent. If a prerequisite is missing this
+Steps 3 and 4 are optional and independent. If a prerequisite is missing this
 says which one and carries on, because a machine that can only contribute
-timings should still contribute timings. Only a failure of step 1, or a crash
-rather than a missing prerequisite, stops the run.
+correctness evidence and timings should still contribute them. A failure of
+either required matrix, or a crash rather than a missing optional prerequisite,
+stops the run.
 
 Usage:
     python3 paper/collect.py --wgpu ../wgpu
@@ -41,7 +45,7 @@ def parse_arguments() -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument("--blade", type=Path, default=blade_root)
     parser.add_argument("--wgpu", type=Path, default=blade_root.parent / "wgpu")
-    parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument("--repetitions", type=int, default=10)
     parser.add_argument("--blade-device-id", type=lambda value: int(value, 0))
     parser.add_argument("--wgpu-adapter-name")
     # Mirror run-study-matrix.py: a macOS machine measures Metal unless told
@@ -57,6 +61,14 @@ def parse_arguments() -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument(
         "--skip-captures", action="store_true", help="do not run capture-streams.py"
+    )
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help=(
+            "do not collect the required small correctness matrix; use only "
+            "when a retained validation collection already covers these sources"
+        ),
     )
     parser.add_argument(
         "--sweeps",
@@ -108,7 +120,57 @@ def main() -> None:
     blade = arguments.blade.resolve()
     wgpu = arguments.wgpu.resolve()
     selectors = shared_selectors(arguments)
+    # These execution switches are safe and useful for the small correctness
+    # run too. Shape, sample-count, output, and seed arguments deliberately
+    # remain confined to the requested timing collection.
+    validation_execution_flags = [
+        flag
+        for flag in (
+            "--allow-dirty",
+            "--allow-software",
+            "--skip-build",
+            "--skip-system-info",
+        )
+        if flag in passthrough
+    ]
     outcomes: list[tuple[str, str, str]] = []
+
+    if arguments.backend == "vulkan" and not arguments.skip_validation:
+        name = "correctness and synchronization validation"
+        status, reason = step(
+            name,
+            [
+                sys.executable,
+                str(HERE / "run-study-matrix.py"),
+                "--blade",
+                str(blade),
+                "--wgpu",
+                str(wgpu),
+                "--repetitions",
+                "1",
+                "--passes",
+                "4",
+                "--elements",
+                "65536",
+                "--rounds",
+                "2",
+                "--width",
+                "256",
+                "--height",
+                "256",
+                "--warmups",
+                "0",
+                "--samples",
+                "3",
+                "--validation",
+                "--cpu-only",
+                *selectors,
+                *validation_execution_flags,
+            ],
+            blade,
+            required=True,
+        )
+        outcomes.append((name, status, reason))
 
     name = "timing matrix"
     status, reason = step(
@@ -116,6 +178,8 @@ def main() -> None:
         [
             sys.executable,
             str(HERE / "run-study-matrix.py"),
+            "--blade",
+            str(blade),
             "--wgpu",
             str(wgpu),
             "--repetitions",
@@ -138,6 +202,8 @@ def main() -> None:
                 [
                     sys.executable,
                     str(HERE / "run-study-matrix.py"),
+                    "--blade",
+                    str(blade),
                     "--wgpu",
                     str(wgpu),
                     "--repetitions",
@@ -158,6 +224,8 @@ def main() -> None:
             [
                 sys.executable,
                 str(HERE / "profile-hosts.py"),
+                "--blade",
+                str(blade),
                 "--wgpu",
                 str(wgpu),
                 *selectors,
@@ -173,6 +241,8 @@ def main() -> None:
             [
                 sys.executable,
                 str(HERE / "capture-streams.py"),
+                "--blade",
+                str(blade),
                 "--wgpu",
                 str(wgpu),
                 *selectors,

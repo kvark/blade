@@ -14,12 +14,18 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
-    var positions = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>(3.0, -1.0),
+    // Avoid a function-local array here. naga 30.0.0 decorates that array
+    // with ArrayStride in SPIR-V, which fails Vulkan validation under
+    // VUID-StandaloneSpirv-None-10684 even though the tested drivers accept it.
+    let position = select(
+        select(
+            vec2<f32>(-1.0, -1.0),
+            vec2<f32>(3.0, -1.0),
+            index == 1u,
+        ),
         vec2<f32>(-1.0, 3.0),
+        index == 2u,
     );
-    let position = positions[index];
     return VertexOutput(
         vec4<f32>(position, 0.0, 1.0),
         position * 0.5 + vec2<f32>(0.5),
@@ -35,8 +41,17 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         value = value ^ (value >> 16u);
     }
 
-    let red = f32(value & 255u) / 255.0;
-    let green = f32((value >> 8u) & 255u) / 255.0;
-    let blue = f32((value >> 16u) & 255u) / 255.0;
-    return vec4<f32>(red, green, blue, 1.0);
+    // Validation reads the first target row after all passes. Full-range
+    // additive RGBA8 output saturates that row to 0xff after a short chain,
+    // hiding missing late passes. Keep that one row to exact 2-bit UNORM
+    // increments (and alpha to one increment), which cannot saturate in the
+    // benchmark's 64-pass sweep. The other 1023 rows retain the measured
+    // full-range workload.
+    let validation_row = input.position.y < 1.0;
+    let channel_mask = select(255u, 3u, validation_row);
+    let alpha = select(1.0, 1.0 / 255.0, validation_row);
+    let red = f32(value & channel_mask) / 255.0;
+    let green = f32((value >> 8u) & channel_mask) / 255.0;
+    let blue = f32((value >> 16u) & channel_mask) / 255.0;
+    return vec4<f32>(red, green, blue, alpha);
 }

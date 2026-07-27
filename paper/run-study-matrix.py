@@ -236,6 +236,37 @@ def parse_metadata(output: str) -> dict[str, str]:
     return metadata
 
 
+def extract_benchmark_csv(output: str) -> str:
+    """Remove validation-layer diagnostics that some backends print to stdout.
+
+    Vulkan debug callbacks do not consistently use stderr. In particular,
+    wgpu's callback can print a validation warning before the benchmark's CSV
+    preamble. Keep the complete output in the validation log, but make the
+    measurement file contain only metadata, its header, and data rows.
+    """
+    retained: list[str] = []
+    data_columns: int | None = None
+    for line in output.splitlines():
+        if line.startswith("#"):
+            retained.append(line)
+            continue
+        if line.startswith("sample,"):
+            data_columns = len(next(csv.reader([line])))
+            retained.append(line)
+            continue
+        if data_columns is None:
+            continue
+        fields = next(csv.reader([line]))
+        if len(fields) != data_columns:
+            continue
+        try:
+            int(fields[0])
+        except ValueError:
+            continue
+        retained.append(line)
+    return "\n".join(retained) + ("\n" if retained else "")
+
+
 class Device:
     """One physical adapter, with the selector each implementation needs."""
 
@@ -554,6 +585,26 @@ def collect_device(
                 ]
                 environment = os.environ.copy()
                 relevant_environment: dict[str, str] = {}
+                if arguments.validation and arguments.backend == "vulkan":
+                    # Force the Khronos layer to load and enable its
+                    # synchronization checks. If the layer is unavailable the
+                    # benchmark fails instead of silently producing a
+                    # "validation" collection that validated nothing.
+                    environment["VK_INSTANCE_LAYERS"] = (
+                        "VK_LAYER_KHRONOS_validation"
+                    )
+                    # Current validation layers warn that the older
+                    # `VK_LAYER_ENABLES=...SYNCHRONIZATION_VALIDATION_EXT`
+                    # setting is deprecated. Use the corresponding named
+                    # setting so correctness logs stay warning-free.
+                    environment.pop("VK_LAYER_ENABLES", None)
+                    environment["VK_LAYER_VALIDATE_SYNC"] = "1"
+                    relevant_environment["VK_INSTANCE_LAYERS"] = environment[
+                        "VK_INSTANCE_LAYERS"
+                    ]
+                    relevant_environment["VK_LAYER_VALIDATE_SYNC"] = environment[
+                        "VK_LAYER_VALIDATE_SYNC"
+                    ]
                 if implementation == "blade" and device.blade_device_id is not None:
                     command.extend(["--device-id", str(device.blade_device_id)])
                 if implementation == "wgpu":
@@ -574,6 +625,23 @@ def collect_device(
                     (output / f"{run_id}.stderr.txt").write_text(
                         result.stderr, encoding="utf-8"
                     )
+                validation_output = result.stdout + "\n" + result.stderr
+                validation_log: Path | None = None
+                if arguments.validation:
+                    validation_log = output / f"{run_id}.validation.txt"
+                    validation_log.write_text(validation_output, encoding="utf-8")
+                validation_errors = [
+                    line
+                    for line in validation_output.splitlines()
+                    if "SYNC-HAZARD" in line or "Validation Error" in line
+                ]
+                if arguments.validation and validation_errors:
+                    assert validation_log is not None
+                    raise RuntimeError(
+                        f"{run_id} reported synchronization/validation errors; "
+                        f"full combined output is in {validation_log.name}\n"
+                        + "\n".join(validation_errors[:20])
+                    )
                 if result.returncode != 0:
                     raise RuntimeError(
                         f"{run_id} failed with exit code {result.returncode}\n"
@@ -582,7 +650,7 @@ def collect_device(
                 captured = (
                     f"# collection_id,{collection_id}\n"
                     f"# repetition,{repetition}\n"
-                    f"{result.stdout}"
+                    f"{extract_benchmark_csv(result.stdout)}"
                 )
                 (output / csv_name).write_text(captured, encoding="utf-8")
                 metadata = parse_metadata(captured)
@@ -618,15 +686,16 @@ def collect_device(
                         csv_name,
                     )
                 )
-                manifest["runs"].append(
-                    {
-                        "id": run_id,
-                        "file": csv_name,
-                        "command": command,
-                        "environment": relevant_environment,
-                        "metadata": metadata,
-                    }
-                )
+                run_record = {
+                    "id": run_id,
+                    "file": csv_name,
+                    "command": command,
+                    "environment": relevant_environment,
+                    "metadata": metadata,
+                }
+                if validation_log is not None:
+                    run_record["validation_log"] = validation_log.name
+                manifest["runs"].append(run_record)
 
     for (repetition, workload, passes), hashes in validation_hashes.items():
         if len(hashes) != 1:
@@ -648,6 +717,12 @@ def collect_device(
             )
             + "\nPass --blade-device-id and --wgpu-adapter-name to pin one device."
         )
+    if arguments.validation:
+        manifest["validation_scan"] = {
+            "khronos_synchronization_validation": arguments.backend == "vulkan",
+            "error_patterns": ["SYNC-HAZARD", "Validation Error"],
+            "errors_found": 0,
+        }
     (output / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
