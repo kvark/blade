@@ -10,9 +10,10 @@ Power Mode enabled.
 
 Blade should keep using Metal's tracked resource mode.
 
-Disabling hazard tracking did not measurably improve independent-pass CPU
-encoding, command-buffer commit, or GPU time. Adding the synchronization that
-untracked dependent resources require was substantially slower: at 100 passes,
+In this single pilot session, disabling hazard tracking did not show a
+consistent independent-pass improvement in CPU encoding, command-buffer commit,
+or GPU time. Adding the synchronization that untracked dependent resources
+require was substantially slower: at 100 passes,
 explicit fences and events cost about 8.5–8.9 times as much CPU encoding time
 and about 10 times as much GPU time as Metal's automatic tracking in this
 microbenchmark.
@@ -63,8 +64,14 @@ Build and run it with:
 ```sh
 xcrun swiftc -O paper/tools/metal-hazard-bench.swift \
   -o /tmp/metal-hazard-bench
-/tmp/metal-hazard-bench
+/tmp/metal-hazard-bench \
+  --raw-output paper/data/raw/<collection-id>/metal-hazard-r01-raw.csv \
+  | tee paper/data/raw/<collection-id>/metal-hazard-r01-summary.csv
 ```
+
+The raw-output path is required and must be new, preventing a future run from
+retaining only summary medians. Repeat with fresh `r02` through `r10` paths for
+publication-quality process-level replication.
 
 Each pass is a separate compute encoder containing one single-thread dispatch. Two
 workloads are measured:
@@ -95,8 +102,9 @@ the requested tracked and untracked modes were active.
 
 Command-buffer commit medians for tracked/untracked were 1.875/1.834 µs,
 2.209/2.125 µs, 15.541/15.542 µs, and 22.000/21.209 µs at 1, 10, 100, and 500
-passes respectively. The small differences were inconsistent, within the
-observed run-to-run spread, and did not translate to an end-to-end win.
+passes respectively. The small differences were inconsistent within this
+process's observations and did not translate to an end-to-end win. Independent
+process repetitions were not retained, so this is not an equivalence result.
 
 ### Dependent passes
 
@@ -119,17 +127,19 @@ responsible for these dependencies, and a different workload, schedule, GPU, or
 OS version may expose the race.
 
 The machine was in Low Power Mode, so these absolute times are not peak M3
-numbers. The interleaved tracked/untracked comparison is still useful, but
-results should be repeated on AC power with Low Power Mode disabled before
-publishing absolute performance claims.
+numbers. Interleaving reduces order bias but does not remove thermal, power, or
+process-level confounding. Only the printed summaries from this session were
+retained. Results should be repeated in fresh processes on AC power with Low
+Power Mode disabled, retaining the harness's new raw CSV output, before
+publishing performance or equivalence claims.
 
 ## Recommendation
 
 Do not wire `CommandEncoderDesc::manual_barriers` to untracked Metal resources,
 and do not add automatic Metal fences or events between Blade passes. The
-measured upside for independent work is effectively zero, while explicit
-synchronization is costly and the existing API cannot express producer-side
-fence placement correctly.
+pilot did not reveal an independent-work upside, explicit synchronization was
+costly in the dependent cases, and the existing API cannot express
+producer-side fence placement correctly.
 
 If a future workload demonstrates meaningful Metal hazard-tracking overhead,
 the safer experiment would be a resource-level opt-in paired with an explicit

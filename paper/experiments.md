@@ -23,8 +23,13 @@ comparison and explanatory profiling—not single-factor causal attribution.
 
 What the captures established (see `capture-streams.py`, output `barriers.csv`):
 
-- factor 1: wgpu emits exactly as many barriers as `B-hazard` — one on the
-  independent workloads, four on the chains, against `B-auto`'s five.
+- barrier-call counts: wgpu emits exactly as many calls as `B-hazard` — one on
+  the independent workloads, four on the chains, against `B-auto`'s five.
+  Replaying Vulkan command buffers in queue-submission order shows the endpoint
+  difference hidden by those counts: wgpu has an initial transition and no
+  final barrier; `B-hazard` has no initial barrier and retains Blade's final
+  encoder barrier. Both put three calls between the four dependent passes;
+  neither puts one between independent passes.
 - factor 2: every Blade barrier is a global `VkMemoryBarrier`; every wgpu
   barrier is a `VkBufferMemoryBarrier` or `VkImageMemoryBarrier`. Neither emits
   the other's kind anywhere.
@@ -37,7 +42,7 @@ What the captures established (see `capture-streams.py`, output `barriers.csv`):
 | ID | Barrier placement | Resource scope | Stage/access scope | Image policy | Status |
 |---|---|---|---|---|---|
 | `B-auto` | every pass | global | broad | `GENERAL` | collected |
-| `B-hazard` | declared hazards | global | broad | `GENERAL` | collected |
+| `B-hazard` | application-declared dependent workload | global | broad | `GENERAL` | collected |
 | `B-explicit-all` | every pass | global | broad | `GENERAL` | collected as a control |
 | `W-wgpu` | derived by wgpu | tracked resource usage | backend-generated | backend-generated | collected |
 
@@ -56,53 +61,65 @@ but its stages and accesses are derived:
   boundaries.
 - destination: the kind of the pass being opened.
 
-Neither needs anything from the caller, so the pass declaration is unchanged.
-The one thing that cannot be derived is the destination of an explicitly placed
-barrier, whose consumer has not been declared yet; `CommandEncoder::barrier`
-therefore takes a `BarrierScope` argument, and the request is emitted when the
-next pass opens so it can still name its consumer.
+Neither needs anything from the caller for automatically placed barriers, so
+the pass declaration is unchanged. The destination of an explicitly placed
+barrier cannot be derived because its consumer has not been declared.
+`CommandEncoder::barrier` therefore takes a `BarrierScope` argument and emits
+the request immediately with a pass-kind source and an `ALL_COMMANDS`
+destination. It is not held until the next pass.
 
 Because a `-scoped` policy places identical numbers of barriers at identical
 boundaries to its unscoped twin, their difference is attributable to scope
 alone — the first single-factor claim this study can make about factor 3.
 
-Correctness evidence: the Khronos synchronization validation checks pass with
-no hazards and no validation errors on all six workloads times six policies,
-and every policy produces the same output hash. Validation earned its place
-here: it caught that Blade's `extra_sync_*_access` driver workarounds add
-transfer accesses that a narrowed stage mask does not support.
+Correctness evidence: a development-time Khronos synchronization-validation
+run reportedly passed with no hazards or validation errors, and the retained
+performance runs agree on the output hash they sampled. Validation earned its
+place here: it caught that Blade's `extra_sync_*_access` driver workarounds add
+transfer accesses that a narrowed stage mask does not support. The current raw
+directories retain the sampled output hashes but not the
+synchronization-validation logs; rerunning the automated correctness
+collection, with the artifact's stronger all-output hash, and retaining its
+logs is a publication gate.
 
-Result so far: the narrowing pays on NVIDIA (up to -5.3% of GPU span at fixed
-placement) and not on either AMD device, which is the opposite of what the
-RADV reading predicted. Reading a driver establishes which commands are
-emitted, not what they cost.
+Result so far: the narrowing pays on NVIDIA render boundaries and on the
+RX 7900 XT's compute boundaries, but no AMD render-boundary saving resolves.
+That is not the pattern the first RADV source reading predicted. Reading a
+driver establishes which operations a barrier requests, not what they cost.
 
 Blade emits a barrier when finishing every encoder, including in manual mode;
-its destination scope is always wide because it has to reach the next
-submission and the host. That barrier is common to all six Blade
-configurations. `B-explicit-all` additionally emits a manual barrier before
-every pass, making it command-for-command equivalent to the automatic policy at
-the same scope; it is a control for benchmark and instrumentation artifacts
-rather than a distinct synchronization strategy.
+its destination scope is always wide because the next queue consumer is
+unknown. Host visibility separately relies on queue completion and mapped
+memory coherency/invalidation. That barrier is common to all six Blade
+configurations. At **global** scope, `B-explicit-all` additionally emits a
+manual barrier before every pass and produces the same barrier calls as
+`B-auto`; it is the device-time control. At pass-kind scope the explicit
+barrier has a wide destination while the automatic one knows its consumer, so
+`B-explicit-all-scoped` is a crossed experimental configuration, not an
+identical-command control.
 
 `W-wgpu` is the realistic tracked comparison. It must not be used alone to
 attribute a difference to tracking, because validation, lifetime management,
-bindings, and command representation also differ. Attribute host costs with
-CPU profiles of wgpu's tracker paths, and explain device costs with captured
-Vulkan barriers, layouts, and timelines. A direct `wgpu-hal` port is optional
-if a particular result needs frontend decomposition; no new tracker in Blade
-is required.
+bindings, and command representation also differ. The current whole-process
+profiles do not attribute host costs; a gated or batched record-and-submit
+profile would be needed for that. Captured Vulkan barriers and layouts explain
+what was requested without decomposing its cost. A direct `wgpu-hal` port is
+optional if a particular result needs frontend decomposition; no new tracker
+in Blade is required.
 
 The matched wgpu program uses wgpu's native `IMMEDIATES` feature for the
-16-byte per-pass parameters that Blade supplies as inline uniform data. This
+16-byte per-pass parameters that Blade supplies as inline uniform data
+(`IMMEDIATES` maps to push constants on Vulkan). This
 avoids adding a tracked uniform-buffer resource only to the wgpu side. The
 baseline is therefore native wgpu/wgpu-core, not browser WebGPU. CPU-only
 collections disable timestamp queries; GPU-timed collections use native
 encoder timestamps and do not use their host timings for primary CPU claims.
+The benchmark also uses wgpu's trusted-shader API to select Blade's unchecked
+shader-runtime-check policy; it is not a browser-safe WebGPU baseline.
 
 ## Workload families
 
-The headless `sync-bench` artifact initially provides:
+The headless `sync-bench` artifact provides:
 
 | Workload | Resources | True inter-pass hazard | Purpose |
 |---|---|---:|---|
@@ -111,17 +128,22 @@ The headless `sync-bench` artifact initially provides:
 | `graphics-independent` | unique color targets | no | cost of redundant graphics barriers |
 | `graphics-chain` | one load/store color target with blending | yes, every pass | serialized graphics control |
 | `mixed-independent` | alternating compute and render, unique per pass | no | scope and placement together across pass kinds |
-| `mixed-chain` | alternating compute and render, each chained within its kind | yes, every pass | scope with placement held fixed |
+| `mixed-chain` | alternating compute and render, each chained within its kind | each pass from the third depends two positions back | scope with automatic placement held fixed |
 
 The mixed families are Blade-only: the matched wgpu benchmark does not
 implement them, and the collector runs wgpu on the four shared workloads only.
-`mixed-chain` is the cleanest single-factor test of barrier scope, because
-`B-hazard` places exactly the same barriers there as `B-auto`.
+`mixed-chain` is a clean test of barrier scope when comparing
+`B-auto-scoped` with `B-auto`, because placement is then identical. The
+hazard-only policy places a barrier before every pass except the first and
+therefore differs from automatic by the initial barrier, just like the
+single-kind chains. Its barrier before the second mixed pass is conservative:
+those first compute and render passes are independent, so `hazard-only` is not
+an edge-minimal schedule for this one workload.
 
-**The workload set is closed.** These six vary one factor — whether
-consecutive passes carry a dependency — across the three pass kinds a
-synchronization policy can distinguish, and the matched wgpu program covers the
-four it can. Extensions considered and declined, with what each costs:
+**The workload set is closed.** These six contrast independent resource sets
+with chain dependency patterns across the pass kinds a synchronization policy
+can distinguish, and the matched wgpu program covers the four it can.
+Extensions considered and declined, with what each costs:
 
 - *Application frames* (Bunnymark, the particle system, a multi-pass scene).
   Would test the decision boundary on real heterogeneity. Declined: scenes,
@@ -156,9 +178,10 @@ here.
 - *Avoiding RADV's global-barrier pessimism* — the unconditional
   `FLUSH_AND_INV_CB_META` / `FLUSH_AND_INV_DB_META`, and the coherence check
   that a memory barrier cannot use. Both are cleared only when the barrier
-  carries an image, which is the state the design declines to keep. Measuring
-  the narrowed scope already put an upper bound on what this is worth on AMD,
-  and that bound is zero.
+  carries an image, which is the state the design declines to keep. The
+  narrowed scope measures what can be removed without naming a resource. It
+  saves time on the discrete part's compute boundaries but not its render
+  boundaries; that is not an upper bound on image-scoped barriers.
 
 The remaining AMD lever is barrier placement, which is application knowledge
 and is already exposed by `manual_barriers`.
@@ -196,17 +219,23 @@ uncertainty.
    per-vendor commands. Record the command and setting; never silently discard
    throttled samples. Check the per-device control floor before interpreting
    any effect.
-7. Warm each configuration for at least 10 iterations. Collect at least 30
-   measured iterations, increasing the count for sub-microsecond effects.
+7. Warm each configuration until time-ordered samples stop drifting; the
+   present fixed matrix uses 1000 warm-ups because the unretained pilot
+   indicated that ten was insufficient. Collect at least 30 measured
+   iterations inside each process.
 8. Counterbalance configuration order across repetitions. Retain order in the
    metadata so drift and thermal bias can be analyzed.
 9. Run one configuration per process when comparing host memory and startup
    effects. Also run an in-process alternation as a sensitivity check.
-10. Repeat a representative subset on a second day or reboot.
+10. Use at least ten independently launched, randomized process repetitions
+    for final inferential claims. The current three-repetition dataset is an
+    exploratory minimum. Repeat a representative subset on a second day or
+    reboot.
 11. For the matched wgpu run, freeze the exact wgpu revision and capture one
-    representative command stream per workload. Confirm that the capture
-    contains the expected resource barriers and layouts before interpreting
-    GPU-time differences.
+    representative capture per workload. Confirm that the extracted barrier
+    records contain the expected resource barriers and layouts before
+    interpreting GPU-time differences; do not call the extracted table the
+    complete command stream.
 
 GPU timestamps add commands and may perturb short workloads. Validate key
 effects with an external profiler and an amortized-throughput run with only
@@ -249,26 +278,38 @@ stretch target, not a requirement for an AMD/NVIDIA-scoped paper.
 
 No practical-equivalence region is used, and none was preregistered. An
 earlier version of this document derived a single ±3% band from the worst
-`B-explicit-all` control deviation; with every machine collected, control
-floors run from 0.0% to 71.3%, so no single band describes them. Each claim is
-compared instead against the control floor of the cell it is made in, which the
-scope table reports beside it. A future collection should preregister the rule,
-not the number.
+`B-explicit-all` control deviation, but controls vary substantially by cell.
+Each claim is compared instead against the control floor of the cell it is made
+in, which the generated figure reports beside it. This is a conservative
+post-hoc stability diagnostic, not a confidence bound or equivalence test. A
+future collection should preregister the rule rather than estimate it after
+collection.
 
 - Preserve every valid raw sample.
 - Plot distributions and time-ordered samples before aggregation.
-- Report median, interquartile range, and a 95% bootstrap confidence interval
-  for the median and paired difference.
-- For counterbalanced paired runs, analyze within-pair deltas. `analyze.py`
-  does not yet do this: it pools samples across repetitions and bootstraps
-  unpaired. The repetition index is the blocking factor that captures clock
-  state, so a paired estimator would tighten the noisy cells; it has not been
-  needed for the claims made so far, because each is checked against its own
-  cell's floor and the ones that fail are reported as failing.
+- One outer repetition is a randomized matrix block with one separately
+  launched process per configuration. Pair a contender process with its
+  `B-auto` process from the same outer block. The 30 samples inside either
+  process share clocks, thermal state, and run order and are not 30
+  independent repetitions.
+- For each outer block, compare the contender process median with its paired
+  `B-auto` process median. Report the median block-level percent effect and a 95%
+  hierarchical-bootstrap interval that resamples blocks first and
+  observations inside each selected block second. `analyze.py` and
+  `build-tables.py` implement this deterministic estimator.
+- The current within-process resampling treats the ordered observations as
+  exchangeable. Inspect their autocorrelation and add a moving-block or
+  process-median-only sensitivity analysis before treating the interval as
+  inferential.
+- Report the process count as well as the observation count. The current
+  `n=3` process blocks expose observed instability but provide weak tail
+  estimation; final collection should use at least ten.
 - Report absolute nanoseconds/milliseconds alongside percentages.
-- Compare “no difference” against the control floor of that cell, never
-  against a global band.
-- Correct for multiple comparisons when making device/workload-wide claims.
+- Read a directional effect only when its hierarchical interval lies wholly
+  beyond the same-side control floor for that cell.
+- No multiplicity-adjusted hypothesis tests are currently reported. Treat the
+  device-by-workload matrix as exploratory effect estimation; add a
+  preregistered correction before making family-wide null-rejection claims.
 - Treat profiler counters as explanatory evidence, not independent benchmark
   repetitions.
 
@@ -318,67 +359,81 @@ paper is transcribed by hand.
 
 ## Known deviations in the current collections
 
-1. The first `rubik` collection ran Blade on the Raphael integrated GPU and
-   wgpu on the RX 7900 XT. The collector now aborts on this condition and
-   collects every enumerated adapter in turn; `rubik` has been recollected as
-   one collection per GPU with both implementations pinned. The defective
-   collection is superseded and no longer retained.
+1. Each fixed-matrix configuration has three process repetitions. That is
+   enough to reveal the pseudoreplication in the former pooled analysis but too
+   few for strong tail estimation. Increase this before an archival run.
 2. Metal GPU timestamps are per pass rather than a span in Blade, and were
    returned as zero by wgpu for three of the four workloads. Metal device time
-   is not reported; host wall time is used instead.
-3. `20260725T160725Z-matrix` fails its own `B-explicit-all` control on
-   `graphics-independent` (-37.4%, repetition medians spanning 3.2-5.6 ms for an
-   identical command stream). The cell is reported and rejected, not deleted.
-4. The RX 7900 XT accelerates while it is being measured. Its clocks were
-   pinned with `power_dpm_force_performance_level = high` -- `rocm-smi` in the
-   collection records it, and also records a 35 MHz shader clock at idle
-   underneath -- and its median block still runs 18.4% faster in its last
-   third than in its first. Every one of its floors is above 2%. More warm-up,
-   not more pinning, is what this needs.
-5. Only `zork` has a timestamp-free collection, so host-cost claims are
-   established there and merely corroborated elsewhere.
+   is not reported; host wall time is shown only as wall time.
+3. Only `zork` has a timestamp-free collection. Cross-device host results use
+   GPU-timed collections for direction; uninstrumented magnitude is established
+   only by the `zork` sweep.
+   Blade also uses 17 device timestamp writes and a window through its final
+   barrier, while wgpu uses two writes ending with the final pass; their GPU
+   spans are instrumented end-to-end comparisons, not matched timer streams.
+4. `profile-hosts.py` samples the whole process, including a completion wait
+   after each iteration. Those profiles describe whole-process shares but do
+   not decompose the record-and-submit interval. The retained profiles were
+   also not adapter-pinned: on `rubik`, Blade selected the Raphael iGPU while
+   wgpu selected the RX 7900 XT. No between-implementation inference is drawn
+   from those columns.
+5. The new Metal matrix collection used shader parity, but Low Power Mode was
+   enabled. The separate tracked/untracked Metal pilot retained only printed
+   summaries from one process session.
+6. At the 2026-07-27 audit, the Radeon 780M (`k6`) matrix, profile, and capture
+   directories cited by the paper were absent from this checkout's
+   `paper/data/raw`. `build-tables.py` now fails by default in that condition;
+   `--allow-incomplete` exists only for partial audits.
+7. The numerical `--shader-checks` sensitivity run and the development-time
+   synchronization-validation logs are not present in the retained raw
+   directories. The retained revision also hashed only one representative
+   output in each independent family and used a mistyped FNV-1a multiplier in
+   both implementations. The latter does not affect within-collection equality
+   checks, but newly collected digest strings use the corrected standard
+   multiplier and therefore differ from the old strings. During this audit the
+   retained wgpu graphics shader also failed Vulkan SPIR-V validation under
+   `VUID-StandaloneSpirv-None-10684`; the equivalent array-free shader now
+   passes the automated correctness matrix. The retained graphics-chain
+   readback row also saturated to all `0xff`, making its hash insensitive to
+   missing late passes; the current shader keeps that row unsaturated through
+   64 passes. The paper no longer quotes the unretained sensitivity result; the
+   complete timing matrix must be
+   recollected from the fixed shader, and the current all-output correctness
+   hashes and validation logs must be published.
+8. The current matrix has neither the planned in-process alternation
+   sensitivity check nor a second-day/reboot repeat. Its inner bootstrap also
+   does not model serial correlation among the 30 ordered observations. These
+   are required before interpreting the resampling intervals as population
+   confidence intervals.
+9. The retained capture manifests identify their three hosts but do not record
+   the adapter selected by either implementation, and they cover only
+   `automatic`, `automatic-scoped`, and `hazard-only`. Their extracted request
+   tables are valid observations of those streams, but they are not evidence
+   from three named GPU models and do not cover the explicit/crossed controls.
+   The current capture runner includes all six Blade policies, requires one new
+   capture per run, records benchmark metadata, compares output hashes, and
+   rejects different Blade/wgpu device names. Recollect with both adapter
+   selectors pinned.
 
 ## Control floor, per cell
 
 The instrumentation control (`explicit-all` against `automatic` at global
-scope) emits identical commands, so its disagreement bounds what can be
-resolved. Nothing smaller may be claimed. `build-tables.py` computes it and
-prints it as the `ctrl` column of the scope table.
+scope) produces the same barrier calls with identical arguments by
+construction. The current capture set does not include this control;
+`capture-streams.py` now includes it by default, so the final captures will
+check the source-level equivalence directly.
+Its device-time disagreement is used as a conservative post-hoc stability
+threshold.
+`build-tables.py` defines the floor as the larger absolute endpoint of that
+cell's paired hierarchical interval.
 
-Two things about how it is computed have each been got wrong once.
-
-It must be read **per cell, not per device**. Noise here is a property of the
-workload on the device, not of the device: on the RX 7900 XT one compute cell
-resolves to 0.1% and the other to 10.9%, and on the Intel part
-`graphics-chain` is 1.7% while `mixed-independent` is 49.7%. An earlier version
-took the worst cell per device as the device's floor, which discarded every
-usable AMD and Intel cell and turned two answerable questions into open ones.
-
-It is the **far end of the control's bootstrap interval, not its point
-estimate**. On the Intel part's `compute-independent` cell the two identical
-configurations agree to 2.8% on the median and their interval reaches 71.3%,
-because that machine's independent-target blocks step down by nearly half
-partway through the measurement and a median records when the step happened.
-The point
-estimate would have licensed a 14% placement reading from that cell; the
-interval says the cell cannot resolve 14%. Switching to the interval moved the
-count of cells with floors above 2% from 9 to 16 and withdrew one claim.
-
-What the disqualified cells have in common was found by asking what the
-control was reacting to. A block is one process launch, and the device
-accelerates inside it: an RX 7900 XT `compute-chain` block opens at 245
-microseconds, holds fourteen iterations, then steps down through 225, 217, 205
-to 193 and is still descending when the block ends. Comparing the median of a
-block's first third against its last third separates the machines the same way
-the floors do -- -0.1% on the RTX 5070 and +0.0% on Raphael against -18.4% on
-the RX 7900 XT and -55.3% in the worst Intel block. `build-tables.py` reports
-it.
-
-The single change that would most improve a repetition of this study is
-therefore warm-up, and it is a flag rather than a code change: `--warmups 2000`
-costs about a minute across a whole collection, against ten warm-ups today that
-leave the RX 7900 XT still accelerating forty iterations later. Pinning clocks
-is worth doing and is not sufficient on its own.
+The floor must be read **per cell, not per device**. It must also come from the
+interval, not only the point estimate: process repetitions can occupy different
+clock or interference regimes even when the median control effect is near
+zero. A directional claim is admitted only when its own interval excludes zero
+and its point lies outside this floor. The generated numbers and figures are
+the source of current floor values; this protocol deliberately does not copy
+them into prose where a recollection can leave them stale.
 
 ## Correctness rules
 
@@ -397,25 +452,34 @@ is worth doing and is not sufficient on its own.
 The paper can lose its `RESULTS PENDING` banner only after:
 
 - [x] the matched wgpu workloads reproduce Blade's workload graph and outputs
-  (all 216 matrix runs and 768 sweep runs agree on the per-workload hash);
+  (the generated hash-group count reports zero conflicts);
 - [x] the paper consistently labels Blade-versus-wgpu results as end-to-end and
   reserves causal claims for the within-Blade barrier-placement control;
-- [~] representative Vulkan captures and CPU profiles support the explanation
-  of tracked-versus-coarse behavior. CPU profiles are collected
-  (`profile-hosts.py`) and reported: resource tracking is 3-7% of wgpu's
-  process CPU time, which rules it out as the explanation for a 2-12x host-cost
-  gap. Command-stream captures of both implementations (`capture-streams.py`,
-  which downloads RenderDoc if none is installed) confirm the emitted masks and
-  counts, and settle factors 2 and 4: every Blade barrier is global and every
-  wgpu barrier is resource-scoped, and neither performs a steady-state layout
-  transition;
-- [x] at least the minimum hardware matrix is complete (NVIDIA and discrete
+- [~] host attribution is not complete. Existing `profile-hosts.py` data cover
+  whole processes dominated by waits and cannot apportion the
+  record-and-submit gap. The paper now treats them as diagnostic only; this
+  becomes a blocker only if a tracking-specific host attribution claim is
+  restored;
+- [ ] a retained synchronization-validation collection covers all six Blade
+  workloads and policies with no reported hazards or validation errors;
+- [~] representative capture extraction confirms barrier masks, counts,
+  pass-relative positions, resource scope, and steady-state layouts. The
+  extracted `barriers.csv` files are not complete command streams; the retained
+  manifests do not identify selected adapters or cover the explicit/crossed
+  policies, and the Radeon 780M capture is currently missing from this
+  checkout;
+- [~] at least the minimum hardware matrix was collected (NVIDIA and discrete
   AMD on Linux, plus two AMD integrated parts, Intel, and Apple as sensitivity
-  cases);
-- [x] raw data and analysis scripts reproduce every table (`build-tables.py`);
+  cases), but the Radeon 780M raw directory must be restored locally;
+- [ ] raw data and analysis scripts reproduce every table. The generator now
+  fails loudly because a cited collection is absent;
 - [x] negative and architecture-specific results are described alongside wins
   (the Radeon 780M regression and the failed RADV scope prediction are both
   reported in the abstract);
-- [x] the abstract contains absolute effects and uncertainty, not only ratios.
+- [x] the abstract contains measured host times and device effect estimates
+  with uncertainty, not only unqualified ratios.
 
-Application workloads remain outstanding independently of the banner.
+Application workloads remain outside the chosen scope. The unchecked
+reproducibility, process-repetition, and validation-artifact items are
+publication blockers. Host attribution is a blocker only for a
+tracking-specific decomposition, which the current paper does not claim.

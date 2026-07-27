@@ -101,7 +101,7 @@ python3 paper/run-study-matrix.py \
   --wgpu ../wgpu \
   --backend vulkan \
   --blade-device-id 0x2f04 \
-  --wgpu-adapter-name "RTX 5070" \
+  --wgpu-adapter-name "NVIDIA GeForce RTX 5070" \
   --output paper/data/raw/linux-nvidia-correctness \
   --repetitions 1 \
   --passes 4 \
@@ -110,8 +110,9 @@ python3 paper/run-study-matrix.py \
   --width 256 \
   --height 256 \
   --warmups 0 \
-  --samples 1 \
-  --validation
+  --samples 3 \
+  --validation \
+  --cpu-only
 ```
 
 Windows PowerShell:
@@ -130,8 +131,9 @@ py -3 paper\run-study-matrix.py `
   --width 256 `
   --height 256 `
   --warmups 0 `
-  --samples 1 `
-  --validation
+  --samples 3 `
+  --validation `
+  --cpu-only
 ```
 
 Replace only the two adapter selectors and the host label. The collector
@@ -152,43 +154,58 @@ python3 paper/run-study-matrix.py \
   --width 256 \
   --height 256 \
   --warmups 0 \
-  --samples 1 \
-  --validation
+  --samples 3 \
+  --validation \
+  --cpu-only
 ```
 
 The collector fails if Blade policies or wgpu produce different output hashes
 for the same workload.
 
-### Synchronization validation for `automatic-scoped`
+### Vulkan synchronization validation
 
 Matching output hashes are necessary but not sufficient for a policy that
 narrows synchronization scopes: a missing dependency can go unobserved on one
-schedule. Before trusting `automatic-scoped` numbers from a machine, run the
-correctness collection there with the Khronos validation layer's
-synchronization checks enabled:
+schedule. On Vulkan, `run-study-matrix.py --validation` forces the Khronos
+validation layer and enables its synchronization checks for every Blade policy
+and the matched wgpu workload. If the layer is unavailable, the process fails
+instead of silently producing an unvalidated collection. Install the layer,
+then run the correctness command above:
 
 ```sh
 sudo apt install vulkan-validationlayers   # or the platform equivalent
-for w in compute-independent compute-chain graphics-independent \
-         graphics-chain mixed-independent mixed-chain; do
-  for p in automatic automatic-scoped hazard-only hazard-only-scoped \
-           explicit-all explicit-all-scoped; do
-    VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation \
-    VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT \
-      ./target/release/examples/sync-bench \
-        --workload $w --policy $p --passes 16 \
-        --warmups 0 --samples 3 --validation 2>&1 |
-      grep -E "SYNC-HAZARD|Validation Error" && echo "FAILED: $w/$p"
-  done
-done
+python3 paper/run-study-matrix.py \
+  --wgpu ../wgpu \
+  --backend vulkan \
+  --blade-device-id 0x2f04 \
+  --wgpu-adapter-name "RTX 5070" \
+  --repetitions 1 \
+  --passes 4 \
+  --elements 65536 \
+  --rounds 2 \
+  --width 256 \
+  --height 256 \
+  --warmups 0 \
+  --samples 3 \
+  --validation \
+  --cpu-only
 ```
 
-Retain the layer output next to the collection. A `SYNC-HAZARD-*` message means
-the derived stage or access masks are too narrow for that workload, and a
-`Validation Error` means they are inconsistent with the declared stages; either
-way the policy must not feed performance data until it is fixed. This check
-found a real defect once already: the `extra_sync_*_access` driver workarounds
-name transfer accesses that only `ALL_COMMANDS` supports.
+The runner retains each process's combined validation output as
+`*.validation.txt`, records that file and the forced environment in the
+manifest, and keeps validation callback text out of the parseable benchmark
+CSV. It scans for `SYNC-HAZARD` and `Validation Error` and aborts if either
+appears. A `SYNC-HAZARD-*` message means the derived stage or access masks are
+too narrow for that workload; any other validation error also disqualifies the
+executable from performance collection until it is understood and fixed.
+This check has found two real defects: Blade's `extra_sync_*_access` driver
+workarounds named transfer accesses that only `ALL_COMMANDS` supports, and the
+retained wgpu graphics shader produced invalid SPIR-V from a function-local
+array. The current array-free shader passes the full small matrix.
+
+`paper/collect.py` runs this correctness matrix automatically before the
+performance matrix. Pass `--skip-validation` only when a retained validation
+collection already covers the exact sources, driver, and OS.
 
 ## Final CPU collection
 
@@ -204,7 +221,7 @@ python3 paper/run-study-matrix.py \
   --blade-device-id 0x2f04 \
   --wgpu-adapter-name "RTX 5070" \
   --output paper/data/raw/linux-nvidia-cpu \
-  --repetitions 5 \
+  --repetitions 10 \
   --cpu-only
 ```
 
@@ -221,7 +238,7 @@ py -3 paper\run-study-matrix.py `
   --blade-device-id 0x2f04 `
   --wgpu-adapter-name "RTX 5070" `
   --output paper\data\raw\windows-nvidia-cpu `
-  --repetitions 5 `
+  --repetitions 10 `
   --cpu-only
 ```
 
@@ -233,7 +250,7 @@ python3 paper/run-study-matrix.py \
   --backend metal \
   --wgpu-adapter-name "Apple M3" \
   --output paper/data/raw/macos-apple-m3-cpu \
-  --repetitions 5 \
+  --repetitions 10 \
   --cpu-only
 ```
 
@@ -255,7 +272,7 @@ python3 paper/run-study-matrix.py \
   --blade-device-id 0x2f04 \
   --wgpu-adapter-name "RTX 5070" \
   --output paper/data/raw/linux-nvidia-gpu \
-  --repetitions 5
+  --repetitions 10
 ```
 
 Use the corresponding AMD selectors and `linux-amd-gpu` on the Linux AMD
@@ -270,7 +287,7 @@ py -3 paper\run-study-matrix.py `
   --blade-device-id 0x2f04 `
   --wgpu-adapter-name "RTX 5070" `
   --output paper\data\raw\windows-nvidia-gpu `
-  --repetitions 5
+  --repetitions 10
 ```
 
 macOS Apple Silicon:
@@ -281,7 +298,7 @@ python3 paper/run-study-matrix.py \
   --backend metal \
   --wgpu-adapter-name "Apple M3" \
   --output paper/data/raw/macos-apple-m3-gpu \
-  --repetitions 5
+  --repetitions 10
 ```
 
 The wgpu benchmark uses beginning/end timestamps on the first and last WebGPU
@@ -297,49 +314,26 @@ run that emits it.
 
 ## Let the device reach a steady clock first
 
-Every collection in this study so far ran with default warm-up, and the cost is
-a control floor -- the largest disagreement between two configurations that emit
-identical commands that the cell is consistent with -- ranging from 0.0% to
-71.3% depending on the cell. A cell whose floor exceeds the effect you are
-chasing cannot answer the question, in either direction.
+One block is one process launch, so a device may idle between configurations
+and ramp again inside the next one. The pilot's ten warm-ups left the RX 7900
+XT accelerating throughout its 30 measured iterations. The current fixed
+matrix uses 1000 warm-ups. Do not infer that a universal count exists: inspect
+time-ordered samples and compare each block's first and last thirds.
 
-The mechanism is in the time-ordered samples, not in the aggregate. One block is
-one process launch: ten warm-up iterations, then thirty measured ones. The
-device idles between blocks and accelerates again inside each. An RX 7900 XT
-`compute-chain` block opens at 245 microseconds, holds for fourteen iterations,
-then steps down through 225, 217, 205 to 193 and is still descending when the
-block ends. Its median is then a fact about where the steps fell.
-
-Compare the median of a block's first third against its last third and the
-machines separate the same way their control floors do:
-
-| machine | median block drift | worst block |
-|---|---:|---:|
-| `zork` RTX 5070 | -0.1% | -3.9% |
-| `rubik` Raphael | +0.0% | -0.1% |
-| `matrix` Intel Xe | -0.5% | -55.3% |
-| `k6` Radeon 780M | -7.0% | -27.9% |
-| `rubik` RX 7900 XT | -18.4% | -44.7% |
-
-`build-tables.py` prints these, so check them before believing a floor.
-
-**Warm up until the drift stops.** This is the lever that works and it is a
-flag, not a change:
+**Warm up until drift stops.** Start with the current setting:
 
 ```sh
-python3 paper/collect.py --wgpu ../wgpu --warmups 2000
+python3 paper/collect.py --wgpu ../wgpu --warmups 1000 --repetitions 10
 ```
 
-The RX 7900 XT had not finished accelerating after the forty iterations a block
-contains, so ten is far too few. Two thousand warm-ups of a 250-microsecond
-workload is half a second per block -- about a minute across a whole collection.
-Raise `--rounds` or `--passes` instead, or as well, if you would rather the
-device settle in fewer iterations.
+Increase the warm-up if any block still moves. `build-tables.py` reports
+first-third versus last-third drift and the per-cell control intervals, so
+read those generated diagnostics rather than a copied table of old values.
 
 **Pinning clocks helps and does not suffice.** The RX 7900 XT collection ran
 with `power_dpm_force_performance_level = high` on both of its devices --
-`rocm-smi` recorded `Performance Level: high` -- and drifted 18% at the median
-block regardless. The same capture shows a 35 MHz shader clock at idle
+`rocm-smi` recorded `Performance Level: high` -- and still drifted in the
+ten-warm-up pilot. The same capture shows a 35 MHz shader clock at idle
 underneath the setting: `high` raises the ceiling, it does not hold the floor.
 Set it anyway, and do not treat it as sufficient.
 
@@ -368,22 +362,21 @@ than to its peak: pinning to `RP0` invites the package limit to throttle
 mid-collection, which puts a step back into the block.
 
 The CPU governor matters for host cost and not for device span. Where host
-numbers are wanted, `sudo cpupower frequency-set -g performance` and a quiet
-machine; `k6`'s host row is unusable not because of its GPU but because its
-median 16-pass host block spread 61% of its own median while its device blocks
-stayed clean.
+numbers are wanted, use `sudo cpupower frequency-set -g performance` and a
+quiet machine, and retain the setting in the collection.
 
 `run-study-matrix.py` reads these knobs itself, writes them to
 `power-state.txt`, records them in the manifest as `power_state` with a
 `clocks_locked` summary, and warns before collecting if a GPU is still under
 automatic management. Nothing has to be remembered or written down by hand.
 
-Then check the floor before believing anything: `build-tables.py` prints a
-`ctrl` column per cell, and any effect smaller than it is not a result.
+Then check the stability diagnostic before interpreting an effect. A
+directional effect must have a hierarchical interval excluding zero and exceed
+the conservative post-hoc threshold derived from its paired global
+explicit-all control. That threshold is a screening rule, not a calibrated
+equivalence or detection bound.
 
 ## Barrier policies and workloads
-
-On Vulkan the collector runs four Blade policies per workload:
 
 On Vulkan the collector crosses three placements with two scopes, giving six
 Blade policies per workload:
@@ -392,20 +385,26 @@ Blade policies per workload:
 |---|---|---|
 | `automatic` | encoder, every pass | `Global` |
 | `automatic-scoped` | encoder, every pass | `PassKind` |
-| `hazard-only` | application, at real hazards | `Global` |
-| `hazard-only-scoped` | application, at real hazards | `PassKind` |
+| `hazard-only` | application, dependent workloads only | `Global` |
+| `hazard-only-scoped` | application, dependent workloads only | `PassKind` |
 | `explicit-all` | application, every pass | `Global` |
 | `explicit-all-scoped` | application, every pass | `PassKind` |
 
 Reading down a scope column isolates placement; reading across a placement row
-isolates scope. `explicit-all` against `automatic` at the same scope is the
-instrumentation control and should be indistinguishable. Metal collects
-`automatic` only, since `barrier_scope` and `manual_barriers` are Vulkan
-concepts.
+isolates the scope change appropriate to that placement. Only global
+`explicit-all` against global `automatic` is the identical-barrier
+instrumentation control. At pass-kind scope an explicit barrier must retain an
+`ALL_COMMANDS` destination because its consumer is unknown, whereas an
+automatic barrier derives both sides. Metal collects `automatic` only, since
+`barrier_scope` and `manual_barriers` are Vulkan concepts.
 
 Workloads are the four shared ones plus `mixed-independent` and `mixed-chain`,
 which alternate compute and render passes. The mixed pair is Blade-only, so
-wgpu still runs four workloads per repetition and Blade runs six.
+wgpu still runs four workloads per repetition and Blade runs six. In
+`mixed-chain`, each pass consumes the output of the same pass kind two
+positions earlier. The benchmark's hazard-only policy nevertheless inserts
+before every pass after the first, so it is a conservative application policy,
+not a minimal placement oracle, for that one workload.
 
 ## Analyze
 
@@ -427,9 +426,9 @@ representative collection after a reboot or on another day.
 
 ## CPU profiles
 
-`paper/profile-hosts.py` attributes host CPU time to the crate or library that
-spent it, which is what turns "wgpu costs 2-12x more host time" into a
-statement about *what* costs it.
+`paper/profile-hosts.py` attributes whole-process CPU samples to the crate or
+library in which they landed. It is a diagnostic; in its current form it does
+not decompose the measured record-and-submit interval.
 
 ```sh
 sudo sysctl kernel.perf_event_paranoid=1     # until reboot
@@ -437,12 +436,14 @@ python3 paper/profile-hosts.py --wgpu ../wgpu
 ```
 
 It refuses to run rather than emit an empty profile if `perf` is missing or
-`perf_event_paranoid` is above 2. The workload it profiles is deliberately
-mis-shaped for the GPU and well shaped for the host -- 4096 elements, 64x64
-targets, one mixing round, 64 passes, no timestamp queries -- so the process
-stays in the recording path instead of blocking in `wait_for`. It rebuilds both
-binaries with `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`, which improves
-symbol attribution without changing optimisation.
+`perf_event_paranoid` is above 2. The workload uses 4096 elements, 64x64
+targets, one mixing round, 64 passes, and no timestamp queries, but each
+iteration still waits for completion. Existing profiles are consequently
+dominated by driver/kernel wait activity. A publication-quality host
+attribution run must gate `perf` to record plus submit or batch many recordings
+before one wait. The script rebuilds both binaries with
+`CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`, which improves symbol
+attribution without changing optimisation.
 
 Output is `symbols.csv` (self time per symbol), `buckets.csv` (self time per
 group), the raw `perf report` text, and a manifest. The groups separate
@@ -450,21 +451,41 @@ group), the raw `perf report` text, and a manifest. The groups separate
 tracking, the second is lazy zero-initialisation, and conflating them would
 overstate the number the profile exists to measure.
 
-Two caveats to record with the result. Self time is attributed to the symbol
+Further caveats to record with the result. Self time is attributed to the symbol
 the sample landed in, so aggressive inlining moves tracker work into its
-callers and the tracker share is a lower bound. And a flat profile answers
+callers and can make the tracker-labelled share an undercount. It is not a
+formal lower bound: classification and the wait-dominated denominator can move
+the share in either direction. The retained profiles were not adapter-pinned
+and selected different GPUs for Blade and wgpu on the dual-GPU AMD host; pass
+both selectors to the current script, which now refuses to write a manifest or
+derived tables when the reported device names differ. A flat profile answers
 "where is time spent", not "why" -- a call-graph run (`--call-graph dwarf`)
 costs more and needs frame pointers to be reliable.
 
 ## GPU captures
 
-`paper/capture-streams.py` captures the Vulkan command stream of each
-configuration, so the barriers the paper describes from source can be checked
-against what reaches the driver.
+`paper/capture-streams.py` captures each Vulkan configuration and extracts its
+barrier records, so the barriers the paper describes from source can be checked
+against the capture.
 
 ```sh
-python3 paper/capture-streams.py
+python3 paper/capture-streams.py --wgpu ../wgpu
 ```
+
+On a multi-GPU machine, pin both selectors:
+
+```sh
+python3 paper/capture-streams.py --wgpu ../wgpu \
+  --blade-device-id 0x744c \
+  --wgpu-adapter-name 'AMD Radeon RX 7900 XT (RADV NAVI31)'
+```
+
+The runner requires exactly one new `.rdc` per requested configuration, records
+the benchmark metadata and relevant adapter environment in the manifest,
+rejects differing output hashes, and aborts if Blade and wgpu report different
+device names. These checks matter even though the barrier requests are expected
+to be device-independent: without them, a multi-GPU host is not a reproducible
+matched capture.
 
 If no RenderDoc is installed it downloads the official build, verifies it
 against a pinned hash, and unpacks it under `paper/data/tools/`. Use
@@ -480,14 +501,17 @@ warns and runs uncaptured rather than failing a measurement.
 
 After capturing it converts each `.rdc` with `renderdoccmd convert -c xml` and
 tabulates every `vkCmdPipelineBarrier` into `barriers.csv`: stage and access
-masks decoded to names, barrier counts by kind, and any image layout
-transition. That is what makes the captures checkable rather than merely
-archived.
+masks decoded to names, barrier counts by kind, any image layout transition,
+and `after_work`, the number of preceding draw/dispatch commands. The last
+field makes placement differences visible; equal barrier counts alone do not
+establish equal placement. That is what makes the captures checkable rather
+than merely archived.
 
 Both implementations are captured: the matched wgpu benchmark takes the same
-`--capture` flag and wraps the same warmed iteration, so the two command
-streams come from the same workload on the same machine state. wgpu is skipped
-for the mixed workloads, which exist only in Blade's benchmark.
+`--capture` flag and wraps the same warmed iteration, so the extracted tables
+come from the same workload on the same machine state. `barriers.csv` is not a
+serialization of the complete command stream. wgpu is skipped for the mixed
+workloads, which exist only in Blade's benchmark.
 
 A note for anyone extending this: RenderDoc hooks Vulkan through a layer, not
 through the preloaded library alone, and the manifest shipped in the tarball
@@ -534,20 +558,25 @@ directly:
 ```sh
 xcrun swiftc -O paper/tools/metal-hazard-bench.swift \
   -o /tmp/metal-hazard-bench
-/tmp/metal-hazard-bench > paper/data/raw/<collection-id>/metal-hazard.csv
+/tmp/metal-hazard-bench \
+  --raw-output paper/data/raw/<collection-id>/metal-hazard-r01-raw.csv \
+  | tee paper/data/raw/<collection-id>/metal-hazard-r01-summary.csv
 ```
 
-It emits a comment header naming the device and OS build, then one row per
-(workload, tracking mode, pass count) with median and 5th/95th-percentile
-encode, commit, GPU, and wall times. It also reports each buffer's effective
-`hazardTrackingMode`, so a run that silently fell back to tracked mode is
-detectable from its own output.
+The required `--raw-output` path must not exist; the harness refuses to
+overwrite it. That file contains every observation in execution order. Standard
+output contains one summary row per (workload, tracking mode, pass count) with
+median and 5th/95th-percentile encode, commit, GPU, and wall times. Both outputs
+record the effective `hazardTrackingMode`, device, OS, UTC time, and session ID.
+Run at least ten fresh processes (`r01` through `r10`) while on AC power with
+Low Power Mode disabled.
 
 The results currently cited by the paper are in
 [`../docs/metal-hazard-tracking.md`](../docs/metal-hazard-tracking.md) and were
-collected on battery with Low Power Mode enabled. Repeat on AC power with Low
-Power Mode disabled before publishing absolute times, and retain the raw
-program output, macOS build, hardware report, and Blade revision.
+collected on battery with Low Power Mode enabled and retained only as
+transcribed summaries. Repeat as above before using the pilot for inferential or
+equivalence claims, and retain the macOS build, hardware report, and Blade
+revision alongside the raw files.
 
 ## Pass-count sweeps
 
@@ -584,7 +613,7 @@ skipped with a message.
 So on a machine with an integrated and a discrete GPU the whole study is:
 
 ```sh
-python3 paper/run-study-matrix.py --wgpu ../wgpu --repetitions 3
+python3 paper/run-study-matrix.py --wgpu ../wgpu --repetitions 10
 ```
 
 Passing `--blade-device-id` or `--wgpu-adapter-name` pins one device and
