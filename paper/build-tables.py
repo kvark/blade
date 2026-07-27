@@ -505,12 +505,14 @@ def build_platform_table(collections: list[Collection]) -> str:
         body=body,
         star=True,
         note=(
-            "Machines were collected over two days, so they do not all sit on "
-            "one commit. The measured code --- \\texttt{blade-graphics} and the "
-            "benchmark --- is identical across every Vulkan revision listed "
-            "except for the addition of an inert \\texttt{--capture} flag; the "
-            "Metal row predates the scope axis, which is why it has no scoped "
-            "configurations."
+            "The Vulkan rows were all collected on one day from one benchmark "
+            "build: where their revisions differ, they differ only by commits "
+            "under \\texttt{paper/}, which the benchmark does not compile, and "
+            "every row used the same \\wgpu{} revision. The Metal row predates "
+            "the scope axis and the shader-parity fix of "
+            "Section~\\ref{sec:workloads}, which is why it has no scoped "
+            "configurations and why its \\wgpu{} device-side numbers are "
+            "withheld."
         ),
     )
 
@@ -542,10 +544,13 @@ def matrix_rows(
             ]
             for implementation, policy in contenders:
                 # A cross-implementation cell is only meaningful when both
-                # implementations ran on the same physical device and compiled
-                # their shaders the same way.
+                # implementations ran on the same physical device and, for the
+                # device-side metrics, compiled their shaders the same way.
+                # The injected checks change what the GPU executes, not what
+                # the host records, so host cells survive a stale wgpu.
                 if implementation != "blade" and (
-                    collection.mismatched_devices or collection.wgpu_shader_checks
+                    collection.mismatched_devices
+                    or (collection.wgpu_shader_checks and metric != "host_ns")
                 ):
                     cells.extend(["n/a", ""])
                     continue
@@ -588,17 +593,23 @@ def build_gpu_matrix_table(
     # collection had the two implementations on different devices; the
     # recollection does not, and a note that outlives its cause is a claim
     # about data that is no longer there.
-    withheld = [c for c in newest_per_device(collections) if c.mismatched_devices]
-    stale = [c for c in newest_per_device(collections) if c.wgpu_shader_checks]
+    # Only machines that would otherwise have cells in this Vulkan-only table
+    # belong in its withholding note; the Metal row is not in it to withhold.
+    vulkan = [
+        c
+        for c in newest_per_device(collections)
+        if c.manifest["backend"] == "vulkan"
+    ]
+    withheld = [c for c in vulkan if c.mismatched_devices]
+    stale = [c for c in vulkan if c.wgpu_shader_checks]
     return latex_table(
         caption=(
             "GPU span of one 16-pass command buffer on Vulkan: \\texttt{B-auto} median "
             "in microseconds, then percent differences from it with 95\\% bootstrap "
             "intervals. \\texttt{B-explicit-all} is the instrumentation control: it "
-            "emits the same commands as \\texttt{B-auto}, so where it is not "
-            "indistinguishable the cell is not measuring. On the Intel part it is "
-            "not, in four cells, and nothing is read from those "
-            "(Section~\\ref{sec:deviations})."
+            "emits the same commands as \\texttt{B-auto}, so its disagreement in a "
+            "cell is that cell's noise floor, and nothing smaller than it is read "
+            "from the cell (Section~\\ref{sec:deviations})."
         ),
         label="tab:gpu-matrix",
         column_spec="@{}llr" + "r@{\\,}l" * 3 + "@{}",
@@ -720,6 +731,15 @@ def build_metal_table(collections: list[Collection]) -> str | None:
         # would be four dashes claiming a measurement was attempted.
         if measured:
             body.append(row)
+    note = None
+    if collection.wgpu_shader_checks:
+        note = (
+            "This collection predates the shader-parity fix of "
+            "Section~\\ref{sec:workloads}: the \\wgpu{} waits include its "
+            "injected shader checks, so the wait comparison overstates "
+            "\\blade's advantage. Host times are recording work and are "
+            "unaffected."
+        )
     return latex_table(
         caption=(
             "Apple M3 (Metal), 16 passes: host cost (recording plus submission) and "
@@ -736,12 +756,17 @@ def build_metal_table(collections: list[Collection]) -> str | None:
             "\\cmidrule(lr){2-3}\\cmidrule(lr){4-5}",
         ),
         body=body,
+        note=note,
     )
 
 
 def build_sweep_table(collections: list[Collection]) -> str | None:
-    gpu = next((c for c in collections if c.role == "sweep-gpu"), None)
-    cpu = next((c for c in collections if c.role == "sweep-cpu"), None)
+    def newest(role: str) -> Collection | None:
+        candidates = [c for c in collections if c.role == role]
+        return max(candidates, key=lambda c: c.collected_utc, default=None)
+
+    gpu = newest("sweep-gpu")
+    cpu = newest("sweep-cpu")
     if gpu is None or cpu is None:
         return None
     passes = [count for count in gpu.pass_counts() if count <= 64]
@@ -821,91 +846,6 @@ def control_floor(
     return max(abs(low), abs(high))
 
 
-def build_scope_table(
-    collections: list[Collection], bootstrap_samples: int
-) -> str | None:
-    """Stage/access scope at fixed placement, plus placement for reference."""
-    scoped = [c for c in newest_per_device(collections) if c.has_scope_axis]
-    if not scoped:
-        return None
-    rows: list[list[str]] = []
-    controls: list[float] = []
-    dirty = False
-    for index, collection in enumerate(scoped):
-        dirty = dirty or collection.is_dirty
-        device = DEVICE_SHORT.get(
-            collection.devices.get("blade", ""), collection.devices.get("blade", "?")
-        )
-        if index:
-            rows.append([RULE])
-        first = True
-        for workload in WORKLOAD_ORDER:
-            baseline = collection.values("blade", "automatic", workload, 16, "gpu_ns")
-            if not baseline:
-                continue
-            floor = control_floor(collection, workload, bootstrap_samples)
-            cells = [
-                device if first else "",
-                WORKLOAD_SHORT[workload],
-                f"{median_us(baseline):.1f}",
-                f"{floor:.1f}" if floor is not None else "---",
-            ]
-            first = False
-            for policy in ("automatic-scoped", "hazard-only", "hazard-only-scoped"):
-                result = comparison(
-                    collection, workload, "gpu_ns", "blade", policy, bootstrap_samples
-                )
-                if result is None:
-                    cells.extend(["---", ""])
-                    continue
-                difference, low, high = result
-                cells.append(signed(difference))
-                cells.append(interval(low, high))
-            rows.append(cells)
-    note = (
-        "The two axes are crossed, so neither is a default for the other. "
-        "Columns differ from \\texttt{B-auto} by scope only, by placement only, "
-        "and by both. On the chain workloads placement has nothing to remove, "
-        "which makes them a scope-only test. The ``both'' column narrows only "
-        "the source scope, because an explicitly placed barrier is emitted "
-        "where it is written and cannot name a consumer that has not been "
-        "declared yet."
-    )
-    note += (
-        " ``ctrl'' is the control floor of that cell: the far end of the "
-        "interval on the disagreement between \\texttt{explicit-all} and "
-        "\\texttt{automatic} at global scope. Those two emit identical "
-        "commands, so it is the smallest effect the cell can resolve, and a "
-        "difference below it means nothing however tight its own interval "
-        "looks. It is per cell rather than per device because noise is not a "
-        "property of the device alone."
-    )
-    if dirty:
-        note += (
-            " These runs were collected from a modified worktree and are a "
-            "pilot, not final data."
-        )
-    return latex_table(
-        caption=(
-            "Barrier placement crossed with barrier scope, 16 passes: "
-            "\\texttt{B-auto} GPU-span median in microseconds, then percent "
-            "differences from it with 95\\% bootstrap intervals."
-        ),
-        label="tab:scope",
-        column_spec="@{}llrr" + "r@{\\,}l" * 3 + "@{}",
-        header=(
-            "Device",
-            "Workload",
-            "B-auto",
-            "ctrl",
-            "\\multicolumn{2}{c}{scope \\%}",
-            "\\multicolumn{2}{c}{placement \\%}",
-            "\\multicolumn{2}{c}{both \\%}",
-        ),
-        body=rows,
-        star=True,
-        note=note,
-    )
 
 
 # Display order for the profile table. Every bucket `profile-hosts.py` can
@@ -937,6 +877,7 @@ class Profile:
         self.root = root
         self.manifest = json.loads((root / "manifest.json").read_text())
         self.host = machine_label(str(self.manifest.get("host", ""))) or root.name
+        self.collected_utc = str(self.manifest.get("created_utc", ""))
         self.shares: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
         for row in csv.DictReader((root / "buckets.csv").open()):
             if row["bucket"].startswith("TOTAL"):
@@ -971,6 +912,25 @@ class Profile:
         return max(weights, key=weights.get, default="")
 
 
+def newest_profile_per_host(raw: Path) -> list[Profile]:
+    """One profile per machine, the most recent, in machine order.
+
+    A re-profiled machine supersedes its earlier run rather than appearing
+    beside it as a second column with the same name.
+    """
+    best: dict[str, Profile] = {}
+    for directory in sorted(raw.glob("*-profile")):
+        if not (directory / "buckets.csv").is_file():
+            continue
+        if not (directory / "manifest.json").is_file():
+            continue
+        profile = Profile(directory)
+        previous = best.get(profile.host)
+        if previous is None or profile.collected_utc > previous.collected_utc:
+            best[profile.host] = profile
+    return sorted(best.values(), key=lambda p: p.host)
+
+
 def build_profile_table(raw: Path) -> str | None:
     """Where each implementation's host CPU time goes, from `profile-hosts.py`.
 
@@ -983,12 +943,7 @@ def build_profile_table(raw: Path) -> str | None:
     share by a factor of three, which is a result rather than a detail to pick
     a winner from.
     """
-    profiles = [
-        Profile(directory)
-        for directory in sorted(raw.glob("*-profile"))
-        if (directory / "buckets.csv").is_file()
-        and (directory / "manifest.json").is_file()
-    ]
+    profiles = newest_profile_per_host(raw)
     if not profiles:
         return None
     unknown = sorted(
@@ -1179,9 +1134,12 @@ def numbers_macros(
                     f"{median_us(baseline):.1f}"
                 )
                 for name, implementation, policy in COMPARISONS:
+                    # Stale wgpu shaders invalidate what the GPU executed, so
+                    # the device and wait metrics are withheld; the host-side
+                    # recording cost is unaffected and stays quotable.
                     if implementation != "blade" and (
                         collection.mismatched_devices
-                        or collection.wgpu_shader_checks
+                        or (collection.wgpu_shader_checks and metric != "host_ns")
                     ):
                         continue
                     contender = collection.values(
@@ -1483,19 +1441,28 @@ def study_counts(raw: Path) -> dict[str, str]:
 
     # Captures: the claim is that the submitted stream does not vary, so what
     # matters is how many machines and drivers produced the identical table.
-    tables: dict[str, list[str]] = defaultdict(list)
-    drivers: set[str] = set()
-    rows: list[dict[str, str]] = []
+    newest_capture: dict[str, tuple[str, Path]] = {}
     for directory in sorted(raw.glob("*-captures")):
         barriers = directory / "barriers.csv"
         if not barriers.is_file():
             continue
+        manifest = json.loads((directory / "manifest.json").read_text())
+        host = str(manifest.get("host", ""))
+        stamp = str(manifest.get("created_utc", ""))
+        if host not in newest_capture or stamp > newest_capture[host][0]:
+            newest_capture[host] = (stamp, directory)
+    tables: dict[str, list[str]] = defaultdict(list)
+    table_paths: dict[str, Path] = {}
+    for host, (_, directory) in sorted(newest_capture.items()):
+        barriers = directory / "barriers.csv"
         digest = hashlib.sha256(barriers.read_bytes()).hexdigest()
-        host = json.loads((directory / "manifest.json").read_text()).get("host", "")
-        tables[digest].append(str(host))
-        rows = list(csv.DictReader(barriers.open()))
+        tables[digest].append(host)
+        table_paths[digest] = barriers
     if tables:
+        # Row count and per-configuration counts come from the majority table,
+        # not from whichever host happened to be read last.
         digest, hosts = max(tables.items(), key=lambda item: len(item[1]))
+        rows = list(csv.DictReader(table_paths[digest].open()))
         values["captures/machines"] = str(len(hosts))
         values["captures/rows"] = str(len(rows))
         values["captures/sha"] = digest[:12]
@@ -1768,6 +1735,26 @@ def main() -> None:
             + "\n  ".join(missing)
             + "\n  Their table rows will be absent while the text still refers "
             "to them.\n  Copy those collections back before building the PDF.",
+            file=sys.stderr,
+        )
+
+    stale = [
+        collection
+        for collection in newest_per_device(collections)
+        if collection.wgpu_shader_checks and "wgpu" in collection.devices
+    ]
+    if stale:
+        print(
+            "WARNING: these collections ran wgpu with its injected shader "
+            "checks, so their W-wgpu cells measure code generation as much as "
+            "synchronization:\n  "
+            + "\n  ".join(
+                f"{collection.root.name} ({collection.display_label})"
+                for collection in stale
+            )
+            + "\n  Those cells are withheld and their prose macros are not "
+            "emitted, so main.tex will fail to build wherever it cites one. "
+            "Recollect with a wgpu at or after the shader-parity commit.",
             file=sys.stderr,
         )
 
