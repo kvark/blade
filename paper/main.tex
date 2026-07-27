@@ -45,9 +45,9 @@ uniformly: removing redundant barriers between sixteen independent compute
 passes is worth $\bmagci{rtx5070}{compute-independent}{placement}$ on an
 RTX~5070 and $\bmagci{rx7900xt}{compute-independent}{placement}$ on an
 RX~7900~XT, while the same change on independent \emph{render} passes is worth
-$\bmag{rtx5070}{graphics-independent}{placement}$ on the NVIDIA part, at most
-$\bmag{raphael}{graphics-independent}{placement}$ on either desktop AMD part,
-and \emph{costs}
+$\bmag{rtx5070}{graphics-independent}{placement}$ on the NVIDIA part, a quarter
+of that ($\bmag{rx7900xt}{graphics-independent}{placement}$) on the discrete
+AMD part, nearly nothing on a saturated AMD iGPU, and \emph{costs}
 $\bmagci{radeon780m}{graphics-independent}{placement}$ on a Radeon~780M. When
 passes genuinely form a chain, the redundant barrier is free everywhere. The
 host side separates the two designs consistently: recording and submitting a
@@ -68,13 +68,15 @@ implemented and measured: a barrier that is still global and still tracks no
 resource, but declares stages and accesses derived from the kinds of the two
 passes it separates. It is worth $\bmagci{rtx5070}{graphics-chain}{scope}$ of
 GPU span on a dependent graphics chain on NVIDIA and
-$\bmagci{intelxe}{graphics-chain}{scope}$ on Intel, where placement can recover
-nothing at all --- and nothing measurable on AMD, which is where the driver
-source predicted it would pay. We report that failed prediction as a result,
-and then find the answer on the same page of the same driver: on the parts
-measured, RADV already elides the destination-side cache invalidation that the
-coarse barrier asks for. Counting the commands a barrier expands into bounds
-what the driver is asked to do, not what it costs. Finally, the classic
+$\bmagci{rx7900xt}{compute-chain}{scope}$ on a dependent compute chain on the
+discrete AMD part --- cells where placement can recover nothing at all --- and
+nothing at any AMD boundary that involves a render pass, which is where the
+driver source predicted the most. The same driver explains the half of the
+prediction that failed: on the parts measured, RADV already elides the
+destination-side cache invalidation that the coarse barrier asks for, and the
+render-side flushes it cannot elide are exactly the operations a render
+boundary keeps under any scope. Counting the commands a barrier expands into
+bounds what the driver is asked to do, not what it costs. Finally, the classic
 argument against \texttt{GENERAL} has largely expired: RADV keeps DCC colour
 compression in \texttt{GENERAL} on GFX10 and later, and keeps TC-compatible
 HTILE, but disables FMASK compression, so multisampled colour is the surviving
@@ -86,7 +88,7 @@ exception.
 \textbf{Working draft.} Every measured number below is generated from the raw
 collections and cited by key, so no sentence can outlive the measurement it
 describes. The result gates of
-\texttt{experiments.md} are met: CPU profiles on two machines
+\texttt{experiments.md} are met: CPU profiles on four machines
 (Section~\ref{sec:profile}) and command-stream captures of both implementations
 on \bladenum{captures/machines} machines across three drivers
 (Section~\ref{sec:generated}). The workload set is final. Claims are stated for
@@ -171,7 +173,8 @@ The contributions are:
   \item a barrier that narrows stage and access scope from the kinds of the
   surrounding passes, keeping the no-resource-state contract, with its
   correctness argument, its measured effect at fixed placement, and the
-  failure of the driver-source reading that predicted where it would pay;
+  two-sided misprediction of the driver-source reading about where it would
+  pay;
   \item matched \blade{} and \wgpu{} workloads with byte-identical outputs, for
   end-to-end comparison;
   \item a reading of the AMD open-source driver that quantifies, in driver
@@ -274,12 +277,13 @@ The consequence is that on RDNA parts, for ordinary images, \emph{every
 destination-side \texttt{INV\_L2} the coarse barrier asks for is dropped}. The
 driver has already made the argument that motivated our narrower barrier, and
 made it without needing the application to say anything. What a narrower scope
-can still remove is the source-side flushes and the pixel drain --- and those
-are the operations whose cost is proportional to work in flight and to dirty
-cache state, both of which are absent in exactly the workloads where the
-narrowing is cleanest to measure. Section~\ref{sec:scope-results} reports the
-measurement; this is the explanation, arrived at afterwards, and it is a
-reading of source rather than a second measurement.
+can still remove is the source-side flushes and the pixel drain --- operations
+whose cost is proportional to work in flight and to dirty cache state, both of
+which are absent in exactly the workloads where the narrowing is cleanest to
+measure. Section~\ref{sec:scope-results} reports the measurement, including
+the one component this account does not predict; the explanation here arrived
+after the numbers, and it is a reading of source rather than a second
+measurement.
 
 \subsection{Image layouts}
 
@@ -380,9 +384,9 @@ cheaper barrier that still tracks nothing: an encoder always knows what kind of
 pass it just closed and what kind it is about to open, and a pass kind is one
 enum per encoder, not a table indexed by resource. The distinction between what
 a barrier asks for and what it costs is the one this configuration went on to
-fail; we keep the original reasoning here because the configuration is
-worth having anyway, and report the failure in
-Section~\ref{sec:scope-results}.
+measure, in both directions; we keep the original reasoning here because the
+configuration is worth having anyway, and report where it held and where it
+did not in Section~\ref{sec:scope-results}.
 
 We therefore added a second scope, and the first question it raises is how
 much the application has to say for it to work. The answer is: nothing, for
@@ -456,9 +460,10 @@ On RADV the difference is concrete. A compute-to-compute boundary drops from
 metadata flushes, L2 invalidate, L2 write-back\} to \{compute partial flush, L2
 invalidate\}. A render-to-compute boundary keeps the colour and depth flushes,
 which are real, but loses the compute drain. What it does \emph{not} drop is
-anything on the destination side, because on these parts the driver had already
-dropped it (Section~\ref{sec:radv-elision}) --- which is the first hint that
-this configuration would not pay where it was designed to.
+anything on the destination's cache side, because on these parts the driver had
+already dropped it (Section~\ref{sec:radv-elision}) --- the first hint that
+what this configuration removes and what it would save were not going to line
+up.
 
 The evaluated contract is deliberately limited:
 
@@ -669,8 +674,10 @@ comparison rather than the end-to-end one.
 Unless stated otherwise, each command buffer contains 16 passes; compute
 buffers hold $2^{20}$ \texttt{u32} elements, render targets are
 $1024\times1024$, and each invocation performs 8 mixing rounds. Every
-configuration is warmed for 10 iterations and measured for 30, three times, in
-an order randomized jointly across implementations.
+configuration is warmed for 1000 iterations --- enough for the device clock to
+stop moving, which Section~\ref{sec:deviations} shows the pilot's ten warm-ups
+were not --- and measured for 30, three times, in an order randomized jointly
+across implementations.
 
 The matched \wgpu{} program uses the same WGSL, resource sizes, pass graph, and
 iteration schedule, and supplies the 16-byte per-pass parameters through
@@ -773,52 +780,64 @@ Power Mode enabled, which is recorded in the collection but not controlled.
 \textbf{Clocks that move during a measurement.} Figures~\ref{fig:placement} and~\ref{fig:scope} carry a
 control floor for every cell: the disagreement between two configurations that
 emit identical commands. Of the \bladenum{floor/count} cells,
-\bladenum{floor/above2} have floors above $2\%$ and \bladenum{floor/above30}
-above $30\%$; the largest of the rest is $\bladenum{floor/below2max}\%$. Any
-effect smaller than its cell's floor is not a result and is not treated as one.
+\bladenum{floor/above2} have floors above $2\%$ and none is above
+$\bladenum{floor/max}\%$; the largest below two is
+$\bladenum{floor/below2max}\%$. Any effect smaller than its cell's floor is not
+a result and is not treated as one.
 
-The cause is visible in the time-ordered samples, and it is not what we first
-wrote down. Each block --- one workload, one policy, one repetition --- is a
-separate process launch of thirty measured iterations after ten warm-ups, so
-the device idles between blocks and ramps its clock again inside each one. On
-the RX~7900~XT a \texttt{compute-chain} block begins at $245\,\mu$s, holds for
-fourteen iterations, then steps down through $225$, $217$, $205$ to
-$193\,\mu$s at the last sample, and is still descending when measurement
-stops. The block never reaches steady state, so its median is a function of
-where the steps fell rather than of the configuration under test.
+The pilot collections that preceded these were an order of magnitude worse,
+and the cause was visible in their time-ordered samples once we looked. Each
+block --- one workload, one policy, one repetition --- is a separate process
+launch, so the device idles between blocks and ramps its clock again inside
+each one. On the pilot's RX~7900~XT a \texttt{compute-chain} block began at
+$245\,\mu$s after its ten warm-ups, held for fourteen iterations, then stepped
+down through $225$, $217$, $205$ to $193\,\mu$s at the last sample, still
+descending when measurement stopped: the block never reached steady state, so
+its median recorded where the steps fell rather than the configuration under
+test. Pinning clocks did not prevent this --- that collection already had
+\texttt{power\_dpm\_force\_performance\_level} set to \texttt{high}, which
+raises the ceiling without stopping the ramp from an idle $35\,$MHz. Warming up
+until the device stops moving does prevent it, and it is a parameter rather
+than a change.
 
-Comparing the median of a block's first third with its last third makes this a
-number. It separates the machines exactly as the control floors do: the
-RTX~5070 drifts $\bladenum{drift/rtx5070/median}\%$ at the median block and the
-Raphael iGPU $\bladenum{drift/raphael/median}\%$, and both have floors at or
-below $\bfloor{rtx5070}{graphics-chain}$ in their best cells. The RX~7900~XT
-drifts $\bladenum{drift/rx7900xt/median}\%$, the Radeon~780M
-$\bladenum{drift/radeon780m/median}\%$, and the Intel part
-$\bladenum{drift/intelxe/median}\%$ at the median block but
-$\bladenum{drift/intelxe/worst}\%$ in its worst --- a single step of that size
-partway through a block, which is what makes its pooled samples look bimodal
-and its floors reach $\bladenum{floor/max}\%$. Whether a given block ramps
-depends on how long the device idled before it, which is why two blocks of the
-same cell can disagree so much more than the samples within either.
+The collections in this paper use both, and comparing the median of each
+block's first third with its last third checks that it worked: at the median
+block, drift is $\bladenum{drift/rtx5070/median}\%$ on the RTX~5070,
+$\bladenum{drift/rx7900xt/median}\%$ on the RX~7900~XT,
+$\bladenum{drift/raphael/median}\%$ on the Raphael iGPU,
+$\bladenum{drift/radeon780m/median}\%$ on the Radeon~780M, and
+$\bladenum{drift/intelxe/median}\%$ on the Intel part. The worst single blocks
+still move --- $\bladenum{drift/rtx5070/worst}\%$ on the RTX~5070 and
+$\bladenum{drift/intelxe/worst}\%$ on the Intel part --- which is the residue
+the control floors price in.
 
-This matters for what to do about it. The RX~7900~XT collection was taken with
-\texttt{power\_dpm\_force\_performance\_level} set to \texttt{high} on both of
-its devices, recorded in the collection, and it drifted anyway: the setting
-raises the ceiling and does not stop the ramp, and the driver still reports a
-$35\,$MHz shader clock at idle underneath it. Pinning clocks is therefore not
-the fix we assumed it was. Warming up until the device stops moving is, and it
-is a parameter rather than a change: the ramp here needs more than the forty
-iterations a block contains. Both are cheap, and a repetition of this study
-should do both and check the drift before believing the floor.
+\textbf{One machine's controls disagree systematically.} Floors above $2\%$
+come in two kinds, and three of the four are the second kind, on the Intel
+part. A ramping clock widens the control's interval around an honest median;
+that is the pilot's failure, and warm-up cured it. On the Intel
+\texttt{compute-chain} cell the control instead reads
+$\bpctci{intelxe}{compute-chain}{control}$ --- an interval that rounds to a
+point, around a number that should be zero. Two identical command streams
+reliably differ by five percent there, and the scoped and hazard-only policies
+move by the same amount in the same cell, so whatever separates them from
+\texttt{B-auto} on that machine is a property of the run, not of the barriers.
+We did not find the mechanism; the floor machinery exists so that we do not
+have to. Cells on that machine answer only above their floors, and one of its
+resolved readings --- \texttt{graphics-chain} placement at
+$\bpct{intelxe}{graphics-chain}{placement}$ against a
+$\bfloor{intelxe}{graphics-chain}$ floor --- sits close enough to the same
+five percent that we report it without building on it.
 
 \hostcaveat
 
-\textbf{Collections span several commits.} The machines were measured over two
-days and each ran the revision listed in Table~\ref{tab:platforms}. The
-measured code --- \texttt{blade-graphics} and the benchmark --- is identical
-across the Vulkan revisions apart from the addition of a
-\texttt{--capture} flag that does nothing unless passed; the Metal collection
-predates the scope axis, which is why it contributes no scoped configurations.
+\textbf{Collections are one day, two paper-only commits.} Every Vulkan machine
+was measured on 2026-07-27 from one benchmark build; where
+Table~\ref{tab:platforms} lists different revisions, they differ only by
+commits under \texttt{paper/}, which the benchmark does not compile. The Metal
+collection predates the scope axis and the shader-parity fix of
+Section~\ref{sec:workloads}, which is why it contributes no scoped
+configurations, and why its \wgpu{} device-side and wait numbers are read with
+the caveat printed under Table~\ref{tab:metal} until it is recollected.
 
 \section{Results}
 
@@ -834,12 +853,16 @@ Figures~\ref{fig:placement} and~\ref{fig:scope}.
 Two choices about that column matter more than they look. It is read per cell,
 because floors range from $\bfloor{rx7900xt}{compute-independent}$ to
 $\bfloor{rx7900xt}{compute-chain}$ within one device and from
-$\bfloor{intelxe}{graphics-chain}$ to $\bfloor{intelxe}{mixed-independent}$
+$\bfloor{intelxe}{graphics-chain}$ to $\bfloor{intelxe}{compute-chain}$
 within another, so no device is uniformly trustworthy or uniformly useless. And
-it is the far end of the control's interval rather than its point estimate: two
-configurations emitting identical commands can agree closely on the median and
-still disagree by $70\%$ across resamples, which is a statement about the cell
-and not about the configurations. A control that only ever confirmed the clean
+it is the far end of the control's interval rather than its point estimate,
+because a control can fail toward either statistic: on the superseded pilot
+collections, identical command streams agreed on the median and still
+disagreed by $70\%$ across resamples, while on this data the Intel part's
+\texttt{compute-chain} control disagrees by a steady
+$\bmag{intelxe}{compute-chain}{control}$ with an interval that rounds to a
+point (Section~\ref{sec:deviations}). Both are statements about the cell, not
+about the configurations. A control that only ever confirmed the clean
 cells would not have been worth running; this one disqualifies
 \bladenum{floor/above2} of \bladenum{floor/count} cells and licenses the rest.
 
@@ -860,41 +883,48 @@ devices for the dependent workloads and unstable for the independent ones.
 
 \textbf{When the barrier is needed, it is free.} For the chain workloads,
 \texttt{B-hazard} places a barrier before every pass except the first, so it
-differs from \texttt{B-auto} by exactly one barrier out of sixteen. Across the five Vulkan devices, only
-\bladenum{chain/resolved} of the fifteen chain cells resolve any difference at
-all above their own control floor, and the larger of those is
-$\bladenum{chain/maxresolved}\%$ --- against effects of up to
-$\bmag{rtx5070}{graphics-independent}{placement}$ in the independent cells of
-the same devices. Applications whose passes genuinely form a chain pay
-approximately nothing for \blade's policy.
+differs from \texttt{B-auto} by exactly one barrier out of sixteen. Across the
+five Vulkan devices, only \bladenum{chain/resolved} of the fifteen chain cells
+resolves any difference at all above its own control floor, and that one runs
+the other way: on the Intel part's \texttt{graphics-chain}, \emph{removing}
+the redundant barrier reads $\bladenum{chain/maxresolved}\%$ slower, a cell
+Section~\ref{sec:deviations} reports without building on. Against effects of
+up to $\bmag{rtx5070}{graphics-independent}{placement}$ in the independent
+cells of the same devices, applications whose passes genuinely form a chain
+pay approximately nothing for \blade's policy.
 
 \textbf{When the barrier is redundant, the cost depends on the device and on
 the kind of work.} For independent \emph{compute} passes, removing the
 redundant barriers is worth $\bmagci{rtx5070}{compute-independent}{placement}$
 on the RTX~5070 and $\bmagci{rx7900xt}{compute-independent}{placement}$ on the
 RX~7900~XT: both large discrete GPUs have idle capacity that a redundant
-barrier prevents them from using. The AMD figure is the one that changed most
-between collections, and its control floor,
-$\bfloor{rx7900xt}{compute-independent}$, is a quarter of the effect.
+barrier prevents them from using. Both figures moved between the ramping pilot
+and this warmed collection --- the AMD one grew, and its control floor fell
+from a quarter of the effect to $\bfloor{rx7900xt}{compute-independent}$.
 
-The Intel part reads $\bpct{intelxe}{compute-independent}{placement}$ in the
-same cell and we do not claim it. Its control floor there is
-$\bfloor{intelxe}{compute-independent}$, because that machine's
-independent-target blocks step down by nearly half partway through the
-measurement as the device finishes accelerating, so a block's median records
-when the step happened. All \bladenum{floor/above30} cells with floors above
-$30\%$ are on that machine, and nothing is read from them in either direction,
-including their large apparent effects.
+The Intel part reads $\bpctci{intelxe}{compute-independent}{placement}$ in the
+same cell, above its $\bfloor{intelxe}{compute-independent}$ floor, with
+$\bpctci{intelxe}{mixed-independent}{placement}$ on
+\texttt{mixed-independent} agreeing from a cleaner cell. The pilot could not
+resolve either --- its version of this machine stepped between clock states
+mid-block and carried floors above $30\%$ --- so warm-up turned the Intel
+column from unreadable into a third vendor confirming the direction, if not
+the NVIDIA magnitude, of the compute result.
 
 For independent \emph{render} passes the same change is worth
-$\bmagci{rtx5070}{graphics-independent}{placement}$ on the RTX~5070 and
-essentially nothing on either desktop AMD device ---
-$\bpctci{rx7900xt}{graphics-independent}{placement}$ on the RX~7900~XT, which
-its floor of $\bfloor{rx7900xt}{graphics-independent}$ cannot separate from
-zero, and $\bpctci{raphael}{graphics-independent}{placement}$ on the Raphael
-iGPU, which is resolved and is still nothing. This is the sharpest vendor split
-in the study, and it means the headline ``placement dominates'' is carried by
-one vendor for graphics and by two for compute.
+$\bmagci{rtx5070}{graphics-independent}{placement}$ on the RTX~5070 but only
+$\bmagci{rx7900xt}{graphics-independent}{placement}$ on the RX~7900~XT ---
+resolved against a floor of $\bfloor{rx7900xt}{graphics-independent}$, real,
+and a quarter of what the same machine recovers on compute --- and
+$\bpctci{raphael}{graphics-independent}{placement}$ on the Raphael iGPU,
+resolved and still nearly nothing. (The pilot could not separate the
+RX~7900~XT's render cell from zero; the warmed collection can, which is the
+difference between ``no effect'' and ``a small one''.) The sharpest split in
+the study is therefore not vendor against vendor but kind of work on the same
+silicon: the RX~7900~XT frees four times more span between compute passes than
+between render passes, while the RTX~5070 frees the same third either way. The
+headline ``placement dominates'' is carried by both discrete parts for
+compute, and at full size by NVIDIA alone for graphics.
 
 \textbf{Removing barriers can make things worse.} On the Radeon~780M,
 \texttt{B-hazard} \emph{costs} $\bmagci{radeon780m}{graphics-independent}{placement}$
@@ -902,33 +932,28 @@ on \texttt{graphics-independent} and
 $\bmagci{radeon780m}{mixed-independent}{placement}$ on
 \texttt{mixed-independent}, against control floors of
 $\bfloor{radeon780m}{graphics-independent}$ and
-$\bfloor{radeon780m}{mixed-independent}$. This is a fresh collection on the
-current revision and it reproduces a regression first seen on an earlier one,
-so it is not an artifact of either.
+$\bfloor{radeon780m}{mixed-independent}$. This is the second collection to
+show it, on a different revision and power configuration: the sign reproduces;
+the magnitude roughly doubled, which itself says the mechanism is sensitive to
+device state in a way the effects on the other machines are not.
 
 The obvious mechanism is memory-system pressure: sixteen concurrent
 $1024\times1024$ \texttt{RGBA8} targets are 64\,MB of write traffic with no
 reuse, and an integrated GPU shares its bandwidth and last-level cache with the
-CPU, so serializing the passes would keep one target resident at a time. The
-data rules this out twice.
-
-First, halving the number of concurrent targets does not halve the loss.
-\texttt{mixed-independent} interleaves compute and render passes, so at sixteen
-passes it has eight render targets rather than sixteen --- half the write
-traffic, half the residency pressure. The loss there is
-$\bmag{radeon780m}{mixed-independent}{placement}$ against
-$\bmag{radeon780m}{graphics-independent}{placement}$ with twice as many
-targets. A capacity story predicts a large difference between those two; the
-measurement gives one and a half points.
-
-Second, the tracked implementation overlaps the same passes and does not pay.
-\wgpu{} emits the same single barrier as \texttt{B-hazard} on this workload
-(Section~\ref{sec:generated}), so the sixteen render passes are equally free to
-run together --- and it is $\bmag{radeon780m}{graphics-independent}{wgpu}$
-\emph{faster} than \texttt{B-auto}, not
-$\bmag{radeon780m}{graphics-independent}{placement}$ slower. Whatever this part
-is punishing, it is not concurrency as such, and it is not the amount of
-memory traffic that concurrency exposes.
+CPU, so serializing the passes would keep one target resident at a time. Half
+of the evidence obliges: \texttt{mixed-independent}, which interleaves compute
+passes among the render passes and so overlaps eight targets rather than
+sixteen, loses $\bmag{radeon780m}{mixed-independent}{placement}$ against
+$\bmag{radeon780m}{graphics-independent}{placement}$ --- less pressure, less
+loss, as a capacity story predicts. The other half refuses: the tracked
+implementation overlaps the same sixteen passes and does not pay. \wgpu{}
+emits the same single barrier as \texttt{B-hazard} on this workload
+(Section~\ref{sec:generated}), so its render passes are equally free to run
+together, write the same 64\,MB --- and it is
+$\bmag{radeon780m}{graphics-independent}{wgpu}$ \emph{faster} than
+\texttt{B-auto}, not $\bmag{radeon780m}{graphics-independent}{placement}$
+slower. Whatever this part is punishing, it is not concurrency as such, and
+not the write traffic concurrency exposes, or \wgpu{} would pay it too.
 
 What is left differs between \texttt{B-hazard} and \wgpu{} on a workload where
 both let everything overlap: the layout the targets sit in
@@ -945,7 +970,11 @@ narrows to, rather than the tidy explanation that the numbers do not support.
 \blade{} configuration is within $2\%$ of every other and every floor is at or
 below $\bfloor{raphael}{compute-chain}$, so the intervals mean it:
 two compute units are fully occupied by a single pass, so there is no idle
-capacity for a second pass to fill regardless of what the barriers say.
+capacity for a second pass to fill regardless of what the barriers say. What
+does move on this device is the tracked implementation --- by up to
+$\bmag{raphael}{graphics-independent}{wgpu}$, in both directions across
+workloads --- which cannot be an overlap effect for the same reason, and is
+taken up in Section~\ref{sec:endtoend}.
 
 This is the boundary the field report does not reveal on its own. Overlap pays
 when adjacent passes have complementary bottlenecks and the device has idle
@@ -966,8 +995,12 @@ accesses change. The two chain workloads make the separation sharp, because
 there placement has nothing to remove --- every boundary is a real hazard ---
 so any difference must come from scope.
 
-The result contradicts the prediction that motivated the configuration, and
-that is the most useful thing about it.
+The result splits the prediction that motivated the configuration down the
+middle, and both halves are informative. It also corrects this paper's own
+pilot, whose floors on the decisive AMD cells were wider than the effect and
+which we initially summarized as ``nothing measurable on AMD''. That summary
+was a statement about the pilot's noise, not about the device; the warmed
+collection resolves what it could not.
 
 \textbf{Where it pays.} On the RTX~5070 narrowing the scope is worth
 $\bmagci{rtx5070}{graphics-chain}{scope}$ on \texttt{graphics-chain} and
@@ -977,91 +1010,124 @@ in those cells. It is not confined to chains on that device: the same change is
 worth $\bmagci{rtx5070}{graphics-independent}{scope}$ on
 \texttt{graphics-independent}, floor $\bfloor{rtx5070}{graphics-independent}$,
 where it is available \emph{in addition} to the much larger placement effect.
-On the Intel~Xe part it is worth $\bmagci{intelxe}{graphics-chain}{scope}$ on
-\texttt{graphics-chain}, floor $\bfloor{intelxe}{graphics-chain}$, and
-$\bmagci{intelxe}{compute-chain}{scope}$ on \texttt{compute-chain}, floor
-$\bfloor{intelxe}{compute-chain}$ --- both of them cells where barrier
-placement can recover nothing at all, and the second of them only just clear of
-its floor.
+And it now pays on AMD --- on the discrete part, at compute-to-compute
+boundaries only: $\bmagci{rx7900xt}{compute-chain}{scope}$ on
+\texttt{compute-chain} against a floor of $\bfloor{rx7900xt}{compute-chain}$,
+confirmed from a far cleaner cell by
+$\bmagci{rx7900xt}{compute-independent}{scope}$ on
+\texttt{compute-independent}, floor $\bfloor{rx7900xt}{compute-independent}$.
+Both work out to about $0.36\,\mu$s per barrier, a fixed per-boundary cost
+rather than a share of the work.
 
-\textbf{Where it does not.} On the Raphael iGPU, whose floors are
-$\bfloor{raphael}{compute-chain}$ or better in every cell, no scope effect
-exceeds $\bmag{raphael}{compute-chain}{scope}$: that is a measured zero, not a
-failure to measure. On the Radeon~780M the two compute cells are the clean
-ones, with floors of $\bfloor{radeon780m}{compute-independent}$ and
-$\bfloor{radeon780m}{compute-chain}$, and the scope effect in both is
-$\bmag{radeon780m}{compute-independent}{scope}$ --- another measured zero, on a
-different AMD generation. The RX~7900~XT is the machine that answers least: its
-floors on this axis run from $\bfloor{rx7900xt}{graphics-chain}$ to
-$\bfloor{rx7900xt}{mixed-chain}$ and no scope effect on it clears its own cell,
-so it neither supports nor contradicts the other two. Every AMD cell precise
-enough to answer says nothing happened.
+\textbf{Where it does not.} Every RX~7900~XT boundary that involves a render
+pass on either side is a measured zero from a cell precise enough to mean it:
+$\bpct{rx7900xt}{graphics-independent}{scope}$ on
+\texttt{graphics-independent} at a floor of
+$\bfloor{rx7900xt}{graphics-independent}$, and the same nothing on
+\texttt{graphics-chain} and both mixed workloads. Neither AMD iGPU pays
+anywhere, \emph{including} the compute boundaries that pay on the discrete
+part: on the Raphael iGPU no scope effect exceeds
+$\bmag{raphael}{compute-independent}{scope}$ with floors of
+$\bfloor{raphael}{compute-chain}$, and on the Radeon~780M the two compute
+cells read $\bmag{radeon780m}{compute-independent}{scope}$ and
+$\bmag{radeon780m}{compute-chain}{scope}$ against floors of
+$\bfloor{radeon780m}{compute-independent}$ and
+$\bfloor{radeon780m}{compute-chain}$. The Intel part is not credited in either
+direction: its \texttt{compute-chain} column does move by
+$\bmag{intelxe}{compute-chain}{scope}$, but its control moves by
+$\bmag{intelxe}{compute-chain}{control}$ in the same cell
+(Section~\ref{sec:deviations}), so the movement belongs to the machine, not
+the mask; and the pilot's Intel \texttt{graphics-chain} effect, once quoted
+here as the Intel result, did not reproduce
+($\bpctci{intelxe}{graphics-chain}{scope}$).
 
-This is the reverse of the prediction. Section~\ref{sec:radv-barriers} derives
-from RADV that narrowing the scope sheds a pixel-pipeline drain, two attachment
-flushes, and two metadata flushes per boundary, and it is right about the
-commands --- that part is read from the source. It is wrong about the money.
-The saving shows up on the two drivers whose source we did not read and not on
-the one we did.
+\textbf{The saving rides on the destination.} The mixed workloads localize it.
+Every \texttt{mixed} boundary joins two pass kinds, so its scoped barrier
+narrows the \emph{source} exactly as a compute-to-compute barrier does ---
+and every mixed cell on AMD is a zero. What a mixed boundary never has is a
+compute-only \emph{destination}. The crossed policies say the same thing from
+the other side: \texttt{B-hazard-scoped}, whose explicitly placed barriers
+narrow their source but must keep a wide destination
+(Section~\ref{sec:scoped}), recovers none of the saving on either vendor ---
+$\bpct{rx7900xt}{compute-chain}{both}$ on the AMD compute chain where scope
+alone is worth $\bpct{rx7900xt}{compute-chain}{scope}$, and
+$\bpct{rtx5070}{graphics-chain}{both}$ on the NVIDIA graphics chain where
+scope alone is worth $\bpct{rtx5070}{graphics-chain}{scope}$. Whatever
+operation the narrowing removes, it is one the driver performs for the
+destination scope, not the source.
 
-Having been wrong once from the source, we went back to it, and the answer was
-there (Section~\ref{sec:radv-elision}): on GFX10 and later with a coherent TCC,
-\texttt{radv\_dst\_access\_flush} drops every destination-side L2 invalidation
-unless a render-backend-incoherent attachment is dirty, which for ordinary
-images it never is. Half of what our narrower barrier was designed to save was
-already being discarded by the driver, without the application saying anything.
-What remains for the narrowing to remove is the source-side flushes and the
-pixel drain --- and a partial flush costs time only if there is work in flight
-to drain, while a metadata flush costs time only if the metadata caches are
-dirty. On a dependent chain neither holds.
+This is not the shape the prediction had. Section~\ref{sec:radv-barriers}
+derives from RADV that narrowing sheds the most at render-involving boundaries
+--- a pixel drain, two attachment flushes, two metadata flushes --- and it is
+right about the commands; that part is read from the source. But those
+boundaries save nothing on any AMD part, while the compute-to-compute
+boundary, where the shed operations run against idle pixel hardware and clean
+caches and were priced accordingly, is where the discrete part actually pays.
+The drivers whose source we did not read split the same way for their own
+reasons: broad savings on NVIDIA, nothing creditable on Intel.
+
+Going back to the source explains most of it (Section~\ref{sec:radv-elision}):
+on GFX10 and later with a coherent TCC, \texttt{radv\_dst\_access\_flush}
+drops every destination-side L2 invalidation unless a render-backend-incoherent
+attachment is dirty, which for ordinary images it never is. Half of what the
+narrower barrier was designed to save was already being discarded by the
+driver, without the application saying anything. On the source side, a flush
+costs time only when there is matching work in flight or dirty state --- which
+a render boundary has, its attachment flushes being real and kept under any
+scope, and a pure compute stream does not. That accounts for every
+render-boundary zero. What it does not account for is the compute-boundary
+saving itself: the operations our reading priced there are the free-when-idle
+ones, and the measurement instead follows the destination mask --- a
+dependence the reading never enumerated, because everything it enumerated on
+the destination side was cache work the driver had already elided. We can name
+the side the cost lives on and not, from the text we read, the operation.
 
 The general mistake is worth naming, because it is easy to repeat and we made
 it in the obvious way. Counting the commands a barrier expands into measures
 how much the driver is being \emph{asked} to do, which is an upper bound on
-what it will \emph{cost} and can be an arbitrarily loose one. We read the half
-of the driver that translates a request and not the half that decides what to
-do about it. Reading it was still worth doing --- it produced the
-configuration, and it now explains the result --- but the explanation arrived
-after the measurement, and would not have been trusted before it.
+what it will \emph{cost} and can be an arbitrarily loose one --- here, loosest
+exactly where the request list is longest. We read the half of the driver that
+translates a request and not the half that decides what to do about it.
+Reading it was still worth doing --- it produced the configuration, and it
+explains most of the result --- but the explanation arrived after the
+measurement, and would not have been trusted before it.
 
 Section~\ref{sec:generated} closes the argument with captures: the command
 streams submitted on all \bladenum{captures/machines} machines are
-byte-identical, so the spread from $\bmag{rtx5070}{graphics-chain}{scope}$ to
-nothing is entirely in how each driver answers, not in what it was asked.
+byte-identical, so the spread --- $\bmag{rtx5070}{graphics-chain}{scope}$ on
+one vendor's render chain, $\bmag{rx7900xt}{compute-chain}{scope}$ on
+another's compute chain, zero at every AMD render boundary --- is entirely in
+how each driver answers, not in what it was asked.
 
 \textbf{Noise is a property of the cell, not the device.} The floor ticks in
 Figures~\ref{fig:placement} and~\ref{fig:scope} make this legible, and they do
 not respect reputations. The Intel part
 is the clearest case: its \texttt{graphics-chain} floor is
 $\bfloor{intelxe}{graphics-chain}$, tight enough to resolve a $3\%$ effect,
-while its \texttt{mixed-independent} floor is
-$\bfloor{intelxe}{mixed-independent}$ and answers nothing --- the same device,
+while its \texttt{compute-chain} floor is
+$\bfloor{intelxe}{compute-chain}$ and answers nothing --- the same device,
 the same session, the same afternoon. The RX~7900~XT splits the other way,
-with its best cell at $\bfloor{rx7900xt}{compute-independent}$ and its worst at
-$\bfloor{rx7900xt}{mixed-chain}$. Two earlier versions of this analysis got
-this wrong in opposite directions: one took the worst cell per device as that
-device's floor, which discarded every usable AMD and Intel cell; the other took
-the control's point estimate rather than its interval, which licensed a
-$14\%$ reading from a cell that moves by nearly half while it is being read.
+with its best cells at $\bfloor{rx7900xt}{graphics-independent}$ and its worst
+at $\bfloor{rx7900xt}{compute-chain}$. Two earlier versions of this analysis
+got this wrong in opposite directions: one took the worst cell per device as
+that device's floor, which discarded every usable AMD and Intel cell; the
+other took the control's point estimate rather than its interval, which
+licensed a $14\%$ reading from a pilot cell that moved by nearly half while it
+was being read.
 
-\textbf{Manual placement forfeits the scope saving.} The third column is not
-the sum of the first two. Combining hazard-only placement with the narrow
-scope reproduces the placement effect and nothing more: on the RTX~5070,
-$\bpct{rtx5070}{graphics-chain}{both}$ on \texttt{graphics-chain} where scope
-alone was worth $\bpct{rtx5070}{graphics-chain}{scope}$, and
-$\bpct{rtx5070}{mixed-chain}{both}$ on \texttt{mixed-chain} where scope alone
-was worth $\bpct{rtx5070}{mixed-chain}{scope}$. The reason is the asymmetry of
-Section~\ref{sec:scoped}: under hazard-only placement every surviving barrier
-is one the application wrote, so it narrows its source but not its destination,
-and on these workloads the destination carried the saving.
-
+\textbf{Manual placement forfeits the scope saving.} The ``both'' column is
+therefore not the sum of the first two: combining hazard-only placement with
+the narrow scope reproduces the placement effect and nothing more, in every
+cell of every vendor where scope pays, for the reason
+Section~\ref{sec:scoped} builds in --- an explicitly placed barrier narrows
+its source but not its destination, and the destination is where the money is.
 That is the opposite of the intuition that more control is strictly better. An
 application that leaves placement to the encoder gets a barrier the encoder
 can describe on both sides; one that takes placement into its own hands gets a
-barrier that only half describes itself. It is also the cheaper of the two
-gains to obtain --- no API change and no resource tracking --- so where it
-exists it should be taken first, and where placement is also available the two
-should not be assumed to compose.
+barrier that only half describes itself. The scope saving is also the cheaper
+of the two gains to obtain --- no API change and no resource tracking --- so
+where it exists it should be taken first, and where placement is also taken
+the two should not be assumed to compose.
 
 \subsection{Scaling with pass count}
 
@@ -1126,6 +1192,14 @@ pass against two in total for \wgpu, so the comparison is conservative for
 \blade. This is the one comparison in the study whose sign never changes: every
 device, every workload, both graphics and compute.
 
+The narrowest ratios in the table are the NVIDIA render cells, and the
+\texttt{B-hazard} column says why: that driver charges heavily for recording
+the barriers themselves, so removing them cuts \blade's own host cost by
+$\bmag{rtx5070}{graphics-independent}{hostplacement}$ on
+\texttt{graphics-independent}. Where \blade's denominator is mostly barrier
+recording --- a cost the application controls --- the ratio narrows; nowhere
+does it invert.
+
 The difference is end-to-end and must not be attributed to tracking alone:
 \wgpu{} also validates, manages lifetimes, resolves bind groups, and builds an
 intermediate command representation. It is also not a barrier-count effect:
@@ -1141,39 +1215,49 @@ several times more host time.
 
 Table~\ref{tab:profile} attributes each implementation's CPU time to the crate
 or library that spent it, on a workload deliberately shaped so the process
-stays in the recording path rather than blocking on the GPU. Two machines are
-profiled, one NVIDIA and one RADV, and they disagree by enough to be worth
-showing side by side.
+stays in the recording path rather than blocking on the GPU. Four machines are
+profiled --- NVIDIA, two RADV, and Intel's ANV --- and they disagree with each
+other by enough to be worth showing side by side.
 
 The result is a correction to the obvious reading of
 Table~\ref{tab:host-matrix}. Resource state tracking is
 $\bladenum{profile/S1/wgpu/compute-independent/wgputracker}\%$ of \wgpu's
-process CPU time on \texttt{compute-independent} on the NVIDIA system and
-$\bladenum{profile/S2/wgpu/compute-independent/wgputracker}\%$ on the RADV one
---- real, and on both machines the largest single \wgpu{}
-component after command recording, but nowhere near enough to explain a gap of
-several times. Across both machines and both workloads the tracker runs
+process CPU time on \texttt{compute-independent} on the NVIDIA system,
+$\bladenum{profile/S2/wgpu/compute-independent/wgputracker}\%$ on one RADV
+machine and
+$\bladenum{profile/S3/wgpu/compute-independent/wgputracker}\%$ on the other
+--- real, on every machine the first- or second-largest \wgpu{} row, and
+nowhere near enough to explain a gap of several times. Across the four
+machines and both workloads the tracker runs
 $\bladenum{profile/wgpu/tracker/min}$--$\bladenum{profile/wgpu/tracker/max}\%$
 and every \wgpu{} row together
 $\bladenum{profile/wgpu/wgputotal/min}$--$\bladenum{profile/wgpu/wgputotal/max}\%$.
 Even if all of \wgpu{} were free above the driver, the remaining process would
 still be more expensive than \blade's.
 
-The factor of three between the two machines is itself informative: the
-tracker's share is a share of a total that the driver dominates, and the two
-drivers charge very differently for the same submissions. It is not evidence
-that \wgpu's tracker is slower on AMD.
+The spread in that tracker share is between machines more than between
+vendors --- the two RADV systems bracket it on the same driver --- and a share
+is a share of a total that other components dominate, so it is not evidence
+that the tracker itself runs differently there.
 
-What actually dominates both implementations is the kernel and the driver:
+What dominates \blade's process everywhere is the kernel and the driver:
 $\bladenum{profile/blade/system/min}$--$\bladenum{profile/blade/system/max}\%$
-of \blade's profile and
+in every column, because these workloads submit a command buffer per iteration
+with very little GPU work in it, so submission cost is the bulk of the
+process. The same two rows take
 $\bladenum{profile/wgpu/system/min}$--$\bladenum{profile/wgpu/system/max}\%$
-of \wgpu's, in every column. These workloads submit a command buffer per iteration with very
-little GPU work in it, so submission cost is the bulk of the process. That also
-means the two totals are not comparable --- \texttt{task-clock} charges a
-blocking fence wait to the process whenever the driver spins inside it, and
-\blade{} and \wgpu{} wait differently --- which is why the table reports shares
-within a process rather than times between processes.
+of \wgpu's --- its largest share everywhere except the Intel machine, where
+a single symbol out-bills them: the \emph{libc / runtime} row reaches
+$\bladenum{profile/S4/wgpu/compute-independent/libcruntime}\%$ of the \wgpu{}
+process, almost all of it \texttt{\_\_memset\_avx2\_unaligned\_erms} ---
+something in that stack clears a lot of memory on ANV, and a flat profile
+cannot name the caller --- against
+$\bladenum{profile/S4/blade/compute-independent/libcruntime}\%$ for all of
+libc in \blade's column on the same machine. The totals are also not
+comparable between implementations --- \texttt{task-clock} charges a blocking
+fence wait to the process whenever the driver spins inside it, and \blade{}
+and \wgpu{} wait differently --- which is why the table reports shares within
+a process rather than times between processes.
 
 Four limits on this evidence. Repeating the profile of one configuration moves
 its shares by around a percentage point, so these are quoted to the nearest
@@ -1188,48 +1272,73 @@ the answer to that is spread across \wgpu's command recording, allocation, and
 driver interaction rather than concentrated anywhere this table can point at.
 
 \subsection{End-to-end \blade{} versus \wgpu}
+\label{sec:endtoend}
 
 The \texttt{W-wgpu} column of Table~\ref{tab:gpu-matrix} is more interesting
-than a single ratio suggests, because its sign changes.
+than a single ratio suggests, because its sign changes --- between devices,
+and on one device between kinds of work.
 
-On the RTX~5070, \wgpu{} is $\bmag{rtx5070}{graphics-independent}{wgpu}$
-\emph{faster} than \texttt{B-auto} on \texttt{graphics-independent} and
-$\bmag{rtx5070}{compute-independent}{wgpu}$--$\bmag{rtx5070}{graphics-chain}{wgpu}$
-slower everywhere else. The graphics-independent cell is what precise tracking
-is supposed to buy: \wgpu{} knows the sixteen render targets are distinct and
-emits no dependency between the passes, so the hardware overlaps them. It is
-also a bounded result --- \texttt{B-hazard} on the same device is
-$\bmag{rtx5070}{graphics-independent}{placement}$ faster than \texttt{B-auto},
-so an application that declares its own graph beats the tracker by a wide
-margin on the same hardware. Precise tracking recovers part of the available
-overlap; explicit knowledge recovers more.
+On the RTX~5070 the tracker collects everything its precision can buy. On
+\texttt{graphics-independent} it is
+$\bmagci{rtx5070}{graphics-independent}{wgpu}$ faster than \texttt{B-auto}:
+it knows the sixteen render targets are distinct, emits no dependency between
+the passes, and lands within a couple of points of \blade's own declared
+placement ($\bmag{rtx5070}{graphics-independent}{placement}$) --- a residue of
+the same order as the destination-scope saving that an explicitly placed
+barrier forfeits (Section~\ref{sec:scope-results}). On this cell the two
+designs agree about the device, and what separates them is the host column of
+Table~\ref{tab:host-matrix}.
 
-On the AMD parts the sign flips. \wgpu{} is faster than \texttt{B-auto} on
-three of the four shared workloads on the RX~7900~XT ---
-$\bmag{rx7900xt}{compute-independent}{wgpu}$ on \texttt{compute-independent},
-$\bmag{rx7900xt}{graphics-chain}{wgpu}$ on \texttt{graphics-chain},
-$\bmag{rx7900xt}{compute-chain}{wgpu}$ on \texttt{compute-chain} --- and faster
-on both graphics workloads on the Raphael iGPU while being
-$\bmag{raphael}{compute-independent}{wgpu}$--$\bmag{raphael}{compute-chain}{wgpu}$
-slower on both compute ones. The largest of these reproduces on two independent
-collections and is far outside its cell's control floor. So the tracked
-implementation is not uniformly paying for its precision on the device side; on
-this AMD part it is collecting on it.
+On \texttt{graphics-chain} the tracker does something no \blade{}
+configuration can express: $\bmagci{rtx5070}{graphics-chain}{wgpu}$ faster
+than \texttt{B-auto} on a workload where every boundary is a real hazard, so
+placement can remove nothing and scope recovers only
+$\bmag{rtx5070}{graphics-chain}{scope}$. The remaining dozen points are
+carried by the factors \blade{} holds fixed --- the resource-scoped form of
+the barrier or the specialized image layout --- or by per-pass work outside
+synchronization. This driver advertises
+\texttt{VK\_KHR\_unified\_image\_layouts} and \blade{} enables it, which is a
+promise that the layout half should not matter; we observe the gap and cannot
+apportion it. Both compute cells on the same machine are within a point of
+zero, so whatever it is, it lives in the render path.
 
-We cannot explain any of these, in either direction, and the captures rule out
-the explanation we would have reached for first. On the Intel device \wgpu's
-GPU span is
-$\bmag{intelxe}{graphics-independent}{wgpu}$--$\bmag{intelxe}{graphics-chain}{wgpu}$
-\emph{larger} than \texttt{B-auto}'s, and since \texttt{compute-chain} is fully
-serialized in both implementations that gap cannot be an overlap difference. It
-is not a barrier-count difference either: Section~\ref{sec:generated} counts
-the two implementations emitting the same number of barriers at the same
-boundaries on the chains. What is left is the memory scope of each barrier, the
-layout the images sit in, or something outside synchronization entirely, such
-as descriptor or dispatch setup. Separating those would need a configuration
-this study does not have --- \blade{} emitting resource-scoped barriers, which
-is the tracking it exists to avoid --- so we leave it open rather than
-attribute it.
+On the discrete AMD part the comparison runs the other way. The tracker
+matches declared placement on \texttt{compute-independent}
+($\bmag{rx7900xt}{compute-independent}{wgpu}$ faster than \texttt{B-auto},
+beside $\bmag{rx7900xt}{compute-independent}{placement}$ for
+\texttt{B-hazard}) and then \emph{charges} for its render path:
+$\bmag{rx7900xt}{graphics-independent}{wgpu}$ slower on
+\texttt{graphics-independent} and $\bmag{rx7900xt}{graphics-chain}{wgpu}$
+slower on \texttt{graphics-chain} --- slower, that is, than a \blade{}
+baseline that is not even overlapping. The captures rule placement out
+(Section~\ref{sec:generated}: the same barriers at the same boundaries on the
+chains), so the premium is per-barrier or per-layout, and it is specific to
+this chip: both AMD iGPUs run the \wgpu{} render path \emph{faster} ---
+$\bmag{radeon780m}{graphics-independent}{wgpu}$ on the Radeon~780M, the very
+cell where removing \blade's barriers costs
+$\bmag{radeon780m}{graphics-independent}{placement}$, and
+$\bmag{raphael}{graphics-independent}{wgpu}$ on the Raphael iGPU, a device on
+which no \blade{} configuration moves anything --- while both charge a few
+percent on compute. The discrete-against-integrated flip is the same split
+the scope axis shows, and we report it as measured.
+
+On the Intel device \wgpu{} is slower on every shared workload, by
+$\bmag{intelxe}{graphics-independent}{wgpu}$ to
+$\bmag{intelxe}{compute-independent}{wgpu}$, and since
+\texttt{compute-chain} is fully serialized in both implementations that gap
+cannot be an overlap difference. Given this machine's systematic control
+offsets (Section~\ref{sec:deviations}), we read the direction and not the
+magnitudes.
+
+Separating the candidates that remain --- the memory scope of each barrier,
+the layout the images sit in, or per-pass setup outside synchronization ---
+would need a configuration this study does not have: \blade{} emitting
+resource-scoped barriers, which is the tracking it exists to avoid. What the
+column does establish is that neither design dominates the device side. The
+tracker wins where its precision or its layouts help and the hardware rewards
+them, loses where its per-barrier form costs more than it recovers, and the
+one comparison that never changes sign is the host time it charges for all of
+it (Table~\ref{tab:host-matrix}).
 
 \subsection{Apple/Metal case study}
 \label{sec:metal}
@@ -1245,6 +1354,11 @@ Table~\ref{tab:metal} therefore reports only what is comparable. \blade's host
 cost is $\bladenum{metal/hostshare/min}$--$\bladenum{metal/hostshare/max}\%$ of
 \wgpu's, and its wall time waiting for completion is
 $\bladenum{metal/waitsaved/min}$--$\bladenum{metal/waitsaved/max}\%$ lower.
+The second figure carries the caveat printed under the table: this collection
+predates the shader-parity fix of Section~\ref{sec:workloads}, so the \wgpu{}
+waits include its injected shader checks and the saving is an upper bound
+until the machine is recollected; the host comparison is recording work and
+is unaffected.
 Note that \blade's Metal host cost
 ($\bladenum{metal/host/min}$--$\bladenum{metal/host/max}\,\mu$s for sixteen
 passes) is about $\bladenum{metal/overvulkan/max}$ times its Vulkan host cost
@@ -1387,29 +1501,37 @@ observation and not a layout experiment.
 
 The results support a decision boundary rather than a winner.
 
-\textbf{Placement dominates precision, in both directions.} The largest device
-effect we measured comes from barrier \emph{placement} within one
-implementation, not from tracking. The best configuration on the RTX~5070 for
-independent render passes is the one with no tracker and no barriers
-(\bus{rtx5070}{graphics-independent}{placement}), followed by the tracked
-implementation (\bus{rtx5070}{graphics-independent}{wgpu}), followed by the
-untracked implementation with redundant barriers
-(\bus{rtx5070}{graphics-independent}{auto}). An abstraction layer that tracks
-resources precisely but still cannot express ``these passes are unrelated'' is
-leaving most of the benefit on the table.
+\textbf{Placement is the big lever, and it does not require tracking.} The
+largest device effect we measured comes from barrier \emph{placement}, not
+from tracking precision: on the RTX~5070's independent render passes,
+redundant barriers cost a third of the span
+(\bus{rtx5070}{graphics-independent}{auto} for \texttt{B-auto} against
+\bus{rtx5070}{graphics-independent}{placement} for \texttt{B-hazard}), while
+the tracker's precision beyond declared placement is worth a couple of points
+more (\bus{rtx5070}{graphics-independent}{wgpu}). The tracker earns the whole
+lever automatically --- that is what tracking buys --- but an application
+able to say ``these passes are unrelated'' collects nearly all of it without
+tracking anything, and an abstraction that can express neither leaves a third
+of the frame on the table. The counterweight is the NVIDIA render chain,
+where the tracker's form of the barrier is worth
+$\bmag{rtx5070}{graphics-chain}{wgpu}$ and no declaration \blade{} accepts
+can reach it (Section~\ref{sec:endtoend}).
 
 \textbf{The device decides, and reading the driver does not substitute for
 asking it.} The captures show that all \bladenum{captures/machines} machines
 submit an identical command stream (Section~\ref{sec:generated}), so every
 vendor difference in this paper is a difference in response rather than in
-request. Against that fixed input, two predictions we made from mechanism were
-wrong in the same direction. Redundant barriers between independent render
-passes cost $\bmag{rtx5070}{graphics-independent}{placement}$ on NVIDIA and
-nothing on either desktop AMD device, despite AMD being the architecture whose
-vendor guidance warns hardest about broad barriers. Narrowing the barrier scope
-removes commands from the RADV stream that it does not remove from the NVIDIA
-or Intel one, and pays on NVIDIA and Intel and not on AMD. Both times the
-source told us what would be emitted and we took that for what it would cost.
+request. Against that fixed input, two predictions we made from mechanism failed in
+the same direction. Redundant barriers between independent render passes cost
+$\bmag{rtx5070}{graphics-independent}{placement}$ on NVIDIA against
+$\bmag{rx7900xt}{graphics-independent}{placement}$ on the discrete AMD part
+and nearly nothing on its iGPUs, despite AMD being the architecture whose
+vendor guidance warns hardest about broad barriers. Narrowing the barrier
+scope removes the most commands from the RADV stream at render-involving
+boundaries, which pay nothing anywhere on AMD, and the fewest at the
+compute-to-compute boundaries where the discrete part actually pays: the
+commands and the money do not correlate. Both times the source told us what
+would be emitted and we took that for what it would cost.
 
 The second failure had an answer in the same file, and finding it afterwards is
 the part worth keeping. \texttt{radv\_dst\_access\_flush} discards the
@@ -1446,8 +1568,8 @@ applications that are CPU-bound on command recording, and this is exactly the
 population that also tends to know its own dependency graph.
 
 \textbf{The negative results matter.} The Radeon~780M shows that removing
-redundant barriers is not a free optimization, and the AMD parts show that
-a saving visible in a command stream need not be visible in a timer. A layer
+redundant barriers is not a free optimization, and the AMD render boundaries
+show that a saving visible in a command stream need not be visible in a timer. A layer
 that exposes manual barriers must therefore treat them as a measured
 optimization rather than a default, and profiling guidance belongs next to the
 API.
@@ -1465,16 +1587,17 @@ $\bmag{rx7900xt}{compute-independent}{placement}$ recoverable to
 $\bmag{radeon780m}{graphics-independent}{placement}$ lost by trying. Three
 things follow, in the order an application should try them.
 
-\emph{Do not expect the narrow barrier to help here.} It is tempting to read
-Section~\ref{sec:radv-barriers} as a shopping list of savings, and we did.
-Narrowing the scope removes real commands from the RADV stream, and it buys
-$\bmag{rtx5070}{graphics-chain}{scope}$ on NVIDIA and
-$\bmag{intelxe}{graphics-chain}{scope}$ on Intel, but on AMD it bought nothing
-we could measure in any cell precise enough to say
-(Section~\ref{sec:scope-results}), and Section~\ref{sec:radv-elision} says why:
-RADV had already discarded the destination half of it. It costs nothing either,
-and it is the one change an application cannot get wrong, so there is no reason
-to avoid it --- but it is not the AMD fix.
+\emph{Take the narrow barrier, and expect it to pay only between compute
+passes.} It is tempting to read Section~\ref{sec:radv-barriers} as a shopping
+list of savings, and we did. What the measurement licenses is narrower: about
+$0.36\,\mu$s per barrier on the discrete part wherever a compute pass hands to
+a compute pass ($\bmagci{rx7900xt}{compute-chain}{scope}$ on the chain),
+nothing at any boundary a render pass touches, and nothing on either iGPU
+(Section~\ref{sec:scope-results}); Section~\ref{sec:radv-elision} says why
+most of the render-side request was already free. It costs nothing anywhere,
+and it is the one change an application cannot get wrong, so take it
+everywhere --- but it is not the AMD render fix, and it survives only under
+automatic placement (below).
 
 \emph{Restructure the passes so the remaining barriers are ones you need.}
 This is the change that pays. On the RX~7900~XT, sixteen independent compute
@@ -1495,10 +1618,12 @@ part in its own encoder and submit both to the same queue.
 Radeon~780M, letting sixteen independent render passes overlap cost
 $\bmag{radeon780m}{graphics-independent}{placement}$ and the mixed equivalent
 $\bmag{radeon780m}{mixed-independent}{placement}$, while on the RX~7900~XT the
-same change on render passes bought nothing at all and the compute equivalent
-bought a quarter of the frame. Two AMD parts of the same generation therefore
-disagree about the sign, which is the strongest reason in this paper not to
-ship the change unmeasured. The passes worth grouping are the ones with
+same change on render passes bought
+$\bmag{rx7900xt}{graphics-independent}{placement}$ --- real, but a quarter of
+the $\bmag{rx7900xt}{compute-independent}{placement}$ its compute equivalent
+buys. Two AMD parts of the same generation therefore disagree about the sign
+on render work, which is the strongest reason in this paper not to ship the
+change unmeasured. The passes worth grouping are the ones with
 complementary bottlenecks --- ray tracing next to rasterization, a depth
 prepass next to a compute simulation --- not several instances of the same
 bottleneck. A GPU profiler showing the two passes actually overlapping, as in
@@ -1507,14 +1632,15 @@ will not distinguish a scheduling win from whatever the 780M is doing.
 
 Note also that suppressing the encoder's barriers forfeits the scope narrowing
 on the boundaries that remain, since an explicitly placed barrier describes
-only its source. On AMD that costs nothing today, because the narrowing buys
-nothing there; on NVIDIA it is a real trade.
+only its source. On AMD that now costs the compute-boundary saving; on NVIDIA
+it is a real trade everywhere the scope pays.
 
 Two things we looked for and did not find are worth recording, because they
 bound what an implementation can do without becoming a tracker. There is no
 cheaper barrier to emit: the narrowed scope already removes everything
 Section~\ref{sec:radv-barriers} identifies as removable without naming a
-resource, and it changes nothing on AMD. And the pessimism that a global
+resource, and what that changes on AMD is a fixed fraction of a microsecond
+per compute boundary. And the pessimism that a global
 barrier does cause in RADV --- the unconditional metadata flushes, the
 unusable coherence check --- is only avoidable by supplying an image, which is
 the state \blade{} declines to keep. The remaining AMD lever is placement, and
@@ -1571,16 +1697,19 @@ Section~\ref{sec:amd-advice} makes anyway.
 
 The AMD evidence is now a discrete RDNA3 part, a mobile RDNA3 iGPU, a very
 small desktop iGPU, the driver sources, and a user report. The small iGPU is
-the most precisely measured device in the study and the least interesting, since
-it is saturated by a single pass; the discrete part carries the largest AMD
-claims and has the widest intervals behind them, at floors of
-$\bfloor{rx7900xt}{compute-independent}$ and
-$\bfloor{rx7900xt}{mixed-independent}$ for the two cells where placement pays.
-Those two should be repeated with enough warm-up for the device to stop
-accelerating before being leaned on --- its clocks were already pinned as far
-as the driver allows, and that was not enough --- and the third AMD part
-disagrees with them in sign on the render workloads, which is itself part of
-the result rather than a contradiction of it.
+the most precisely measured device in the study and the least interesting,
+since it is saturated by a single pass. The pilot's version of this paragraph
+asked for the discrete part's placement cells to be repeated with enough
+warm-up for the device to stop accelerating before being leaned on --- its
+clocks were already pinned, and that was not enough. This revision is that
+repeat, and the claims survived it sharpened rather than softened: the compute
+effect grew while its floor fell to $\bfloor{rx7900xt}{compute-independent}$,
+the render cell went from unresolvable to a resolved
+$\bmag{rx7900xt}{graphics-independent}{placement}$, and the scope axis,
+unreadable on the pilot, resolved to $\bmag{rx7900xt}{compute-chain}{scope}$
+at compute boundaries and to zero elsewhere. The third AMD part still
+disagrees in sign on the render workloads, which is itself part of the result
+rather than a contradiction of it.
 
 \section{Related Work}
 
@@ -1608,8 +1737,9 @@ measured, but coarse synchronization does not come free either, and the two
 costs live on different sides of the interface. Tracking costs host time
 consistently ---
 $\bladenum{host/ratio/min}$--$\bladenum{host/ratio/max}\times$ across four
-vendors --- and buys back device time only where it can prove independence,
-which it did on some devices and not others. Placing a barrier at every pass
+vendors --- and buys device time back where its precision finds overlap or its
+barrier form and layouts suit the part: on some devices it collects, on others
+it charges. Placing a barrier at every pass
 boundary costs nothing when passes are dependent, costs up to
 $\bmag{rtx5070}{graphics-independent}{placement}$ of device time when they are
 not and the device has spare capacity, and \emph{saves}
@@ -1618,18 +1748,22 @@ reasons we could not establish. Which of those three a given application is in
 is not predictable from the vendor, the API, or the driver source; it has to be
 measured.
 
-The practical conclusion is that the expressive gap that matters is not
+The practical conclusion is that the expressive gap that matters most is not
 per-resource state but the ability to say ``these passes are unrelated''. An
 encoder-level opt-out gives an application that already knows its dependency
-graph the whole benefit of tracking and more, at a fraction of the host cost
-and none of the API surface. It should be presented as a profiled optimization
-rather than a default, because on at least one real device it makes things
-worse.
+graph nearly all of the tracker's device-side benefit at a fraction of the
+host cost and none of the API surface. What it cannot reach is the tracker's
+remaining edge: a destination scope for explicitly placed barriers, and, on
+one NVIDIA render chain, a further $\bmag{rtx5070}{graphics-chain}{wgpu}$
+carried by barrier form or layout that no global barrier expresses. The
+opt-out should be presented as a profiled optimization rather than a default,
+because on at least one real device it makes things worse.
 
 What this draft does not have, and has decided not to pursue, is stated rather
-than promised: application frames, multisampled targets, and repeats --- with
-enough warm-up to reach a steady clock --- of the cells whose control floor
-exceeds the effect in them. Each is a bound on a specific claim, named where
+than promised: application frames, multisampled targets, a mechanism for the
+Radeon~780M regression and for the fixed per-boundary cost the scope axis
+uncovered on the discrete AMD part, and the Metal recollection that the
+shader-parity fix obliges. Each is a bound on a specific claim, named where
 that claim is made.
 
 \bibliographystyle{plain}
