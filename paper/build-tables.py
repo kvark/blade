@@ -193,6 +193,12 @@ class Collection:
             lambda: defaultdict(list)
         )
         self.devices: dict[str, str] = {}
+        # Whether the wgpu side ran with its injected bounds, division and loop
+        # checks. Those cost tens of percent of GPU span on a fragment-bound
+        # workload, so a collection taken with them is not comparable with one
+        # taken without, and the two must never share a column. Collections
+        # predating the flag do not record it and were all taken with checks on.
+        self.wgpu_shader_checks = True
         # Per-block clock drift, keyed by metric. One block is one process
         # launch, so the device idles between blocks and ramps again inside
         # each; pooling the samples hides that, which is why it is measured
@@ -202,6 +208,10 @@ class Collection:
             run = analyze.read_run(path)
             implementation = run.metadata["implementation"]
             self.devices[implementation] = run.metadata["device_name"]
+            if implementation == "wgpu":
+                self.wgpu_shader_checks = (
+                    run.metadata.get("shader_checks", "true").lower() != "false"
+                )
             for metric in ("gpu_ns", "wait_ns"):
                 ordered = [
                     float(row[metric]) for row in run.rows if int(row["passes"]) == 16
@@ -532,8 +542,11 @@ def matrix_rows(
             ]
             for implementation, policy in contenders:
                 # A cross-implementation cell is only meaningful when both
-                # implementations ran on the same physical device.
-                if implementation != "blade" and collection.mismatched_devices:
+                # implementations ran on the same physical device and compiled
+                # their shaders the same way.
+                if implementation != "blade" and (
+                    collection.mismatched_devices or collection.wgpu_shader_checks
+                ):
                     cells.extend(["n/a", ""])
                     continue
                 result = comparison(
@@ -576,6 +589,7 @@ def build_gpu_matrix_table(
     # recollection does not, and a note that outlives its cause is a claim
     # about data that is no longer there.
     withheld = [c for c in newest_per_device(collections) if c.mismatched_devices]
+    stale = [c for c in newest_per_device(collections) if c.wgpu_shader_checks]
     return latex_table(
         caption=(
             "GPU span of one 16-pass command buffer on Vulkan: \\texttt{B-auto} median "
@@ -611,6 +625,18 @@ def build_gpu_matrix_table(
                 "physical device; the collector aborts otherwise "
                 "(Section~\\ref{sec:deviations})."
             )
+        )
+        + (
+            (
+                " \\texttt{W-wgpu} is withheld on "
+                + ", ".join(f"\\texttt{{{c.display_label}}}" for c in stale)
+                + ", whose \\wgpu{} side still carried the injected shader "
+                "checks of Section~\\ref{sec:workloads}; those cells measure "
+                "code generation as much as synchronization and are not "
+                "comparable with the rest."
+            )
+            if stale
+            else ""
         ),
     )
 
@@ -1153,7 +1179,10 @@ def numbers_macros(
                     f"{median_us(baseline):.1f}"
                 )
                 for name, implementation, policy in COMPARISONS:
-                    if implementation != "blade" and collection.mismatched_devices:
+                    if implementation != "blade" and (
+                        collection.mismatched_devices
+                        or collection.wgpu_shader_checks
+                    ):
                         continue
                     contender = collection.values(
                         implementation, policy, workload, 16, metric
