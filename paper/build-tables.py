@@ -117,6 +117,12 @@ BOOTSTRAP_SAMPLES = 10_000
 # rather than a tuning knob.
 HOST_DISPERSION_LIMIT = 40.0
 
+# Host medians on the sweep driver turn unstable past this pass count --- the
+# 32- and 64-pass host columns are non-monotonic --- so host marginals are
+# taken from the region below it, where every series is monotone and linear.
+# GPU marginals use the whole range, which is linear throughout.
+HOST_MARGINAL_CAP = 8
+
 # Sentinel for a row that carries a bare booktabs rule rather than cells.
 RULE = "\\addlinespace"
 
@@ -396,6 +402,7 @@ def latex_table(
     star: bool = False,
     note: str | None = None,
     preamble_rows: Sequence[str] = (),
+    column_sep: str | None = None,
 ) -> str:
     environment = "table*" if star else "table"
     lines = [
@@ -403,6 +410,9 @@ def latex_table(
         f"\\begin{{{environment}}}[t]",
         "\\centering",
         "\\small",
+        # A sixteen-column table only fits the page with narrower inter-column
+        # space; the group ends with the environment, so nothing leaks.
+        *([f"\\setlength{{\\tabcolsep}}{{{column_sep}}}"] if column_sep else []),
         f"\\begin{{tabular}}{{{column_spec}}}",
         "\\toprule",
         # Verbatim lines above the column names, for a spanning header.
@@ -780,22 +790,18 @@ def build_sweep_table(collections: list[Collection]) -> str | None:
         body.append(
             [f"\\multicolumn{{{len(passes) + 3}}}{{l}}{{\\emph{{{workload}}}}}"]
         )
-        for source, source_label, metric in (
-            (cpu, "host", "host_ns"),
-            (gpu, "GPU", "gpu_ns"),
+        for source, source_label, metric, marginal_cap in (
+            (cpu, "host", "host_ns", HOST_MARGINAL_CAP),
+            (gpu, "GPU", "gpu_ns", 64),
         ):
             for implementation, policy, name in configurations:
                 cells = [source_label, name]
-                marginal = None
                 for count in passes:
                     values = source.values(implementation, policy, workload, count, metric)
                     cells.append(f"{median_us(values):.1f}" if values else "---")
-                first = source.values(implementation, policy, workload, passes[0], metric)
-                last = source.values(implementation, policy, workload, passes[-1], metric)
-                if first and last:
-                    marginal = (median_us(last) - median_us(first)) / (
-                        passes[-1] - passes[0]
-                    )
+                marginal = marginal_cost(
+                    source, implementation, policy, workload, metric, marginal_cap
+                )
                 cells.append(f"{marginal:.2f}" if marginal is not None else "---")
                 body.append(cells)
     return latex_table(
@@ -803,7 +809,8 @@ def build_sweep_table(collections: list[Collection]) -> str | None:
             "Pass-count sweep on the RTX~5070, medians in microseconds. "
             "Host rows come from the timestamp-free collection; GPU rows come from the "
             "GPU-timed collection. The last column is the marginal cost per additional "
-            "pass over the measured range."
+            "pass, taken over the whole range for the GPU rows and over 1--"
+            f"{HOST_MARGINAL_CAP} passes for the host rows."
         ),
         label="tab:sweep",
         column_spec="@{}ll" + "r" * len(passes) + "r@{}",
@@ -811,8 +818,13 @@ def build_sweep_table(collections: list[Collection]) -> str | None:
         body=body,
         star=True,
         note=(
-            "Both cost components are linear in the pass count over this range, "
-            "which is what makes a single marginal cost meaningful."
+            "GPU span is linear in the pass count across the whole range. Host "
+            "cost is linear only up to "
+            f"{HOST_MARGINAL_CAP} passes on this driver: beyond that its "
+            "medians turn unstable --- visibly non-monotonic in the 32- and "
+            "64-pass columns --- so the host marginal is taken from the region "
+            "where a slope is a fact rather than an artifact of where the "
+            "samples split."
         ),
     )
 
@@ -978,19 +990,27 @@ def build_profile_table(raw: Path) -> str | None:
         if present:
             body.append(cells)
 
-    spanning = [""]
+    # Three header levels --- machine, workload, implementation --- so a
+    # column is only as wide as its numbers. One level of `b c-ind` headers
+    # across sixteen columns is what made this table wider than the page.
+    machine_row, workload_row = [""], [""]
+    machine_rules, workload_rules = [], []
     index = 2
-    rules = []
     for profile in profiles:
         width = 2 * len(profile.workloads)
-        spanning.append(
+        machine_row.append(
             f"\\multicolumn{{{width}}}{{c}}{{\\texttt{{{profile.host}}}}}"
         )
-        rules.append(f"\\cmidrule(lr){{{index}-{index + width - 1}}}")
-        index += width
+        machine_rules.append(f"\\cmidrule(lr){{{index}-{index + width - 1}}}")
+        for workload in profile.workloads:
+            workload_row.append(
+                f"\\multicolumn{{2}}{{c}}{{{WORKLOAD_SHORT.get(workload, workload)}}}"
+            )
+            workload_rules.append(f"\\cmidrule(lr){{{index}-{index + 1}}}")
+            index += 2
     header = ["Component"] + [
-        f"\\textsc{{{implementation[0]}}} {WORKLOAD_SHORT.get(workload, workload)}"
-        for _, workload, implementation in columns
+        f"\\textsc{{{implementation[0]}}}"
+        for _, _, implementation in columns
     ]
     drivers = ", ".join(
         f"\\texttt{{{profile.host}}} on \\texttt{{{profile.driver_library}}}"
@@ -1010,7 +1030,13 @@ def build_profile_table(raw: Path) -> str | None:
         header=header,
         body=body,
         star=True,
-        preamble_rows=(" & ".join(spanning) + " \\\\", "".join(rules)),
+        column_sep="3.5pt",
+        preamble_rows=(
+            " & ".join(machine_row) + " \\\\",
+            "".join(machine_rules),
+            " & ".join(workload_row) + " \\\\",
+            "".join(workload_rules),
+        ),
         note=(
             "Shares within a process, not times between processes: "
             "\\texttt{task-clock} charges a blocking fence wait to the process "
@@ -1342,18 +1368,42 @@ def numbers_macros(
     return "\n".join(lines) + "\n"
 
 
+def marginal_cost(
+    collection: Collection,
+    implementation: str,
+    policy: str,
+    workload: str,
+    metric: str,
+    cap: int,
+) -> float | None:
+    """Slope of the median cost per additional pass, over counts up to `cap`."""
+    counts = [count for count in collection.pass_counts() if count <= cap]
+    if len(counts) < 2:
+        return None
+    first = collection.values(implementation, policy, workload, counts[0], metric)
+    last = collection.values(implementation, policy, workload, counts[-1], metric)
+    if not first or not last:
+        return None
+    return (median_us(last) - median_us(first)) / (counts[-1] - counts[0])
+
+
 def sweep_numbers(collections: list[Collection]) -> dict[str, str]:
     """Marginal cost per pass and the value at sixteen passes, from the sweeps."""
     sources = {
-        "host": (next((c for c in collections if c.role == "sweep-cpu"), None), "host_ns"),
-        "gpu": (next((c for c in collections if c.role == "sweep-gpu"), None), "gpu_ns"),
+        "host": (
+            next((c for c in collections if c.role == "sweep-cpu"), None),
+            "host_ns",
+            HOST_MARGINAL_CAP,
+        ),
+        "gpu": (
+            next((c for c in collections if c.role == "sweep-gpu"), None),
+            "gpu_ns",
+            64,
+        ),
     }
     values: dict[str, str] = {}
-    for side, (collection, metric) in sources.items():
+    for side, (collection, metric, cap) in sources.items():
         if collection is None:
-            continue
-        passes = [count for count in collection.pass_counts() if count <= 64]
-        if not passes:
             continue
         for workload in ("compute-independent", "graphics-independent"):
             for name, implementation, policy in (
@@ -1361,18 +1411,12 @@ def sweep_numbers(collections: list[Collection]) -> dict[str, str]:
                 ("hazard", "blade", "hazard-only"),
                 ("wgpu", "wgpu", "tracked"),
             ):
-                first = collection.values(
-                    implementation, policy, workload, passes[0], metric
-                )
-                last = collection.values(
-                    implementation, policy, workload, passes[-1], metric
-                )
                 at16 = collection.values(implementation, policy, workload, 16, metric)
                 key = f"sweep/{side}/{workload}/{name}"
-                if first and last:
-                    marginal = (median_us(last) - median_us(first)) / (
-                        passes[-1] - passes[0]
-                    )
+                marginal = marginal_cost(
+                    collection, implementation, policy, workload, metric, cap
+                )
+                if marginal is not None:
                     values[f"{key}/marginal"] = f"{marginal:.2f}"
                 if at16:
                     values[f"{key}/at16"] = f"{median_us(at16):.1f}"
@@ -1652,7 +1696,8 @@ def marginal_figure(collections: list[Collection]) -> str | None:
         "\\end{axis}\n\\end{tikzpicture}\n"
         "\\caption{Marginal cost of one additional pass on the RTX~5070, from the "
         "pass-count sweeps. Host figures come from the timestamp-free collection "
-        "and device figures from the GPU-timed one. The gap between "
+        "and device figures from the GPU-timed one; each is the slope over its "
+        "linear region in Table~\\ref{tab:sweep}. The gap between "
         "\\texttt{B-auto} and \\texttt{B-hazard} is what one redundant barrier "
         "costs; the gap to \\texttt{W-wgpu} is end-to-end.}\n"
         "\\label{fig:marginal}\n\\end{figure}\n"

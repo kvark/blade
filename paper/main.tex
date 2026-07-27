@@ -698,12 +698,13 @@ disables integer-division checks; \wgpu's \texttt{create\_shader\_module}
 keeps its own defaults, which clamp indices, guard divisions, and apply
 \texttt{force\_loop\_bounding} --- a simulated 64-bit counter loaded, compared,
 decremented and stored on every iteration of a loop. Both of these shaders run
-such a loop, and the fragment one runs it per pixel. On the RTX~5070 that costs
-the \wgpu{} side $41.4\%$ of GPU span on \texttt{graphics-independent} and
-$47.8\%$ on \texttt{graphics-chain}, against $0.8\%$ on
-\texttt{compute-independent} where the workload is memory-bound and the extra
-arithmetic hides. Those figures are stable to $0.1\,\mu$s across three
-repetitions.
+such a loop, and the fragment one runs it per pixel. On the RTX~5070,
+re-measured at this paper's final revision with the artifact's
+\texttt{--shader-checks} flag, the checks cost the \wgpu{} side $48\%$ of GPU
+span on \texttt{graphics-chain} (repeatable to $0.2$ points across three
+runs) and about $36\%$ on \texttt{graphics-independent}, against roughly
+$2\%$ on \texttt{compute-independent}, where the workload is memory-bound and
+the extra arithmetic hides.
 
 That is a shader-code difference an order of magnitude larger than the
 synchronization effects this paper measures, and it lands in the same column.
@@ -1135,8 +1136,9 @@ the two should not be assumed to compose.
 \input{data/derived/tables/fig-marginal}
 
 Table~\ref{tab:sweep} sweeps the pass count on the RTX~5070 and answers RQ1.
-Both cost components are linear in the number of passes over this range, so
-each configuration is summarized by a marginal cost per pass, which
+GPU span is linear in the number of passes across the whole range, and host
+cost is linear up to sixteen, so each configuration is summarized by a
+marginal cost per pass over its linear region, which
 Figure~\ref{fig:marginal} compares directly.
 
 On the host side, a redundant global barrier costs \blade{}
@@ -1158,16 +1160,27 @@ no barrier at all. At sixteen passes the absolute gap is
 $\bladenum{sweep/host/compute-independent/auto/at16}$ against
 $\bladenum{sweep/host/compute-independent/wgpu/at16}\,\mu$s.
 
+Past sixteen passes this driver's host cost leaves the linear regime
+entirely: the jump between the 16- and 32-pass medians is several-fold,
+larger with barriers than without, and the 32- and 64-pass host medians in
+Table~\ref{tab:sweep} are not even monotone. Something in the submission path
+changes mode at that size, and the host samples there split between regimes,
+so a slope fitted across the jump would measure where the samples fell rather
+than a cost. The marginals above are therefore taken from the region the
+table shows to be linear, and the 16-pass matrix sits inside it.
+
 On the device side, each redundant barrier costs
 $\bladenum{sweep/gpu/compute-independent/barriercost}\,\mu$s of GPU span for
 compute ($\bladenum{sweep/gpu/compute-independent/auto/marginal}$ against
 $\bladenum{sweep/gpu/compute-independent/hazard/marginal}$ per pass) and
 $\bladenum{sweep/gpu/graphics-independent/barriercost}\,\mu$s for graphics
 ($\bladenum{sweep/gpu/graphics-independent/auto/marginal}$ against
-$\bladenum{sweep/gpu/graphics-independent/hazard/marginal}$). Against a pass
-that performs roughly $11\,\mu$s and $9\,\mu$s of work respectively, that is a
-quarter of a pass lost per boundary. The ratio is what makes the effect visible
-at any pass count: it is a property of the pass, not of the graph size.
+$\bladenum{sweep/gpu/graphics-independent/hazard/marginal}$). Against passes
+that themselves cost $\bladenum{sweep/gpu/compute-independent/hazard/marginal}$
+and $\bladenum{sweep/gpu/graphics-independent/hazard/marginal}\,\mu$s, that is
+more than a third of a pass lost per boundary. The ratio is what makes the
+effect visible at any pass count: it is a property of the pass, not of the
+graph size.
 
 The sweep is also why host claims are taken from the timestamp-free
 collection. The same measurement is larger with GPU timing enabled, on both
@@ -1293,10 +1306,10 @@ On \texttt{graphics-chain} the tracker does something no \blade{}
 configuration can express: $\bmagci{rtx5070}{graphics-chain}{wgpu}$ faster
 than \texttt{B-auto} on a workload where every boundary is a real hazard, so
 placement can remove nothing and scope recovers only
-$\bmag{rtx5070}{graphics-chain}{scope}$. The remaining dozen points are
-carried by the factors \blade{} holds fixed --- the resource-scoped form of
-the barrier or the specialized image layout --- or by per-pass work outside
-synchronization. This driver advertises
+$\bmag{rtx5070}{graphics-chain}{scope}$. The rest of the gap --- nearly three
+times what scope recovers --- is carried by the factors \blade{} holds fixed,
+the resource-scoped form of the barrier or the specialized image layout, or by
+per-pass work outside synchronization. This driver advertises
 \texttt{VK\_KHR\_unified\_image\_layouts} and \blade{} enables it, which is a
 promise that the layout half should not matter; we observe the gap and cannot
 apportion it. Both compute cells on the same machine are within a point of

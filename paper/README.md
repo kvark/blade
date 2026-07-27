@@ -122,25 +122,28 @@ commands, and is explicitly reported as an end-to-end comparison.
 
 `build-tables.py` discovers collections under `data/raw/` and classifies them
 by what they contain, so a retest lands in the tables without editing any
-script. Collections named `<timestamp>-<hostname>` come from the four-policy
-era; later ones cross placement with scope.
+script. The current set is the one-day recollection of 2026-07-27 on a single
+benchmark build (wgpu `882d5bb` everywhere; blade revisions differ only by
+commits under `paper/`, which the benchmark does not compile), plus the older
+Metal case study:
 
 | Collection | Machine | Device measured by Blade | Role |
 |---|---|---|---|
-| `20260725T191617Z-zork` | zork | NVIDIA RTX 5070 | matrix, placement × scope |
-| `*-rubik-amd-radeon-rx-7900-xt-radv-n` | rubik | AMD RX 7900 XT | matrix, placement × scope |
-| `*-rubik-amd-ryzen-5-9600x-6-core-pro` | rubik | AMD Raphael iGPU | matrix, placement × scope |
-| `20260726T071814Z-k6` | k6 | AMD Radeon 780M | matrix, placement × scope |
-| `20260725T204044Z-matrix` | matrix | Intel Xe (RPL-U) | matrix, placement × scope (chain cells clean; independent-target cells noisy) |
-| `20260725T062529Z-mac` | mac | Apple M3 | matrix, Metal case study |
-| `20260725T060107Z-zork` | zork | NVIDIA RTX 5070 | superseded by `191617` |
-| `20260725T185508Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, GPU-timed |
-| `20260725T190100Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, timestamp-free |
+| `20260727T070057Z-zork` | zork | NVIDIA RTX 5070 | matrix, placement × scope |
+| `20260727T062803Z-rubik-...rx-7900-xt...` | rubik | AMD RX 7900 XT | matrix, placement × scope |
+| `20260727T062803Z-rubik-...ryzen-5-9600x...` | rubik | AMD Raphael iGPU | matrix, placement × scope |
+| `20260727T042448Z-k6` | k6 | AMD Radeon 780M | matrix, placement × scope |
+| `20260727T044808Z-matrix` | matrix | Intel Xe (RPL-U) | matrix, placement × scope |
+| `20260725T062529Z-mac` | mac | Apple M3 | matrix, Metal case study; predates the scope axis and the shader-parity fix, recollection pending |
+| `20260727T070208Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, GPU-timed |
+| `20260727T071905Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, timestamp-free |
+| `20260727T050247Z-zork` | zork | NVIDIA RTX 5070 | superseded by `070057` (worktree carried a modified `paper/` script) |
 
-`build-tables.py` keeps only the most recent matrix collection per machine and
-device, so a retest supersedes an earlier run rather than appearing beside it.
-The two `rubik` directories come from one invocation: the collector runs every
-enumerated adapter in turn.
+Per-host `*-profile` and `*-captures` directories accompany the matrix
+collections on all four Linux machines. `build-tables.py` keeps only the most
+recent matrix collection per machine and device, so a retest supersedes an
+earlier run rather than appearing beside it. The two `rubik` directories come
+from one invocation: the collector runs every enumerated adapter in turn.
 
 Because `data/raw/` is not in git, a collection is only where it was copied.
 `build-tables.py` warns when `main.tex` cites a device whose data is not on the
@@ -159,24 +162,23 @@ considered and declined, and why. What remains is filling the existing grid:
 |---|:--:|:--:|:--:|
 | zork | yes | yes | yes |
 | rubik | yes | yes | yes |
-| k6 | yes | no `perf` | yes |
-| matrix | yes | no `perf` | yes |
+| k6 | yes | yes | yes |
+| matrix | yes | yes | yes |
 | mac | yes | n/a | n/a |
 
 `python3 paper/collect.py --wgpu ../wgpu` fills a row; the profile step needs a
 permissive `kernel.perf_event_paranoid` and says so when it skips. Apple has
-neither a `perf` nor a RenderDoc path, so its row is complete as it stands. Two
-profiles are enough for what the profile table claims, which is a range rather
-than a value.
+neither a `perf` nor a RenderDoc path, so its row is complete as it stands.
 
-The one collection change that would materially improve the study is locking
-GPU clocks. 16 of the 30 scope cells have a control floor above 2%, and the
-four worst — all on `matrix` — are above 30% because that device's samples are
-bimodal between two clock states. Those cells answer nothing in either
-direction. The `ctrl` column of the scope table says which is which, and the
-floor is the far end of the control's bootstrap interval, not its point
-estimate: a cell can agree to 2.8% on the median and still be consistent with
-71%.
+The collection change that materially improved the study has been made: every
+2026-07-27 run warms up for 1000 iterations, which is what stops the device
+clock from ramping inside a measurement block (pinning `power_dpm` levels
+alone did not). Control floors fell from 16 of 30 cells above 2% to 4 of 30,
+none above 5%. What remains is machine-specific: the Intel part's controls
+disagree by a systematic ~5% in a few cells — identical command streams,
+reliably different times — and the mac collection predates the wgpu
+shader-parity fix, so its device-side and wait comparisons stay withheld or
+caveated until it is recollected.
 
 ## Current scope
 
