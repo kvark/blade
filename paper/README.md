@@ -137,7 +137,6 @@ Metal case study:
 | `20260725T062529Z-mac` | mac | Apple M3 | matrix, Metal case study; predates the scope axis and the shader-parity fix, recollection pending |
 | `20260727T070208Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, GPU-timed |
 | `20260727T071905Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, timestamp-free |
-| `20260727T050247Z-zork` | zork | NVIDIA RTX 5070 | superseded by `070057` (worktree carried a modified `paper/` script) |
 
 Per-host `*-profile` and `*-captures` directories accompany the matrix
 collections on all four Linux machines. `build-tables.py` keeps only the most

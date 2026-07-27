@@ -44,7 +44,14 @@ def parse_arguments() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--blade-device-id", type=lambda value: int(value, 0))
     parser.add_argument("--wgpu-adapter-name")
-    parser.add_argument("--backend", default="vulkan")
+    # Mirror run-study-matrix.py: a macOS machine measures Metal unless told
+    # otherwise. Hardcoding "vulkan" here overrode the runner's own
+    # platform-aware default and sent Mac collections down the wrong backend.
+    parser.add_argument(
+        "--backend",
+        choices=("vulkan", "metal"),
+        default="metal" if sys.platform == "darwin" else "vulkan",
+    )
     parser.add_argument(
         "--skip-profile", action="store_true", help="do not run profile-hosts.py"
     )
