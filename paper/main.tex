@@ -498,9 +498,80 @@ full_barrier(); resolve_main_msaa()
 full_barrier(); render_reflective_refractive()
 \end{verbatim}
 
-The reporter observed in a GPU profiler that the barriers forced the AMD
-scheduler to run the reflection work to completion before starting the main
-view, and asked whether the hardware could overlap them at all if the barriers
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[
+  x=1cm, y=1cm,
+  pass/.style={draw=black!55, fill=black!7, rounded corners=1pt,
+    minimum height=6.5mm, text width=15mm, align=center,
+    font=\scriptsize, inner sep=1.5pt, anchor=south west},
+  needed/.style={black!75, line width=0.9pt},
+  redundant/.style={black!55, line width=0.9pt,
+    dash pattern=on 1.6pt off 1.4pt},
+  rowlabel/.style={font=\small, anchor=south west},
+  note/.style={font=\scriptsize, anchor=west, black!70},
+]
+
+% ---- automatic: a barrier before every pass, all eight in one chain.
+\node[rowlabel] at (0.1,2.75) {\textsc{automatic}};
+\foreach \i/\name in {0/{ray trace}, 1/{refl.\ depth}, 2/{refl.\ draw},
+                     3/{refl.\ resolve}, 4/{main depth}, 5/{main draw},
+                     6/{main resolve}, 7/{refract}} {
+  \node[pass] at ({0.2 + \i*1.95}, 1.85) {\name};
+}
+\foreach \i in {0,2,3,5,6,7} {
+  \draw[needed] ({0.1 + \i*1.95}, 1.75) -- ({0.1 + \i*1.95}, 2.6);
+}
+\foreach \i in {1,4} {
+  \draw[redundant] ({0.1 + \i*1.95}, 1.75) -- ({0.1 + \i*1.95}, 2.6);
+}
+
+% ---- manual: the same graph, barriers only where it has an edge.
+\node[rowlabel] at (0.1,1.05) {\texttt{manual\_barriers}};
+\node[pass] at (0.2, 0.15) {ray trace};
+\foreach \i/\name in {0/{refl.\ depth}, 1/{refl.\ draw}, 2/{refl.\ resolve}} {
+  \node[pass] at ({0.2 + \i*1.95}, -0.6) {\name};
+}
+\foreach \i/\name in {0/{main depth}, 1/{main draw}, 2/{main resolve}} {
+  \node[pass] at ({0.2 + \i*1.95}, -1.35) {\name};
+}
+\foreach \i in {1,2} {
+  \draw[needed] ({0.1 + \i*1.95}, -0.7) -- ({0.1 + \i*1.95}, -0.05);
+  \draw[needed] ({0.1 + \i*1.95}, -1.45) -- ({0.1 + \i*1.95}, -0.8);
+}
+\draw[needed] (0.1, -1.45) -- (0.1, 0.9);
+\draw[needed] (6.0, -1.45) -- (6.0, 0.9);
+\node[pass] at (6.1, -0.6) {refract};
+
+% ---- legend, in the space the restructured frame does not use.
+\draw[needed] (8.7,0.15) -- (8.7,0.6);
+\node[note] at (8.95,0.375) {barrier the dependency graph needs};
+\draw[redundant] (8.7,-0.7) -- (8.7,-0.25);
+\node[note] at (8.95,-0.475) {barrier nothing needs: two of the eight};
+
+\draw[->, black!45] (0.1, -1.95) -- (15.9, -1.95)
+  node[midway, below, font=\scriptsize, black!70]
+  {time, schematic --- every pass is drawn the same width because none was measured};
+
+\end{tikzpicture}
+\caption{The field report's frame, as \blade{} emitted it and as it was
+restructured. The figure shows what the barriers \emph{permit}, not what the
+hardware achieved. Two of the eight barriers separate work with no resource in
+common --- ray tracing from the reflection view, and the reflection view from
+the main one --- and on RADV each of them drains both the compute and the pixel
+pipelines whether or not anything depends on it
+(Section~\ref{sec:radv-barriers}). Removing those two is what let the
+reporter's profiler show ray tracing and reflection running together. The
+remaining six are real edges in the graph and stay, which is why this is a
+change to where \texttt{barrier()} is called and not to any resource
+declaration.}
+\label{fig:field-report}
+\end{figure*}
+
+Figure~\ref{fig:field-report} draws that sequence against the dependency
+graph it came from. The reporter observed in a GPU profiler that the barriers
+forced the AMD scheduler to run the reflection work to completion before
+starting the main view, and asked whether the hardware could overlap them at all if the barriers
 were removed. Section~\ref{sec:radv-barriers} answers the mechanism question:
 on RADV each \texttt{full\_barrier} sets both \texttt{CS\_PARTIAL\_FLUSH} and
 \texttt{PS\_PARTIAL\_FLUSH}, so the drain is unconditional and does not depend
