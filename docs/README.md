@@ -54,3 +54,28 @@ Blade-graphics can run on:
 - Web (WebGL2)
 
 The full-stack Blade Engine can only run on Vulkan with hardware Ray Tracing support.
+
+## Citing Blade
+
+If Blade appears in a paper, a technical report, or a thesis, cite the software
+itself and pin the revision you measured or built against — the synchronization
+model this library is built on has changed within single releases, so a bare
+project name is not enough for anyone to reproduce a number.
+
+```bibtex
+@software{blade,
+  author    = {Dzmitry Malyshau and contributors},
+  title     = {Blade: a sharp and simple graphics library},
+  year      = {2026},
+  url       = {https://github.com/kvark/blade},
+  version   = {0.3.0},
+  note      = {Revision <commit>}
+}
+```
+
+Replace `<commit>` with the short hash of what you used (`git rev-parse --short
+HEAD`). If you measured performance, say which backend and which driver
+version, because both change results more than the library version does.
+
+There is also a `CITATION.cff` in the repository root, so GitHub's "Cite this
+repository" button and tools that read it produce the same metadata.

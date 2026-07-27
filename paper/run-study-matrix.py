@@ -95,7 +95,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--rounds", type=int, default=8)
     parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--height", type=int, default=1024)
-    parser.add_argument("--warmups", type=int, default=10)
+    # Ten is not enough for a device that is still accelerating forty
+    # iterations in; see the clock section of COLLECTING.md. A thousand costs
+    # about a quarter of a second per block on a fast part and ten minutes
+    # across a whole collection on the slowest one here.
+    parser.add_argument("--warmups", type=int, default=1000)
     parser.add_argument("--samples", type=int, default=30)
     parser.add_argument("--validation", action="store_true")
     parser.add_argument("--cpu-only", action="store_true")

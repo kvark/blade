@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+title: "Blade: a sharp and simple graphics library"
+message: "If you use this software, please cite it and pin the revision you used."
+type: software
+authors:
+  - family-names: Malyshau
+    given-names: Dzmitry
+  - name: "Blade contributors"
+repository-code: "https://github.com/kvark/blade"
+license: MIT
+version: 0.3.0

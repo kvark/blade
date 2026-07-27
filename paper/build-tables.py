@@ -49,6 +49,18 @@ analyze = load_analyze()
 KNOWN_COLLECTIONS: dict[str, tuple[str, str]] = {}
 MATRIX_ORDER = ("zork", "rubik", "k6", "matrix", "mac")
 
+# The paper names systems, not the machines they happened to run on. Hostnames
+# are an accident of whose desk a box sits on and carry no information a reader
+# can use; `S1`-`S5` follow `MATRIX_ORDER`, so the numbering is the order the
+# results are presented in.
+MACHINE_LABEL = {host: f"S{index + 1}" for index, host in enumerate(MATRIX_ORDER)}
+
+
+def machine_label(host: str) -> str:
+    """Reader-facing name for a collection's machine."""
+    return MACHINE_LABEL.get(host, host)
+
+
 DEVICE_SHORT = {
     "NVIDIA GeForce RTX 5070": "RTX 5070",
     "AMD Radeon RX 7900 XT (RADV NAVI31)": "RX 7900 XT",
@@ -236,6 +248,10 @@ class Collection:
         return any(key[1] == "automatic-scoped" for key in self.samples)
 
     @property
+    def display_label(self) -> str:
+        return machine_label(self.label)
+
+    @property
     def collected_utc(self) -> str:
         return str(self.manifest.get("created_utc", ""))
 
@@ -419,7 +435,7 @@ def vulkan_facts(root: Path) -> tuple[str, str]:
 def build_platform_table(collections: list[Collection]) -> str:
     body = []
     for collection in newest_per_device(collections):
-        label = collection.label
+        label = collection.display_label
         manifest = collection.manifest
         run = manifest["runs"][0]["metadata"]
         driver = run.get("driver_info") or "---"
@@ -584,7 +600,7 @@ def build_gpu_matrix_table(
         star=True,
         note=(
             (
-                ", ".join(f"\\texttt{{{c.label}}}" for c in withheld)
+                ", ".join(f"\\texttt{{{c.display_label}}}" for c in withheld)
                 + " selected different devices for the two implementations, so "
                 "its \\texttt{W-wgpu} cells are withheld "
                 "(Section~\\ref{sec:deviations})."
@@ -607,7 +623,7 @@ def build_host_matrix_table(
         collections, "host_ns", bootstrap_samples, contenders, vulkan_only=False
     )
     spreads = {
-        collection.label: spread
+        collection.display_label: spread
         for collection in newest_per_device(collections)
         if (spread := collection.dispersion("host_ns")) is not None
     }
@@ -733,7 +749,7 @@ def build_sweep_table(collections: list[Collection]) -> str | None:
                 body.append(cells)
     return latex_table(
         caption=(
-            "Pass-count sweep on \\texttt{zork} (RTX 5070), medians in microseconds. "
+            "Pass-count sweep on the RTX~5070, medians in microseconds. "
             "Host rows come from the timestamp-free collection; GPU rows come from the "
             "GPU-timed collection. The last column is the marginal cost per additional "
             "pass over the measured range."
@@ -894,7 +910,7 @@ class Profile:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.manifest = json.loads((root / "manifest.json").read_text())
-        self.host = str(self.manifest.get("host", "")) or root.name
+        self.host = machine_label(str(self.manifest.get("host", ""))) or root.name
         self.shares: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
         for row in csv.DictReader((root / "buckets.csv").open()):
             if row["bucket"].startswith("TOTAL"):
@@ -1189,7 +1205,7 @@ def numbers_macros(
         # first closing brace. The prose does the marking up.
         values["host/excluded/count"] = str(len(excluded))
         values["host/excluded/machines"] = ", ".join(
-            collection.label for collection in excluded
+            collection.display_label for collection in excluded
         )
         values["host/excluded/dispersion"] = ", ".join(
             f"{dispersions[collection]:.0f}" for collection in excluded
@@ -1276,7 +1292,7 @@ def numbers_macros(
             vulkan = [
                 median_us(collection.values("blade", "automatic", w, 16, "host_ns"))
                 for collection in newest_per_device(collections)
-                if collection.label == "zork"
+                if DEVICE_SLUG.get(collection.devices.get("blade", "")) == "rtx5070"
                 for w in ("compute-independent", "graphics-independent")
                 if collection.values("blade", "automatic", w, 16, "host_ns")
             ]
@@ -1294,7 +1310,39 @@ def numbers_macros(
     values.update(profile_numbers(raw))
     values.update(study_counts(raw))
 
-    lines = [NUMBERS_PREAMBLE]
+    # Prose fragments that exist only when the data calls for them. A machine
+    # that measures cleanly should appear in the paper as an ordinary platform,
+    # with no paragraph explaining itself; one that does not has to be excluded
+    # in the text, not silently. Generating the sentence from the same check
+    # that excludes the data keeps the two in step.
+    if excluded:
+        names = ", ".join(
+            f"\\texttt{{{collection.display_label}}}" for collection in excluded
+        )
+        caveat = (
+            f"\\textbf{{Host measurements on {names}.}} These are reported in "
+            "Table~\\ref{tab:host-matrix} and used for nothing. At the median "
+            "16-pass block those host samples spread "
+            "$\\bladenum{host/excluded/dispersion}\\%$ of their own median, "
+            "against at most $\\bladenum{host/usable/dispersion}\\%$ elsewhere, "
+            "while the same collection's \\emph{device} blocks are as clean as "
+            "anyone's. That is CPU-side interference confined to individual "
+            "blocks, which is what a control floor cannot see, since both "
+            "control configurations sit inside the same block."
+        )
+        inline = (
+            f" The {names} row is shown but not used, for the reason given in "
+            "Section~\\ref{sec:deviations}."
+        )
+    else:
+        caveat = ""
+        inline = ""
+    prose = [
+        f"\\newcommand{{\\hostcaveat}}{{{caveat}}}",
+        f"\\newcommand{{\\hostcaveatinline}}{{{inline}}}",
+    ]
+
+    lines = [NUMBERS_PREAMBLE, *prose]
     for key in sorted(values):
         if "{" in values[key] or "}" in values[key]:
             raise ValueError(
@@ -1475,6 +1523,146 @@ def profile_numbers(raw: Path) -> dict[str, str]:
     return values
 
 
+
+# ---------------------------------------------------------------- figures
+
+FIGURE_PREAMBLE = "% Generated by paper/build-tables.py -- do not edit by hand.\n"
+
+
+def effect_figure(
+    collections: list[Collection],
+    bootstrap_samples: int,
+    policy: str,
+    caption: str,
+    label: str,
+) -> str | None:
+    """One panel per device: effect per workload, with interval and floor.
+
+    A bar is the percent difference from `B-auto`, the two black ticks are its
+    95% interval, and the wider grey ticks are plus and minus that cell's
+    control floor. A bar ending between the grey ticks is a cell saying
+    nothing, which is the judgement the text makes over and over and which a
+    table leaves the reader to make for themselves.
+
+    Interval and floor are drawn as marks rather than pgfplots error bars,
+    which cannot take a numeric offset against a symbolic axis.
+    """
+    devices = [c for c in newest_per_device(collections) if c.has_scope_axis]
+    if not devices:
+        return None
+    panels = []
+    for collection in devices:
+        device = DEVICE_SHORT.get(
+            collection.devices.get("blade", ""), collection.devices.get("blade", "?")
+        )
+        bars, intervals, floors = [], [], []
+        for workload in WORKLOAD_ORDER:
+            result = comparison(
+                collection, workload, "gpu_ns", "blade", policy, bootstrap_samples
+            )
+            floor = control_floor(collection, workload, bootstrap_samples)
+            if result is None or floor is None:
+                continue
+            difference, low, high = result
+            short = WORKLOAD_SHORT[workload]
+            bars.append(f"({difference:.1f},{short})")
+            intervals.append(f"({low:.1f},{short}) ({high:.1f},{short})")
+            floors.append(f"({floor:.1f},{short}) ({-floor:.1f},{short})")
+        if not bars:
+            continue
+        panels.append(
+            "\\nextgroupplot[title={" + device + "}]\n"
+            "\\addplot[xbar, fill=black!12, draw=black!55]\n"
+            "coordinates {" + " ".join(bars) + "};\n"
+            "\\addplot[only marks, mark=|, mark size=3pt, black, forget plot]\n"
+            "coordinates {" + " ".join(intervals) + "};\n"
+            "\\addplot[only marks, mark=|, mark size=5.5pt, black!35, forget plot]\n"
+            "coordinates {" + " ".join(floors) + "};"
+        )
+    if not panels:
+        return None
+    body = "\n".join(panels)
+    rows = -(-len(panels) // 3)
+    workloads = ",".join(WORKLOAD_SHORT[w] for w in WORKLOAD_ORDER)
+    return (
+        FIGURE_PREAMBLE
+        + "\\begin{figure*}[t]\n\\centering\n\\begin{tikzpicture}\n"
+        "\\begin{groupplot}[\n"
+        f"  group style={{group size=3 by {rows}, horizontal sep=1.15cm,\n"
+        "    vertical sep=1.75cm, y descriptions at=edge left},\n"
+        "  width=5.2cm, height=4.3cm,\n"
+        "  xbar, /pgf/bar width=5pt,\n"
+        f"  symbolic y coords={{{workloads}}},\n"
+        "  ytick=data, y dir=reverse,\n"
+        "  xlabel={\\% of \\texttt{B-auto}},\n"
+        "  xlabel style={font=\\scriptsize},\n"
+        "  tick label style={font=\\scriptsize},\n"
+        "  title style={font=\\scriptsize},\n"
+        "  grid=major, grid style={black!10},\n"
+        "  scaled x ticks=false,\n"
+        "]\n"
+        f"{body}\n"
+        "\\end{groupplot}\n\\end{tikzpicture}\n"
+        f"\\caption{{{caption}}}\n\\label{{{label}}}\n\\end{{figure*}}\n"
+    )
+
+
+def marginal_figure(collections: list[Collection]) -> str | None:
+    """Marginal cost of one additional pass, host and device side."""
+    values = sweep_numbers(collections)
+    configurations = (("B-auto", "auto"), ("B-hazard", "hazard"), ("W-wgpu", "wgpu"))
+    categories: list[str] = []
+    coordinates: dict[str, list[str]] = {name: [] for name, _ in configurations}
+    for side, side_label in (("host", "host"), ("gpu", "GPU")):
+        for workload in ("compute-independent", "graphics-independent"):
+            category = f"{side_label}~{WORKLOAD_SHORT[workload]}"
+            present = False
+            for name, config in configurations:
+                value = values.get(f"sweep/{side}/{workload}/{config}/marginal")
+                if value is None:
+                    continue
+                coordinates[name].append(f"({category},{float(value):.2f})")
+                present = True
+            if present:
+                categories.append(category)
+    if not categories:
+        return None
+    plots = "\n".join(
+        "\\addplot+[ybar] coordinates {" + " ".join(coordinates[name]) + "};"
+        for name, _ in configurations
+        if coordinates[name]
+    )
+    legend = ",".join(
+        f"\\texttt{{{name}}}" for name, _ in configurations if coordinates[name]
+    )
+    return (
+        FIGURE_PREAMBLE
+        + "\\begin{figure}[t]\n\\centering\n\\begin{tikzpicture}\n\\begin{axis}[\n"
+        "  width=\\columnwidth, height=5.2cm,\n"
+        "  ybar, /pgf/bar width=7pt,\n"
+        f"  symbolic x coords={{{','.join(categories)}}},\n"
+        "  xtick=data, ymin=0,\n"
+        "  ylabel={$\\mu$s per additional pass},\n"
+        "  ylabel style={font=\\scriptsize},\n"
+        "  tick label style={font=\\scriptsize},\n"
+        "  legend style={font=\\scriptsize, at={(0.5,1.03)}, anchor=south,\n"
+        "    legend columns=3, draw=none},\n"
+        "  grid=major, grid style={black!10},\n"
+        "  nodes near coords,\n"
+        "  every node near coord/.append style={font=\\tiny},\n"
+        "]\n"
+        f"{plots}\n"
+        f"\\legend{{{legend}}}\n"
+        "\\end{axis}\n\\end{tikzpicture}\n"
+        "\\caption{Marginal cost of one additional pass on the RTX~5070, from the "
+        "pass-count sweeps. Host figures come from the timestamp-free collection "
+        "and device figures from the GPU-timed one. The gap between "
+        "\\texttt{B-auto} and \\texttt{B-hazard} is what one redundant barrier "
+        "costs; the gap to \\texttt{W-wgpu} is end-to-end.}\n"
+        "\\label{fig:marginal}\n\\end{figure}\n"
+    )
+
+
 def build_summary_csv(collections: list[Collection], path: Path) -> None:
     with path.open("w", encoding="utf-8", newline="") as destination:
         writer = csv.writer(destination)
@@ -1574,7 +1762,30 @@ def main() -> None:
         ),
         "metal.tex": build_metal_table(collections),
         "sweep.tex": build_sweep_table(collections),
-        "scope.tex": build_scope_table(collections, arguments.bootstrap_samples),
+        "fig-placement.tex": effect_figure(
+            collections,
+            arguments.bootstrap_samples,
+            "hazard-only",
+            "Barrier placement: percent difference in GPU span between "
+            "\\texttt{B-hazard} and \\texttt{B-auto} at 16 passes, by device and "
+            "workload. The bar is the median, the two black ticks its 95\\% "
+            "bootstrap interval, and the wider grey ticks plus and minus that "
+            "cell's control floor. A bar ending between the grey ticks is a cell "
+            "that cannot answer, whatever its own interval looks like. Note the "
+            "per-panel horizontal scales.",
+            "fig:placement",
+        ),
+        "fig-scope.tex": effect_figure(
+            collections,
+            arguments.bootstrap_samples,
+            "automatic-scoped",
+            "Barrier scope at fixed placement: percent difference in GPU span "
+            "between \\texttt{B-auto-scoped} and \\texttt{B-auto}, drawn as in "
+            "Figure~\\ref{fig:placement}. The chain workloads are the clean test, "
+            "because placement has nothing to remove there.",
+            "fig:scope",
+        ),
+        "fig-marginal.tex": marginal_figure(collections),
         "profile.tex": build_profile_table(arguments.raw),
         "numbers.tex": numbers_macros(
             collections, arguments.raw, arguments.bootstrap_samples
