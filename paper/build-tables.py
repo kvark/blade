@@ -1575,6 +1575,7 @@ def numbers_macros(
 
     values.update(launch_state_numbers(collections))
     values.update(sweep_numbers(collections))
+    values.update(hazard_numbers(raw))
     values.update(profile_numbers(raw))
     values.update(study_counts(raw))
 
@@ -1834,6 +1835,75 @@ def study_counts(raw: Path) -> dict[str, str]:
                     values[f"barriers/{name}/{family}/final"] = str(
                         sum(position >= passes for position in positions)
                     )
+    return values
+
+
+def hazard_numbers(raw: Path) -> dict[str, str]:
+    """Process-level statistics for the Metal hazard-tracking sessions.
+
+    The newest `*-hazard` directory holds one raw CSV per process session.
+    Per session, each (workload, tracking, passes) cell is summarized by its
+    median; the paper quotes the median and range of those session values, so
+    a claim is never one launch's luck. A recorded incorrect output is a build
+    error, not a dropped row.
+    """
+    directories = sorted(raw.glob("*-hazard"))
+    if not directories:
+        return {}
+    directory = directories[-1]
+    sessions: dict[str, dict] = {}
+    rows_total = 0
+    for path in sorted(directory.glob("*-raw.csv")):
+        per_cell = defaultdict(list)
+        with path.open() as source:
+            for row in csv.DictReader(
+                line for line in source if not line.startswith("#")
+            ):
+                rows_total += 1
+                if row["correct"] != "true":
+                    raise ValueError(f"{path}: incorrect output recorded")
+                per_cell[
+                    (row["workload"], row["tracking"], int(row["passes"]))
+                ].append((float(row["encode_us"]), float(row["gpu_us"])))
+        sessions[path.name] = {
+            key: (
+                statistics.median(v[0] for v in vals),
+                statistics.median(v[1] for v in vals),
+            )
+            for key, vals in per_cell.items()
+        }
+    if not sessions:
+        return {}
+    values = {
+        "hazard/sessions": str(len(sessions)),
+        "hazard/rows": str(rows_total),
+    }
+    counts = sorted({key[2] for cells in sessions.values() for key in cells})
+    for index, metric in ((0, "encode"), (1, "gpu")):
+        deltas = []
+        for cells in sessions.values():
+            for count in counts:
+                tracked = cells.get(("independent", "tracked", count))
+                untracked = cells.get(("independent", "untracked", count))
+                if tracked and untracked and tracked[index]:
+                    deltas.append(100.0 * (untracked[index] / tracked[index] - 1.0))
+        if deltas:
+            values[f"hazard/independent/{metric}/lo"] = f"{min(deltas):+.1f}"
+            values[f"hazard/independent/{metric}/hi"] = f"{max(deltas):+.1f}"
+    for mode, name in (("untracked+fence", "fence"), ("untracked+event", "event")):
+        for count in (100, 500):
+            for index, metric in ((0, "encode"), (1, "gpu")):
+                ratios = []
+                for cells in sessions.values():
+                    tracked = cells.get(("dependent", "tracked", count))
+                    untracked = cells.get(("dependent", mode, count))
+                    if tracked and untracked and tracked[index]:
+                        ratios.append(untracked[index] / tracked[index])
+                if ratios:
+                    key = f"hazard/dependent/{name}/{metric}/p{count}"
+                    values[f"{key}/med"] = f"{statistics.median(ratios):.1f}"
+                    values[f"{key}/lo"] = f"{min(ratios):.1f}"
+                    values[f"{key}/hi"] = f"{max(ratios):.1f}"
     return values
 
 

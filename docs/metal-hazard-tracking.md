@@ -10,13 +10,18 @@ Power Mode enabled.
 
 Blade should keep using Metal's tracked resource mode.
 
-In this single pilot session, disabling hazard tracking did not show a
-consistent independent-pass improvement in CPU encoding, command-buffer commit,
-or GPU time. Adding the synchronization that untracked dependent resources
-require was substantially slower: at 100 passes,
-explicit fences and events cost about 8.5–8.9 times as much CPU encoding time
-and about 10 times as much GPU time as Metal's automatic tracking in this
-microbenchmark.
+Replicated across ten raw-retained process sessions on AC power
+(`20260728T145211Z-Mac-hazard`, collected by
+`paper/tools/collect-metal-hazard.zsh`), disabling hazard tracking moves
+independent-pass encode time by −2.0% to +5.3% and GPU time by −3.5% to +2.1%
+across every session and pass count — no consistent improvement. Adding the
+synchronization that untracked dependent resources require is expensive and
+stable session to session: at 100 passes an `MTLFence` costs 8.9× the encode
+time (session range 8.8–9.1) and 10.1× the GPU time of Metal's automatic
+tracking, an `MTLEvent` 8.5× and 10.1×; at 500 passes the GPU ratios rise to
+about 11.1×. Every row records the resource mode the driver actually applied
+and passes an output-correctness check. The original single-session pilot of
+2026-07-24 showed the same picture from printed summaries alone.
 
 This differs from Blade's Vulkan `manual_barriers` optimization. The automatic
 Vulkan path inserts a global `ALL_COMMANDS` barrier before every pass. Metal's

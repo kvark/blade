@@ -15,11 +15,11 @@
 \newcommand{\wgpu}{\textsc{wgpu}}
 \newcommand{\ci}[2]{\,[#1,\,#2]}
 
-% Every quantity drawn from the retained matrix, sweep, profile, or capture
-% collections is defined by paper/build-tables.py and cited by key, so
-% regenerating a table also regenerates the sentences about it. The separate
-% summary-only Metal hazard pilot is explicitly labelled. Citing a key that
-% the retained collections do not supply is a build error, not a blank.
+% Every quantity drawn from the retained matrix, sweep, profile, capture, or
+% Metal-hazard collections is defined by paper/build-tables.py and cited by
+% key, so regenerating a table also regenerates the sentences about it.
+% Citing a key that the retained collections do not supply is a build error,
+% not a blank.
 \input{data/derived/tables/numbers}
 
 \title{Global Pass Barriers Without Per-Resource RHI Tracking:\\
@@ -85,17 +85,16 @@ resource-specific knowledge somewhere in the engine.
 
 \noindent\colorbox{yellow!25}{%
 \parbox{\dimexpr\columnwidth-2\fboxsep\relax}{%
-\textbf{Working draft.} Fixed-matrix, sweep, profile, and capture quantities
-are generated from retained collections and cited by key. The separate Metal
-hazard pilot retained only summary medians and is explicitly exploratory.
-The 2026-07-28 archival round closes the gates an earlier audit left open:
-every machine ran the corrected benchmark from one clean revision pair, with
-ten process repetitions per configuration, a retained
+\textbf{Working draft.} Fixed-matrix, sweep, profile, capture, and
+Metal-hazard quantities are generated from retained collections and cited by
+key. The 2026-07-28 archival round closes the gates an earlier audit left
+open: every machine ran the corrected benchmark from one clean revision pair,
+with ten process repetitions per configuration, a retained
 synchronization-validation collection and its logs on every Vulkan machine,
-and captures of all six policies on four machines agreeing byte-for-byte.
-Still open: the Metal hazard pilot has no retained raw observations, and the
-raw collections remain git-ignored pending the archival bundle of the
-artifact section. Claims are stated for the
+captures of all six policies on four machines agreeing byte-for-byte, and the
+Metal hazard question replicated across ten raw-retained sessions on AC
+power. Still open: the raw collections remain git-ignored pending the
+archival bundle of the artifact section. Claims are stated for the
 device-driver pairs measured; multisampled targets and application frames are
 named where they bound a claim.}}
 
@@ -1496,8 +1495,8 @@ this paper.
 
 The question Metal actually poses --- what hazard tracking costs when the framework
 rather than the application performs it --- is not answered by these workloads,
-because both implementations pay it. A separate pilot harness, listed in
-Appendix~\ref{sec:metal-harness}, probes it directly by creating the same
+because both implementations pay it. A separate harness, listed in
+Appendix~\ref{sec:metal-harness}, measures it directly by creating the same
 resources with \texttt{MTLHazardTrackingModeTracked} and
 \texttt{MTLHazardTrackingModeUntracked} and, in the untracked dependent case,
 reconstructing the dependency with an \texttt{MTLFence} or an
@@ -1506,26 +1505,37 @@ dispatch, so the measurement is dominated by synchronization rather than by
 work. The full protocol and tables are in the repository's investigation
 note~\cite{blade-metal-note}.
 
-The pilot point estimates differ sharply from the Vulkan placement result. For
-\emph{independent} passes, encode time differs by $-0.9\%$ to
-$+1.0\%$ and GPU time by $-0.4\%$ to $0.0\%$ at 1, 10, 100, and 500 passes.
-That is consistent with Metal's tracker already distinguishing the resources,
-but a single session without an equivalence interval cannot establish ``no
-cost''. For \emph{dependent}
-passes, opting out is expensive: at 100 passes an \texttt{MTLFence} costs
-$8.9\times$ the encode time and $10.1\times$ the GPU time of the tracker, and
-an \texttt{MTLEvent} costs $8.5\times$ and $10.3\times$; at 500 passes the
-ratios are $8.7\times$/$11.1\times$ and $8.4\times$/$11.2\times$.
+The replicated result differs sharply from the Vulkan placement result, in
+the direction the single-session pilot indicated. Across
+$\bladenum{hazard/sessions}$ retained process sessions on AC power, turning
+tracking off for \emph{independent} passes moves encode time by
+$\bladenum{hazard/independent/encode/lo}$ to
+$\bladenum{hazard/independent/encode/hi}\%$ and GPU time by
+$\bladenum{hazard/independent/gpu/lo}$ to
+$\bladenum{hazard/independent/gpu/hi}\%$ across every session and pass count
+--- consistent with Metal's tracker already distinguishing the resources, and
+now bounded by the observed spread rather than asserted from one launch. For
+\emph{dependent} passes, opting out is expensive and stable across sessions:
+at 100 passes an \texttt{MTLFence} costs
+$\bladenum{hazard/dependent/fence/encode/p100/med}\times$ the encode time
+(session range
+$[\bladenum{hazard/dependent/fence/encode/p100/lo},\,\bladenum{hazard/dependent/fence/encode/p100/hi}]$)
+and $\bladenum{hazard/dependent/fence/gpu/p100/med}\times$ the GPU time of
+the tracker, an \texttt{MTLEvent}
+$\bladenum{hazard/dependent/event/encode/p100/med}\times$ and
+$\bladenum{hazard/dependent/event/gpu/p100/med}\times$; at 500 passes the
+GPU ratios rise to
+$\bladenum{hazard/dependent/fence/gpu/p500/med}\times$ and
+$\bladenum{hazard/dependent/event/gpu/p500/med}\times$.
 
-These figures are exploratory. They come from one session with ten warm-ups;
-the machine was on battery with Low Power Mode enabled, and only the printed
-summary medians were retained. Interleaving reduces mode-order bias but cannot
-remove power, thermal, or process-level variation. Publication-quality claims
-need retained raw observations and repeated process sessions on AC power. The
-harness's deliberately unsynchronized untracked case happened to produce
-correct values here, which is not evidence that it is safe.
+Every session retains its raw observations, and each of the
+$\bladenum{hazard/rows}$ rows records the resource mode the driver actually
+applied and an output-correctness check; the requested mode took effect and
+the check passed in all of them. The harness's deliberately unsynchronized
+untracked case again produced correct values, which is still not evidence
+that the mode is safe.
 
-The API consequence is firmer than the timing pilot:
+The API consequence is firmer still than the timings:
 \texttt{manual\_barriers} should stay a Vulkan concept. Metal's tracking mode is chosen per resource at
 creation, while \blade's flag belongs to a command encoder, and a resource
 outlives any one encoder; moreover \blade's \texttt{barrier()} is called
@@ -2026,7 +2036,7 @@ manifests record the revisions, the clock configuration, and device metadata.
 
 This is source availability, not yet an archival artifact: the raw
 directories are git-ignored, so the collections exist only where they were
-copied, and the Metal hazard pilot retains no raw observations. A
+copied. A
 submission artifact should be a versioned superproject that pins both source
 trees as submodules and archives raw observations, validation logs, captures,
 manifests, and checksums under a durable release or DOI. Moving branch names
@@ -2072,10 +2082,9 @@ because on at least one real device it makes things worse.
 
 The remaining bounds are specific: no application frames or multisampled
 targets, no mechanism for the Radeon~780M overlap penalty, its launch-state
-mixture, or the discrete AMD scope saving, no controlled layout variant, and
-no retained raw observations or process repetitions for the separate Metal
-hazard-tracking pilot. They bound the corresponding claims rather than
-supporting extrapolation beyond the measured workloads.
+mixture, or the discrete AMD scope saving, and no controlled layout variant.
+They bound the corresponding claims rather than supporting extrapolation
+beyond the measured workloads.
 
 \bibliographystyle{plain}
 \bibliography{references}
@@ -2108,10 +2117,13 @@ receives ten warm-up runs, cases are interleaved in alternating order to reduce
 mode-order and thermal bias, and results are medians of 200 samples, except the
 500-pass cases which use 80. Encoding time excludes \texttt{commit()}, which is
 measured separately; device time comes from \texttt{gpuStartTime} and
-\texttt{gpuEndTime}. This initial run retained only printed summaries, not raw
-per-iteration observations, and has no independent process repetitions; it is
-therefore exploratory. The harness also contains a deliberately unsynchronized
-untracked case as a canary; it happened to produce correct values on this
-machine and workload, which is not evidence that the mode is safe.
+\texttt{gpuEndTime}. The archival run repeats the whole procedure as
+$\bladenum{hazard/sessions}$ separate process sessions on AC power, driven by
+a collection script distributed with the artifact; every session retains its
+raw per-iteration observations, the resource mode the driver actually
+applied, and an output-correctness check per row. The harness also contains a
+deliberately unsynchronized untracked case as a canary; it produced correct
+values on this machine and workload, which is not evidence that the mode is
+safe.
 
 \end{document}
