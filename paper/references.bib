@@ -15,11 +15,12 @@
 }
 
 @misc{webgpu-spec,
-  author = {{W3C GPU for the Web Community Group}},
-  title = {WebGPU},
+  author = {{W3C GPU for the Web Working Group}},
+  title = {{WebGPU}},
   year = {2026},
   howpublished = {\url{https://gpuweb.github.io/gpuweb/}},
-  note = {Editor's Draft, 23 July 2026; accessed 2026-07-24}
+  note = {Editor's Draft, 27 July 2026, source revision
+          d390da5f80f18e82d9535a40c6f2f1f65e6884ae; accessed 2026-07-28}
 }
 
 @misc{wgpu-trackers,
@@ -40,7 +41,7 @@
 
 @misc{amd-rdna-guide,
   author = {{AMD}},
-  title = {RDNA Performance Guide},
+  title = {{RDNA} Performance Guide},
   year = {2023},
   howpublished = {\url{https://gpuopen.com/learn/rdna-performance-guide/}},
   note = {Updated for RDNA 3; accessed 2026-07-24}
@@ -58,10 +59,18 @@
   author = {Dzmitry Malyshau and contributors},
   title = {Blade},
   year = {2026},
-  howpublished = {\url{https://github.com/kvark/blade}},
-  note = {Branch \texttt{blade-sync-study}; the revision each machine measured
-          is recorded in its collection manifest and listed per row in
-          Table~\ref{tab:platforms}}
+  howpublished = {\url{https://github.com/kvark/blade/tree/blade-sync-study}},
+  note = {Study branch; accessed 2026-07-28}
+}
+
+@misc{wgpu-study,
+  author = {Dzmitry Malyshau and others},
+  title = {{wgpu} synchronization-study benchmark fork},
+  year = {2026},
+  howpublished = {\url{https://github.com/kvark/wgpu/tree/blade-sync-study}},
+  note = {Retained measurements at revision
+          882d5bbff6d6b94e224cf7e818c90aa9b9b230dd; corrected benchmark at
+          7d37a77c086f3d3b8a9dbda6b476cd7ac195fcfc; accessed 2026-07-28}
 }
 
 @misc{blade-issue-343,
@@ -101,25 +110,34 @@
   author = {Dzmitry Malyshau},
   title = {Metal untracked hazard mode on {A}pple {M3}},
   year = {2026},
-  howpublished = {\url{https://github.com/kvark/blade/blob/blade-sync-study/docs/metal-hazard-tracking.md}},
-  note = {Investigation of 24 July 2026 at Blade revision ba0fb5a}
+  howpublished = {\url{https://github.com/kvark/blade/blob/87ed06750877f336ad1c54fa5005a0b799f488d7/docs/metal-hazard-tracking.md}},
+  note = {Investigation of 24 July 2026 at Blade revision ba0fb5a; note frozen
+          at study revision 87ed06750877}
 }
 
 @misc{metal-hazard-tracking,
   author = {{Apple}},
-  title = {{MTLHazardTrackingMode}},
+  title = {Resource synchronization},
   year = {2026},
-  howpublished = {\url{https://developer.apple.com/documentation/metal/mtlhazardtrackingmode}},
-  note = {Accessed 2026-07-25}
+  howpublished = {\url{https://developer.apple.com/documentation/metal/resource-synchronization}},
+  note = {Includes pre-Metal-4 hazard tracking and Metal 4 queue
+          synchronization; accessed 2026-07-28}
 }
 
-@misc{gtav-study,
-  author = {Adrian Courr{\`e}ges},
-  title = {{GTA V} --- Graphics Study},
-  year = {2015},
-  howpublished = {\url{https://www.adriancourreges.com/blog/2015/11/02/gta-v-graphics-study/}},
-  note = {Frame analysis reporting 4155 draw calls, 1113 textures, and 88 render
-          targets in one frame; accessed 2026-07-27}
+@misc{d3d12-enhanced-barriers,
+  author = {Bill Kristiansen},
+  title = {{D3D12} Enhanced Barriers Preview},
+  year = {2021},
+  howpublished = {\url{https://devblogs.microsoft.com/directx/d3d12-enhanced-barriers-preview/}},
+  note = {Microsoft DirectX Developer Blog; accessed 2026-07-28}
+}
+
+@misc{nvrhi-state-tracking,
+  author = {Alexey Panteleev},
+  title = {Writing Portable Rendering Code with {NVRHI}},
+  year = {2021},
+  howpublished = {\url{https://developer.nvidia.com/blog/writing-portable-rendering-code-with-nvrhi/}},
+  note = {NVIDIA Technical Blog; accessed 2026-07-28}
 }
 
 @misc{frostbite-framegraph,
@@ -128,6 +146,50 @@
   year = {2017},
   howpublished = {\url{https://www.gdcvault.com/play/1024612/FrameGraph-}},
   note = {Game Developers Conference 2017; accessed 2026-07-27}
+}
+
+@misc{activision-task-graph,
+  author = {Charlie Birtwistle and Fran{\c{c}}ois Durand},
+  title = {Task Graph Renderer at {Activision}},
+  year = {2023},
+  howpublished = {\url{https://enginearchitecture.org/downloads/reac2023_task_graph_renderer.pdf}},
+  note = {Rendering Engine Architecture Conference 2023; accessed 2026-07-28}
+}
+
+@misc{unreal-rdg,
+  author = {{Epic Games}},
+  title = {Render Dependency Graph in {Unreal Engine}},
+  year = {2026},
+  howpublished = {\url{https://dev.epicgames.com/documentation/en-us/unreal-engine/render-dependency-graph-in-unreal-engine}},
+  note = {Unreal Engine 5.8 documentation; accessed 2026-07-28}
+}
+
+@article{luisa-render,
+  author = {Shaokun Zheng and Zhiqian Zhou and Xin Chen and Difei Yan and
+            Chuyan Zhang and Yuefeng Geng and Yan Gu and Kun Xu},
+  title = {{LuisaRender}: A High-Performance Rendering Framework with Layered
+           and Unified Interfaces on Stream Architectures},
+  journal = {ACM Transactions on Graphics},
+  year = {2022},
+  volume = {41},
+  number = {6},
+  articleno = {232},
+  pages = {1--19},
+  doi = {10.1145/3550454.3555463},
+  note = {Author manuscript:
+          \url{https://www.cs.ucr.edu/~ygu/papers/SIGASIA22/LuisaRender.pdf}}
+}
+
+@article{renderkernel,
+  author = {Jinyuan Yang and Soumyabrata Dev and Abraham G. Campbell},
+  title = {{RenderKernel}: High-Level Programming for Real-Time Rendering
+           Systems},
+  journal = {Visual Informatics},
+  year = {2024},
+  volume = {8},
+  pages = {82--95},
+  doi = {10.1016/j.visinf.2024.09.004},
+  note = {\url{https://doi.org/10.1016/j.visinf.2024.09.004}}
 }
 
 @book{davison-hinkley-bootstrap,

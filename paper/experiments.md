@@ -430,8 +430,8 @@ cell's paired hierarchical interval.
 The floor must be read **per cell, not per device**. It must also come from the
 interval, not only the point estimate: process repetitions can occupy different
 clock or interference regimes even when the median control effect is near
-zero. A directional claim is admitted only when its own interval excludes zero
-and its point lies outside this floor. The generated numbers and figures are
+zero. A directional claim is admitted only when its entire interval lies
+beyond the same-side floor for that cell. The generated numbers and figures are
 the source of current floor values; this protocol deliberately does not copy
 them into prose where a recollection can leave them stale.
 

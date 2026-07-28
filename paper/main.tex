@@ -22,7 +22,7 @@
 % the retained collections do not supply is a build error, not a blank.
 \input{data/derived/tables/numbers}
 
-\title{Global Pass Barriers Without Resource Tracking:\\
+\title{Global Pass Barriers Without Per-Resource RHI Tracking:\\
 A Cross-Vendor Study with \blade}
 \author{Author information to be finalized}
 \date{Draft of July 2026}
@@ -32,12 +32,12 @@ A Cross-Vendor Study with \blade}
 
 \begin{abstract}
 Modern explicit graphics APIs make applications describe memory dependencies,
-resource access scopes, and image layouts in detail. Portable APIs such as
-WebGPU reconstruct and validate this state at run time, while render graphs
-derive it from a declared workload. \blade{} explores a different point in the
-design space: its Vulkan backend keeps ordinary images in
-\texttt{GENERAL}, does not maintain per-resource states, and places a global
-memory barrier at pass boundaries.
+resource access scopes, and image layouts in detail. Implementations of
+portable APIs, such as \wgpu{} for WebGPU, reconstruct and validate this state
+at run time, while render graphs derive it from a declared workload. \blade{}
+explores a different point in the design space: its Vulkan backend keeps
+ordinary images in \texttt{GENERAL}, does not maintain per-resource states,
+and places a global memory barrier at pass boundaries.
 
 We separate barrier placement from stage/access scope inside \blade{}, compare
 matched native \wgpu{} programs end-to-end, and examine six GPUs from four
@@ -72,7 +72,12 @@ idle or clean units can make the remainder cheap. The same source narrows the
 layout concern: under the measured queue and usage conditions, RADV retains
 DCC in \texttt{GENERAL} on GFX10 and later and conditionally retains HTILE,
 but forgoes FMASK compression. Multisampled colour therefore remains an
-important unmeasured exception.
+important unmeasured exception. For engine architecture, the result is not
+``discard the render graph'': dependency knowledge can remain above a
+tracking-free RHI and select global cuts in the command stream. Such cuts do
+not encode arbitrary per-resource DAG edges without over-synchronization, and
+aliasing, cross-queue use, and exceptional layouts still require
+resource-specific knowledge somewhere in the engine.
 \end{abstract}
 
 \noindent\colorbox{yellow!25}{%
@@ -99,19 +104,19 @@ transitions. This machinery sits on a CPU-critical command recording path. The
 \wgpu{} implementation describes its trackers as some of the hottest code in
 its codebase~\cite{wgpu-trackers}.
 
-It is worth being concrete about how much of it there is to do. A published
-frame-by-frame study of a shipping title counts 4155 draw calls, 1113 textures,
-and 88 render targets in a single frame~\cite{gtav-study}, arranged into
-roughly a dozen and a half distinct stages: six cubemap faces, four shadow
-cascades, a G-buffer, ambient occlusion and its two blur passes, a planar
-reflection, lighting, water, atmosphere, transparency, tone mapping, and
-anti-aliasing. Every boundary between those is a place where a layer either
-knows that two passes are unrelated or assumes that they are not, and every
-resource in them is one a tracker has to keep state for. The synchronization
-question is not academic at that scale; it is per-frame arithmetic on the
-critical path.
+Production engines show both the scale and why this work is normally
+centralized. Activision reports that the first deployment of its Task Graph
+contained 236 tasks, 258 resources, and 92 barrier calls with 328 barrier
+elements; the graph later grew to roughly 350 tasks~\cite{activision-task-graph}.
+Unreal's Render Dependency Graph likewise uses
+pass resource declarations to derive subresource transitions, asynchronous
+compute fences, transient aliasing, validation, and parallel
+recording~\cite{unreal-rdg}. At that scale the useful question is more precise than
+``track or do not track'': must the low-level graphics abstraction duplicate
+per-resource knowledge, or can an engine-level graph remain the source of
+truth and give the abstraction a smaller execution contract?
 
-\blade{}~\cite{blade} tests the opposite engineering hypothesis. The
+\blade{}~\cite{blade} tests the latter engineering hypothesis. The
 distinction is not that its API exposes fewer state objects --- \wgpu's does
 not expose resource states either, and tracking is an internal matter for both
 --- but that \blade{} does not maintain the state at all. On Vulkan, ordinary
@@ -119,7 +124,11 @@ images stay in \texttt{VK\_IMAGE\_LAYOUT\_GENERAL} and a broad memory barrier
 orders writes before later reads and writes at pass boundaries, so nothing has
 to be remembered between one pass and the next. What surfaces in the API is a
 consequence rather than the point: no per-resource work at record time, and an
-application that wants overlap has to say so itself.
+application that wants overlap has to say so itself. A render graph and
+\blade{} are therefore composable rather than competing designs: the graph can
+choose the dependency boundaries while the RHI declines to rediscover them.
+An application without such a graph can retain \blade's conservative automatic
+boundaries.
 
 The question is newly relevant because
 \texttt{VK\_KHR\_unified\_image\_layouts} guarantees, when enabled, that
@@ -199,6 +208,15 @@ variable. A system may:
   \item transition images between specialized layouts or retain one layout.
 \end{enumerate}
 
+This decomposition is not specific to Vulkan. Direct3D~12 Enhanced Barriers
+independently expose synchronization scope, access scope, and texture layout,
+and distinguish global, buffer, and texture barriers. A global barrier affects
+the indicated resource-memory accesses without identifying a resource or
+changing a texture layout~\cite{d3d12-enhanced-barriers}. \blade's policy
+selects the analogous global point and separately chooses a persistent image
+layout. We do not benchmark Direct3D~12; its API is evidence that the axes are
+real interface choices, not performance evidence for \blade.
+
 \subsection{What a coarse barrier costs a driver}
 \label{sec:radv-barriers}
 
@@ -223,8 +241,9 @@ consequently every branch of \texttt{radv\_src\_access\_flush} fires:
   \item \texttt{TRANSFER\_WRITE} requests both attachment-cache paths and their
   metadata handling;
   \item \texttt{TRANSFORM\_FEEDBACK\_WRITE} requests an L2 write-back; and
-  \item command-preprocess, shader-storage, and acceleration-structure writes
-  request an L2 invalidation where the relevant memory is not coherent.
+  \item command-preprocess writes request an L2 invalidation; shader-storage
+  and acceleration-structure writes do so where the relevant memory is not
+  coherent.
 \end{itemize}
 
 Two details make the global form more pessimistic than an \emph{image}-scoped
@@ -288,8 +307,8 @@ AMD~\cite{amd-rdna-guide}. The unified-image-layouts extension reflects a
 hardware and driver trend in which most layouts are physically identical. It
 allows \texttt{GENERAL} in most positions and promises optimal performance,
 while retaining exceptions such as initialization from
-\texttt{UNDEFINED}, presentation, and some video interactions
-~\cite{vulkan-unified-layouts}.
+\texttt{UNDEFINED}, presentation, and some video
+interactions~\cite{vulkan-unified-layouts}.
 
 RADV lets us be more specific than the extension proposal, because the layout
 policy is three readable predicates~\cite{mesa-radv}:
@@ -333,7 +352,8 @@ colour as the case where the claim is weakest.
 WebGPU defines usage scopes that reject conflicting uses and provide a safe,
 portable programming contract~\cite{webgpu-spec}. \wgpu{} represents buffer
 and texture states in dense trackers, merges per-scope usage, and generates
-transitions between command buffers~\cite{wgpu-trackers}. Its Vulkan backend
+transitions as usage scopes enter a command buffer and between submitted
+command buffers~\cite{wgpu-trackers}. Its Vulkan backend
 emits \texttt{VkBufferMemoryBarrier} and \texttt{VkImageMemoryBarrier}
 structures whose stages, accesses, and image layouts are derived from the
 recorded usage. That makes the requests resource-specific; it does not prove
@@ -1695,6 +1715,43 @@ that exposes manual barriers must therefore treat them as a measured
 optimization rather than a default, and profiling guidance belongs next to the
 API.
 
+\subsection{Implications for engine architecture}
+\label{sec:engine-implications}
+
+The architectural result concerns where resource knowledge lives, not whether
+it exists. An engine that already has a render or task graph need not reproduce
+that graph as per-resource state inside its RHI. It can use the graph to group
+independent producers, place a \blade{} barrier at a dependency cut, and then
+record the consumers. The field report has exactly this shape: two independent
+views form one phase and join before refraction. In a phase-structured graph,
+one global barrier can represent many aligned resource edges.
+
+A global barrier is nevertheless a \emph{cut}, not an edge. Suppose one
+producer must complete before a consumer while another long producer is
+independent of that consumer. A global barrier placed for the first dependency
+also constrains the second producer whenever it falls on the barrier's source
+side and matches its scope; a resource-specific barrier can name only the real
+edge. The controlled workloads here are the two endpoints --- all inter-pass
+edges or none --- plus a mixed chain whose incoming passes are almost all
+hazardous. They do not show that an arbitrary partially dependent render graph
+can be lowered to global cuts without losing scheduling freedom.
+
+For a small or immediate-mode renderer without a graph, automatic pass
+boundaries remain the conservative starting point. Deriving stage and access
+scope from pass kind is internal, requires no resource declarations, and
+caused no resolved regression in the measured cells. Manual placement is then
+a profiler-guided escape hatch for a region where unrelated passes demonstrably
+serialize; it is not a new default for the whole frame.
+
+Finally, a tracking-free RHI is not a resource-management system. Transient
+aliasing and lifetime planning, subresource layout transitions, queue-family
+ownership and cross-queue dependencies, and the multisampled-colour exception
+identified on RADV all still require resource identity somewhere. An
+engine-level graph can own those responsibilities; an engine that wants the
+RHI to infer them needs a tracked abstraction such as \wgpu{} or NVRHI. The
+choice exposed by this study is whether that knowledge must be duplicated on
+the command-recording path when the engine already has it.
+
 \subsection{What to do on AMD}
 \label{sec:amd-advice}
 
@@ -1850,6 +1907,16 @@ design exists to hold still. A reader who needs the rule validated on their own
 frame should measure their own frame, which is the recommendation
 Section~\ref{sec:amd-advice} makes anyway.
 
+The dependency structures are also endpoints rather than representative DAGs.
+The independent workloads remove every timed inter-pass barrier, while the
+single-kind chains retain every one; in \texttt{mixed-chain}, every incoming
+pass from the third onward has a dependency and the policy is intentionally
+conservative at the second pass. No controlled workload contains two
+interleaved chains whose dependency edges cross different global cuts. Such a
+staggered partial DAG is the most important next microbenchmark for the engine
+claim: it would measure the scheduling freedom lost when one real edge forces
+a global cut across otherwise independent work.
+
 The AMD evidence is now a discrete RDNA3 part, a mobile RDNA3 iGPU, a very
 small desktop iGPU, the driver sources, and a user report. The small iGPU is
 the most precisely measured device in the study and the least responsive to
@@ -1872,36 +1939,83 @@ contradiction of it.
 
 The Vulkan specification defines explicit execution and memory dependencies
 and application-controlled image layouts~\cite{vulkan-spec}. AMD and NVIDIA
-have published architecture-specific synchronization guidance
-~\cite{amd-barriers,amd-rdna-guide,nvidia-vulkan-tips}. The
+have published architecture-specific synchronization
+guidance~\cite{amd-barriers,amd-rdna-guide,nvidia-vulkan-tips}. The
 unified-image-layouts extension standardizes the observation that specialized
 layouts no longer correspond to distinct representations on many modern
 implementations~\cite{vulkan-unified-layouts}; the RADV predicates quoted in
 this paper are a concrete instance of that convergence, including its
 exceptions.
 
+Direct3D~12 Enhanced Barriers separate work synchronization, memory access,
+and texture layout, and provide global as well as resource-specific barrier
+types~\cite{d3d12-enhanced-barriers}. This closely matches the factorization
+used here. The present study differs by evaluating an RHI policy that chooses
+global barriers systematically at pass boundaries and by measuring that policy
+through Vulkan; it makes no Direct3D performance claim.
+
 Render graphs take the workload declaration as their source of resource
 lifetimes and pass dependencies. Frostbite's FrameGraph is a canonical
 production example: it builds a graph of render passes and resources so the
 engine can derive scheduling and resource-management decisions
-centrally~\cite{frostbite-framegraph}. \blade{} deliberately declines that
-declaration and the resource state it enables. Its smaller contract retains
-only pass kind plus application-selected dependency boundaries, and therefore
-cannot derive resource-scoped barriers, aliasing, or queue schedules.
+centrally~\cite{frostbite-framegraph}. Activision's Task Graph reports the
+maintenance failures that motivated the same move and its scale in a shipping
+renderer~\cite{activision-task-graph}; Unreal's RDG is a current production
+system deriving transitions, queue fences, aliasing, and validation from pass
+parameters~\cite{unreal-rdg}. These systems are not alternatives to \blade{}.
+An upstream graph may select \blade's dependency cuts. What \blade{} declines
+is the resource declaration \emph{inside the RHI}, and its smaller contract
+therefore cannot itself derive resource-scoped barriers, aliasing, or queue
+schedules.
+
+Academic rendering systems explore the resource-aware end of the same design
+space. LuisaRender builds a subresource dependency graph and reorders
+independent commands, reporting up to a 19\% rendering-time improvement from
+its command scheduler~\cite{luisa-render}. RenderKernel moves resource
+declarations into a compile-time DSL and generates Vulkan command recording
+and barrier insertion~\cite{renderkernel}. Both demonstrate the value of rich
+resource knowledge in a framework or compiler. \blade{} does not dispute that
+value; it asks whether a low-level RHI must maintain the same knowledge at run
+time when an upstream system already owns it.
 
 WebGPU specifies portable usage-scope validation~\cite{webgpu-spec}; \wgpu{}
 implements it using optimized dense resource trackers~\cite{wgpu-trackers}.
+NVRHI is the closest prior RHI design point: it tracks resource and optional
+subresource state per command list, while allowing automatic barriers to be
+disabled for lower-frequency explicit state calls when an application wants
+to reduce CPU overhead or control placement~\cite{nvrhi-state-tracking}.
+Unlike \blade{}, that manual mode retains the per-resource state machinery and
+its explicit calls still name resources.
 Metal takes a third position, performing hazard tracking in the framework with
 an opt-out per resource for \texttt{MTLCommandQueue}; Metal~4 queue barriers
-are outside this study~\cite{metal-hazard-tracking}. \blade{} occupies a fourth
-point by exposing an unsafe native contract and relying on application-declared
-pass dependencies.
+are outside this study~\cite{metal-hazard-tracking}. \blade{} occupies the
+tracking-free RHI point by exposing an unsafe native contract and relying on
+application-declared pass dependencies.
+
+\section{Artifact Status}
+
+The manuscript, collectors, and \blade{} implementation are public on the
+\texttt{blade-sync-study} branch, and the matched program is public on the
+corresponding \wgpu{} fork branch~\cite{blade,wgpu-study}. The retained Vulkan
+measurements used \wgpu{} revision \texttt{882d5bb}; the corrected benchmark
+described in the working-draft box is revision \texttt{7d37a77}.
+The bibliography records the full identifiers, and per-collection manifests
+record the \blade{} revision and device metadata.
+
+This is source availability, not yet an archival artifact. The raw directories
+are git-ignored, one cited collection is absent from this checkout, and the
+validation and corrected graphics recollections remain open gates. A
+submission artifact should be a versioned superproject that pins both source
+trees as submodules and archives raw observations, validation logs, captures,
+manifests, and checksums under a durable release or DOI. Moving branch names
+are not sufficient for reproducing the paper.
 
 \section{Conclusion}
 
 This study does not isolate a single price for fine-grained resource state:
 the \wgpu{} comparison also changes validation, barrier form, layouts, and
-command machinery. It does establish the cost of \blade's placement choice.
+command machinery. Within \blade{}, it does isolate the effect of placement
+for the measured cells.
 The dependent-chain variants have the same timed barrier calls by construction
 and no chain interval clears its cell-specific stability threshold; removing
 fifteen redundant inter-pass barriers reduces device span by
@@ -1912,14 +2026,19 @@ could not establish. The matched \wgpu{} stack takes more record-and-submit
 time in every measured cell, but that end-to-end difference must not be called
 the cost of tracking alone.
 
-The practical conclusion is that the expressive gap that matters most is not
-per-resource state but the ability to say ``these passes are unrelated''. An
-encoder-level opt-out gives an application that already knows its dependency
-graph nearly the same device-span reduction that the matched \wgpu{} path shows
-on the RTX~5070 independent-render cell, while retaining \blade's lower
-measured host cost, without adding per-resource state surface. That is a
-cell-specific end-to-end comparison, not a decomposition of tracking cost. The
-opt-out does add an
+The practical conclusion is that resource-dependency knowledge is
+indispensable, but per-resource state inside the RHI is not always. For the
+phase-structured field report and the independent-pass endpoints measured
+here, the expressive gap that matters is the ability to say ``these passes are
+unrelated''. An engine-level graph can remain the source of truth and drive
+\blade's dependency cuts without maintaining a second tracker in the
+abstraction. An encoder-level opt-out gives an application that already knows
+its dependency graph nearly the same device-span reduction that the matched
+\wgpu{} path shows on the RTX~5070 independent-render cell, while retaining
+\blade's lower measured host cost, without adding per-resource state surface.
+That is a cell-specific end-to-end comparison, not a decomposition of tracking
+cost, and the current workloads do not establish the same result for a
+partially dependent DAG. The opt-out does add an
 encoder-level mode and explicit barrier calls. What the current call cannot
 reach is a destination scope derived from a future pass, and, on
 one NVIDIA render chain, a further $\bmag{rtx5070}{graphics-chain}{wgpu}$
