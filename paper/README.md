@@ -152,7 +152,8 @@ host's sweeps add one paper-only commit.
 | `20260728T035352Z-k6` | k6 | AMD Radeon 780M | pass-count sweep 1-64, GPU-timed; its 16-pass cells are the 780M matrix (val: `100356Z`) |
 | `20260728T035923Z-matrix` | matrix | Intel Xe (RPL-U) | matrix (val: `035920Z`) |
 | `20260728T034901Z-mac` | mac | Apple M3 | matrix, Metal case study |
-| `20260728T…-zork` | zork | NVIDIA RTX 5070 | pass-count sweeps 1-64, GPU-timed and timestamp-free |
+| `20260728T104331Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, GPU-timed |
+| `20260728T111220Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, timestamp-free |
 
 Per-host `*-profile` and `*-captures` directories accompany the round on
 rubik, matrix, and k6 (zork's profile is pending a re-run).

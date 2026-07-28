@@ -955,11 +955,13 @@ def build_sweep_table(collections: list[Collection]) -> str | None:
         star=True,
         note=(
             "GPU span has nearly constant increments across the whole range. "
-            "The host average is restricted to 1--"
-            f"{HOST_MARGINAL_CAP} passes on this driver: beyond that its "
-            "medians turn unstable --- visibly non-monotonic in the 32- and "
-            "64-pass columns --- so one fitted slope over all counts would be "
-            "an artifact of where the samples split."
+            "Host cost is linear only to "
+            f"{HOST_MARGINAL_CAP} passes: between "
+            f"{HOST_MARGINAL_CAP} and 16 its medians jump several-fold into a "
+            "second, steeper regime, so one slope fitted over all counts "
+            "would describe neither. The 1--"
+            f"{HOST_MARGINAL_CAP} average characterizes the linear regime; "
+            "the larger counts are reported as measured."
         ),
     )
 

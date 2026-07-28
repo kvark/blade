@@ -1270,15 +1270,15 @@ no inter-pass barrier. At sixteen passes the absolute gap is
 $\bladenum{sweep/host/compute-independent/auto/at16}$ against
 $\bladenum{sweep/host/compute-independent/wgpu/at16}\,\mu$s.
 
-Past eight passes the data no longer support one linear host-cost model. The
-jump between some 16- and 32-pass medians is several-fold,
-larger with barriers than without, and the 32- and 64-pass host medians in
-Table~\ref{tab:sweep} are not even monotone. Something in the submission path
-changes mode at that size, and the host samples there split between regimes,
-so a slope fitted across the jump would measure where the samples fell rather
-than a cost. The averages above are therefore restricted to 1--8 passes; the
-16-pass matrix is a directly measured point, not an extrapolation from that
-range.
+Past eight passes the host cost leaves that linear regime: between the 8- and
+16-pass medians it jumps several-fold on both implementations, and beyond
+sixteen it grows steeply but smoothly. Something in the submission path
+changes mode near that size, and its onset wandered between collections ---
+the superseded three-block sweep crossed over between sixteen and thirty-two,
+erratically --- so no single slope describes the full range. The averages
+above are therefore restricted to 1--8 passes; the 16-pass matrix is a
+directly measured point inside the second regime, not an extrapolation from
+the first.
 
 On the device side, the corresponding endpoint-average cost of each additional
 redundant barrier is
@@ -1295,14 +1295,15 @@ the auto--hazard gap is descriptively visible at every measured count above
 one; at one pass there is no timed inter-pass barrier to remove. This is not a
 claim about other graph shapes or devices.
 
-The sweep is also why host claims are taken from the timestamp-free
-collection. The same measurement is larger with GPU timing enabled, on both
-implementations, by a margin that grows with the pass count. The overhead is
-not matched --- \blade{} records one timestamp per pass while \wgpu{} records
-two in total --- so the absolute host numbers in a GPU-timed collection are not
-the uninstrumented recording cost of the workload. This is why
-Table~\ref{tab:host-matrix} is used for direction and Table~\ref{tab:sweep} for
-magnitude.
+The timestamp-free sweep exists to check whether GPU timing perturbs the host
+measurement --- \blade{} records one timestamp per pass against two in total
+for \wgpu{}, so any effect would also be unmatched between them. On this
+driver, at ten repetitions, there is none to find: the timestamped and
+timestamp-free host medians agree at every pass count for both
+implementations. A superseded three-block sweep had appeared to show a gap
+growing with the pass count; it did not survive the repetitions. The fixed
+matrix's host columns are therefore read as host cost, with the
+instrumentation concern tested on this machine and untested on the others.
 
 \subsection{Host cost across devices}
 
@@ -1322,13 +1323,15 @@ instrumented end-to-end path, not an uninstrumented record-only cost; the
 timestamp-free RTX~5070 sweep supplies the clean magnitude check. The sign
 never changes in the fixed matrix.
 
-The narrowest ratios in the table are the NVIDIA render cells, and the
+The narrowest Vulkan ratios are the NVIDIA render cells, and the
 \texttt{B-hazard} column says why: that driver charges heavily for recording
 the barriers themselves, so removing them cuts \blade's own host cost by
 $\bmag{rtx5070}{graphics-independent}{hostplacement}$ on
 \texttt{graphics-independent}. Where \blade's denominator is mostly barrier
 recording --- a cost the application controls --- the ratio narrows; nowhere
-does it invert.
+does it invert. The Metal rows are narrower still for the backend's own
+reason: each \blade{} pass there creates a fresh command encoder
+(Section~\ref{sec:metal}), which inflates the same denominator.
 
 The difference is end-to-end and must not be attributed to tracking alone:
 \wgpu{} also validates, manages lifetimes, resolves bind groups, and builds an
@@ -1858,12 +1861,12 @@ by either barrier axis.
 \section{Threats to Validity}
 \label{sec:threats}
 
-GPU timestamps perturb the measurement: the same host cost is larger with them
-enabled, by a margin that grows with the pass count. The cross-device fixed
-matrix is GPU-timed, so it supports the observed direction under that
-instrumentation but not an uninstrumented absolute host cost. The
-timestamp-free RTX~5070 sweep supplies descriptive host magnitudes over its
-measured range. Device-side \blade{}--\wgpu{} comparisons also use different
+GPU timestamps could perturb the host measurement, and the paired RTX~5070
+sweeps test for it: their timestamped and timestamp-free host medians agree
+at every pass count, so on that machine the fixed matrix's host columns carry
+no measurable instrumentation inflation. The other machines have no such
+pair, so the concern is tested on one driver and assumed bounded, not proven
+absent, on the rest. Device-side \blade{}--\wgpu{} comparisons also use different
 timestamp counts and endpoints (17 writes including Blade's final barrier
 versus two writes ending with wgpu's last pass), so they remain end-to-end
 instrumented spans; within-\blade{} comparisons use identical instrumentation.
