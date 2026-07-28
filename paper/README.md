@@ -138,28 +138,29 @@ record-and-submit interval.
 
 `build-tables.py` discovers collections under `data/raw/` and classifies them
 by what they contain, so a retest lands in the tables without editing any
-script. The current set is the one-day recollection of 2026-07-27 on a single
-benchmark build (wgpu `882d5bb` everywhere; blade revisions differ only by
-commits under `paper/`, which the benchmark does not compile), plus the
-shader-parity Metal recollection:
+script. The current set is the archival round of 2026-07-28: every machine on
+blade `87ed067` + wgpu `7d37a77` from clean trees, ten process repetitions,
+1000 warm-ups, a retained validation collection per Vulkan machine (the small
+`val` entries), and captures of all six policies on four machines. The study
+host's sweeps add one paper-only commit.
 
 | Collection | Machine | Device measured by Blade | Role |
 |---|---|---|---|
-| `20260727T070057Z-zork` | zork | NVIDIA RTX 5070 | matrix, placement × scope |
-| `20260727T062803Z-rubik-...rx-7900-xt...` | rubik | AMD RX 7900 XT | matrix, placement × scope |
-| `20260727T062803Z-rubik-...ryzen-5-9600x...` | rubik | AMD Raphael iGPU | matrix, placement × scope |
-| `20260727T042448Z-k6` | k6 | AMD Radeon 780M | expected matrix; absent from this checkout |
-| `20260727T044808Z-matrix` | matrix | Intel Xe (RPL-U) | matrix, placement × scope |
-| `20260727T140950Z-mac` | mac | Apple M3 | matrix, Metal case study with shader parity |
-| `20260727T070208Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, GPU-timed |
-| `20260727T071905Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, timestamp-free |
+| `20260728T035118Z-zork` | zork | NVIDIA RTX 5070 | matrix, placement × scope (val: `035105Z`) |
+| `20260728T035844Z-rubik-...rx-7900-xt...` | rubik | AMD RX 7900 XT | matrix (val: `035824Z-...`) |
+| `20260728T035844Z-rubik-...ryzen-5-9600x...` | rubik | AMD Raphael iGPU | matrix (val: `035824Z-...`) |
+| `20260728T035352Z-k6` | k6 | AMD Radeon 780M | pass-count sweep 1-64, GPU-timed; its 16-pass cells are the 780M matrix (val: `100356Z`) |
+| `20260728T035923Z-matrix` | matrix | Intel Xe (RPL-U) | matrix (val: `035920Z`) |
+| `20260728T034901Z-mac` | mac | Apple M3 | matrix, Metal case study |
+| `20260728T…-zork` | zork | NVIDIA RTX 5070 | pass-count sweeps 1-64, GPU-timed and timestamp-free |
 
-Per-host `*-profile` and `*-captures` directories currently accompany the
-matrix collections on zork, rubik, and matrix; the k6 copies are missing.
-`build-tables.py` keeps only the most
-recent matrix collection per machine and device, so a retest supersedes an
-earlier run rather than appearing beside it. The two `rubik` directories come
-from one invocation: the collector runs every enumerated adapter in turn.
+Per-host `*-profile` and `*-captures` directories accompany the round on
+rubik, matrix, and k6 (zork's profile is pending a re-run).
+`build-tables.py` keeps only the most recent matrix-capable collection per
+machine and device --- a dedicated matrix wins over a sweep standing in for
+one --- so a retest supersedes an earlier run rather than appearing beside
+it. The two `rubik` directories come from one invocation: the collector runs
+every enumerated adapter in turn.
 
 Because `data/raw/` is not in git, a collection exists only where it was
 copied. `build-tables.py` now fails when `main.tex` cites a device whose matrix

@@ -187,19 +187,42 @@ def discover_collections(raw: Path) -> list[Collection]:
     return sorted(collections, key=sort_key)
 
 
+def matrix_rank(collection: Collection) -> int:
+    """How well a collection can stand in for the fixed 16-pass matrix.
+
+    A dedicated matrix collection is the purpose-built source. Failing that, a
+    GPU-timed sweep that includes the 16-pass point serves: its 16-pass blocks
+    are the same protocol --- one randomized process launch per configuration,
+    the same warm-up and sample counts --- collected alongside the other
+    counts. A timestamp-free sweep cannot supply device time, so it never
+    stands in.
+    """
+    if collection.role == "matrix":
+        return 2
+    if collection.role == "sweep-gpu" and 16 in collection.pass_counts():
+        return 1
+    return 0
+
+
 def newest_per_device(collections: list[Collection]) -> list[Collection]:
-    """One matrix collection per machine and device: the most recent.
+    """One fixed-matrix source per machine and device.
 
     A retest supersedes an earlier run of the same hardware rather than
-    appearing beside it, so the tables never show one device twice.
+    appearing beside it, so the tables never show one device twice. A
+    dedicated matrix collection wins over a sweep standing in for one; within
+    a rank, the most recent wins.
     """
     best: dict[tuple[str, str], Collection] = {}
     for collection in collections:
-        if collection.role != "matrix":
+        rank = matrix_rank(collection)
+        if not rank:
             continue
         key = (collection.label, collection.device_name)
         previous = best.get(key)
-        if previous is None or collection.collected_utc > previous.collected_utc:
+        if previous is None or (rank, collection.collected_utc) > (
+            matrix_rank(previous),
+            previous.collected_utc,
+        ):
             best[key] = collection
     return [c for c in collections if best.get((c.label, c.device_name)) is c]
 
@@ -399,6 +422,7 @@ def comparison(
     bootstrap_samples: int,
     *,
     against: tuple[str, str] = ("blade", "automatic"),
+    passes: int = 16,
 ) -> tuple[float, float, float] | None:
     """Paired percent difference from `against`, with a hierarchical interval.
 
@@ -415,13 +439,14 @@ def comparison(
         implementation,
         policy,
         against,
+        passes,
         bootstrap_samples,
     )
     if key in _INTERVALS:
         return _INTERVALS[key]
-    baseline = collection.blocked_values(*against, workload, 16, metric)
+    baseline = collection.blocked_values(*against, workload, passes, metric)
     contender = collection.blocked_values(
-        implementation, policy, workload, 16, metric
+        implementation, policy, workload, passes, metric
     )
     if not baseline or not contender:
         return None
@@ -832,15 +857,60 @@ def build_metal_table(collections: list[Collection]) -> str | None:
     )
 
 
-def build_sweep_table(collections: list[Collection]) -> str | None:
-    def newest(role: str) -> Collection | None:
-        candidates = [c for c in collections if c.role == role]
-        return max(candidates, key=lambda c: c.collected_utc, default=None)
+def newest_sweeps(collections: list[Collection], role: str) -> list[Collection]:
+    """The newest sweep of `role` for each machine and device, in table order."""
+    best: dict[tuple[str, str], Collection] = {}
+    for collection in collections:
+        if collection.role != role:
+            continue
+        key = (collection.label, collection.device_name)
+        if key not in best or collection.collected_utc > best[key].collected_utc:
+            best[key] = collection
+    def rank(key: tuple[str, str]) -> tuple:
+        try:
+            order = MATRIX_ORDER.index(key[0])
+        except ValueError:
+            order = len(MATRIX_ORDER)
+        return (order, key)
+    return [best[key] for key in sorted(best, key=rank)]
 
-    gpu = newest("sweep-gpu")
-    cpu = newest("sweep-cpu")
-    if gpu is None or cpu is None:
+
+def sweep_pair(collections: list[Collection]) -> tuple[Collection, Collection] | None:
+    """The newest GPU-timed and timestamp-free sweeps of one device.
+
+    The scaling table reads host cost against device cost, so the two sides
+    must come from the same machine and device; a GPU sweep from one machine
+    must never be paired with a host sweep from another. When several devices
+    have both sweeps, the earliest in `MATRIX_ORDER` is the one the scaling
+    section describes.
+    """
+    gpu = {
+        (c.label, c.device_name): c for c in newest_sweeps(collections, "sweep-gpu")
+    }
+    cpu = {
+        (c.label, c.device_name): c for c in newest_sweeps(collections, "sweep-cpu")
+    }
+    shared = [key for key in gpu if key in cpu]
+    if not shared:
         return None
+    def rank(key: tuple[str, str]) -> tuple:
+        try:
+            order = MATRIX_ORDER.index(key[0])
+        except ValueError:
+            order = len(MATRIX_ORDER)
+        return (order, key)
+    key = min(shared, key=rank)
+    return gpu[key], cpu[key]
+
+
+def build_sweep_table(collections: list[Collection]) -> str | None:
+    pair = sweep_pair(collections)
+    if pair is None:
+        return None
+    gpu, cpu = pair
+    device = DEVICE_SHORT.get(
+        gpu.devices.get("blade", ""), gpu.devices.get("blade", "?")
+    ).replace(" ", "~")
     passes = [count for count in gpu.pass_counts() if count <= 64]
     configurations = (
         ("blade", "automatic", "B-auto"),
@@ -870,7 +940,7 @@ def build_sweep_table(collections: list[Collection]) -> str | None:
                 body.append(cells)
     return latex_table(
         caption=(
-            "Pass-count sweep on the RTX~5070, medians of process medians in "
+            f"Pass-count sweep on the {device}, medians of process medians in "
             "microseconds. "
             "Host rows come from the timestamp-free collection; GPU rows come from the "
             "GPU-timed collection. The last column is the average increment per "
@@ -1474,6 +1544,34 @@ def numbers_macros(
                 values["metal/overvulkan/min"] = f"{ratios[0]:.1f}"
                 values["metal/overvulkan/max"] = f"{ratios[1]:.1f}"
 
+    # Overlap-depth effects for every swept device, cited by pass count. The
+    # prose reads the growth-and-saturation of the Radeon 780M penalty from
+    # these rather than re-deriving it from the figure by eye.
+    for collection in newest_sweeps(collections, "sweep-gpu"):
+        slug = DEVICE_SLUG.get(collection.devices.get("blade", ""))
+        if slug is None:
+            continue
+        for count in [c for c in collection.pass_counts() if c <= 64]:
+            for name, implementation, policy in (
+                ("placement", "blade", "hazard-only"),
+                ("wgpu", "wgpu", "tracked"),
+            ):
+                result = comparison(
+                    collection,
+                    "graphics-independent",
+                    "gpu_ns",
+                    implementation,
+                    policy,
+                    bootstrap_samples,
+                    passes=count,
+                )
+                if result is not None:
+                    record(
+                        f"depth/{slug}/graphics-independent/p{count}/{name}",
+                        *result,
+                    )
+
+    values.update(launch_state_numbers(collections))
     values.update(sweep_numbers(collections))
     values.update(profile_numbers(raw))
     values.update(study_counts(raw))
@@ -1547,25 +1645,18 @@ def marginal_cost(
 
 
 def sweep_numbers(collections: list[Collection]) -> dict[str, str]:
-    """Marginal cost per pass and the value at sixteen passes, from the sweeps."""
-    def newest(role: str) -> Collection | None:
-        return max(
-            (collection for collection in collections if collection.role == role),
-            key=lambda collection: collection.collected_utc,
-            default=None,
-        )
+    """Marginal cost per pass and the value at sixteen passes, from the sweeps.
 
+    Both sides come from `sweep_pair`, so a host number and the device number
+    beside it always describe the same machine and device.
+    """
+    pair = sweep_pair(collections)
+    if pair is None:
+        return {}
+    gpu, cpu = pair
     sources = {
-        "host": (
-            newest("sweep-cpu"),
-            "host_ns",
-            HOST_MARGINAL_CAP,
-        ),
-        "gpu": (
-            newest("sweep-gpu"),
-            "gpu_ns",
-            64,
-        ),
+        "host": (cpu, "host_ns", HOST_MARGINAL_CAP),
+        "gpu": (gpu, "gpu_ns", 64),
     }
     values: dict[str, str] = {}
     for side, (collection, metric, cap) in sources.items():
@@ -1858,6 +1949,12 @@ def effect_figure(
 
 def marginal_figure(collections: list[Collection]) -> str | None:
     """Marginal cost of one additional pass, host and device side."""
+    pair = sweep_pair(collections)
+    if pair is None:
+        return None
+    device = DEVICE_SHORT.get(
+        pair[0].devices.get("blade", ""), pair[0].devices.get("blade", "?")
+    ).replace(" ", "~")
     values = sweep_numbers(collections)
     configurations = (("B-auto", "auto"), ("B-hazard", "hazard"), ("W-wgpu", "wgpu"))
     categories: list[str] = []
@@ -1903,7 +2000,7 @@ def marginal_figure(collections: list[Collection]) -> str | None:
         f"{plots}\n"
         f"\\legend{{{legend}}}\n"
         "\\end{axis}\n\\end{tikzpicture}\n"
-        "\\caption{Average cost of one additional pass on the RTX~5070, from the "
+        f"\\caption{{Average cost of one additional pass on the {device}, from the "
         "pass-count sweeps. Host figures come from the timestamp-free collection "
         "and device figures from the GPU-timed one; each is the endpoint increment "
         "over the range stated in Table~\\ref{tab:sweep}. The gap between "
@@ -1911,6 +2008,191 @@ def marginal_figure(collections: list[Collection]) -> str | None:
         "costs; the gap to \\texttt{W-wgpu} is end-to-end.}\n"
         "\\label{fig:marginal}\n\\end{figure}\n"
     )
+
+
+def paired_block_effects(
+    collection: Collection,
+    workload: str,
+    passes: int,
+    implementation: str,
+    policy: str,
+    metric: str = "gpu_ns",
+) -> list[float]:
+    """Per-repetition paired percent effects against `B-auto` at one count.
+
+    These are the raw points behind the hierarchical estimate: one number per
+    randomized block. The overlap-depth figure draws them individually because
+    on one device they are bimodal, and a median with an interval would state
+    that fact less plainly than the points themselves.
+    """
+    base = collection.blocked_values("blade", "automatic", workload, passes, metric)
+    contender = collection.blocked_values(
+        implementation, policy, workload, passes, metric
+    )
+    effects = []
+    for repetition in sorted(set(base) & set(contender), key=str):
+        baseline = statistics.median(base[repetition])
+        if baseline:
+            effects.append(
+                100.0
+                * (statistics.median(contender[repetition]) - baseline)
+                / baseline
+            )
+    return effects
+
+
+def overlap_figure(
+    collections: list[Collection], bootstrap_samples: int
+) -> str | None:
+    """Placement and tracked effects against overlap depth, per swept device.
+
+    One panel per GPU-timed sweep: the paired process-level effect of
+    `B-hazard` and `W-wgpu` against `B-auto` on `graphics-independent`, at
+    every measured pass count. Small marks are individual block effects; the
+    line joins the medians. The block marks are the honest part: where a
+    device assigns whole launches to different performance states, the
+    mixture is visible rather than averaged away.
+    """
+    sweeps = newest_sweeps(collections, "sweep-gpu")
+    workload = "graphics-independent"
+    panels = []
+    for collection in sweeps:
+        device = DEVICE_SHORT.get(
+            collection.devices.get("blade", ""), collection.devices.get("blade", "?")
+        )
+        counts = [count for count in collection.pass_counts() if count <= 64]
+        series = []
+        for policy_label, implementation, policy, line_style, dot_style in (
+            ("B-hazard", "blade", "hazard-only", "black, mark=*, mark size=1.4pt",
+             "black!35"),
+            ("W-wgpu", "wgpu", "tracked",
+             "black!55, densely dashed, mark=o, mark size=1.4pt", "black!20"),
+        ):
+            line, dots = [], []
+            for count in counts:
+                result = comparison(
+                    collection,
+                    workload,
+                    "gpu_ns",
+                    implementation,
+                    policy,
+                    bootstrap_samples,
+                    passes=count,
+                )
+                if result is None:
+                    continue
+                line.append(f"({count},{result[0]:.1f})")
+                dots.extend(
+                    f"({count},{effect:.1f})"
+                    for effect in paired_block_effects(
+                        collection, workload, count, implementation, policy
+                    )
+                )
+            if line:
+                series.append(
+                    f"\\addplot[only marks, mark=*, mark size=0.8pt, {dot_style},"
+                    " forget plot] coordinates {" + " ".join(dots) + "};\n"
+                    f"\\addplot[{line_style}] coordinates {{"
+                    + " ".join(line)
+                    + "};\n"
+                    f"\\addlegendentry{{\\texttt{{{policy_label}}}}}"
+                )
+        if series:
+            panels.append(
+                f"\\nextgroupplot[title={{{device}}}]\n" + "\n".join(series)
+            )
+    if not panels:
+        return None
+    counts_text = ",".join(
+        str(count)
+        for count in sorted(
+            {c for s in sweeps for c in s.pass_counts() if c <= 64}
+        )
+    )
+    return (
+        FIGURE_PREAMBLE
+        + "\\begin{figure*}[t]\n\\centering\n\\begin{tikzpicture}\n"
+        "\\begin{groupplot}[\n"
+        f"  group style={{group size={len(panels)} by 1, horizontal sep=1.4cm}},\n"
+        "  width=8.0cm, height=5.4cm,\n"
+        f"  symbolic x coords={{{counts_text}}},\n"
+        "  xtick=data,\n"
+        "  xlabel={passes per command buffer},\n"
+        "  ylabel={\\% of \\texttt{B-auto}},\n"
+        "  xlabel style={font=\\scriptsize},\n"
+        "  ylabel style={font=\\scriptsize},\n"
+        "  tick label style={font=\\scriptsize},\n"
+        "  title style={font=\\scriptsize},\n"
+        "  legend style={font=\\scriptsize, draw=none, at={(0.03,0.97)},\n"
+        "    anchor=north west},\n"
+        "  grid=major, grid style={black!10},\n"
+        "]\n"
+        + "\n".join(panels)
+        + "\n\\end{groupplot}\n\\end{tikzpicture}\n"
+        "\\caption{GPU-span effect of removing the redundant barriers "
+        "(\\texttt{B-hazard}) and of the tracked implementation "
+        "(\\texttt{W-wgpu}) against \\texttt{B-auto} on "
+        "\\texttt{graphics-independent}, as the number of overlapping passes "
+        "grows. Each small mark is one paired process launch; the line joins "
+        "the medians of those block effects. The launch-level split on the "
+        "Radeon~780M is the bimodality of Section~\\ref{sec:deviations}: "
+        "whole launches land in one of two performance states, and the "
+        "placement penalty reproduces inside each.}\n"
+        "\\label{fig:overlap-depth}\n\\end{figure*}\n"
+    )
+
+
+def launch_state_numbers(collections: list[Collection]) -> dict[str, str]:
+    """Launch-level performance-state statistics for the swept devices.
+
+    A launch counts as slow when its block median exceeds 1.5 times the
+    fastest block of the same configuration and pass count; the observed
+    split is a factor of about two, so the threshold is a separator rather
+    than a tuning knob. Keys are only emitted for a device where slow
+    launches exist, so citing them for a device that has none is a build
+    error rather than a claim.
+    """
+    values: dict[str, str] = {}
+    workload = "graphics-independent"
+    for collection in newest_sweeps(collections, "sweep-gpu"):
+        slug = DEVICE_SLUG.get(collection.devices.get("blade", ""))
+        if slug is None:
+            continue
+        counted = {"blade": [0, 0], "wgpu": [0, 0]}
+        ratios: list[float] = []
+        fast_modes: dict[tuple[str, str, int], float] = {}
+        for key in sorted(collection.samples, key=str):
+            implementation, policy, key_workload, passes = key
+            if key_workload != workload:
+                continue
+            blocks = collection.blocked_values(
+                implementation, policy, key_workload, passes, "gpu_ns"
+            )
+            medians = sorted(
+                statistics.median(values_) for values_ in blocks.values()
+            )
+            if not medians:
+                continue
+            fastest = medians[0]
+            fast = [m for m in medians if m <= 1.5 * fastest]
+            slow = [m for m in medians if m > 1.5 * fastest]
+            counted[implementation][0] += len(slow)
+            counted[implementation][1] += len(medians)
+            fast_modes[implementation, policy, passes] = statistics.median(fast)
+            ratios.extend(m / statistics.median(fast) for m in slow)
+        if not ratios:
+            continue
+        for implementation, (slow_count, total) in counted.items():
+            values[f"bimodal/{slug}/{implementation}/slow"] = str(slow_count)
+            values[f"bimodal/{slug}/{implementation}/launches"] = str(total)
+        values[f"bimodal/{slug}/ratio"] = f"{statistics.median(ratios):.2f}"
+        auto = fast_modes.get(("blade", "automatic", 16))
+        hazard = fast_modes.get(("blade", "hazard-only", 16))
+        if auto and hazard:
+            values[f"bimodal/{slug}/fastplacement"] = (
+                f"{100.0 * (hazard - auto) / auto:+.1f}"
+            )
+    return values
 
 
 def build_summary_csv(collections: list[Collection], path: Path) -> None:
@@ -2080,6 +2362,7 @@ def main() -> None:
             "fig:scope",
         ),
         "fig-marginal.tex": marginal_figure(collections),
+        "fig-depth.tex": overlap_figure(collections, arguments.bootstrap_samples),
         "profile.tex": build_profile_table(arguments.raw),
         "numbers.tex": numbers_macros(
             collections, arguments.raw, arguments.bootstrap_samples

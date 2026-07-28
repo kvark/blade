@@ -48,8 +48,11 @@ and $\bmagci{rx7900xt}{compute-independent}{placement}$ on an RX~7900~XT.
 For independent render passes the corresponding reductions are
 $\bmag{rtx5070}{graphics-independent}{placement}$ and
 $\bmag{rx7900xt}{graphics-independent}{placement}$, while the same change
-\emph{costs} $\bmagci{radeon780m}{graphics-independent}{placement}$ on a
-Radeon~780M. On dependent chains, whose variants have identical timed
+\emph{costs} on a Radeon~780M: a penalty that grows with the number of
+overlapping passes and saturates near
+$\bladenum{depth/radeon780m/graphics-independent/p16/placement/pct}\%$ by
+sixteen, while the tracked implementation overlaps the same passes without
+one. On dependent chains, whose variants have identical timed
 inter-pass barrier calls by construction, no placement effect clears the
 study's cell-specific stability criterion.
 
@@ -85,12 +88,14 @@ resource-specific knowledge somewhere in the engine.
 \textbf{Working draft.} Fixed-matrix, sweep, profile, and capture quantities
 are generated from retained collections and cited by key. The separate Metal
 hazard pilot retained only summary medians and is explicitly exploratory.
-Publication gates remain open: only three process repetitions were collected,
-the synchronization-validation logs were not retained, the retained \wgpu{}
-graphics shader fails SPIR-V validation, and the retained graphics-chain
-readback row saturates; both have been fixed but not recollected,
-the retained captures omit the explicit and crossed controls, and one cited
-Radeon~780M collection is absent from this checkout. Claims are stated for the
+The 2026-07-28 archival round closes the gates an earlier audit left open:
+every machine ran the corrected benchmark from one clean revision pair, with
+ten process repetitions per configuration, a retained
+synchronization-validation collection and its logs on every Vulkan machine,
+and captures of all six policies on four machines agreeing byte-for-byte.
+Still open: the Metal hazard pilot has no retained raw observations, and the
+raw collections remain git-ignored pending the archival bundle of the
+artifact section. Claims are stated for the
 device-driver pairs measured; multisampled targets and application frames are
 named where they bound a claim.}}
 
@@ -120,7 +125,7 @@ truth and give the abstraction a smaller execution contract?
 distinction is not that its API exposes fewer state objects --- \wgpu's does
 not expose resource states either, and tracking is an internal matter for both
 --- but that \blade{} does not maintain the state at all. On Vulkan, ordinary
-images stay in \texttt{VK\_IMAGE\_LAYOUT\_GENERAL} and a broad memory barrier
+images stay in the \texttt{GENERAL} image layout and a broad memory barrier
 orders writes before later reads and writes at pass boundaries, so nothing has
 to be remembered between one pass and the next. What surfaces in the API is a
 consequence rather than the point: no per-resource work at record time, and an
@@ -710,7 +715,7 @@ Unless stated otherwise, each command buffer contains 16 passes; compute
 buffers hold $2^{20}$ \texttt{u32} elements, render targets are
 $1024\times1024$, and each invocation performs 8 mixing rounds. Every
 configuration is warmed for 1000 iterations---chosen after the pilot's ten
-warm-ups left severe within-block drift---and measured for 30, three times, in
+warm-ups left severe within-block drift---and measured for 30, ten times, in
 an order randomized jointly across implementations. Residual drift is reported
 in Section~\ref{sec:deviations}; the warm-up count is not assumed to prove a
 fixed clock.
@@ -725,45 +730,33 @@ identical after normalizing those interface declarations and binding
 decorations. After the final iteration of each process, the collector aborts
 if the two implementations produce different output hashes. All
 \bladenum{runs/matrix} runs of the fixed matrix
-and all \bladenum{runs/sweep} runs of the two sweeps agree on the output hash
+and all \bladenum{runs/sweep} runs of the pass-count sweeps agree on the output hash
 within each collection/workload/pass-count group. Across the
 \bladenum{runs/hashgroups} such groups from all devices, every configuration
 present in a group agrees, with \bladenum{runs/hashconflicts} exceptions.
 
-The retained benchmark revision hashed one representative output for each
-independent family, not every per-pass output. That detects cross-policy and
-cross-implementation disagreement in the sampled pass but could miss a failure
-confined to another independent pass. The artifact now hashes a slice from
-every independent output after timing; the required correctness recollection
-will use that stronger check. That readback-only change does not alter the
-measured command buffer, but the retained hashes must not be described as
-exhaustive pass validation.
-
-The retained revision also labelled its digest \texttt{fnv1a64} while a
-mistyped multiplier made it a non-standard 64-bit rolling hash. Both
-implementations used the same function, so equality and disagreement checks
-remain valid; the artifact now uses the standard FNV-1a multiplier and a known
-test vector, so newly collected digest strings will not match old ones merely
-because the hash function changed.
-
-The retained graphics-chain check had a further blind spot: sixteen
-full-range additive writes saturate its sampled \texttt{RGBA8} row, and its
-digest is exactly the digest of 4096 \texttt{0xff} bytes. It therefore could
-not detect a missing late pass. The current shader preserves full-range output
-on 1023 of 1024 rows but uses exact two-bit UNORM increments on the one
-readback row, which remains unsaturated through the 64-pass sweep. This change
-does affect a timed shader, so it is another reason that no retained graphics
-timing can be promoted without recollection.
-
-The audit also exposed a separate graphics-shader defect in the retained
-\wgpu{} executable. naga~30.0.0 decorated the function-local fullscreen-triangle
-array with \texttt{ArrayStride}; Vulkan validation rejects the resulting
-SPIR-V under \texttt{VUID-StandaloneSpirv-None-10684}, although every measured
-driver accepted and executed it. The artifact now expresses the identical
-three positions without a local array in both shader copies, and the automated
-forty-configuration Vulkan correctness matrix passes on the RTX~5070. Because
-this fix changes the graphics shader binaries, all current graphics timing
-rows remain exploratory until they are recollected from the fixed source.
+An audit between the pilot and the archival collections found and fixed four
+validation weaknesses, each recorded here because the pilots could not have
+caught what they were designed to catch. The pilot benchmark hashed one
+representative output per independent family rather than every per-pass
+output, so a failure confined to another independent pass could hide. Its
+digest was labelled \texttt{fnv1a64} while a mistyped multiplier made it a
+non-standard hash --- both implementations shared the function, so equality
+checks remained valid. The sampled graphics-chain readback row saturated
+after a short additive chain, making its digest exactly the digest of 4096
+\texttt{0xff} bytes, blind to a missing late pass. And naga~30.0.0 decorated
+the function-local fullscreen-triangle array so that the \wgpu{} graphics
+shader failed SPIR-V validation under
+\texttt{VUID-StandaloneSpirv-None-10684}, although every measured driver
+accepted and executed it. The archival benchmark hashes a slice of every
+independent output with the standard FNV-1a function and a pinned test
+vector, keeps the one readback row to exact two-bit increments that cannot
+saturate across the 64-pass sweep while the other 1023 rows retain the
+full-range workload, and expresses the triangle without the local array in
+both shader copies. Two of these fixes touch a timed shader, so no pilot
+graphics timing was carried forward: every number in this draft comes from
+the corrected binaries, and each Vulkan machine's round begins with a
+retained validation matrix whose logs sit beside its timing collection.
 
 Identical shader bodies do not guarantee identical generated code. \blade{} hands
 naga the default bounds-check policies, which are unchecked throughout, and
@@ -824,18 +817,20 @@ within-\blade{} device comparisons are single-factor measurements.
 
 The experimental unit for one configuration is a process launch, not one of
 the 30 samples inside it. One outer matrix repetition launches every
-configuration once in randomized order; for each of the three outer
+configuration once in randomized order; for each of the ten outer
 repetitions we pair the contender launch with the \texttt{B-auto} launch from
 the same randomized block and compute their percent difference. The reported
-point is the median of those three block effects; quoted absolute timings are
-likewise the median of the three process medians. The 95\%
+point is the median of those ten block effects; quoted absolute timings are
+likewise the median of the ten process medians. The 95\%
 hierarchical-bootstrap percentile interval resamples outer blocks first and
 observations within each selected process second, using a deterministic
 seed~\cite{davison-hinkley-bootstrap,loy-korobova-bootstrap}. Quartiles
-describe the pooled observations, but no interval treats all 90 as independent.
-With only three process launches per configuration, and possible serial
-correlation among observations inside a launch, these intervals expose
-observed instability rather than supporting high-powered population inference.
+describe the pooled observations, but no interval treats all 300 as
+independent. With ten process launches per configuration, and possible serial
+correlation among observations inside a launch, these intervals describe
+uncertainty across the observed sessions rather than a sampled population ---
+where whole launches land in different performance states, the interval says
+so by widening.
 We do not report multiplicity-adjusted hypothesis tests; the
 device-by-workload cells and their control floors are exploratory effect
 estimates. Validation layers are enabled for correctness runs and disabled for
@@ -894,26 +889,49 @@ still move --- $\bladenum{drift/rtx5070/worst}\%$ on the RTX~5070 and
 $\bladenum{drift/intelxe/worst}\%$ on the Intel part --- which is the residue
 that the post-hoc control diagnostic is intended to flag.
 
-\textbf{The process repetitions expose instability hidden by pooling.} The
-Intel controls are the clearest example. Their paired point estimates can be
-small, but the hierarchical intervals reach as far as
-$\bfloor{intelxe}{graphics-chain}$ in \texttt{graphics-chain} and
-$\bfloor{intelxe}{mixed-independent}$ in \texttt{mixed-independent}.
-Consequently the apparent placement changes in those cells are not results.
-We did not establish the mechanism; the floor machinery exists so that we do
-not have to assign one. The important correction is statistical: treating the
-90 nested samples as independent previously hid this process-to-process
-variation and licensed Intel claims the experiment does not support.
+\textbf{The process repetitions expose what pooling hides.} At three blocks
+the Intel part's controls swung across signs and disqualified its cells; at
+ten its floors settle to
+$\bfloor{intelxe}{compute-independent}$--$\bfloor{intelxe}{mixed-chain}$ of
+run-to-run variation and its compute-placement cells resolve
+(Section~\ref{sec:placement}). The instability that remains in this round is
+a different machine and a different kind.
+
+\textbf{One device assigns whole launches to performance states.} On the
+Radeon~780M's \texttt{graphics-independent} workload, a process launch lands
+in one of two states separated by a factor of
+$\bladenum{bimodal/radeon780m/ratio}$:
+$\bladenum{bimodal/radeon780m/blade/slow}$ of
+$\bladenum{bimodal/radeon780m/blade/launches}$ \blade{} launches across its
+policies and pass counts landed slow, against
+$\bladenum{bimodal/radeon780m/wgpu/slow}$ of
+$\bladenum{bimodal/radeon780m/wgpu/launches}$ \wgpu{} launches. The state
+belongs to the launch, not the samples: blocks are internally tight, exactly
+one crossed states midway --- the device's worst within-block drift,
+$\bladenum{drift/radeon780m/worst}\%$ --- and the assignment shows no
+correlation with the sizes of neighbouring runs in the randomized order. A
+dedicated 16-pass collection of the previous day, since superseded, showed no
+slow launch in thirty, so the mixture may need the varied allocation history
+of a sweep, or simply more launches to show itself. We could not name the
+mechanism; the strong implementation bias says it is not a plain clock
+lottery, and a placement decision made once per launch --- where the
+allocator put that launch's targets --- fits what a clock does not. The
+machinery prices the consequence rather than hiding it: the cell's control
+floor reaches $\bfloor{radeon780m}{graphics-independent}$, its unconditional
+intervals span the state mixture, and the placement penalty is read from
+Figure~\ref{fig:overlap-depth}, where it reproduces within each state ---
+descriptively, $\bladenum{bimodal/radeon780m/fastplacement}\%$ between
+fast-state medians at sixteen passes.
 
 \hostcaveat
 
-\textbf{Collections are one day, two paper-only commits.} Every Vulkan machine
-was measured on 2026-07-27 from one benchmark build; where
-Table~\ref{tab:platforms} lists different revisions, they differ only by
-commits under \texttt{paper/}, which the benchmark does not compile. The Metal
-collection was recollected after the shader-parity fix. It has no scoped
-configurations because those variants alter Vulkan barrier masks, not Metal's
-framework-managed resource hazards.
+\textbf{Collections are one day, one benchmark build.} Every machine,
+including the Apple M3, was measured on 2026-07-28 from the same corrected
+revisions of both repositories; where Table~\ref{tab:platforms} lists a
+different \blade{} revision for the study host's sweeps, it differs only by
+commits under \texttt{paper/}, which the benchmark does not compile. The
+Metal collection has no scoped configurations because those variants alter
+Vulkan barrier masks, not Metal's framework-managed resource hazards.
 
 \section{Results}
 
@@ -939,6 +957,7 @@ claimed effect must lie beyond the same-side floor of its own cell.
 \label{sec:placement}
 
 \input{data/derived/tables/gpu-matrix}
+\input{data/derived/tables/fig-depth}
 
 Table~\ref{tab:gpu-matrix} answers RQ2 and RQ4 together. The pattern is not
 ``coarse barriers are slow''; it is conditional in a way that is stable across
@@ -966,11 +985,14 @@ those mechanisms. Both figures moved between the ramping pilot
 and this warmed collection --- the AMD one grew, and its control floor fell
 from a quarter of the effect to $\bfloor{rx7900xt}{compute-independent}$.
 
-The Intel point estimates have the same sign, but neither
-\texttt{compute-independent} ($\bpctci{intelxe}{compute-independent}{placement}$)
-nor \texttt{mixed-independent}
-($\bpctci{intelxe}{mixed-independent}{placement}$) resolves across process
-repetitions. They are not counted as a third-vendor confirmation.
+The Intel part, unreadable at three blocks, resolves at ten:
+$\bpctci{intelxe}{compute-independent}{placement}$ on
+\texttt{compute-independent} against a floor of
+$\bfloor{intelxe}{compute-independent}$, with
+$\bpctci{intelxe}{mixed-independent}{placement}$ on
+\texttt{mixed-independent} against $\bfloor{intelxe}{mixed-independent}$
+agreeing --- a third vendor for the direction of the compute result, at well
+under the NVIDIA magnitude.
 
 For independent \emph{render} passes the same change is worth
 $\bmagci{rtx5070}{graphics-independent}{placement}$ on the RTX~5070 but only
@@ -988,47 +1010,43 @@ between render passes, while the RTX~5070 frees the same third either way. The
 headline ``placement dominates'' is carried by both discrete parts for
 compute, and at full size by NVIDIA alone for graphics.
 
-\textbf{Removing barriers can make things worse.} On the Radeon~780M,
-\texttt{B-hazard} \emph{costs} $\bmagci{radeon780m}{graphics-independent}{placement}$
-on \texttt{graphics-independent} and
-$\bmagci{radeon780m}{mixed-independent}{placement}$ on
-\texttt{mixed-independent}, against control floors of
-$\bfloor{radeon780m}{graphics-independent}$ and
-$\bfloor{radeon780m}{mixed-independent}$. This is the second collection to
-show it, on a different revision and power configuration: the sign reproduces;
-the magnitude roughly doubled, which itself says the mechanism is sensitive to
-device state in a way the effects on the other machines are not.
+\textbf{Removing barriers can make things worse, and the sweep shows how.}
+On the Radeon~780M, \texttt{B-hazard} \emph{costs}. This is the third
+collection to show it, across two benchmark revisions and two power
+configurations, and this round sweeps the pass count on that machine, so it
+shows the shape as well as the sign. In Figure~\ref{fig:overlap-depth} the
+penalty is absent at one pass
+($\bladenum{depth/radeon780m/graphics-independent/p1/placement/pct}\%$),
+already
+$\bladenum{depth/radeon780m/graphics-independent/p2/placement/pct}\%$ at two,
+and grows with the number of overlapping passes until it saturates near
+sixteen
+($\bladenum{depth/radeon780m/graphics-independent/p16/placement/pct}\%$,
+still $\bladenum{depth/radeon780m/graphics-independent/p64/placement/pct}\%$
+at sixty-four). The 16-pass matrix cells carry the launch-state mixture of
+Section~\ref{sec:deviations} in their intervals, which is why the shape is
+read from the paired block effects in the figure rather than from one cell.
 
-The obvious mechanism is memory-system pressure: sixteen concurrent
-$1024\times1024$ \texttt{RGBA8} targets have a 64\,MiB aggregate uncompressed
-footprint and receive full-screen logical stores, although compression can
-reduce physical traffic. An integrated GPU shares its bandwidth and last-level
-cache with the CPU, so serializing the passes could reduce the number of active
-targets. Half of the evidence obliges: \texttt{mixed-independent}, which
-interleaves compute passes among the render passes and so exposes eight targets
-rather than sixteen, loses
-$\bmag{radeon780m}{mixed-independent}{placement}$ against
-$\bmag{radeon780m}{graphics-independent}{placement}$ --- less potential
-pressure, less loss, as a capacity story predicts. The other half refuses: the tracked
-implementation uses distinct targets and its capture contains no sequence of
-inter-pass image dependencies, yet it does not pay. It is
-$\bmag{radeon780m}{graphics-independent}{wgpu}$ \emph{faster} than
-\texttt{B-auto}, not $\bmag{radeon780m}{graphics-independent}{placement}$
-slower. This weakens concurrency pressure as a sufficient explanation, but it
-does not isolate what differs between the two implementations.
-
-What differs between \texttt{B-hazard} and \wgpu{} on a workload where both
-permit the passes to overlap includes the layout the targets sit in
-(\texttt{GENERAL} against \texttt{COLOR\_ATTACHMENT\_OPTIMAL}) and the endpoint
-barrier form in the captured command stream (a final global memory barrier
-against an initial image barrier), but also parameter delivery, timestamp
-instrumentation, command translation, and any backend-specific per-pass work.
-These are factors this study observes and does not control, which is exactly
-where its design is weakest. A pass-count sweep and a controlled layout
-variant on this part would test the pressure and layout hypotheses,
-respectively; neither alone would decompose the end-to-end \wgpu{} result. We
-report the regression without the tidy explanation that the numbers do not
-support.
+Growth with concurrency is what a shared-resource account predicts --- and
+the tracked implementation refutes the simple version of it at every count.
+\wgpu{} overlaps the same passes onto usage-matched targets (both request
+attachment and copy usage only, so both are DCC-eligible by the predicates of
+Section~\ref{sec:radv-barriers}), writes the same bytes, and stays
+\emph{faster} than serialized \texttt{B-auto} across the whole sweep:
+$\bladenum{depth/radeon780m/graphics-independent/p2/wgpu/pct}\%$ at two
+passes, $\bladenum{depth/radeon780m/graphics-independent/p64/wgpu/pct}\%$ at
+sixty-four. Whatever resource \blade's overlapping passes exhaust, \wgpu's
+overlapping passes do not touch. What still differs between them here is
+narrow: the layout the targets sit in (\texttt{GENERAL} against
+\texttt{COLOR\_ATTACHMENT\_OPTIMAL}) and the endpoint barrier form --- on a
+driver that advertises \texttt{VK\_KHR\_unified\_image\_layouts} and
+therefore promises that the layout half should not matter --- along with
+parameter delivery, timestamp instrumentation, and backend-specific per-pass
+work. Under hazard-only placement there is no interior barrier left to
+blame. The controlled layout variant --- the same \blade{} stream with
+attachment-optimal layouts --- is the experiment that would close this, and
+the study does not have it. We report the shape and the eliminations rather
+than the tidy explanation the numbers do not support.
 
 \textbf{Long-running passes leave little measured headroom.} On the Raphael
 iGPU the largest highlighted within-\blade{} change is
@@ -1098,10 +1116,10 @@ $\bpctci{raphael}{compute-independent}{scope}$ and
 $\bpctci{raphael}{compute-chain}{scope}$, against floors of
 $\bfloor{raphael}{compute-independent}$ and
 $\bfloor{raphael}{compute-chain}$. The
-\texttt{compute-independent} interval still overlaps its stability band; the
+\texttt{compute-independent} interval still touches its stability band; the
 \texttt{compute-chain} interval clears its band only at the rounding edge.
-With only three process repetitions, neither supports the practical claim made
-for the discrete part.
+Either way these are fractions of a percent on a saturated device, not the
+practical claim made for the discrete part.
 
 \textbf{Where no direction resolves.} Every RX~7900~XT boundary that involves
 a render pass on either side fails the paper's exploratory directional
@@ -1110,15 +1128,14 @@ criterion: $\bpctci{rx7900xt}{graphics-independent}{scope}$ on
 $\bfloor{rx7900xt}{graphics-independent}$, with no resolved directional effect
 on \texttt{graphics-chain} or either mixed workload. This is not an
 equivalence result. On the Radeon~780M the two compute cells read
-$\bmag{radeon780m}{compute-independent}{scope}$ and
-$\bmag{radeon780m}{compute-chain}{scope}$ against floors of
+$\bpctci{radeon780m}{compute-independent}{scope}$ and
+$\bpctci{radeon780m}{compute-chain}{scope}$ against floors of
 $\bfloor{radeon780m}{compute-independent}$ and
 $\bfloor{radeon780m}{compute-chain}$, and neither clears its cell's floor.
 The Intel part is not credited in either direction. Its
-\texttt{compute-chain} column moves by
-$\bmag{intelxe}{compute-chain}{scope}$, but its control estimate is
-$\bpctci{intelxe}{compute-chain}{control}$ in the same cell and places the
-scope estimate essentially on its $\bfloor{intelxe}{compute-chain}$ threshold
+\texttt{compute-chain} column reads
+$\bpctci{intelxe}{compute-chain}{scope}$ against a floor of
+$\bfloor{intelxe}{compute-chain}$
 (Section~\ref{sec:deviations}). Its
 \texttt{graphics-independent} estimate is
 $\bpctci{intelxe}{graphics-independent}{scope}$, but that wide interval
@@ -1392,8 +1409,8 @@ $\bmagci{rtx5070}{graphics-chain}{wgpu}$ faster
 than \texttt{B-auto} on a workload where every boundary is a real hazard, so
 the within-\blade{} placement variants have identical timed barriers and scope
 recovers only
-$\bmag{rtx5070}{graphics-chain}{scope}$. The rest of the gap --- nearly three
-times what scope recovers --- remains bundled among the resource-scoped form of
+$\bmag{rtx5070}{graphics-chain}{scope}$. The rest of the gap --- well over
+twice what scope recovers --- remains bundled among the resource-scoped form of
 the barrier, the specialized image layout, differing timestamp windows, and
 per-pass work outside synchronization. This driver advertises
 \texttt{VK\_KHR\_unified\_image\_layouts} and \blade{} enables it, which is a
@@ -1461,9 +1478,11 @@ explicit queue barriers are a separate design point~\cite{metal-hazard-tracking}
 
 Table~\ref{tab:metal} therefore reports only what is comparable. \blade's host
 cost is $\bladenum{metal/hostshare/min}$--$\bladenum{metal/hostshare/max}\%$ of
-\wgpu's. Completion wall time is lower for \blade{} on \texttt{compute-chain}
-and \texttt{graphics-independent} and within a percent either way on the other
-two; it is not used as a substitute for device span. This recollection uses the shader-check settings of
+\wgpu's. Completion wall time is within a few percent either way on every
+workload; the double-digit wait saving the pre-parity pilot appeared to show
+does not survive shader parity, which is consistent with it having been the
+injected-check artifact of Section~\ref{sec:workloads}. Wall time is not used
+as a substitute for device span. This recollection uses the shader-check settings of
 Section~\ref{sec:workloads} on both implementations.
 Note that \blade's Metal host cost
 ($\bladenum{metal/host/min}$--$\bladenum{metal/host/max}\,\mu$s for sixteen
@@ -1800,7 +1819,10 @@ part in its own encoder and submit both to the same queue.
 \emph{Then measure, because the restructuring is not always a win.} On the
 Radeon~780M, letting sixteen independent render passes overlap cost
 $\bmag{radeon780m}{graphics-independent}{placement}$ and the mixed equivalent
-$\bmag{radeon780m}{mixed-independent}{placement}$, while on the RX~7900~XT the
+$\bmag{radeon780m}{mixed-independent}{placement}$ --- a penalty that grows
+with overlap depth (Figure~\ref{fig:overlap-depth}) and whose 16-pass
+intervals carry that device's launch-state mixture
+(Section~\ref{sec:deviations}) --- while on the RX~7900~XT the
 same change on render passes bought
 $\bmag{rx7900xt}{graphics-independent}{placement}$ --- real, but a quarter of
 the $\bmag{rx7900xt}{compute-independent}{placement}$ its compute equivalent
@@ -1862,17 +1884,12 @@ construction. The scoped results cover five Vulkan device-driver pairs across
 three vendors, but not every cell within them:
 \bladenum{floor/above2} of \bladenum{floor/count} have control floors above
 $2\%$, and every conclusion is checked against the post-hoc stability
-threshold of the cell it comes from. The development-time synchronization
-validation run reportedly found no errors, but its logs were not retained.
-This audit subsequently found that the retained \wgpu{} graphics shader's
-SPIR-V fails Vulkan validation and that the graphics-chain readback row
-saturates before the end of the measured chain. The equivalent array-free
-shader and unsaturated validation row pass the current automated correctness
-matrix, but they are not the executable and timed shader from which the timing
-rows were collected. Until the fixed benchmark is recollected and its
-validation logs are published, the sampled output hashes are the only archival
-correctness evidence; even retained validation would be evidence about
-executed schedules rather than a proof.
+threshold of the cell it comes from. Every archival timing collection is
+preceded by a retained synchronization-validation matrix, run with the
+Khronos checks forced on and its logs stored beside the timing rows; the
+timing rows themselves come from the audited shaders of
+Section~\ref{sec:workloads}. Retained validation is still evidence about the
+schedules that were executed rather than a proof.
 The automated workload matrix exercises compute, render, and their crossings;
 it does not exercise the transfer or acceleration-structure rows of the
 pass-kind table. Those rows have a source-level correctness argument but need
@@ -1882,15 +1899,16 @@ End-to-end \wgpu{} differences are labelled as such throughout, and the ones we
 cannot account for --- the Intel gap in one direction, the RX~7900~XT gap in
 the other --- are left unexplained rather than attributed.
 
-Each configuration has 30 within-process samples but only three independent
+Each configuration has 30 within-process samples and ten independent
 process-level repetitions. The paired hierarchical bootstrap preserves that
-nesting and reveals variation the earlier pooled analysis hid, but three
-blocks provide limited power and weak tail estimation. The intervals should be
-read as uncertainty over the observed sessions. The inner resampling also
-treats time-ordered observations as exchangeable and the matrix has no
-second-day or in-process-alternation sensitivity run. A final archival dataset
-should increase the number of process repetitions and check the reported
-effects with a moving-block or process-median-only analysis.
+nesting and reveals variation a pooled analysis hides --- at three pilot
+blocks it disqualified cells that ten now resolve, and on one device it
+exposes a launch-level state mixture rather than averaging it away. Ten
+blocks still estimate tails coarsely, the inner resampling treats
+time-ordered observations as exchangeable, and the matrix has no second-day
+or in-process-alternation sensitivity run. A moving-block or
+process-median-only re-analysis of the archived observations remains a
+worthwhile check.
 
 The workloads are microbenchmarks of sixteen passes each. Two of the six
 alternate compute and render work, so heterogeneity is represented, but only
@@ -1996,15 +2014,16 @@ application-declared pass dependencies.
 
 The manuscript, collectors, and \blade{} implementation are public on the
 \texttt{blade-sync-study} branch, and the matched program is public on the
-corresponding \wgpu{} fork branch~\cite{blade,wgpu-study}. The retained Vulkan
-measurements used \wgpu{} revision \texttt{882d5bb}; the corrected benchmark
-described in the working-draft box is revision \texttt{7d37a77}.
-The bibliography records the full identifiers, and per-collection manifests
-record the \blade{} revision and device metadata.
+corresponding \wgpu{} fork branch~\cite{blade,wgpu-study}. The archival round
+measures the corrected benchmark on every machine: \wgpu{} revision
+\texttt{7d37a77} and \blade{} revision \texttt{87ed067}, with the study
+host's sweeps adding one paper-directory commit that the benchmark does not
+compile. The bibliography records the full identifiers, and per-collection
+manifests record the revisions, the clock configuration, and device metadata.
 
-This is source availability, not yet an archival artifact. The raw directories
-are git-ignored, one cited collection is absent from this checkout, and the
-validation and corrected graphics recollections remain open gates. A
+This is source availability, not yet an archival artifact: the raw
+directories are git-ignored, so the collections exist only where they were
+copied, and the Metal hazard pilot retains no raw observations. A
 submission artifact should be a versioned superproject that pins both source
 trees as submodules and archives raw observations, validation logs, captures,
 manifests, and checksums under a durable release or DOI. Moving branch names
@@ -2021,8 +2040,8 @@ and no chain interval clears its cell-specific stability threshold; removing
 fifteen redundant inter-pass barriers reduces device span by
 $\bmag{rtx5070}{compute-independent}{placement}$ and
 $\bmag{rx7900xt}{compute-independent}{placement}$ on the two discrete GPUs,
-and makes independent render work slower on the Radeon~780M for reasons we
-could not establish. The matched \wgpu{} stack takes more record-and-submit
+and makes independent render work slower on the Radeon~780M --- by two-fifths
+once sixteen passes overlap --- for reasons we could not establish. The matched \wgpu{} stack takes more record-and-submit
 time in every measured cell, but that end-to-end difference must not be called
 the cost of tracking alone.
 
@@ -2049,11 +2068,11 @@ opt-out should be presented as a profiled optimization rather than a default,
 because on at least one real device it makes things worse.
 
 The remaining bounds are specific: no application frames or multisampled
-targets, no mechanism for the Radeon~780M regression or the discrete AMD scope
-saving, only three process repetitions per configuration, and no retained raw
-observations or process repetitions for the separate Metal hazard-tracking
-pilot. They bound the corresponding claims rather than supporting
-extrapolation beyond the measured workloads.
+targets, no mechanism for the Radeon~780M overlap penalty, its launch-state
+mixture, or the discrete AMD scope saving, no controlled layout variant, and
+no retained raw observations or process repetitions for the separate Metal
+hazard-tracking pilot. They bound the corresponding claims rather than
+supporting extrapolation beyond the measured workloads.
 
 \bibliographystyle{plain}
 \bibliography{references}
