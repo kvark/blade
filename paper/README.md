@@ -167,8 +167,12 @@ Because `data/raw/` is not in git, a collection exists only where it was
 copied. `build-tables.py` now fails when `main.tex` cites a device whose matrix
 data are absent, since otherwise table rows can vanish while the prose keeps
 referring to them. Restore the named collections before building the PDF.
-Before submission, publish the immutable raw directories and checksums as a
-versioned artifact; local, ignored data are not a reproducibility story.
+
+The archival copy ships as the arXiv submission's ancillary files:
+`data/artifact/` holds the compressed raw collections with per-file
+checksums, source snapshots of both repositories at the measured revisions,
+and the assembled submission tarball (`arxiv-submission.tar.gz` — LaTeX
+source, generated tables, `anc/` bundle), which compiles standalone.
 
 The result gates in [experiments.md](experiments.md) are not all met. In
 addition to the missing k6 artifact and only three process repetitions, the

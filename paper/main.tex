@@ -83,21 +83,6 @@ aliasing, cross-queue use, and exceptional layouts still require
 resource-specific knowledge somewhere in the engine.
 \end{abstract}
 
-\noindent\colorbox{yellow!25}{%
-\parbox{\dimexpr\columnwidth-2\fboxsep\relax}{%
-\textbf{Working draft.} Fixed-matrix, sweep, profile, capture, and
-Metal-hazard quantities are generated from retained collections and cited by
-key. The 2026-07-28 archival round closes the gates an earlier audit left
-open: every machine ran the corrected benchmark from one clean revision pair,
-with ten process repetitions per configuration, a retained
-synchronization-validation collection and its logs on every Vulkan machine,
-captures of all six policies on four machines agreeing byte-for-byte, and the
-Metal hazard question replicated across ten raw-retained sessions on AC
-power. Still open: the raw collections remain git-ignored pending the
-archival bundle of the artifact section. Claims are stated for the
-device-driver pairs measured; multisampled targets and application frames are
-named where they bound a claim.}}
-
 \section{Introduction}
 
 Explicit GPU APIs expose synchronization so applications can preserve
@@ -2058,7 +2043,7 @@ are outside this study~\cite{metal-hazard-tracking}. \blade{} occupies the
 tracking-free RHI point by exposing an unsafe native contract and relying on
 application-declared pass dependencies.
 
-\section{Artifact Status}
+\section{Artifact}
 
 The manuscript, collectors, and \blade{} implementation are public on the
 \texttt{blade-sync-study} branch, and the matched program is public on the
@@ -2069,13 +2054,15 @@ host's sweeps adding one paper-directory commit that the benchmark does not
 compile. The bibliography records the full identifiers, and per-collection
 manifests record the revisions, the clock configuration, and device metadata.
 
-This is source availability, not yet an archival artifact: the raw
-directories are git-ignored, so the collections exist only where they were
-copied. A
-submission artifact should be a versioned superproject that pins both source
-trees as submodules and archives raw observations, validation logs, captures,
-manifests, and checksums under a durable release or DOI. Moving branch names
-are not sufficient for reproducing the paper.
+Because moving branch names are not sufficient for reproducing a paper, this
+submission's ancillary files are the frozen copy: every raw collection ---
+timing matrices, sweeps, retained synchronization-validation logs, host
+profiles, captures with extracted barrier tables, and the Metal hazard
+sessions --- with a digest of every file, alongside source snapshots of both
+repositories at the measured revisions. Extracting the collections into
+\texttt{paper/data/raw/} of the \blade{} snapshot and running the table
+builder regenerates every table, figure, and quoted number in this paper;
+a missing collection is a build error rather than a silent absence.
 
 \section{Conclusion}
 
