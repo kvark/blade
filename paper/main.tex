@@ -734,28 +734,16 @@ within each collection/workload/pass-count group. Across the
 \bladenum{runs/hashgroups} such groups from all devices, every configuration
 present in a group agrees, with \bladenum{runs/hashconflicts} exceptions.
 
-An audit between the pilot and the archival collections found and fixed four
-validation weaknesses, each recorded here because the pilots could not have
-caught what they were designed to catch. The pilot benchmark hashed one
-representative output per independent family rather than every per-pass
-output, so a failure confined to another independent pass could hide. Its
-digest was labelled \texttt{fnv1a64} while a mistyped multiplier made it a
-non-standard hash --- both implementations shared the function, so equality
-checks remained valid. The sampled graphics-chain readback row saturated
-after a short additive chain, making its digest exactly the digest of 4096
-\texttt{0xff} bytes, blind to a missing late pass. And naga~30.0.0 decorated
-the function-local fullscreen-triangle array so that the \wgpu{} graphics
-shader failed SPIR-V validation under
-\texttt{VUID-StandaloneSpirv-None-10684}, although every measured driver
-accepted and executed it. The archival benchmark hashes a slice of every
-independent output with the standard FNV-1a function and a pinned test
-vector, keeps the one readback row to exact two-bit increments that cannot
-saturate across the 64-pass sweep while the other 1023 rows retain the
-full-range workload, and expresses the triangle without the local array in
-both shader copies. Two of these fixes touch a timed shader, so no pilot
-graphics timing was carried forward: every number in this draft comes from
-the corrected binaries, and each Vulkan machine's round begins with a
-retained validation matrix whose logs sit beside its timing collection.
+Validation is layered so that a silent failure has somewhere to be caught.
+Each Vulkan machine's round begins with a retained synchronization-validation
+matrix, run with the Khronos checks forced on and its logs stored beside the
+timing collection. After every timed process, a slice of every independent
+output is hashed with standard FNV-1a and the collector aborts on any
+disagreement between policies or implementations. The graphics chain reserves
+its readback row for exact two-bit increments that cannot saturate across the
+64-pass sweep --- a missing late pass changes the digest instead of hiding
+under clamped bytes --- while the other 1023 rows carry the full-range
+measured workload, and both implementations' shaders pass SPIR-V validation.
 
 Identical shader bodies do not guarantee identical generated code. \blade{} hands
 naga the default bounds-check policies, which are unchecked throughout, and
@@ -780,6 +768,22 @@ also add scene, content, and driver-heuristic variation that this design exists
 to exclude. We report a bounded claim about a controlled workload rather than
 an unbounded one about renderers.
 
+They are also deliberately barrier-dense stress tests, and the two things
+they stress scale differently in a real application. A pass here performs
+only microseconds of work, so every boundary cost lands on the smallest
+denominator the design allows --- sixteen boundaries against roughly a
+millisecond of total work. Fixed per-boundary costs --- host-side barrier
+recording, the fraction-of-a-microsecond device-side scope constant ---
+amortize in a production frame whose passes run hundreds of microseconds to
+milliseconds each: those results should be read as microseconds per boundary
+and divided by real pass durations, which shrinks them by one to two orders
+of magnitude. Overlap effects are structural instead: what a redundant
+barrier forfeits is proportional to how much genuinely independent work sits
+on both sides of it, which sixteen equal independent passes maximize and few
+real frames approach. On both axes a real application suffers less than
+these numbers; the field report is what the exception looks like when it
+occurs.
+
 \subsection{Platforms}
 
 Table~\ref{tab:platforms} lists the machines. The matrix covers the minimum
@@ -787,6 +791,16 @@ viable study of experiments.md --- one recent AMD and one recent NVIDIA
 device-driver pair on Linux --- and adds an Intel Vulkan implementation and an
 Apple/Metal case study. Results are reported per device-driver pair and never
 pooled by vendor.
+
+One class is absent by construction: mobile GPUs. The matrix contains no
+Android-class tiler --- no Adreno, Mali, or PowerVR --- and while the AMD
+iGPUs and the Apple M3 are integrated parts, only the M3 is a tile-based
+deferred renderer, and it is measured through Metal's tracker rather than
+through explicit barriers. On a Vulkan tiler, a barrier that forces a
+render-pass break costs a tile flush and reload --- a mechanism none of the
+measured architectures has --- so nothing in this paper should be
+extrapolated to that class; it is the most consequential gap in the platform
+set.
 
 \input{data/derived/tables/platforms}
 
@@ -1740,6 +1754,21 @@ difference over the measured pass counts. The fixed-matrix ratios
 timestamp instrumentation, and the sweep becomes non-linear at larger counts,
 so we do not extrapolate them to hundreds of passes or whole-frame savings.
 
+\textbf{What tracking itself costs the CPU is bracketed, not measured.} The
+question this study set out from --- how much host time \wgpu{} sacrifices
+specifically for resource tracking --- gets a lower and an upper bound here,
+and they are far apart. Symbols directly attributable to the trackers are
+$\bladenum{profile/wgpu/tracker/min}$--$\bladenum{profile/wgpu/tracker/max}\%$
+of \wgpu's whole-process samples, a bound blind to inlined tracker work; the
+full end-to-end gap is the upper bound, and it bundles validation, lifetime
+management, bind-group resolution, and command translation with the
+trackers --- machinery that exists partly \emph{because} state is tracked but
+is not the tracking itself. The experiment that would separate them --- a
+\wgpu{} build with tracking short-circuited, or a profile gated to the
+record-and-submit interval on a pinned adapter
+(Section~\ref{sec:profile}) --- was not performed. Anyone quoting this paper
+as ``tracking costs $N\times$'' is quoting a bracket as a point.
+
 \textbf{The negative results matter.} The Radeon~780M shows that removing
 redundant barriers is not a free optimization, and the AMD render boundaries
 show that a saving visible in a command stream need not be visible in a timer. A layer
@@ -1900,9 +1929,9 @@ $2\%$, and every conclusion is checked against the post-hoc stability
 threshold of the cell it comes from. Every archival timing collection is
 preceded by a retained synchronization-validation matrix, run with the
 Khronos checks forced on and its logs stored beside the timing rows; the
-timing rows themselves come from the audited shaders of
-Section~\ref{sec:workloads}. Retained validation is still evidence about the
-schedules that were executed rather than a proof.
+timing rows themselves come from the validated shaders and layered output
+checks of Section~\ref{sec:workloads}. Retained validation is still evidence
+about the schedules that were executed rather than a proof.
 The automated workload matrix exercises compute, render, and their crossings;
 it does not exercise the transfer or acceleration-structure rows of the
 pass-kind table. Those rows have a source-level correctness argument but need
@@ -1965,6 +1994,12 @@ $\bmag{raphael}{compute-chain}{scope}$ observations on Raphael and no
 render-boundary result. The third AMD part still disagrees in
 sign on the render workloads, which is itself part of the result rather than a
 contradiction of it.
+
+Finally, no mobile tiler is represented at all. A pass-boundary barrier
+policy would be stressed hardest exactly there --- a barrier that breaks a
+render pass on a tile-based GPU forces a tile flush and reload --- so the
+class where this design has the most to lose is the class the study says
+nothing about.
 
 \section{Related Work}
 
@@ -2057,6 +2092,20 @@ and makes independent render work slower on the Radeon~780M --- by two-fifths
 once sixteen passes overlap --- for reasons we could not establish. The matched \wgpu{} stack takes more record-and-submit
 time in every measured cell, but that end-to-end difference must not be called
 the cost of tracking alone.
+
+The corresponding \blade{} development outcome is deliberately small. The
+mainline Vulkan encoder can retain its existing API and add one encoder-wide
+pass-kind summary: a bitmask of producers recorded since the previous barrier.
+An automatic boundary can then derive both sides of its global barrier from
+the accumulated producers and the pass being opened; an explicitly placed
+barrier derives its source and keeps a conservative destination. This is
+lightweight aggregate access tracking, not per-resource state: it stores no
+resource identities, subresources, layouts, or lifetimes. The AMD measurements
+also make this a scope refinement rather than a vendor heuristic. Narrowing
+paid at the discrete part's compute boundaries but not at its render
+boundaries, while removing barriers from independent render work hurt the
+Radeon~780M. \blade{} therefore should neither select placement by vendor nor
+assume that fewer barriers are always faster.
 
 The practical conclusion is that resource-dependency knowledge is
 indispensable, but per-resource state inside the RHI is not always. For the
