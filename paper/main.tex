@@ -11,6 +11,16 @@
 \pgfplotsset{compat=1.18}
 \usepgfplotslibrary{groupplots}
 
+% The floats outnumber the pages whose tops can host them under the default
+% fractions, which strands the last tables alone past the end of the text.
+% Allow fuller tops and denser float pages so they interleave instead.
+\renewcommand{\topfraction}{0.92}
+\renewcommand{\dbltopfraction}{0.92}
+\renewcommand{\textfraction}{0.07}
+\renewcommand{\floatpagefraction}{0.75}
+\setcounter{topnumber}{3}
+\setcounter{dbltopnumber}{3}
+
 \newcommand{\blade}{\textsc{Blade}}
 \newcommand{\wgpu}{\textsc{wgpu}}
 \newcommand{\ci}[2]{\,[#1,\,#2]}
@@ -1378,9 +1388,10 @@ and \wgpu{} wait differently --- which is why the table reports shares within
 a process rather than times between processes.
 
 Repeating one profile moves shares by around a percentage point, so small row
-differences are not meaningful. The retained profiling invocations were not
-adapter-pinned; on the multi-GPU \texttt{S2} host, \blade{} and \wgpu{} selected
-different devices, as the generated table note records. A causal decomposition
+differences are not meaningful. The profiling invocations were not
+adapter-pinned, so on a multi-GPU host the two implementations need not have
+profiled the same device; only within-process shares are read from the table
+for that reason. A causal decomposition
 of the host gap needs a follow-up that gates sampling to record plus submit (or
 batches many recordings before one wait) on the same pinned device. These flat
 whole-process profiles are retained as a diagnostic, not presented as that
@@ -2138,7 +2149,7 @@ beyond the measured workloads.
 The Metal question in Section~\ref{sec:metal} --- what hazard tracking costs
 when the framework rather than the application performs it --- is not answered
 by the main workloads, because both implementations pay it there. A standalone
-Swift harness probes it as a pilot and is distributed with the artifact.
+Swift harness measures it and is distributed with the artifact.
 
 It allocates the same resources twice, once with
 \texttt{MTLHazardTrackingModeTracked} and once with
