@@ -1,14 +1,13 @@
 # Blade synchronization paper
 
-This directory contains the working technical report and its experiment
-protocol. The build is designed so every quantity drawn from a retained
-matrix, sweep, profile, or capture is generated from the raw collections and
-the prose cannot drift from the data. The explicitly exploratory Metal hazard
-pilot is the exception because only its printed summaries survived. The build
-currently fails deliberately until the cited Radeon 780M collection is
-restored; the remaining open gates are stated where they bound a claim.
+This directory contains the technical report, experiment protocol, collectors,
+and analysis code. The build is designed so every quantity drawn from a
+retained matrix, sweep, profile, capture, or Metal hazard-tracking session is
+generated from the raw collections and the prose cannot drift from the data.
+The complete archival round and a standalone arXiv upload bundle are under the
+ignored `data/artifact/` staging directory.
 
-## Draft
+## Build
 
 Regenerate the tables before building, because both the tables and the numbers
 the prose cites come out of the same script:
@@ -34,13 +33,11 @@ than a blank. The unsigned forms (`\bmag`, `\bmagci`) are deliberately
 undefined for cells whose interval spans zero, so "worth X%" cannot be written
 about a cell that does not support it.
 
-A full build needs `booktabs` and `xcolor`, which Debian's `texlive-latex-base`
-does not include; `texlive-latex-recommended` or a `tectonic` binary covers
-them.
+A full PDFLaTeX build needs Latin Modern, `booktabs`, `xcolor`, and `pgfplots`.
+On Debian/Ubuntu these come from `lmodern`, `texlive-latex-recommended`, and
+`texlive-pictures`; a `tectonic` binary also covers them.
 
-The source uses a generic two-column article layout so that the work is not
-tied to a venue before the evaluation is complete. It can later be moved to a
-venue template without rewriting the content.
+The source uses a venue-neutral two-column article layout.
 
 ## Experiments
 
@@ -155,75 +152,55 @@ host's sweeps add one paper-only commit.
 | `20260728T104331Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, GPU-timed |
 | `20260728T111220Z-zork` | zork | NVIDIA RTX 5070 | pass-count sweep 1-64, timestamp-free |
 
-Per-host `*-profile` and `*-captures` directories accompany the round on
-rubik, matrix, and k6 (zork's profile is pending a re-run).
+Per-host `*-profile` and `*-captures` directories accompany the round on all
+four Vulkan hosts: zork, rubik, matrix, and k6.
 `build-tables.py` keeps only the most recent matrix-capable collection per
 machine and device --- a dedicated matrix wins over a sweep standing in for
 one --- so a retest supersedes an earlier run rather than appearing beside
 it. The two `rubik` directories come from one invocation: the collector runs
 every enumerated adapter in turn.
 
-Because `data/raw/` is not in git, a collection exists only where it was
-copied. `build-tables.py` now fails when `main.tex` cites a device whose matrix
-data are absent, since otherwise table rows can vanish while the prose keeps
-referring to them. Restore the named collections before building the PDF.
+Because `data/raw/` is not in git, a fresh checkout must extract the ancillary
+data bundle there before regenerating the tables. `build-tables.py` fails when
+`main.tex` cites a device whose matrix data are absent, since otherwise table
+rows could vanish while the prose kept referring to them.
 
 The archival copy ships as the arXiv submission's ancillary files:
 `data/artifact/` holds the compressed raw collections with per-file
 checksums and the assembled submission tarball (`arxiv-submission.tar.gz` —
 LaTeX source, generated tables, `anc/` data bundle), which compiles
 standalone. Sources are referenced, not bundled: the tags `sync-study-v1`
-(blade) and `blade-sync-study-v1` (wgpu fork) name the submitted state, and
-the commit hashes in the bibliography and manifests are the identifiers of
-record.
+(blade) and `blade-sync-study-v1` (wgpu fork) pin the study code, not the
+article revision, and the measured commit hashes in the bibliography and
+manifests are the identifiers of record. arXiv preserves the submitted article
+source separately.
 
-The result gates in [experiments.md](experiments.md) are not all met. In
-addition to the missing k6 artifact and only three process repetitions, the
-development-time synchronization-validation logs were not retained, and the
-retained benchmark revision sampled only one output from each independent
-family. The retained wgpu graphics executable also emits SPIR-V that Vulkan
-validation rejects under `VUID-StandaloneSpirv-None-10684`; the shared shader
-has been rewritten equivalently and now passes the automated correctness
-matrix. The current benchmark hashes every independent output and corrects a
-mistyped FNV-1a multiplier that both retained binaries shared; old and new
-digest strings are therefore not directly comparable. It also prevents the
-graphics-chain readback row from saturating to all `0xff`, which previously
-made that hash insensitive to missing late passes. These shader
-fixes change graphics binaries: rerun the full timing collection as well as its
-small correctness matrix before submission. The current flat CPU profiles
-include completion waits and therefore cannot attribute the record-and-submit
-gap; the paper now uses them only as a diagnostic. They were also unpinned and
-selected different Blade/wgpu GPUs on the dual-GPU AMD host. The retained
-capture manifests likewise identify hosts but not selected adapters and omit
-three Blade controls. Recollect both artifacts with explicit selectors; the
-current profile and capture runners reject a mismatched device, and the capture
-runner additionally checks output hashes and one newly created capture per
-configuration.
+The archival round supersedes the earlier pilot collections. Every Vulkan
+timing collection has ten randomized process repetitions, 1000 warm-ups, and a
+retained synchronization-validation run of the corrected benchmark. Captures
+cover all six Blade policies and the matched wgpu program on every Vulkan host.
+The flat CPU profiles remain diagnostic rather than a causal decomposition of
+the record-and-submit gap. The capture manifests identify hosts but not the
+selected adapter, so the paper uses their identical extracted barrier tables
+only as cross-host evidence and does not claim four identified GPU models from
+them. The Apple timing matrix is explicitly exploratory.
 
 The workload set is closed; see [experiments.md](experiments.md) for what was
-considered and declined, and why. What remains is filling the existing grid:
+considered and declined, and why. The retained grid is:
 
 | machine | matrix | profile | captures |
 |---|:--:|:--:|:--:|
 | zork | yes | yes | yes |
 | rubik | yes | yes | yes |
-| k6 | missing locally | missing locally | missing locally |
+| k6 | yes | yes | yes |
 | matrix | yes | yes | yes |
 | mac | yes | n/a | n/a |
 
 `python3 paper/collect.py --wgpu ../wgpu` fills a row; the profile step needs a
 permissive `kernel.perf_event_paranoid` and says so when it skips. Apple has
-neither a `perf` nor a RenderDoc path, so those two cells are not applicable;
-its three-repetition, Low-Power-Mode timing collection is still exploratory.
-
-The collection change that materially improved the study has been made: every
-2026-07-27 run warms up for 1000 iterations, chosen because the earlier ten
-left severe within-block drift (pinning `power_dpm` levels alone did not).
-Residual drift still exists and is priced by the per-cell stability diagnostic;
-the warm-up count is not proof of a fixed clock. The analysis now also treats
-the three process repetitions as the experimental blocks. That correction
-widens unstable Intel and RTX compute-chain intervals while leaving the large
-discrete-GPU independent-pass effects intact. Current thresholds must be read
+neither a `perf` nor a RenderDoc path, so those two cells are not applicable.
+Residual drift is priced by the per-cell stability diagnostic; the warm-up
+count is not treated as proof of a fixed clock. Current thresholds must be read
 from regenerated tables, not copied into this README.
 
 ## Current scope

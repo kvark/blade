@@ -1,6 +1,7 @@
 \documentclass[10pt,twocolumn]{article}
 
 \usepackage[T1]{fontenc}
+\usepackage{lmodern}
 \usepackage[margin=0.75in]{geometry}
 \usepackage{amsmath}
 \usepackage{booktabs}
@@ -10,6 +11,11 @@
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.18}
 \usepgfplotslibrary{groupplots}
+\hypersetup{
+  pdftitle={Global Pass Barriers Without Per-Resource RHI Tracking:
+    A Cross-Vendor Study with Blade},
+  pdfauthor={Dzmitry Malyshau}
+}
 
 % The floats outnumber the pages whose tops can host them under the default
 % fractions, which strands the last tables alone past the end of the text.
@@ -41,56 +47,39 @@ A Cross-Vendor Study with \blade}
 \maketitle
 
 \begin{abstract}
-Modern explicit graphics APIs make applications describe memory dependencies,
-resource access scopes, and image layouts in detail. Implementations of
-portable APIs, such as \wgpu{} for WebGPU, reconstruct and validate this state
-at run time, while render graphs derive it from a declared workload. \blade{}
-explores a different point in the design space: its Vulkan backend keeps
-ordinary images in \texttt{GENERAL}, does not maintain per-resource states,
-and places a global memory barrier at pass boundaries.
+Explicit graphics APIs expose memory dependencies, per-resource accesses, and
+image layouts. \wgpu{} reconstructs and validates this state; \blade{} keeps
+Vulkan images in \texttt{GENERAL}, tracks no per-resource state, and issues
+global pass-boundary barriers. We isolate barrier placement and stage/access
+scope within \blade{}, compare matched \wgpu{} programs end-to-end, and measure
+six GPUs from four vendors, including exploratory Apple/Metal results.
 
-We separate barrier placement from stage/access scope inside \blade{}, compare
-matched native \wgpu{} programs end-to-end, and examine six GPUs from four
-vendors, including an exploratory Apple/Metal case study. Removing fifteen
-redundant inter-pass barriers from sixteen independent compute passes reduces
-GPU span by $\bmagci{rtx5070}{compute-independent}{placement}$ on an RTX~5070
-and $\bmagci{rx7900xt}{compute-independent}{placement}$ on an RX~7900~XT.
-For independent render passes the corresponding reductions are
+Removing fifteen redundant barriers from sixteen independent compute passes
+reduces GPU span by $\bmagci{rtx5070}{compute-independent}{placement}$ on an
+RTX~5070 and $\bmagci{rx7900xt}{compute-independent}{placement}$ on an
+RX~7900~XT. It reduces independent-render span by
 $\bmag{rtx5070}{graphics-independent}{placement}$ and
-$\bmag{rx7900xt}{graphics-independent}{placement}$, while the same change
-\emph{costs} on a Radeon~780M: a penalty that grows with the number of
-overlapping passes and saturates near
-$\bladenum{depth/radeon780m/graphics-independent/p16/placement/pct}\%$ by
-sixteen, while the tracked implementation overlaps the same passes without
-one. On dependent chains, whose variants have identical timed
-inter-pass barrier calls by construction, no placement effect clears the
-study's cell-specific stability criterion.
-
-A second \blade{} configuration remains global and tracks no resource, but
-derives stages and accesses from adjacent pass kinds. It reduces span by
+$\bmag{rx7900xt}{graphics-independent}{placement}$ on the same discrete parts,
+but increases it by
+$\bladenum{depth/radeon780m/graphics-independent/p32/placement/mag}\%$ on a
+Radeon~780M at 32 passes, beyond that count's stability floor. No
+dependent-chain placement effect clears the study's cell-specific stability
+criterion. Deriving global barrier scope from the pass kinds around each
+boundary, without tracking any resource, saves
 $\bmagci{rtx5070}{graphics-chain}{scope}$ on an NVIDIA graphics chain and
-$\bmagci{rx7900xt}{compute-chain}{scope}$ on an AMD compute chain; no
-render-involving AMD cell clears the same criterion. The timestamp-free host
-sweep also separates the stacks: recording and submitting sixteen independent
-compute passes costs
-$\bladenum{sweep/host/compute-independent/auto/at16}\,\mu$s in \blade{} and
-$\bladenum{sweep/host/compute-independent/wgpu/at16}\,\mu$s in \wgpu{}, an
-end-to-end difference that cannot be assigned to tracking alone.
+$\bmagci{rx7900xt}{compute-chain}{scope}$ on an AMD compute chain; no AMD
+render-involving scope cell resolves. \wgpu's record-and-submit cost is higher
+in every measured cell, but this end-to-end difference cannot be attributed
+to tracking alone.
 
-Reading RADV explains why command counts do not predict these timings. A
-global \texttt{MEMORY\_WRITE} dependency over \texttt{ALL\_COMMANDS} expands
-into requests for compute and pixel partial flushes, attachment and metadata
-flushes, and L2 invalidation, but the driver can elide part of that request and
-idle or clean units can make the remainder cheap. The same source narrows the
-layout concern: under the measured queue and usage conditions, RADV retains
-DCC in \texttt{GENERAL} on GFX10 and later and conditionally retains HTILE,
-but forgoes FMASK compression. Multisampled colour therefore remains an
-important unmeasured exception. For engine architecture, the result is not
-``discard the render graph'': dependency knowledge can remain above a
-tracking-free RHI and select global cuts in the command stream. Such cuts do
-not encode arbitrary per-resource DAG edges without over-synchronization, and
-aliasing, cross-queue use, and exceptional layouts still require
-resource-specific knowledge somewhere in the engine.
+RADV source shows why command counts do not predict these costs: broad global
+dependencies expand to several flush and invalidate requests that the driver
+may partly elide. It also shows that persistent \texttt{GENERAL} retains DCC
+under the measured RDNA conditions but disables FMASK. The resulting \blade{}
+direction is lightweight aggregate pass-kind state in a tracking-free RHI: an
+upstream render graph selects global dependency cuts, while aliasing,
+cross-queue use, exceptional layouts, and arbitrary per-resource DAG edges
+remain resource-aware engine responsibilities.
 \end{abstract}
 
 \section{Introduction}
@@ -837,8 +826,7 @@ describe the pooled observations, but no interval treats all 300 as
 independent. With ten process launches per configuration, and possible serial
 correlation among observations inside a launch, these intervals describe
 uncertainty across the observed sessions rather than a sampled population ---
-where whole launches land in different performance states, the interval says
-so by widening.
+where launches disagree with one another, the interval says so by widening.
 We do not report multiplicity-adjusted hypothesis tests; the
 device-by-workload cells and their control floors are exploratory effect
 estimates. Validation layers are enabled for correctness runs and disabled for
@@ -848,12 +836,16 @@ We did not preregister a practical-equivalence region, and in the end we do not
 use one. An earlier version of this analysis derived a single $\pm3\%$ band
 from the worst \texttt{B-explicit-all} control deviation; with all
 \bladenum{floor/count} cells collected, control floors vary by cell and reach
-$\bladenum{floor/max}\%$, so no single band describes them. Every claim is
-therefore compared against the control floor of the cell it is made in, which
-Figures~\ref{fig:placement} and~\ref{fig:scope} draw beside it. A band wide enough to cover the
-worst cell would discard the best ones, and a band fitted to the best would
-license the worst. This post-hoc floor is a conservative stability diagnostic,
-not a confidence bound or a preregistered equivalence test.
+$\bladenum{floor/max}\%$, so no single band describes them. Every directional
+result is therefore compared against the control floor of the cell and pass
+count it comes from. Figures~\ref{fig:placement} and~\ref{fig:scope} draw the
+fixed-matrix floors beside the effects; Section~\ref{sec:placement} states the
+corresponding sweep floors. A band wide enough to cover the worst cell would
+discard the best ones, and a band fitted to the best would license the worst.
+This post-hoc floor is a conservative stability diagnostic, not a confidence
+bound or a preregistered equivalence test. Curve shapes and post-hoc
+state-conditioned summaries are explicitly labelled descriptive and are not
+counted as directional results.
 
 \subsection{Deviations from the protocol}
 \label{sec:deviations}
@@ -905,31 +897,18 @@ run-to-run variation and its compute-placement cells resolve
 (Section~\ref{sec:placement}). The instability that remains in this round is
 a different machine and a different kind.
 
-\textbf{One device assigns whole launches to performance states.} On the
-Radeon~780M's \texttt{graphics-independent} workload, a process launch lands
-in one of two states separated by a factor of
-$\bladenum{bimodal/radeon780m/ratio}$:
-$\bladenum{bimodal/radeon780m/blade/slow}$ of
-$\bladenum{bimodal/radeon780m/blade/launches}$ \blade{} launches across its
-policies and pass counts landed slow, against
-$\bladenum{bimodal/radeon780m/wgpu/slow}$ of
-$\bladenum{bimodal/radeon780m/wgpu/launches}$ \wgpu{} launches. The state
-belongs to the launch, not the samples: blocks are internally tight, exactly
-one crossed states midway --- the device's worst within-block drift,
-$\bladenum{drift/radeon780m/worst}\%$ --- and the assignment shows no
-correlation with the sizes of neighbouring runs in the randomized order. A
-dedicated 16-pass collection of the previous day, since superseded, showed no
-slow launch in thirty, so the mixture may need the varied allocation history
-of a sweep, or simply more launches to show itself. We could not name the
-mechanism; the strong implementation bias says it is not a plain clock
-lottery, and a placement decision made once per launch --- where the
-allocator put that launch's targets --- fits what a clock does not. The
-machinery prices the consequence rather than hiding it: the cell's control
-floor reaches $\bfloor{radeon780m}{graphics-independent}$, its unconditional
-intervals span the state mixture, and the placement penalty is read from
-Figure~\ref{fig:overlap-depth}, where it reproduces within each state ---
-descriptively, $\bladenum{bimodal/radeon780m/fastplacement}\%$ between
-fast-state medians at sixteen passes.
+\textbf{One host's render cells vary launch to launch.} On the Radeon~780M's
+\texttt{graphics-independent} workload, paired block effects disperse far
+more between process launches than samples do within one launch, which is
+visible directly in the block marks of Figure~\ref{fig:overlap-depth}. The
+host ran unrelated services during its multi-hour sweep, and that kind of
+interference is the mundane explanation we can neither exclude nor need to:
+the identical-request controls price the dispersion per pass count, the
+16-pass control floor reaches
+$\bfloor{radeon780m}{graphics-independent}$, and no conclusion is drawn from
+a cell whose interval fails its own floor. The directional support comes from
+the sweep counts whose full intervals clear their own controls, reported in
+Section~\ref{sec:placement}.
 
 \hostcaveat
 
@@ -960,6 +939,8 @@ zero while different process repetitions occupy different regimes. Of the
 \bladenum{floor/count} cells, \bladenum{floor/above2} have floors above $2\%$.
 That does not disqualify a whole device; it means the entire interval of a
 claimed effect must lie beyond the same-side floor of its own cell.
+The overlap-depth sweep applies the same construction separately at each pass
+count.
 
 \subsection{Barrier placement and dependency structure}
 \label{sec:placement}
@@ -1018,34 +999,45 @@ between render passes, while the RTX~5070 frees the same third either way. The
 headline ``placement dominates'' is carried by both discrete parts for
 compute, and at full size by NVIDIA alone for graphics.
 
-\textbf{Removing barriers can make things worse, and the sweep shows how.}
-On the Radeon~780M, \texttt{B-hazard} \emph{costs}. This is the third
-collection to show it, across two benchmark revisions and two power
-configurations, and this round sweeps the pass count on that machine, so it
-shows the shape as well as the sign. In Figure~\ref{fig:overlap-depth} the
-penalty is absent at one pass
-($\bladenum{depth/radeon780m/graphics-independent/p1/placement/pct}\%$),
-already
-$\bladenum{depth/radeon780m/graphics-independent/p2/placement/pct}\%$ at two,
-and grows with the number of overlapping passes until it saturates near
-sixteen
-($\bladenum{depth/radeon780m/graphics-independent/p16/placement/pct}\%$,
-still $\bladenum{depth/radeon780m/graphics-independent/p64/placement/pct}\%$
-at sixty-four). The 16-pass matrix cells carry the launch-state mixture of
-Section~\ref{sec:deviations} in their intervals, which is why the shape is
-read from the paired block effects in the figure rather than from one cell.
+\textbf{Removing barriers can make things worse, and the sweep shows where the
+claim resolves.} On the Radeon~780M, \texttt{B-hazard} costs at
+\bladenum{depth/radeon780m/graphics-independent/resolved-placement-counts}
+pass counts under the same criterion used for the fixed matrix. The effect is
+absent at one pass
+($\bladenum{depth/radeon780m/graphics-independent/p1/placement/pct}\%$).
+At two passes its full interval clears a
+$\bladenum{depth/radeon780m/graphics-independent/p2/floor}\%$ control floor.
+At 32 passes the effect is
+$\bladenum{depth/radeon780m/graphics-independent/p32/placement/pct}\%$
+[$\bladenum{depth/radeon780m/graphics-independent/p32/placement/lo}$,
+$\bladenum{depth/radeon780m/graphics-independent/p32/placement/hi}$] against
+a $\bladenum{depth/radeon780m/graphics-independent/p32/floor}\%$ floor, and at
+64 it is
+$\bladenum{depth/radeon780m/graphics-independent/p64/placement/pct}\%$
+[$\bladenum{depth/radeon780m/graphics-independent/p64/placement/lo}$,
+$\bladenum{depth/radeon780m/graphics-independent/p64/placement/hi}$] against
+$\bladenum{depth/radeon780m/graphics-independent/p64/floor}\%$.
 
-Growth with concurrency is what a shared-resource account predicts --- and
-the tracked implementation refutes the simple version of it at every count.
-\wgpu{} overlaps the same passes onto usage-matched targets (both request
-attachment and copy usage only, so both are DCC-eligible by the predicates of
-Section~\ref{sec:radv-barriers}), writes the same bytes, and stays
-\emph{faster} than serialized \texttt{B-auto} across the whole sweep:
+The medians at four, eight, and sixteen passes suggest growth and saturation
+near sixteen, but their intervals do not clear their count-specific floors;
+that curve shape is descriptive rather than a fourth result. In particular,
+the 16-pass point
+($\bladenum{depth/radeon780m/graphics-independent/p16/placement/pct}\%$)
+is not promoted: that count's launch-to-launch dispersion
+(Section~\ref{sec:deviations}) puts its floor past its interval.
+
+That descriptive growth is what a shared-resource account predicts, but the
+tracked comparison makes the simplest version inadequate. \wgpu{} overlaps the
+same passes onto usage-matched targets (both request attachment and copy usage
+only, so both are DCC-eligible by the predicates of
+Section~\ref{sec:radv-barriers}), writes the same bytes, and has a faster point
+estimate than serialized \texttt{B-auto} across the sweep:
 $\bladenum{depth/radeon780m/graphics-independent/p2/wgpu/pct}\%$ at two
 passes, $\bladenum{depth/radeon780m/graphics-independent/p64/wgpu/pct}\%$ at
-sixty-four. Whatever resource \blade's overlapping passes exhaust, \wgpu's
-overlapping passes do not touch. What still differs between them here is
-narrow: the layout the targets sit in (\texttt{GENERAL} against
+sixty-four. This descriptive contrast argues against overlap depth or target
+bytes alone as the explanation; it does not identify the resource involved.
+What still differs between the implementations here is narrow: the layout the
+targets sit in (\texttt{GENERAL} against
 \texttt{COLOR\_ATTACHMENT\_OPTIMAL}) and the endpoint barrier form --- on a
 driver that advertises \texttt{VK\_KHR\_unified\_image\_layouts} and
 therefore promises that the layout half should not matter --- along with
@@ -1442,16 +1434,15 @@ slower on \texttt{graphics-chain} --- slower, that is, than a \blade{}
 baseline whose global barriers prevent inter-pass overlap. The current capture
 extract identifies barrier counts, kinds, masks, and layouts but does not by
 itself apportion this gap; it is specific to this chip in the measured set.
-Both AMD iGPUs run the \wgpu{} render path \emph{faster} ---
-$\bmag{radeon780m}{graphics-independent}{wgpu}$ on the Radeon~780M, the very
-cell where removing \blade's barriers costs
-$\bmag{radeon780m}{graphics-independent}{placement}$, and
-$\bmag{raphael}{graphics-independent}{wgpu}$ on the Raphael iGPU, where the
-largest highlighted within-\blade{} change is
-$\bmag{raphael}{mixed-independent}{placement}$---while both are slower on
-compute.
-The discrete-against-integrated flip is reported as measured rather than
-assigned to one of the bundled factors.
+On the Radeon~780M the \wgpu{} render point estimate is
+$\bmag{radeon780m}{graphics-independent}{wgpu}$ faster, but neither it nor the
+16-pass \blade{} placement contrast clears that cell's
+$\bfloor{radeon780m}{graphics-independent}$ floor; both are descriptive. The
+Raphael iGPU does resolve a $\bmag{raphael}{graphics-independent}{wgpu}$
+\wgpu{} advantage, where the largest highlighted within-\blade{} change is
+$\bmag{raphael}{mixed-independent}{placement}$, while both iGPUs are slower on
+compute. The discrete-against-integrated contrast is reported as measured
+rather than assigned to one of the bundled factors.
 
 On the Intel device the \wgpu{} point estimate is slower on every shared
 workload. Three cells have one-signed intervals, from
@@ -1707,8 +1698,9 @@ the same direction. Redundant barriers between independent render passes cost
 $\bmag{rtx5070}{graphics-independent}{placement}$ on NVIDIA against
 $\bmag{rx7900xt}{graphics-independent}{placement}$ on the discrete AMD part
 and only $\bmag{raphael}{graphics-independent}{placement}$ on Raphael, while
-the Radeon~780M reverses sign, despite AMD being the architecture whose vendor
-guidance warns hardest about broad barriers. Narrowing the barrier
+the Radeon~780M sweep has threshold-cleared points in the opposite direction,
+despite AMD being the architecture whose vendor guidance warns hardest about
+broad barriers. Narrowing the barrier
 scope removes the most commands from the RADV stream at render-involving
 boundaries, where no AMD cell resolves a directional effect, and the fewest at
 the compute-to-compute boundaries where the discrete part actually pays: the
@@ -1765,12 +1757,12 @@ record-and-submit interval on a pinned adapter
 (Section~\ref{sec:profile}) --- was not performed. Anyone quoting this paper
 as ``tracking costs $N\times$'' is quoting a bracket as a point.
 
-\textbf{The negative results matter.} The Radeon~780M shows that removing
-redundant barriers is not a free optimization, and the AMD render boundaries
-show that a saving visible in a command stream need not be visible in a timer. A layer
-that exposes manual barriers must therefore treat them as a measured
-optimization rather than a default, and profiling guidance belongs next to the
-API.
+\textbf{The negative results matter.} The Radeon~780M sweep contains
+threshold-cleared regressions, showing that removing redundant barriers is not
+a free optimization, and the AMD render boundaries show that a saving visible
+in a command stream need not be visible in a timer. A layer that exposes
+manual barriers must therefore treat them as a measured optimization rather
+than a default, and profiling guidance belongs next to the API.
 
 \subsection{Implications for engine architecture}
 \label{sec:engine-implications}
@@ -1855,13 +1847,15 @@ that want the automatic policy for most of a frame can put the restructured
 part in its own encoder and submit both to the same queue.
 
 \emph{Then measure, because the restructuring is not always a win.} On the
-Radeon~780M, letting sixteen independent render passes overlap cost
-$\bmag{radeon780m}{graphics-independent}{placement}$ and the mixed equivalent
-$\bmag{radeon780m}{mixed-independent}{placement}$ --- a penalty that grows
-with overlap depth (Figure~\ref{fig:overlap-depth}) and whose 16-pass
-intervals carry that device's launch-state mixture
-(Section~\ref{sec:deviations}) --- while on the RX~7900~XT the
-same change on render passes bought
+Radeon~780M, the 16-pass mixed-independent cell costs
+$\bmagci{radeon780m}{mixed-independent}{placement}$ against a
+$\bfloor{radeon780m}{mixed-independent}$ floor. The corresponding
+graphics-independent point is
+$\bmag{radeon780m}{graphics-independent}{placement}$ but is not resolved
+because launch-to-launch dispersion raises the floor; the graphics sweep resolves
+the same direction at 2, 32, and 64 passes, with descriptive medians suggesting
+growth and saturation (Figure~\ref{fig:overlap-depth}). On the RX~7900~XT the
+same change on render passes instead bought
 $\bmag{rx7900xt}{graphics-independent}{placement}$ --- real, but a quarter of
 the $\bmag{rx7900xt}{compute-independent}{placement}$ its compute equivalent
 buys. Two AMD parts of the same generation therefore disagree about the sign
@@ -1921,8 +1915,10 @@ end-to-end through \wgpu, so causal claims about them are limited by
 construction. The scoped results cover five Vulkan device-driver pairs across
 three vendors, but not every cell within them:
 \bladenum{floor/above2} of \bladenum{floor/count} have control floors above
-$2\%$, and every conclusion is checked against the post-hoc stability
-threshold of the cell it comes from. Every archival timing collection is
+$2\%$, and every directional conclusion is checked against the post-hoc
+stability threshold of the cell and pass count it comes from; curve shapes and
+state-conditioned contrasts are labelled descriptive. Every archival timing
+collection is
 preceded by a retained synchronization-validation matrix, run with the
 Khronos checks forced on and its logs stored beside the timing rows; the
 timing rows themselves come from the validated shaders and layered output
@@ -1940,8 +1936,8 @@ the other --- are left unexplained rather than attributed.
 Each configuration has 30 within-process samples and ten independent
 process-level repetitions. The paired hierarchical bootstrap preserves that
 nesting and reveals variation a pooled analysis hides --- at three pilot
-blocks it disqualified cells that ten now resolve, and on one device it
-exposes a launch-level state mixture rather than averaging it away. Ten
+blocks it disqualified cells that ten now resolve, and on one host it
+exposes launch-to-launch dispersion rather than averaging it away. Ten
 blocks still estimate tails coarsely, the inner resampling treats
 time-ordered observations as exchangeable, and the matrix has no second-day
 or in-process-alternation sensitivity run. A moving-block or
@@ -2061,24 +2057,32 @@ The manuscript, collectors, and \blade{} implementation are public on the
 corresponding \wgpu{} fork branch~\cite{blade,wgpu-study}. The archival round
 measures the corrected benchmark on every machine: \wgpu{} revision
 \texttt{7d37a77} and \blade{} revision \texttt{87ed067}, with the study
-host's sweeps adding one paper-directory commit that the benchmark does not
-compile. The bibliography records the full identifiers, and per-collection
-manifests record the revisions, the clock configuration, and device metadata.
+host's sweeps at one later commit that changed only the paper directory and
+therefore did not change the compiled benchmark. The bibliography records the
+full identifiers, and per-collection manifests record the revisions, the clock
+configuration, and device metadata.
 
 The measurements are the irreplaceable half, and they travel with this
 submission: the ancillary files hold every raw collection --- timing
 matrices, sweeps, retained synchronization-validation logs, host profiles,
 captures with extracted barrier tables, and the Metal hazard sessions ---
-with a digest of every file. The sources are public and content-addressed
-instead: both repositories carry tags naming the submitted state
+with a digest of every file. The measured code is public and
+content-addressed: both repositories carry study-code tags
 (\texttt{sync-study-v1} on \blade{}, \texttt{blade-sync-study-v1} on the
-\wgpu{} fork), and because a tag is a convenience pointer rather than a
-guarantee, the commit hashes recorded in the bibliography and in every
+\wgpu{} fork), and the commit hashes recorded in the bibliography and in every
 collection manifest remain the identifiers of record --- verifiable from any
-clone or archive of either repository. Extracting the collections into
-\texttt{paper/data/raw/} at the tagged \blade{} revision and running the
-table builder regenerates every table, figure, and quoted number in this
-paper; a missing collection is a build error rather than a silent absence.
+clone or archive of either repository. The tags pin the code, not this article
+revision; arXiv preserves the submitted article source. Extracting the
+collections into \texttt{paper/data/raw/} in a study-branch checkout containing
+this submission's analysis tooling and running the table builder regenerates
+every table, figure, and quoted number in this paper; a missing collection is a
+build error rather than a silent absence.
+
+\paragraph{Generative-AI disclosure.}
+Anthropic Claude and OpenAI Codex were used interactively for literature
+discovery, manuscript editing, and development and review of benchmark and
+analysis tooling. They are not authors; the human author takes responsibility
+for the cited sources, code, analyses, and final text.
 
 \section{Conclusion}
 
@@ -2091,10 +2095,12 @@ and no chain interval clears its cell-specific stability threshold; removing
 fifteen redundant inter-pass barriers reduces device span by
 $\bmag{rtx5070}{compute-independent}{placement}$ and
 $\bmag{rx7900xt}{compute-independent}{placement}$ on the two discrete GPUs,
-and makes independent render work slower on the Radeon~780M --- by two-fifths
-once sixteen passes overlap --- for reasons we could not establish. The matched \wgpu{} stack takes more record-and-submit
-time in every measured cell, but that end-to-end difference must not be called
-the cost of tracking alone.
+while the Radeon~780M graphics sweep resolves a roughly two-fifths penalty at
+32 and 64 passes, for reasons we could not establish. Its 16-pass graphics
+point has the same magnitude but does not clear that noisy cell's control
+floor; the 16-pass mixed-independent regression does. The matched \wgpu{} stack
+takes more record-and-submit time in every measured cell, but that end-to-end
+difference must not be called the cost of tracking alone.
 
 The corresponding \blade{} development outcome is deliberately small. The
 mainline Vulkan encoder can retain its existing API and add one encoder-wide
@@ -2133,8 +2139,8 @@ opt-out should be presented as a profiled optimization rather than a default,
 because on at least one real device it makes things worse.
 
 The remaining bounds are specific: no application frames or multisampled
-targets, no mechanism for the Radeon~780M overlap penalty, its launch-state
-mixture, or the discrete AMD scope saving, and no controlled layout variant.
+targets, no mechanism for the Radeon~780M overlap penalty or the discrete AMD
+scope saving, and no controlled layout variant.
 They bound the corresponding claims rather than supporting extrapolation
 beyond the measured workloads.
 

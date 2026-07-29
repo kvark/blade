@@ -1548,17 +1548,21 @@ def numbers_macros(
                 values["metal/overvulkan/min"] = f"{ratios[0]:.1f}"
                 values["metal/overvulkan/max"] = f"{ratios[1]:.1f}"
 
-    # Overlap-depth effects for every swept device, cited by pass count. The
-    # prose reads the growth-and-saturation of the Radeon 780M penalty from
-    # these rather than re-deriving it from the figure by eye.
+    # Overlap-depth effects for every swept device, cited by pass count. Keep
+    # the identical-request control alongside the placement and wgpu effects:
+    # the Radeon 780M changes launch-level performance states, so a claim at
+    # one pass count must use that count's own stability floor.
     for collection in newest_sweeps(collections, "sweep-gpu"):
         slug = DEVICE_SLUG.get(collection.devices.get("blade", ""))
         if slug is None:
             continue
+        resolved_placement_counts = 0
         for count in [c for c in collection.pass_counts() if c <= 64]:
+            count_results: dict[str, tuple[float, float, float]] = {}
             for name, implementation, policy in (
                 ("placement", "blade", "hazard-only"),
                 ("wgpu", "wgpu", "tracked"),
+                ("control", "blade", "explicit-all"),
             ):
                 result = comparison(
                     collection,
@@ -1570,10 +1574,27 @@ def numbers_macros(
                     passes=count,
                 )
                 if result is not None:
+                    count_results[name] = result
                     record(
                         f"depth/{slug}/graphics-independent/p{count}/{name}",
                         *result,
                     )
+            control = count_results.get("control")
+            if control is not None:
+                _, low, high = control
+                floor = max(abs(low), abs(high))
+                values[
+                    f"depth/{slug}/graphics-independent/p{count}/floor"
+                ] = f"{floor:.1f}"
+                placement = count_results.get("placement")
+                if (
+                    placement is not None
+                    and clears_stability_floor(placement, floor)
+                ):
+                    resolved_placement_counts += 1
+        values[
+            f"depth/{slug}/graphics-independent/resolved-placement-counts"
+        ] = str(resolved_placement_counts)
 
     values.update(launch_state_numbers(collections))
     values.update(sweep_numbers(collections))
@@ -2141,6 +2162,9 @@ def overlap_figure(
              "black!35"),
             ("W-wgpu", "wgpu", "tracked",
              "black!55, densely dashed, mark=o, mark size=1.4pt", "black!20"),
+            ("B-exp-all", "blade", "explicit-all",
+             "black!45, densely dotted, mark=triangle*, mark size=1.4pt",
+             "black!15"),
         ):
             line, dots = [], []
             for count in counts:
@@ -2207,11 +2231,13 @@ def overlap_figure(
         "(\\texttt{B-hazard}) and of the tracked implementation "
         "(\\texttt{W-wgpu}) against \\texttt{B-auto} on "
         "\\texttt{graphics-independent}, as the number of overlapping passes "
-        "grows. Each small mark is one paired process launch; the line joins "
-        "the medians of those block effects. The launch-level split on the "
-        "Radeon~780M is the bimodality of Section~\\ref{sec:deviations}: "
-        "whole launches land in one of two performance states, and the "
-        "placement penalty reproduces inside each.}\n"
+        "grows. \\texttt{B-exp-all} is the identical-request control. Each "
+        "small mark is one paired process launch; the line joins the medians "
+        "of those block effects. The scattered marks on the Radeon~780M panel "
+        "are that host's launch-to-launch dispersion "
+        "(Section~\\ref{sec:deviations}); directional results "
+        "use the count-specific control intervals stated in the text, while "
+        "the joined medians describe the sweep's shape.}\n"
         "\\label{fig:overlap-depth}\n\\end{figure*}\n"
     )
 

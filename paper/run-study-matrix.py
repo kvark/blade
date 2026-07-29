@@ -150,7 +150,12 @@ def file_sha256(path: Path) -> str:
 
 
 def write_command_capture(
-    output: Path, name: str, command: list[str], cwd: Path, timeout: int = 30
+    output: Path,
+    name: str,
+    command: list[str],
+    cwd: Path,
+    timeout: int = 30,
+    transform=None,
 ) -> None:
     if shutil.which(command[0]) is None:
         return
@@ -167,7 +172,35 @@ def write_command_capture(
             f"timeout={timeout}\n"
             f"{error.stdout or ''}{error.stderr or ''}"
         )
+    if transform is not None:
+        content = transform(content)
     (output / name).write_text(content, encoding="utf-8")
+
+
+MACOS_PRIVATE_SYSTEM_FIELDS = (
+    "Serial Number (system)",
+    "Hardware UUID",
+    "Provisioning UDID",
+    "Activation Lock Status",
+)
+
+
+def redact_macos_system_identifiers(content: str) -> str:
+    """Remove stable account/device identifiers while retaining useful specs."""
+    redacted = []
+    for line in content.splitlines(keepends=True):
+        stripped = line.lstrip()
+        for field in MACOS_PRIVATE_SYSTEM_FIELDS:
+            if stripped.startswith(f"{field}:"):
+                indentation = line[: len(line) - len(stripped)]
+                ending = "\n" if line.endswith("\n") else ""
+                line = (
+                    f"{indentation}{field}: [redacted from public artifact]"
+                    f"{ending}"
+                )
+                break
+        redacted.append(line)
+    return "".join(redacted)
 
 
 # Sysfs knobs that decide whether a device holds one clock for the length of a
@@ -482,6 +515,7 @@ def collect_device(
                 ["system_profiler", "SPHardwareDataType", "SPDisplaysDataType"],
                 blade,
                 timeout=60,
+                transform=redact_macos_system_identifiers,
             )
             write_command_capture(output, "power.txt", ["pmset", "-g", "custom"], blade)
         if sys.platform == "win32":

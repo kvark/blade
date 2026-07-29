@@ -449,7 +449,8 @@ them into prose where a recollection can leave them stale.
 
 ## Result gates
 
-The paper can lose its `RESULTS PENDING` banner only after:
+The archival paper is ready only while the following claim gates remain
+satisfied:
 
 - [x] the matched wgpu workloads reproduce Blade's workload graph and outputs
   (the generated hash-group count reports zero conflicts);
@@ -460,26 +461,27 @@ The paper can lose its `RESULTS PENDING` banner only after:
   record-and-submit gap. The paper now treats them as diagnostic only; this
   becomes a blocker only if a tracking-specific host attribution claim is
   restored;
-- [ ] a retained synchronization-validation collection covers all six Blade
-  workloads and policies with no reported hazards or validation errors;
-- [~] representative capture extraction confirms barrier masks, counts,
-  pass-relative positions, resource scope, and steady-state layouts. The
-  extracted `barriers.csv` files are not complete command streams; the retained
-  manifests do not identify selected adapters or cover the explicit/crossed
-  policies, and the Radeon 780M capture is currently missing from this
-  checkout;
-- [~] at least the minimum hardware matrix was collected (NVIDIA and discrete
-  AMD on Linux, plus two AMD integrated parts, Intel, and Apple as sensitivity
-  cases), but the Radeon 780M raw directory must be restored locally;
-- [ ] raw data and analysis scripts reproduce every table. The generator now
-  fails loudly because a cited collection is absent;
+- [x] a retained synchronization-validation collection covers all six Blade
+  workloads and policies on every Vulkan timing host with no reported hazards
+  or validation errors;
+- [x] representative capture extraction confirms barrier masks, counts,
+  pass-relative positions, resource scope, and steady-state layouts for all six
+  Blade policies and the matched wgpu program on four Vulkan hosts. The
+  extracted `barriers.csv` files are not complete command streams, and the
+  retained manifests do not identify selected adapters, so the paper makes the
+  narrower cross-host claim those captures support;
+- [x] the minimum hardware matrix was collected (NVIDIA and discrete AMD on
+  Linux, plus two AMD integrated parts, Intel, and Apple as a sensitivity
+  case);
+- [x] the archived raw data and analysis scripts reproduce every table, figure,
+  and quoted number, and the generator fails loudly if a cited collection is
+  absent;
 - [x] negative and architecture-specific results are described alongside wins
   (the Radeon 780M regression and the failed RADV scope prediction are both
   reported in the abstract);
-- [x] the abstract contains measured host times and device effect estimates
-  with uncertainty, not only unqualified ratios.
+- [x] the abstract contains device effect estimates with uncertainty and labels
+  the wgpu host comparison as end-to-end rather than attributing it to tracking.
 
 Application workloads remain outside the chosen scope. The unchecked
-reproducibility, process-repetition, and validation-artifact items are
-publication blockers. Host attribution is a blocker only for a
-tracking-specific decomposition, which the current paper does not claim.
+host-attribution item is a blocker only for a tracking-specific decomposition,
+which the current paper does not claim.

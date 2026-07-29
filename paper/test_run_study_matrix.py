@@ -37,5 +37,25 @@ sample,workload,policy
         )
 
 
+class SystemInfoRedactionTests(unittest.TestCase):
+    def test_macos_private_identifiers_are_redacted(self) -> None:
+        source = """\
+      Model Identifier: Mac15,12
+      Serial Number (system): SERIAL
+      Hardware UUID: HARDWARE-UUID
+      Provisioning UDID: PROVISIONING-UDID
+      Activation Lock Status: Enabled
+      Chip: Apple M3
+"""
+        redacted = run_study_matrix.redact_macos_system_identifiers(source)
+        self.assertNotIn("SERIAL", redacted)
+        self.assertNotIn("HARDWARE-UUID", redacted)
+        self.assertNotIn("PROVISIONING-UDID", redacted)
+        self.assertNotIn("Enabled", redacted)
+        self.assertIn("Model Identifier: Mac15,12", redacted)
+        self.assertIn("Chip: Apple M3", redacted)
+        self.assertEqual(redacted.count("[redacted from public artifact]"), 4)
+
+
 if __name__ == "__main__":
     unittest.main()

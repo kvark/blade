@@ -1,0 +1,21 @@
+Title:
+Global Pass Barriers Without Per-Resource RHI Tracking: A Cross-Vendor Study with Blade
+
+Authors:
+Dzmitry Malyshau
+
+Primary category:
+cs.GR (Graphics)
+
+Cross-list:
+cs.PF (Performance)
+
+Comments:
+26 pages, 5 figures, 7 tables; ancillary raw data and checksums included.
+
+Abstract:
+Explicit graphics APIs expose memory dependencies, per-resource accesses, and image layouts. wgpu reconstructs and validates this state; Blade keeps Vulkan images in GENERAL, tracks no per-resource state, and issues global pass-boundary barriers. We isolate barrier placement and stage/access scope within Blade, compare matched wgpu programs end-to-end, and measure six GPUs from four vendors, including exploratory Apple/Metal results.
+
+Removing fifteen redundant barriers from sixteen independent compute passes reduces GPU span by 29.3% [29.2, 29.4] on an RTX 5070 and 32.3% [32.1, 32.6] on an RX 7900 XT. It reduces independent-render span by 32.4% and 7.3% on the same discrete parts, but increases Radeon 780M span by 42.4% [40.5, 59.2] at 32 passes, beyond a 12.3% count-specific stability floor. No dependent-chain placement effect clears the study's cell-specific stability criterion. Deriving global barrier scope from the pass kinds around each boundary, without tracking any resource, saves 5.0% [4.8, 5.0] on an NVIDIA graphics chain and 6.7% [4.5, 6.9] on an AMD compute chain; no AMD render-involving scope cell resolves. wgpu's record-and-submit cost is higher in every measured cell, but this end-to-end difference cannot be attributed to tracking alone.
+
+RADV source shows why command counts do not predict these costs: broad global dependencies expand to several flush and invalidate requests that the driver may partly elide. It also shows that persistent GENERAL retains DCC under the measured RDNA conditions but disables FMASK. The resulting Blade direction is lightweight aggregate pass-kind state in a tracking-free RHI: an upstream render graph selects global dependency cuts, while aliasing, cross-queue use, exceptional layouts, and arbitrary per-resource DAG edges remain resource-aware engine responsibilities.
