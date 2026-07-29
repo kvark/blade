@@ -37,6 +37,12 @@ A full PDFLaTeX build needs Latin Modern, `booktabs`, `xcolor`, and `pgfplots`.
 On Debian/Ubuntu these come from `lmodern`, `texlive-latex-recommended`, and
 `texlive-pictures`; a `tectonic` binary also covers them.
 
+`references.bib` is the bibliography's source of truth; `main.bbl` is a build
+artifact regenerated from it on every run. It is untracked but ships in the
+arXiv package because arXiv compiles TeX without running BibTeX — after any
+`.bib` edit, rebuild before repackaging or the submission carries a stale
+bibliography.
+
 The source uses a venue-neutral two-column article layout.
 
 ## Experiments
