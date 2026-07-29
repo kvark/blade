@@ -2054,15 +2054,20 @@ host's sweeps adding one paper-directory commit that the benchmark does not
 compile. The bibliography records the full identifiers, and per-collection
 manifests record the revisions, the clock configuration, and device metadata.
 
-Because moving branch names are not sufficient for reproducing a paper, this
-submission's ancillary files are the frozen copy: every raw collection ---
-timing matrices, sweeps, retained synchronization-validation logs, host
-profiles, captures with extracted barrier tables, and the Metal hazard
-sessions --- with a digest of every file, alongside source snapshots of both
-repositories at the measured revisions. Extracting the collections into
-\texttt{paper/data/raw/} of the \blade{} snapshot and running the table
-builder regenerates every table, figure, and quoted number in this paper;
-a missing collection is a build error rather than a silent absence.
+The measurements are the irreplaceable half, and they travel with this
+submission: the ancillary files hold every raw collection --- timing
+matrices, sweeps, retained synchronization-validation logs, host profiles,
+captures with extracted barrier tables, and the Metal hazard sessions ---
+with a digest of every file. The sources are public and content-addressed
+instead: both repositories carry tags naming the submitted state
+(\texttt{sync-study-v1} on \blade{}, \texttt{blade-sync-study-v1} on the
+\wgpu{} fork), and because a tag is a convenience pointer rather than a
+guarantee, the commit hashes recorded in the bibliography and in every
+collection manifest remain the identifiers of record --- verifiable from any
+clone or archive of either repository. Extracting the collections into
+\texttt{paper/data/raw/} at the tagged \blade{} revision and running the
+table builder regenerates every table, figure, and quoted number in this
+paper; a missing collection is a build error rather than a silent absence.
 
 \section{Conclusion}
 

@@ -170,9 +170,12 @@ referring to them. Restore the named collections before building the PDF.
 
 The archival copy ships as the arXiv submission's ancillary files:
 `data/artifact/` holds the compressed raw collections with per-file
-checksums, source snapshots of both repositories at the measured revisions,
-and the assembled submission tarball (`arxiv-submission.tar.gz` — LaTeX
-source, generated tables, `anc/` bundle), which compiles standalone.
+checksums and the assembled submission tarball (`arxiv-submission.tar.gz` —
+LaTeX source, generated tables, `anc/` data bundle), which compiles
+standalone. Sources are referenced, not bundled: the tags `sync-study-v1`
+(blade) and `blade-sync-study-v1` (wgpu fork) name the submitted state, and
+the commit hashes in the bibliography and manifests are the identifiers of
+record.
 
 The result gates in [experiments.md](experiments.md) are not all met. In
 addition to the missing k6 artifact and only three process repetitions, the
