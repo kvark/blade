@@ -54,3 +54,11 @@ Blade-graphics can run on:
 - Web (WebGL2)
 
 The full-stack Blade Engine can only run on Vulkan with hardware Ray Tracing support.
+
+## Research
+
+[Global Pass Barriers Without Per-Resource RHI Tracking: A Cross-Vendor Study
+with Blade](global-pass-barriers.pdf) measures Blade's synchronization model
+against matched wgpu workloads on AMD, NVIDIA, Intel, and Apple hardware. The
+[synchronization guide](synchronization.md) summarizes the resulting design
+and what an engine using Blade is still responsible for.

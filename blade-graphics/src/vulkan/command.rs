@@ -326,10 +326,13 @@ impl super::CommandEncoder {
         }
     }
 
-    fn begin_pass(&mut self, label: &str) {
+    fn begin_pass(&mut self, label: &str, kind: super::PassKind) {
         if !self.manual_barriers {
-            self.barrier();
+            self.barrier_before(kind);
         }
+        // Keep the history in manual mode as well: the next explicit barrier
+        // must cover every pass recorded since the previous one.
+        self.producer_kinds.insert(kind);
         self.add_marker(label);
         self.add_timestamp(label);
 
@@ -350,7 +353,9 @@ impl super::CommandEncoder {
     }
 
     pub(super) fn finish(&mut self) -> vk::CommandBuffer {
-        self.barrier();
+        // A later queue consumer is not known here, so keep the destination
+        // conservative while deriving the source from the passes that ran.
+        self.barrier_before(super::PassKind::Unknown);
         self.add_marker("finish");
         let cmd_buf = self.buffers.first_mut().unwrap();
         unsafe {
@@ -368,20 +373,154 @@ impl super::CommandEncoder {
         cmd_buf.raw
     }
 
+    /// Stages and write accesses a pass of this kind may have produced.
+    fn source_scope(kind: super::PassKind) -> (vk::PipelineStageFlags, vk::AccessFlags) {
+        use super::PassKind as Pk;
+        match kind {
+            Pk::Transfer => (
+                vk::PipelineStageFlags::TRANSFER,
+                vk::AccessFlags::TRANSFER_WRITE,
+            ),
+            Pk::AccelerationStructure => (
+                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+                    | vk::PipelineStageFlags::TRANSFER,
+                vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR | vk::AccessFlags::TRANSFER_WRITE,
+            ),
+            Pk::Compute => (
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::AccessFlags::SHADER_WRITE,
+            ),
+            // Shader stores can happen at any graphics stage, in addition to
+            // attachment writes at the fragment-output stages.
+            Pk::Render => (
+                vk::PipelineStageFlags::ALL_GRAPHICS,
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE
+                    | vk::AccessFlags::SHADER_WRITE,
+            ),
+            Pk::Unknown => (
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::AccessFlags::MEMORY_WRITE,
+            ),
+        }
+    }
+
+    /// Stages and accesses a pass of this kind may consume.
+    fn destination_scope(
+        kind: super::PassKind,
+        ray_tracing: bool,
+    ) -> (vk::PipelineStageFlags, vk::AccessFlags) {
+        use super::PassKind as Pk;
+        let mut shader_access = vk::AccessFlags::SHADER_READ
+            | vk::AccessFlags::SHADER_WRITE
+            | vk::AccessFlags::UNIFORM_READ;
+        if ray_tracing {
+            // A ray query in a compute or graphics shader reads an
+            // acceleration structure at that shader's stage.
+            shader_access |= vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR;
+        }
+        match kind {
+            Pk::Transfer => (
+                vk::PipelineStageFlags::TRANSFER,
+                vk::AccessFlags::TRANSFER_READ | vk::AccessFlags::TRANSFER_WRITE,
+            ),
+            Pk::AccelerationStructure => (
+                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+                    | vk::PipelineStageFlags::TRANSFER,
+                vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR
+                    | vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR
+                    | vk::AccessFlags::TRANSFER_READ
+                    | vk::AccessFlags::TRANSFER_WRITE
+                    // Geometry input buffers use SHADER_READ at the
+                    // acceleration-structure build stage.
+                    | vk::AccessFlags::SHADER_READ,
+            ),
+            // DRAW_INDIRECT covers dispatch-indirect argument reads.
+            Pk::Compute => (
+                vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+                shader_access | vk::AccessFlags::INDIRECT_COMMAND_READ,
+            ),
+            Pk::Render => (
+                vk::PipelineStageFlags::ALL_GRAPHICS,
+                shader_access
+                    | vk::AccessFlags::INDIRECT_COMMAND_READ
+                    | vk::AccessFlags::INDEX_READ
+                    | vk::AccessFlags::VERTEX_ATTRIBUTE_READ
+                    | vk::AccessFlags::COLOR_ATTACHMENT_READ
+                    | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            ),
+            Pk::Unknown => (
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
+            ),
+        }
+    }
+
+    fn producer_scope(
+        producer_kinds: super::PassKinds,
+    ) -> (vk::PipelineStageFlags, vk::AccessFlags) {
+        use super::PassKind as Pk;
+        if producer_kinds.contains(Pk::Unknown) {
+            return Self::source_scope(Pk::Unknown);
+        }
+
+        let mut stages = vk::PipelineStageFlags::empty();
+        let mut accesses = vk::AccessFlags::empty();
+        for kind in [
+            Pk::Transfer,
+            Pk::AccelerationStructure,
+            Pk::Compute,
+            Pk::Render,
+        ] {
+            if producer_kinds.contains(kind) {
+                let (kind_stages, kind_accesses) = Self::source_scope(kind);
+                stages |= kind_stages;
+                accesses |= kind_accesses;
+            }
+        }
+        (stages, accesses)
+    }
+
+    /// Insert a global memory barrier at the current pass boundary.
+    ///
+    /// The source covers all passes recorded since the previous barrier. A
+    /// caller-placed barrier remains immediate and uses a conservative
+    /// destination because its consumer has not been declared yet.
     pub fn barrier(&mut self) {
+        self.barrier_before(super::PassKind::Unknown);
+    }
+
+    fn barrier_before(&mut self, consumer: super::PassKind) {
+        if self.producer_kinds.is_empty() {
+            return;
+        }
+
+        let unknown_producer = self.producer_kinds.contains(super::PassKind::Unknown);
+        let (src_stage_mask, mut src_access_mask) = Self::producer_scope(self.producer_kinds);
+        let (dst_stage_mask, mut dst_access_mask) =
+            Self::destination_scope(consumer, self.device.ray_tracing.is_some());
         let wa = &self.device.workarounds;
+        if unknown_producer {
+            // Preserve the broad-barrier workaround for work whose kind is
+            // unknown. Known pass kinds spell out transfer and AS accesses.
+            src_access_mask |= wa.extra_sync_src_access;
+        }
+        if consumer == super::PassKind::Unknown {
+            dst_access_mask |= wa.extra_sync_dst_access;
+        }
+        self.producer_kinds.clear();
         let barrier = vk::MemoryBarrier {
-            src_access_mask: vk::AccessFlags::MEMORY_WRITE | wa.extra_sync_src_access,
-            dst_access_mask: vk::AccessFlags::MEMORY_READ
-                | vk::AccessFlags::MEMORY_WRITE
-                | wa.extra_sync_dst_access,
+            src_access_mask,
+            dst_access_mask,
             ..Default::default()
         };
         unsafe {
             self.device.core.cmd_pipeline_barrier(
                 self.buffers[0].raw,
-                vk::PipelineStageFlags::ALL_COMMANDS,
-                vk::PipelineStageFlags::ALL_COMMANDS,
+                src_stage_mask,
+                dst_stage_mask,
                 vk::DependencyFlags::empty(),
                 &[barrier],
                 &[],
@@ -391,7 +530,7 @@ impl super::CommandEncoder {
     }
 
     pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder<'_> {
-        self.begin_pass(label);
+        self.begin_pass(label, super::PassKind::Transfer);
         super::TransferCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
@@ -402,7 +541,7 @@ impl super::CommandEncoder {
         &mut self,
         label: &str,
     ) -> super::AccelerationStructureCommandEncoder<'_> {
-        self.begin_pass(label);
+        self.begin_pass(label, super::PassKind::AccelerationStructure);
         super::AccelerationStructureCommandEncoder {
             raw: self.buffers[0].raw,
             device: &self.device,
@@ -410,7 +549,7 @@ impl super::CommandEncoder {
     }
 
     pub fn compute(&mut self, label: &str) -> super::ComputeCommandEncoder<'_> {
-        self.begin_pass(label);
+        self.begin_pass(label, super::PassKind::Compute);
         super::ComputeCommandEncoder {
             cmd_buf: self.buffers.first_mut().unwrap(),
             device: &self.device,
@@ -423,7 +562,7 @@ impl super::CommandEncoder {
         label: &str,
         targets: crate::RenderTargetSet,
     ) -> super::RenderCommandEncoder<'_> {
-        self.begin_pass(label);
+        self.begin_pass(label, super::PassKind::Render);
 
         let mut target_size = [0u16; 2];
         let mut color_attachments = Vec::with_capacity(targets.colors.len());
@@ -517,6 +656,14 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     type Frame = super::Frame;
 
     fn start(&mut self) {
+        self.producer_kinds.clear();
+        if !self.manual_barriers {
+            // Preserve the automatic barrier before the first pass. Its source
+            // is work from an earlier submission, so its kind is unknown.
+            // Manual mode already relies on the prior submission's finish
+            // barrier and starts accumulating at its first recorded pass.
+            self.producer_kinds.insert(super::PassKind::Unknown);
+        }
         self.buffers.rotate_left(1);
         let cmd_buf = self.buffers.first_mut().unwrap();
         self.device
@@ -1180,5 +1327,58 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
                 0,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ash::vk;
+
+    use super::super::{CommandEncoder, PassKind, PassKinds};
+
+    #[test]
+    fn producer_scope_unions_known_pass_kinds() {
+        let mut kinds = PassKinds::default();
+        kinds.insert(PassKind::Transfer);
+        kinds.insert(PassKind::Compute);
+
+        let (stages, accesses) = CommandEncoder::producer_scope(kinds);
+        assert_eq!(
+            stages,
+            vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::COMPUTE_SHADER
+        );
+        assert_eq!(
+            accesses,
+            vk::AccessFlags::TRANSFER_WRITE | vk::AccessFlags::SHADER_WRITE
+        );
+    }
+
+    #[test]
+    fn unknown_producer_forces_the_conservative_source() {
+        let mut kinds = PassKinds::default();
+        kinds.insert(PassKind::Compute);
+        kinds.insert(PassKind::Unknown);
+
+        assert_eq!(
+            CommandEncoder::producer_scope(kinds),
+            (
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::AccessFlags::MEMORY_WRITE
+            )
+        );
+    }
+
+    #[test]
+    fn compute_consumer_includes_indirect_and_ray_query_reads() {
+        let (stages, accesses) = CommandEncoder::destination_scope(PassKind::Compute, true);
+        assert_eq!(
+            stages,
+            vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT
+        );
+        assert!(accesses.contains(vk::AccessFlags::INDIRECT_COMMAND_READ));
+        assert!(accesses.contains(vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR));
+        assert!(!accesses.intersects(
+            vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+        ));
     }
 }

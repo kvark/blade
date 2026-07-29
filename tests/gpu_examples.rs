@@ -212,9 +212,7 @@ impl EnvMapSampler {
     }
 }
 
-#[test]
-#[ignore = "requires a working GPU context"]
-fn dispatch_gpu_test() {
+fn run_dispatch_gpu_test(manual_barriers: bool) {
     let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
 
     let input = context.create_buffer(gpu::BufferDesc {
@@ -248,7 +246,7 @@ fn dispatch_gpu_test() {
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "dispatch-test",
         buffer_count: 1,
-        manual_barriers: false,
+        manual_barriers,
     });
     command_encoder.start();
     if let mut compute = command_encoder.compute("dispatch")
@@ -263,18 +261,51 @@ fn dispatch_gpu_test() {
         );
         pass.dispatch([1, 1, 1]);
     }
+    if manual_barriers {
+        command_encoder.barrier();
+        if let mut compute = command_encoder.compute("dispatch-again")
+            && let mut pass = compute.with(&pipeline)
+        {
+            pass.bind(
+                0,
+                &DispatchGlobals {
+                    input: output.into(),
+                    output: input.into(),
+                },
+            );
+            pass.dispatch([1, 1, 1]);
+        }
+    }
 
     let sync_point = context.submit(&mut command_encoder);
     assert!(context.wait_for(&sync_point, 2000).unwrap());
 
-    let actual = unsafe { slice::from_raw_parts(output.data() as *const u32, 4) };
-    let expected = [3, 5, 7, 9];
+    let actual_buffer = if manual_barriers { input } else { output };
+    let actual = unsafe { slice::from_raw_parts(actual_buffer.data() as *const u32, 4) };
+    let expected = if manual_barriers {
+        [7, 11, 15, 19]
+    } else {
+        [3, 5, 7, 9]
+    };
     assert_eq!(actual, expected);
 
     context.destroy_command_encoder(&mut command_encoder);
     context.destroy_compute_pipeline(&mut pipeline);
     context.destroy_buffer(output);
     context.destroy_buffer(input);
+}
+
+#[test]
+#[ignore = "requires a working GPU context"]
+fn dispatch_gpu_test() {
+    run_dispatch_gpu_test(false);
+}
+
+#[cfg(not(gles))]
+#[test]
+#[ignore = "requires a working GPU context"]
+fn manual_barrier_gpu_test() {
+    run_dispatch_gpu_test(true);
 }
 
 /// Big enough for the weight chain to have several levels, so a mistake in the

@@ -2,6 +2,13 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- gfx/vk: derive each global pass barrier's pipeline stages and access masks
+  from a lightweight encoder-wide summary of the pass kinds recorded since the
+  previous barrier. This adds no per-resource state and does not change the
+  public API or automatic barrier placement. Repeated explicit barriers are
+  skipped when no intervening pass has produced writes.
+- docs: add the cross-vendor study of Blade's global pass barriers and an
+  engine-facing synchronization guide.
 - gfx: `Memory::Download` asks the allocator for a host-cached mapping, for
   buffers the CPU reads after a transfer. `Shared` can land on write-combined
   or even device-local host-visible memory, where a scan of the range runs

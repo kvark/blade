@@ -441,6 +441,50 @@ struct CrashHandler {
     next_offset: usize,
 }
 
+/// Kind of work recorded by a pass.
+///
+/// This is the only synchronization state kept by the Vulkan encoder. It
+/// describes producers globally, without storing resource identities,
+/// subresources, layouts, or lifetimes.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PassKind {
+    Transfer = 0,
+    AccelerationStructure = 1,
+    Compute = 2,
+    Render = 3,
+    /// Work outside the current command buffer's pass history.
+    Unknown = 4,
+}
+
+impl PassKind {
+    const fn bit(self) -> u8 {
+        1u8 << self as u8
+    }
+}
+
+/// Pass kinds whose writes have not yet been made available by a barrier.
+#[derive(Clone, Copy, Debug, Default)]
+struct PassKinds(u8);
+
+impl PassKinds {
+    fn insert(&mut self, kind: PassKind) {
+        self.0 |= kind.bit();
+    }
+
+    fn clear(&mut self) {
+        self.0 = 0;
+    }
+
+    fn contains(self, kind: PassKind) -> bool {
+        self.0 & kind.bit() != 0
+    }
+
+    fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
 pub struct CommandEncoder {
     pool: vk::CommandPool,
     buffers: Box<[CommandBuffer]>,
@@ -451,6 +495,7 @@ pub struct CommandEncoder {
     temp_label: Vec<u8>,
     timings: crate::Timings,
     manual_barriers: bool,
+    producer_kinds: PassKinds,
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
@@ -587,6 +632,7 @@ impl crate::traits::CommandDevice for Context {
             temp_label: Vec::new(),
             timings: Default::default(),
             manual_barriers: desc.manual_barriers,
+            producer_kinds: PassKinds::default(),
         }
     }
 
