@@ -6,6 +6,7 @@
 [![Crates.io](https://img.shields.io/crates/v/blade.svg?label=blade)](https://crates.io/crates/blade)
 [![Crates.io](https://img.shields.io/crates/v/blade-graphics.svg?label=blade-graphics)](https://crates.io/crates/blade-graphics)
 [![Crates.io](https://img.shields.io/crates/v/blade-render.svg?label=blade-render)](https://crates.io/crates/blade-render)
+[![arXiv](https://img.shields.io/badge/arXiv-2607.26506-b31b1b.svg)](https://arxiv.org/abs/2607.26506)
 
 ![](logo.png)
 
@@ -58,7 +59,8 @@ The full-stack Blade Engine can only run on Vulkan with hardware Ray Tracing sup
 ## Research
 
 [Global Pass Barriers Without Per-Resource RHI Tracking: A Cross-Vendor Study
-with Blade](global-pass-barriers.pdf) measures Blade's synchronization model
-against matched wgpu workloads on AMD, NVIDIA, Intel, and Apple hardware. The
-[synchronization guide](synchronization.md) summarizes the resulting design
-and what an engine using Blade is still responsible for.
+with Blade](https://arxiv.org/abs/2607.26506) measures Blade's synchronization
+model against matched wgpu workloads on AMD, NVIDIA, Intel, and Apple hardware.
+A [repository copy](global-pass-barriers.pdf) is retained with the code. The
+[synchronization guide](synchronization.md) summarizes the resulting design and
+what an engine using Blade is still responsible for.

@@ -8,8 +8,10 @@ live in the application or its render graph.
 
 The design and its trade-offs are measured in [Global Pass Barriers Without
 Per-Resource RHI Tracking: A Cross-Vendor Study with
-Blade](global-pass-barriers.pdf). The benchmark and analysis sources are
-preserved on the `blade-sync-study` branch and its `sync-study-v1` code tag.
+Blade](https://arxiv.org/abs/2607.26506). A
+[repository copy](global-pass-barriers.pdf) is retained alongside this guide.
+The benchmark and analysis sources are preserved on the `blade-sync-study`
+branch and its `sync-study-v1` code tag.
 
 ## What Blade does
 
