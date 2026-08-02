@@ -188,6 +188,7 @@ impl super::Context {
         let mut template_entries = Vec::with_capacity(layout.bindings.len());
         let mut template_offsets = Vec::with_capacity(layout.bindings.len());
         let mut binding_flags = Vec::with_capacity(layout.bindings.len());
+        let mut descriptor_counts = super::descriptor::DescriptorCounts::default();
         let mut inline_uniform_mask = 0u64;
         let mut update_offset = 0;
         for (binding_index, (&(_, binding), &access)) in layout
@@ -275,6 +276,7 @@ impl super::Context {
                 );
                 inline_uniform_mask |= 1 << binding_index;
             }
+            descriptor_counts.add(descriptor_type, descriptor_count);
 
             vk_bindings.push(vk::DescriptorSetLayoutBinding {
                 binding: binding_index as u32,
@@ -324,6 +326,7 @@ impl super::Context {
             update_template,
             template_size: update_offset as u32,
             template_offsets: template_offsets.into_boxed_slice(),
+            descriptor_counts,
             inline_uniform_mask,
         }
     }
