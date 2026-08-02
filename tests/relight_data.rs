@@ -672,17 +672,18 @@ fn generate_relighting_dataset() {
                     None,
                 );
             }
-            if let mut pass = encoder.render(
-                "relight-compose",
-                gpu::RenderTargetSet {
-                    colors: &[gpu::RenderTarget {
-                        view: hdr.view,
-                        init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
-                        finish_op: gpu::FinishOp::Store,
-                    }],
-                    depth_stencil: None,
-                },
-            ) {
+            {
+                let mut pass = encoder.render(
+                    "relight-compose",
+                    gpu::RenderTargetSet {
+                        colors: &[gpu::RenderTarget {
+                            view: hdr.view,
+                            init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
+                            finish_op: gpu::FinishOp::Store,
+                        }],
+                        depth_stencil: None,
+                    },
+                );
                 renderer.post_proc(&mut pass, debug_config, post_proc, &[], &[]);
             }
             let bytes = hdr.read_pixels(&context, &mut encoder);
