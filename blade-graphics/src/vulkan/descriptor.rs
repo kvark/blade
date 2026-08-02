@@ -10,54 +10,132 @@ const COUNT_BASE: u32 = 16;
 /// request more memory than the device has (e.g. 4096 sets × 4 MiB = 16 GiB).
 const IUB_BYTES_PER_SET: u32 = 4096;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct DescriptorCounts {
+    pub storage_buffers: u32,
+    pub sampled_images: u32,
+    pub samplers: u32,
+    pub storage_images: u32,
+    pub inline_uniform_bytes: u32,
+    pub inline_uniform_bindings: u32,
+    pub uniform_buffers: u32,
+    pub acceleration_structures: u32,
+}
+
+impl DescriptorCounts {
+    pub fn add(&mut self, ty: vk::DescriptorType, count: u32) {
+        match ty {
+            vk::DescriptorType::STORAGE_BUFFER => self.storage_buffers += count,
+            vk::DescriptorType::SAMPLED_IMAGE => self.sampled_images += count,
+            vk::DescriptorType::SAMPLER => self.samplers += count,
+            vk::DescriptorType::STORAGE_IMAGE => self.storage_images += count,
+            vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT => {
+                self.inline_uniform_bytes += count;
+                self.inline_uniform_bindings += 1;
+            }
+            vk::DescriptorType::UNIFORM_BUFFER => self.uniform_buffers += count,
+            vk::DescriptorType::ACCELERATION_STRUCTURE_KHR => {
+                self.acceleration_structures += count;
+            }
+            _ => unreachable!("unsupported descriptor type {ty:?}"),
+        }
+    }
+
+    fn max(self, other: Self) -> Self {
+        Self {
+            storage_buffers: self.storage_buffers.max(other.storage_buffers),
+            sampled_images: self.sampled_images.max(other.sampled_images),
+            samplers: self.samplers.max(other.samplers),
+            storage_images: self.storage_images.max(other.storage_images),
+            inline_uniform_bytes: self.inline_uniform_bytes.max(other.inline_uniform_bytes),
+            inline_uniform_bindings: self
+                .inline_uniform_bindings
+                .max(other.inline_uniform_bindings),
+            uniform_buffers: self.uniform_buffers.max(other.uniform_buffers),
+            acceleration_structures: self
+                .acceleration_structures
+                .max(other.acceleration_structures),
+        }
+    }
+
+    fn supports(self, required: Self) -> bool {
+        self.max(required) == self
+    }
+}
+
 #[derive(Debug)]
 pub struct DescriptorPool {
     sub_pools: Vec<vk::DescriptorPool>,
     growth_iter: usize,
+    per_set: DescriptorCounts,
 }
 
 impl super::Device {
-    fn create_descriptor_sub_pool(&self, max_sets: u32) -> vk::DescriptorPool {
+    fn create_descriptor_sub_pool(
+        &self,
+        max_sets: u32,
+        required_per_set: DescriptorCounts,
+    ) -> (vk::DescriptorPool, DescriptorCounts) {
         log::info!("Creating a descriptor pool for at most {} sets", max_sets);
+        let baseline = DescriptorCounts {
+            storage_buffers: 1,
+            sampled_images: 2,
+            samplers: 1,
+            storage_images: 1,
+            inline_uniform_bytes: if self.max_inline_uniform_block_size > 0 {
+                IUB_BYTES_PER_SET
+            } else {
+                0
+            },
+            inline_uniform_bindings: u32::from(self.max_inline_uniform_block_size > 0),
+            uniform_buffers: 1,
+            acceleration_structures: u32::from(self.ray_tracing.is_some()),
+        };
+        let per_set = baseline.max(required_per_set);
+        let pool_count = |count: u32| {
+            count
+                .checked_mul(max_sets)
+                .expect("descriptor pool count overflow")
+        };
         let mut descriptor_sizes = vec![
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_BUFFER,
-                descriptor_count: max_sets,
+                descriptor_count: pool_count(per_set.storage_buffers),
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLED_IMAGE,
-                descriptor_count: 2 * max_sets,
+                descriptor_count: pool_count(per_set.sampled_images),
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLER,
-                descriptor_count: max_sets,
+                descriptor_count: pool_count(per_set.samplers),
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_IMAGE,
-                descriptor_count: max_sets,
+                descriptor_count: pool_count(per_set.storage_images),
             },
         ];
         if self.max_inline_uniform_block_size > 0 {
             descriptor_sizes.push(vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::INLINE_UNIFORM_BLOCK_EXT,
-                descriptor_count: max_sets * IUB_BYTES_PER_SET,
+                descriptor_count: pool_count(per_set.inline_uniform_bytes),
             });
         }
         // Always include UBO type: needed as fallback when bindings exceed
         // the inline uniform block size limit, or when IUBs aren't supported.
         descriptor_sizes.push(vk::DescriptorPoolSize {
             ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: max_sets,
+            descriptor_count: pool_count(per_set.uniform_buffers),
         });
         if self.ray_tracing.is_some() {
             descriptor_sizes.push(vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
-                descriptor_count: max_sets,
+                descriptor_count: pool_count(per_set.acceleration_structures),
             });
         }
 
         let mut inline_uniform_block_info = vk::DescriptorPoolInlineUniformBlockCreateInfoEXT {
-            max_inline_uniform_block_bindings: max_sets,
+            max_inline_uniform_block_bindings: pool_count(per_set.inline_uniform_bindings),
             ..Default::default()
         };
 
@@ -69,18 +147,21 @@ impl super::Device {
             descriptor_pool_info = descriptor_pool_info.push_next(&mut inline_uniform_block_info);
         }
 
-        unsafe {
+        let raw = unsafe {
             self.core
                 .create_descriptor_pool(&descriptor_pool_info, None)
                 .unwrap()
-        }
+        };
+        (raw, per_set)
     }
 
     pub(super) fn create_descriptor_pool(&self) -> DescriptorPool {
-        let vk_pool = self.create_descriptor_sub_pool(COUNT_BASE);
+        let (sub_pool, per_set) =
+            self.create_descriptor_sub_pool(COUNT_BASE, DescriptorCounts::default());
         DescriptorPool {
-            sub_pools: vec![vk_pool],
+            sub_pools: vec![sub_pool],
             growth_iter: 0,
+            per_set,
         }
     }
 
@@ -97,6 +178,13 @@ impl super::Device {
     ) -> vk::DescriptorSet {
         let descriptor_set_layouts = [layout.raw];
 
+        if !pool.per_set.supports(layout.descriptor_counts) {
+            let required = pool.per_set.max(layout.descriptor_counts);
+            let (sub_pool, per_set) = self.create_descriptor_sub_pool(COUNT_BASE, required);
+            pool.sub_pools.insert(0, sub_pool);
+            pool.per_set = per_set;
+        }
+
         loop {
             let descriptor_set_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(pool.sub_pools[0])
@@ -110,15 +198,16 @@ impl super::Device {
 
             let next_max_sets = COUNT_BASE.pow(pool.growth_iter as u32 + 1);
             pool.growth_iter += 1;
-            let vk_pool = self.create_descriptor_sub_pool(next_max_sets);
-            pool.sub_pools.insert(0, vk_pool);
+            let (sub_pool, per_set) = self.create_descriptor_sub_pool(next_max_sets, pool.per_set);
+            pool.sub_pools.insert(0, sub_pool);
+            pool.per_set = per_set;
         }
     }
 
     pub(super) fn reset_descriptor_pool(&self, pool: &mut DescriptorPool) {
-        for vk_pool in pool.sub_pools.drain(1..) {
+        for sub_pool in pool.sub_pools.drain(1..) {
             unsafe {
-                self.core.destroy_descriptor_pool(vk_pool, None);
+                self.core.destroy_descriptor_pool(sub_pool, None);
             }
         }
 
@@ -127,5 +216,44 @@ impl super::Device {
                 .reset_descriptor_pool(pool.sub_pools[0], vk::DescriptorPoolResetFlags::empty())
                 .unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn descriptor_counts_accumulate_binding_arrays() {
+        let mut counts = DescriptorCounts::default();
+        counts.add(vk::DescriptorType::STORAGE_BUFFER, 2);
+        counts.add(vk::DescriptorType::STORAGE_BUFFER, 64);
+        counts.add(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, 64);
+
+        assert_eq!(counts.storage_buffers, 66);
+        assert_eq!(counts.acceleration_structures, 64);
+    }
+
+    #[test]
+    fn a_pool_budget_must_cover_every_descriptor_per_set() {
+        let small = DescriptorCounts {
+            storage_buffers: 1,
+            acceleration_structures: 1,
+            ..DescriptorCounts::default()
+        };
+        let scene = DescriptorCounts {
+            storage_buffers: 322,
+            acceleration_structures: 64,
+            ..DescriptorCounts::default()
+        };
+        let budget = small.max(scene);
+
+        assert!(budget.supports(scene));
+        assert!(!small.supports(scene));
+        assert_eq!(budget.storage_buffers.checked_mul(COUNT_BASE), Some(5152));
+        assert_eq!(
+            budget.acceleration_structures.checked_mul(COUNT_BASE),
+            Some(1024)
+        );
     }
 }
