@@ -2,6 +2,14 @@ use ash::vk;
 use gpu_alloc_ash::AshMemoryDevice;
 use std::{mem, ptr};
 
+fn memory_allocate_flags(needs_device_address: bool) -> vk::MemoryAllocateFlags {
+    if needs_device_address {
+        vk::MemoryAllocateFlags::DEVICE_ADDRESS
+    } else {
+        vk::MemoryAllocateFlags::empty()
+    }
+}
+
 struct Allocation {
     memory: vk::DeviceMemory,
     offset: u64,
@@ -16,9 +24,10 @@ impl super::Context {
         requirements: vk::MemoryRequirements,
         memory: crate::Memory,
         name: &str,
+        needs_device_address: bool,
     ) -> Allocation {
         let mut manager = self.memory.lock().unwrap();
-        let device_address_usage = if self.device.buffer_device_address {
+        let device_address_usage = if needs_device_address {
             gpu_alloc::UsageFlags::DEVICE_ADDRESS
         } else {
             gpu_alloc::UsageFlags::empty()
@@ -35,10 +44,14 @@ impl super::Context {
                     | device_address_usage
             }
             crate::Memory::Download => {
-                gpu_alloc::UsageFlags::HOST_ACCESS | gpu_alloc::UsageFlags::DOWNLOAD
+                gpu_alloc::UsageFlags::HOST_ACCESS
+                    | gpu_alloc::UsageFlags::DOWNLOAD
+                    | device_address_usage
             }
             crate::Memory::Upload => {
-                gpu_alloc::UsageFlags::HOST_ACCESS | gpu_alloc::UsageFlags::UPLOAD
+                gpu_alloc::UsageFlags::HOST_ACCESS
+                    | gpu_alloc::UsageFlags::UPLOAD
+                    | device_address_usage
             }
         };
         let memory_types = requirements.memory_type_bits & manager.valid_ash_memory_types;
@@ -163,12 +176,17 @@ impl super::Context {
                     },
                 };
 
-                let allocation_info = vk::MemoryAllocateInfo {
+                let mut allocation_info = vk::MemoryAllocateInfo {
                     allocation_size,
                     memory_type_index,
                     ..vk::MemoryAllocateInfo::default()
                 }
                 .push_next(external_info);
+                let flags = memory_allocate_flags(needs_device_address);
+                let mut flags_info = vk::MemoryAllocateFlagsInfo::default().flags(flags);
+                if !flags.is_empty() {
+                    allocation_info = allocation_info.push_next(&mut flags_info);
+                }
 
                 let memory = unsafe {
                     self.device
@@ -400,7 +418,12 @@ impl crate::traits::ResourceDevice for super::Context {
         let raw = unsafe { self.device.core.create_buffer(&vk_info, None).unwrap() };
         let mut requirements = unsafe { self.device.core.get_buffer_memory_requirements(raw) };
         requirements.alignment = requirements.alignment.max(self.min_buffer_alignment);
-        let allocation = self.allocate_memory(requirements, desc.memory, desc.name);
+        let allocation = self.allocate_memory(
+            requirements,
+            desc.memory,
+            desc.name,
+            self.device.buffer_device_address,
+        );
 
         log::info!(
             "Creating buffer {:?} of size {}, name '{}', handle {:?}",
@@ -491,6 +514,7 @@ impl crate::traits::ResourceDevice for super::Context {
             desc.external
                 .map_or(crate::Memory::Device, crate::Memory::External),
             desc.name,
+            false,
         );
 
         log::info!(
@@ -615,7 +639,12 @@ impl crate::traits::ResourceDevice for super::Context {
 
         let buffer = unsafe { self.device.core.create_buffer(&buffer_info, None).unwrap() };
         let requirements = unsafe { self.device.core.get_buffer_memory_requirements(buffer) };
-        let allocation = self.allocate_memory(requirements, crate::Memory::Device, desc.name);
+        let allocation = self.allocate_memory(
+            requirements,
+            crate::Memory::Device,
+            desc.name,
+            self.device.buffer_device_address,
+        );
 
         unsafe {
             self.device
@@ -831,5 +860,19 @@ fn fetch_external_source(
             })
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_address_buffers_request_matching_memory_flags() {
+        assert_eq!(
+            memory_allocate_flags(true),
+            vk::MemoryAllocateFlags::DEVICE_ADDRESS
+        );
+        assert!(memory_allocate_flags(false).is_empty());
     }
 }
