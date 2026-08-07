@@ -52,6 +52,20 @@ impl super::Context {
         // Enable unconditionally so naga validates subgroup ops and emits
         // the correct SPIR-V capabilities (GroupNonUniform, etc.).
         caps.set(naga::valid::Capabilities::SUBGROUP, true);
+        // Cross-workgroup producer/consumer protocols - persistent kernels
+        // that keep a whole graph in one dispatch - need `@coherent` and
+        // `@volatile` payload declarations, and `storageFence` /
+        // `workgroupFence` to order memory without the uniform-control-flow
+        // requirement the barriers carry. Enabled unconditionally, as with
+        // SUBGROUP above: all three lower to plain SPIR-V on Vulkan and to
+        // MSL qualifiers on Metal, with no device feature behind them. A
+        // shader that does not use them is unaffected.
+        caps.set(
+            naga::valid::Capabilities::MEMORY_DECORATION_COHERENT
+                | naga::valid::Capabilities::MEMORY_DECORATION_VOLATILE
+                | naga::valid::Capabilities::MEMORY_FENCE,
+            true,
+        );
 
         naga::valid::Validator::new(flags, caps)
             .validate(module)

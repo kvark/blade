@@ -52,6 +52,12 @@ impl super::Context {
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
             zero_initialize_workgroup_memory: spv::ZeroInitializeWorkgroupMemoryMode::None,
             force_loop_bounding: false,
+            // New field, and required to build against a naga carrying
+            // gfx-rs/wgpu#10016. Off: opting the whole backend into the
+            // Vulkan memory model would change how every module's barriers
+            // and atomics are emitted, and the modules that need it
+            // (cooperative matrices) already declare it themselves.
+            use_vulkan_memory_model: false,
             ray_query_initialization_tracking: false,
             trace_ray_argument_validation: false,
             use_storage_input_output_16: false,
