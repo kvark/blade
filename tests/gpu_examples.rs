@@ -1539,6 +1539,20 @@ fn gltf_material_test() {
 }
 
 // --- Render pipeline state tests ---
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct QuadParams {
+    color: [f32; 4],
+    depth: f32,
+    pad: [f32; 3],
+}
+
+#[derive(blade_macros::ShaderData)]
+struct QuadData {
+    quad_params: QuadParams,
+}
+
 #[derive(blade_macros::ShaderData)]
 struct SplitData {
     left_texture: gpu::TextureView,
@@ -1600,6 +1614,132 @@ fn make_solid_texture(
         transfer.copy_buffer_to_texture(stage.at(0), 4, texture.into(), size);
     }
     (texture, view, stage)
+}
+
+/// Draw a near quad and then a far one, and check the near one survives.
+///
+/// Draw order alone would put the far quad on top, so a backend that drops
+/// `RenderPipelineDesc::depth_stencil` renders this inside out.
+#[test]
+#[ignore = "requires a working GPU context"]
+fn depth_state_gpu_test() {
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    let format = gpu::TextureFormat::Rgba8Unorm;
+    let target = snapshot::OffscreenTarget::new(&context, STATE_TEST_SIZE, format);
+
+    let depth_texture = context.create_texture(gpu::TextureDesc {
+        name: "depth-state/depth",
+        format: gpu::TextureFormat::Depth32Float,
+        size: STATE_TEST_SIZE,
+        dimension: gpu::TextureDimension::D2,
+        array_layer_count: 1,
+        mip_level_count: 1,
+        usage: gpu::TextureUsage::TARGET,
+        sample_count: 1,
+        external: None,
+    });
+    let depth_view = context.create_texture_view(
+        depth_texture,
+        gpu::TextureViewDesc {
+            name: "depth-state/depth",
+            format: gpu::TextureFormat::Depth32Float,
+            dimension: gpu::ViewDimension::D2,
+            subresources: &Default::default(),
+        },
+    );
+
+    let shader = context.create_shader(gpu::ShaderDesc {
+        source: include_str!("shaders/pipeline_state.wgsl"),
+        naga_module: None,
+    });
+    let quad_layout = <QuadData as gpu::ShaderData>::layout();
+    let mut pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
+        name: "depth-state",
+        data_layouts: &[&quad_layout],
+        vertex: shader.at("quad_vs"),
+        vertex_fetches: &[],
+        primitive: gpu::PrimitiveState {
+            topology: gpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: Some(gpu::DepthStencilState {
+            format: gpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: gpu::CompareFunction::Less,
+            stencil: gpu::StencilState::default(),
+            bias: gpu::DepthBiasState::default(),
+        }),
+        fragment: Some(shader.at("quad_fs")),
+        color_targets: &[format.into()],
+        multisample_state: gpu::MultisampleState::default(),
+    });
+
+    let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "depth-state",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    command_encoder.start();
+    command_encoder.init_texture(target.texture);
+    command_encoder.init_texture(depth_texture);
+
+    if let mut pass = command_encoder.render(
+        "depth-state",
+        gpu::RenderTargetSet {
+            colors: &[gpu::RenderTarget {
+                view: target.view,
+                init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
+                finish_op: gpu::FinishOp::Store,
+            }],
+            depth_stencil: Some(gpu::RenderTarget {
+                view: depth_view,
+                init_op: gpu::InitOp::Clear(gpu::TextureColor::White),
+                finish_op: gpu::FinishOp::Discard,
+            }),
+        },
+    ) && let mut pc = pass.with(&pipeline)
+    {
+        // near, and green
+        pc.bind(
+            0,
+            &QuadData {
+                quad_params: QuadParams {
+                    color: [0.0, 1.0, 0.0, 1.0],
+                    depth: 0.25,
+                    pad: [0.0; 3],
+                },
+            },
+        );
+        pc.draw(0, 3, 0, 1);
+        // far, and red: covers the same pixels, and has to lose all of them
+        pc.bind(
+            0,
+            &QuadData {
+                quad_params: QuadParams {
+                    color: [1.0, 0.0, 0.0, 1.0],
+                    depth: 0.75,
+                    pad: [0.0; 3],
+                },
+            },
+        );
+        pc.draw(0, 3, 0, 1);
+    }
+
+    let pixels = target.read_pixels(&context, &mut command_encoder);
+    for (i, texel) in pixels.chunks(4).enumerate() {
+        assert!(
+            texel[1] > 200 && texel[0] < 50,
+            "texel {} is {:?}, so the far quad won the depth test",
+            i,
+            texel
+        );
+    }
+
+    context.destroy_render_pipeline(&mut pipeline);
+    context.destroy_texture_view(depth_view);
+    context.destroy_texture(depth_texture);
+    context.destroy_command_encoder(&mut command_encoder);
+    target.destroy(&context);
 }
 
 /// Bind two textures to one pipeline and check they land in different slots.

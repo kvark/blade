@@ -337,6 +337,18 @@ impl super::PassEncoder<'_, super::RenderPipeline> {
     ) -> super::PipelineEncoder<'b> {
         self.commands
             .push(super::Command::SetProgram(pipeline.inner.program));
+        self.commands.push(match pipeline.depth_stencil {
+            Some(ref ds) => super::Command::SetDepthState {
+                enabled: true,
+                func: super::map_compare_func(ds.depth_compare),
+                write: ds.depth_write_enabled,
+            },
+            None => super::Command::SetDepthState {
+                enabled: false,
+                func: glow::ALWAYS,
+                write: false,
+            },
+        });
 
         match &pipeline.inner.color_targets[..] {
             &[(blend_state, write_masks)] => self
@@ -1099,14 +1111,23 @@ impl super::Command {
                         );
                     }
                 },
-                Self::ClearDepthStencil { depth, stencil } => match (depth, stencil) {
-                    (Some(d), Some(s)) => {
-                        gl.clear_buffer_depth_stencil(glow::DEPTH_STENCIL, 0, d, s as i32)
+                Self::ClearDepthStencil { depth, stencil } => {
+                    // The depth write mask gates the clear as much as it gates a draw,
+                    // and it's left wherever the last bound pipeline put it. Every
+                    // pipeline bind emits `SetDepthState`, so opening it up here can't
+                    // leak into the draws that follow.
+                    if depth.is_some() {
+                        gl.depth_mask(true);
                     }
-                    (Some(d), None) => gl.clear_buffer_f32_slice(glow::DEPTH, 0, &[d]),
-                    (None, Some(s)) => gl.clear_buffer_i32_slice(glow::STENCIL, 0, &[s as i32]),
-                    (None, None) => (),
-                },
+                    match (depth, stencil) {
+                        (Some(d), Some(s)) => {
+                            gl.clear_buffer_depth_stencil(glow::DEPTH_STENCIL, 0, d, s as i32)
+                        }
+                        (Some(d), None) => gl.clear_buffer_f32_slice(glow::DEPTH, 0, &[d]),
+                        (None, Some(s)) => gl.clear_buffer_i32_slice(glow::STENCIL, 0, &[s as i32]),
+                        (None, None) => (),
+                    }
+                }
                 Self::Barrier => {
                     gl.memory_barrier(
                         glow::SHADER_STORAGE_BARRIER_BIT
@@ -1135,6 +1156,19 @@ impl super::Command {
                 //SetDepth(DepthState),
                 //SetDepthBias(wgt::DepthBiasState),
                 //ConfigureDepthStencil(crate::FormatAspects),
+                Self::SetDepthState {
+                    enabled,
+                    func,
+                    write,
+                } => {
+                    if enabled {
+                        gl.enable(glow::DEPTH_TEST);
+                        gl.depth_func(func);
+                    } else {
+                        gl.disable(glow::DEPTH_TEST);
+                    }
+                    gl.depth_mask(write);
+                }
                 Self::SetProgram(raw_program) => {
                     gl.use_program(Some(raw_program));
                 }
