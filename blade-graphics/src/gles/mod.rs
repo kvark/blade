@@ -455,7 +455,10 @@ pub struct SyncPoint {
 
 struct ExecutionContext {
     framebuf: glow::Framebuffer,
-    plain_buffer: glow::Buffer,
+    /// Scratch buffer holding the encoder's plain uniform data.
+    /// Only created when the encoder actually recorded any, so that
+    /// a submission without uniforms never binds a storage-less buffer.
+    plain_buffer: Option<glow::Buffer>,
     string_data: Box<[u8]>,
 }
 
@@ -561,16 +564,19 @@ impl crate::traits::CommandDevice for Context {
                 }
                 let framebuf = gl.create_framebuffer().unwrap();
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuf));
-                let plain_buffer = gl.create_buffer().unwrap();
-                if !encoder.plain_data.is_empty() {
+                let plain_buffer = if encoder.plain_data.is_empty() {
+                    None
+                } else {
                     log::trace!("Allocating plain data of size {}", encoder.plain_data.len());
-                    gl.bind_buffer(glow::UNIFORM_BUFFER, Some(plain_buffer));
+                    let raw = gl.create_buffer().unwrap();
+                    gl.bind_buffer(glow::UNIFORM_BUFFER, Some(raw));
                     gl.buffer_data_u8_slice(
                         glow::UNIFORM_BUFFER,
                         &encoder.plain_data,
                         glow::STATIC_DRAW,
                     );
-                }
+                    Some(raw)
+                };
                 ExecutionContext {
                     framebuf,
                     plain_buffer,
@@ -583,7 +589,9 @@ impl crate::traits::CommandDevice for Context {
             }
             unsafe {
                 gl.delete_framebuffer(ec.framebuf);
-                gl.delete_buffer(ec.plain_buffer);
+                if let Some(plain_buffer) = ec.plain_buffer {
+                    gl.delete_buffer(plain_buffer);
+                }
                 if push_group {
                     gl.pop_debug_group();
                 }

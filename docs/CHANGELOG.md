@@ -2,6 +2,10 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- gles: the per-submission scratch buffer for plain uniform data is only
+  created when the encoder recorded any, instead of being created and deleted
+  on every submission. A submission without uniforms no longer allocates a GL
+  object it never binds.
 - gles: `sync_buffer` takes a `BufferTarget` argument naming the buffer's
   binding class (`Data` or `Index`). WebGL2 permanently assigns a buffer to
   the element-array class or the general data class on its first bind, so the

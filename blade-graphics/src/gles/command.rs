@@ -1182,10 +1182,13 @@ impl super::Command {
                     //desc: ColorTargetDesc,
                 } => unimplemented!(),
                 Self::BindUniform { slot, offset, size } => {
+                    let plain_buffer = ec
+                        .plain_buffer
+                        .expect("plain data buffer is missing for a uniform binding");
                     gl.bind_buffer_range(
                         glow::UNIFORM_BUFFER,
                         slot,
-                        Some(ec.plain_buffer),
+                        Some(plain_buffer),
                         offset as i32,
                         size as i32,
                     );
