@@ -2,6 +2,12 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- gles: `sync_buffer` takes a `BufferTarget` argument naming the buffer's
+  binding class (`Data` or `Index`). WebGL2 permanently assigns a buffer to
+  the element-array class or the general data class on its first bind, so the
+  backend now defers all binding to the first sync, where the caller-provided
+  target makes the choice. This makes index buffers work on WebGL2.
+  - breaking: existing callers pass `BufferTarget::Data`.
 - gfx/vk: derive each global pass barrier's pipeline stages and access masks
   from a lightweight encoder-wide summary of the pass kinds recorded since the
   previous barrier. This adds no per-resource state and does not change the

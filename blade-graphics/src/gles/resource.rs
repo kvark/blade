@@ -1,5 +1,7 @@
 use glow::HasContext as _;
-use std::{ptr, slice};
+#[cfg(not(target_arch = "wasm32"))]
+use std::ptr;
+use std::slice;
 
 impl super::Context {
     pub fn get_bottom_level_acceleration_structure_sizes(
@@ -37,62 +39,80 @@ impl crate::traits::ResourceDevice for super::Context {
         let gl = self.lock();
 
         let raw = unsafe { gl.create_buffer() }.unwrap();
-        let mut data = ptr::null_mut();
 
-        let mut storage_flags = 0;
-        let mut map_flags = 0;
-        let usage = match desc.memory {
-            crate::Memory::Device => glow::STATIC_DRAW,
-            crate::Memory::Shared => {
-                map_flags = glow::MAP_READ_BIT | glow::MAP_WRITE_BIT | glow::MAP_PERSISTENT_BIT;
-                storage_flags = glow::MAP_PERSISTENT_BIT
-                    | glow::MAP_COHERENT_BIT
-                    | glow::MAP_READ_BIT
-                    | glow::MAP_WRITE_BIT;
-                glow::DYNAMIC_DRAW //TEMP
+        // WebGL2 permanently assigns a buffer to either the element-array
+        // class or the general data class on its first bind. Leave the buffer
+        // unbound here; the first `sync_buffer` allocates the storage through
+        // the caller-provided target.
+        #[cfg(target_arch = "wasm32")]
+        let data = {
+            if let crate::Memory::External(_) = desc.memory {
+                unimplemented!()
             }
-            crate::Memory::Download => {
-                map_flags = glow::MAP_READ_BIT | glow::MAP_PERSISTENT_BIT;
-                storage_flags =
-                    glow::MAP_PERSISTENT_BIT | glow::MAP_COHERENT_BIT | glow::MAP_READ_BIT;
-                glow::DYNAMIC_READ
-            }
-            crate::Memory::Upload => {
-                map_flags =
-                    glow::MAP_WRITE_BIT | glow::MAP_PERSISTENT_BIT | glow::MAP_UNSYNCHRONIZED_BIT;
-                storage_flags =
-                    glow::MAP_PERSISTENT_BIT | glow::MAP_COHERENT_BIT | glow::MAP_WRITE_BIT;
-                glow::DYNAMIC_DRAW
-            }
-            crate::Memory::External(_) => unimplemented!(),
+            Vec::leak(vec![0u8; desc.size as usize]).as_mut_ptr()
         };
 
-        unsafe {
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(raw));
-            if self
-                .capabilities
-                .contains(super::Capabilities::BUFFER_STORAGE)
-            {
-                gl.buffer_storage(glow::ARRAY_BUFFER, desc.size as _, None, storage_flags);
-                if map_flags != 0 {
-                    data = gl.map_buffer_range(glow::ARRAY_BUFFER, 0, desc.size as _, map_flags);
-                    assert!(!data.is_null());
+        #[cfg(not(target_arch = "wasm32"))]
+        let data = {
+            let mut data = ptr::null_mut();
+            let mut storage_flags = 0;
+            let mut map_flags = 0;
+            let usage = match desc.memory {
+                crate::Memory::Device => glow::STATIC_DRAW,
+                crate::Memory::Shared => {
+                    map_flags = glow::MAP_READ_BIT | glow::MAP_WRITE_BIT | glow::MAP_PERSISTENT_BIT;
+                    storage_flags = glow::MAP_PERSISTENT_BIT
+                        | glow::MAP_COHERENT_BIT
+                        | glow::MAP_READ_BIT
+                        | glow::MAP_WRITE_BIT;
+                    glow::DYNAMIC_DRAW //TEMP
                 }
-            } else {
-                gl.buffer_data_size(glow::ARRAY_BUFFER, desc.size as _, usage);
-                let data_vec = vec![0; desc.size as usize];
-                data = Vec::leak(data_vec).as_mut_ptr();
+                crate::Memory::Download => {
+                    map_flags = glow::MAP_READ_BIT | glow::MAP_PERSISTENT_BIT;
+                    storage_flags =
+                        glow::MAP_PERSISTENT_BIT | glow::MAP_COHERENT_BIT | glow::MAP_READ_BIT;
+                    glow::DYNAMIC_READ
+                }
+                crate::Memory::Upload => {
+                    map_flags = glow::MAP_WRITE_BIT
+                        | glow::MAP_PERSISTENT_BIT
+                        | glow::MAP_UNSYNCHRONIZED_BIT;
+                    storage_flags =
+                        glow::MAP_PERSISTENT_BIT | glow::MAP_COHERENT_BIT | glow::MAP_WRITE_BIT;
+                    glow::DYNAMIC_DRAW
+                }
+                crate::Memory::External(_) => unimplemented!(),
+            };
+
+            unsafe {
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(raw));
+                if self
+                    .capabilities
+                    .contains(super::Capabilities::BUFFER_STORAGE)
+                {
+                    gl.buffer_storage(glow::ARRAY_BUFFER, desc.size as _, None, storage_flags);
+                    if map_flags != 0 {
+                        data =
+                            gl.map_buffer_range(glow::ARRAY_BUFFER, 0, desc.size as _, map_flags);
+                        assert!(!data.is_null());
+                    }
+                } else {
+                    gl.buffer_data_size(glow::ARRAY_BUFFER, desc.size as _, usage);
+                    let data_vec = vec![0; desc.size as usize];
+                    data = Vec::leak(data_vec).as_mut_ptr();
+                }
+                gl.bind_buffer(glow::ARRAY_BUFFER, None);
+                if !desc.name.is_empty() && gl.supports_debug() {
+                    gl.object_label(
+                        glow::BUFFER,
+                        std::mem::transmute::<glow::NativeBuffer, u32>(raw),
+                        Some(desc.name),
+                    );
+                }
             }
-            gl.bind_buffer(glow::ARRAY_BUFFER, None);
-            #[cfg(not(target_arch = "wasm32"))]
-            if !desc.name.is_empty() && gl.supports_debug() {
-                gl.object_label(
-                    glow::BUFFER,
-                    std::mem::transmute::<glow::NativeBuffer, u32>(raw),
-                    Some(desc.name),
-                );
-            }
-        }
+            data
+        };
+
         super::Buffer {
             raw,
             size: desc.size,
@@ -100,16 +120,25 @@ impl crate::traits::ResourceDevice for super::Context {
         }
     }
 
-    fn sync_buffer(&self, buffer: super::Buffer) {
+    fn sync_buffer(&self, buffer: super::Buffer, target: crate::BufferTarget) {
         if !self
             .capabilities
             .contains(super::Capabilities::BUFFER_STORAGE)
         {
             let gl = self.lock();
+            let raw_target = match target {
+                crate::BufferTarget::Data => glow::ARRAY_BUFFER,
+                crate::BufferTarget::Index => glow::ELEMENT_ARRAY_BUFFER,
+            };
             unsafe {
                 let data = slice::from_raw_parts(buffer.data, buffer.size as usize);
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer.raw));
-                gl.buffer_sub_data_u8_slice(glow::ARRAY_BUFFER, 0, data);
+                gl.bind_buffer(raw_target, Some(buffer.raw));
+                // On WebGL the storage is allocated here on first sync:
+                // `bufferData` both allocates and uploads (buffer orphaning).
+                #[cfg(target_arch = "wasm32")]
+                gl.buffer_data_u8_slice(raw_target, data, glow::DYNAMIC_DRAW);
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.buffer_sub_data_u8_slice(raw_target, 0, data);
             }
         }
     }

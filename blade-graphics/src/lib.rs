@@ -355,6 +355,19 @@ pub struct BufferDesc<'a> {
     pub memory: Memory,
 }
 
+/// Binding target hint for [`sync_buffer`](traits::ResourceDevice::sync_buffer).
+///
+/// Only meaningful on the GLES backend under WebGL2, where a buffer is
+/// permanently assigned to either the element-array class or the general
+/// data class by its first bind. Other backends ignore it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BufferTarget {
+    /// Anything other than index data: vertices, uniforms, texels, etc.
+    Data,
+    /// Index data for indexed draws.
+    Index,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct BufferPiece {
     pub buffer: Buffer,
