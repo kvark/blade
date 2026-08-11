@@ -66,6 +66,7 @@ Changelog for *Blade* project
 - tests: validate the renderer shaders, snapshot the PBR material grid in both of the render paths
 - vk: support `VK_EXT_external_memory_host` — enable the extension, query memory-type compatibility via `vkGetMemoryHostPointerPropertiesEXT`, and round allocation size to `minImportedHostPointerAlignment` so `Memory::External(HostAllocation)` imports succeed on drivers that expose the extension
 - gles: assign texture units to sampler uniforms where GLSL ES 3.00 can't carry explicit bindings, so multi-texture pipelines don't collide on unit 0 in WebGL2
+- gles: apply `RenderPipelineDesc::depth_stencil`, which the backend previously ignored, leaving draw order to decide visibility
 
 ## blade-egui-0.8.2, blade-util-0.4.1 (25 Apr 2026)
 

@@ -412,6 +412,7 @@ impl crate::traits::ShaderDevice for super::Context {
         super::RenderPipeline {
             inner,
             topology: desc.primitive.topology,
+            depth_stencil: desc.depth_stencil.clone(),
         }
     }
 

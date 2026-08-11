@@ -2,6 +2,25 @@
 // with the least shading a backend can get away with, so that a failure points
 // at the state rather than at the pixels.
 
+struct QuadParams {
+    color: vec4<f32>,
+    depth: f32,
+}
+var<uniform> quad_params: QuadParams;
+
+// A full-screen triangle at a depth the host picks, in a color the host picks.
+@vertex
+fn quad_vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    let x = 4.0 * f32(vi & 1u) - 1.0;
+    let y = 4.0 * f32(vi >> 1u) - 1.0;
+    return vec4<f32>(x, y, quad_params.depth, 1.0);
+}
+
+@fragment
+fn quad_fs() -> @location(0) vec4<f32> {
+    return quad_params.color;
+}
+
 var left_texture: texture_2d<f32>;
 var right_texture: texture_2d<f32>;
 var samp: sampler;

@@ -144,6 +144,7 @@ impl crate::traits::ComputePipelineBase for ComputePipeline {
 pub struct RenderPipeline {
     inner: PipelineInner,
     topology: crate::PrimitiveTopology,
+    depth_stencil: Option<crate::DepthStencilState>,
 }
 
 #[derive(Debug)]
@@ -321,6 +322,15 @@ enum Command {
     //SetDepthBias(wgt::DepthBiasState),
     //ConfigureDepthStencil(crate::FormatAspects),
     SetProgram(glow::Program),
+    // Depth state travels with the pipeline bind: the pipeline descriptor's
+    // DepthStencilState was previously ignored by this backend entirely,
+    // which left GL_DEPTH_TEST off and made draw order decide visibility.
+    // Stencil and bias are still not implemented.
+    SetDepthState {
+        enabled: bool,
+        func: u32,
+        write: bool,
+    },
     UnsetProgram,
     //SetPrimitive(PrimitiveState),
     SetBlendConstant([f32; 4]),
