@@ -1537,3 +1537,181 @@ fn gltf_material_test() {
     context.destroy_command_encoder(&mut command_encoder);
     harness.destroy();
 }
+
+// --- Render pipeline state tests ---
+#[derive(blade_macros::ShaderData)]
+struct SplitData {
+    left_texture: gpu::TextureView,
+    right_texture: gpu::TextureView,
+    samp: gpu::Sampler,
+}
+
+const STATE_TEST_SIZE: gpu::Extent = gpu::Extent {
+    width: 16,
+    height: 16,
+    depth: 1,
+};
+
+/// Upload a 1x1 texture of the given color, for a binding that only has to be
+/// told apart from another one.
+fn make_solid_texture(
+    name: &'static str,
+    color: [u8; 4],
+    encoder: &mut gpu::CommandEncoder,
+    context: &gpu::Context,
+) -> (gpu::Texture, gpu::TextureView, gpu::Buffer) {
+    let format = gpu::TextureFormat::Rgba8Unorm;
+    let size = gpu::Extent {
+        width: 1,
+        height: 1,
+        depth: 1,
+    };
+    let texture = context.create_texture(gpu::TextureDesc {
+        name,
+        format,
+        size,
+        dimension: gpu::TextureDimension::D2,
+        array_layer_count: 1,
+        mip_level_count: 1,
+        usage: gpu::TextureUsage::COPY | gpu::TextureUsage::RESOURCE,
+        sample_count: 1,
+        external: None,
+    });
+    let view = context.create_texture_view(
+        texture,
+        gpu::TextureViewDesc {
+            name,
+            format,
+            dimension: gpu::ViewDimension::D2,
+            subresources: &Default::default(),
+        },
+    );
+    let stage = context.create_buffer(gpu::BufferDesc {
+        name,
+        size: 4,
+        memory: gpu::Memory::Upload,
+    });
+    unsafe {
+        std::ptr::copy_nonoverlapping(color.as_ptr(), stage.data(), 4);
+    }
+
+    encoder.init_texture(texture);
+    if let mut transfer = encoder.transfer(name) {
+        transfer.copy_buffer_to_texture(stage.at(0), 4, texture.into(), size);
+    }
+    (texture, view, stage)
+}
+
+/// Bind two textures to one pipeline and check they land in different slots.
+///
+/// A backend that leaves them sharing a slot shows whichever was bound last on
+/// both halves of the screen, which no single-texture pipeline would reveal.
+///
+/// Which of the GLES binding paths this takes is the driver's call: the slots
+/// come from the shader's explicit bindings where `GL_EXT_buffer_storage` is
+/// available, and are assigned by hand where it isn't. A desktop driver has the
+/// extension, so covering the hand-assigned path — the one WebGL2 always takes
+/// — means running this on a context that lacks it.
+#[test]
+#[ignore = "requires a working GPU context"]
+fn multi_texture_gpu_test() {
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    let format = gpu::TextureFormat::Rgba8Unorm;
+    let target = snapshot::OffscreenTarget::new(&context, STATE_TEST_SIZE, format);
+
+    let shader = context.create_shader(gpu::ShaderDesc {
+        source: include_str!("shaders/pipeline_state.wgsl"),
+        naga_module: None,
+    });
+    let split_layout = <SplitData as gpu::ShaderData>::layout();
+    let mut pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
+        name: "multi-texture",
+        data_layouts: &[&split_layout],
+        vertex: shader.at("split_vs"),
+        vertex_fetches: &[],
+        primitive: gpu::PrimitiveState {
+            topology: gpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        fragment: Some(shader.at("split_fs")),
+        color_targets: &[format.into()],
+        multisample_state: gpu::MultisampleState::default(),
+    });
+    let sampler = context.create_sampler(gpu::SamplerDesc {
+        name: "multi-texture",
+        ..Default::default()
+    });
+
+    let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "multi-texture",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    command_encoder.start();
+    command_encoder.init_texture(target.texture);
+
+    let (left_texture, left_view, left_stage) = make_solid_texture(
+        "multi-texture/left",
+        [0, 255, 0, 255],
+        &mut command_encoder,
+        &context,
+    );
+    let (right_texture, right_view, right_stage) = make_solid_texture(
+        "multi-texture/right",
+        [0, 0, 255, 255],
+        &mut command_encoder,
+        &context,
+    );
+
+    if let mut pass = command_encoder.render(
+        "multi-texture",
+        gpu::RenderTargetSet {
+            colors: &[gpu::RenderTarget {
+                view: target.view,
+                init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
+                finish_op: gpu::FinishOp::Store,
+            }],
+            depth_stencil: None,
+        },
+    ) && let mut pc = pass.with(&pipeline)
+    {
+        pc.bind(
+            0,
+            &SplitData {
+                left_texture: left_view,
+                right_texture: right_view,
+                samp: sampler,
+            },
+        );
+        pc.draw(0, 3, 0, 1);
+    }
+
+    let pixels = target.read_pixels(&context, &mut command_encoder);
+    let width = STATE_TEST_SIZE.width as usize;
+    for (i, texel) in pixels.chunks(4).enumerate() {
+        let (channel, name) = if i % width < width / 2 {
+            (1, "green")
+        } else {
+            (2, "blue")
+        };
+        assert!(
+            texel[channel] > 200,
+            "texel {} is {:?}, expected {}: the two textures share a slot",
+            i,
+            texel,
+            name
+        );
+    }
+
+    context.destroy_sampler(sampler);
+    context.destroy_render_pipeline(&mut pipeline);
+    context.destroy_buffer(left_stage);
+    context.destroy_buffer(right_stage);
+    context.destroy_texture_view(left_view);
+    context.destroy_texture(left_texture);
+    context.destroy_texture_view(right_view);
+    context.destroy_texture(right_texture);
+    context.destroy_command_encoder(&mut command_encoder);
+    target.destroy(&context);
+}

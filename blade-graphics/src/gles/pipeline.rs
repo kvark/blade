@@ -1,5 +1,6 @@
 use glow::HasContext as _;
 use naga::back::glsl;
+use std::collections::HashMap;
 
 fn separate<T: PartialEq>(mut iter: impl Iterator<Item = T>) -> bool {
     if let Some(first) = iter.next() {
@@ -208,6 +209,14 @@ impl super::Context {
             if !force_explicit_bindings {
                 let force_uniform_block_assignment = true;
                 let mut variables_to_bind = Vec::new();
+                // GLSL ES 3.00 (WebGL2) cannot carry explicit sampler
+                // bindings, and freshly linked programs leave every sampler
+                // uniform at texture unit 0 — so multiple textures in one
+                // pipeline would all collide there. Assign sequential units
+                // here instead, sharing the unit between the texture and
+                // sampler halves of each combined GLSL sampler.
+                let mut assigned_units = HashMap::<&str, u32>::new();
+                let mut next_texture_unit = 0u32;
                 for (sf, baked_shader) in shaders.iter().zip(baked_shaders.iter()) {
                     let reflection = &baked_shader.1;
                     for (glsl_name, mapping) in reflection.texture_mapping.iter() {
@@ -243,9 +252,17 @@ impl super::Context {
                                 if let Some(ref location) =
                                     gl.get_uniform_location(program, glsl_name)
                                 {
-                                    let mut slots = [0i32];
-                                    gl.get_uniform_i32(program, location, &mut slots);
-                                    targets.push(slots[0] as u32);
+                                    let unit = match assigned_units.get(glsl_name.as_str()) {
+                                        Some(&unit) => unit,
+                                        None => {
+                                            let unit = next_texture_unit;
+                                            next_texture_unit += 1;
+                                            gl.uniform_1_i32(Some(location), unit as i32);
+                                            assigned_units.insert(glsl_name, unit);
+                                            unit
+                                        }
+                                    };
+                                    targets.push(unit);
                                 }
                             }
                             crate::ShaderBinding::Buffer => {
