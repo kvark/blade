@@ -8,7 +8,7 @@ pub trait ResourceDevice {
     type AccelerationStructure: Send + Sync + Clone + Copy + Debug + Hash + PartialEq;
 
     fn create_buffer(&self, desc: super::BufferDesc) -> Self::Buffer;
-    fn sync_buffer(&self, buffer: Self::Buffer);
+    fn sync_buffer(&self, buffer: Self::Buffer, target: super::BufferTarget);
     fn destroy_buffer(&self, buffer: Self::Buffer);
     fn create_texture(&self, desc: super::TextureDesc) -> Self::Texture;
     fn destroy_texture(&self, texture: Self::Texture);
