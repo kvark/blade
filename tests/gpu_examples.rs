@@ -1200,7 +1200,7 @@ fn render_ray_traced_grid_as(
 #[ignore = "requires a working GPU context with ray tracing"]
 fn snapshot_pbr_ray_trace() {
     if let Some(pixels) = render_ray_traced_grid("pbr-ray-trace", RayTraceMode::Restir) {
-        snapshot::check_at("pbr-ray-trace", &pixels, RAY_TRACE_SIZE, 0.99);
+        snapshot::check("pbr-ray-trace", &pixels, RAY_TRACE_SIZE);
     }
 }
 
