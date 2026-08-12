@@ -466,8 +466,22 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
             other.selected_radiance = t_neighbor_at_canonical.radiance;
             other.weight_sum = t_neighbor_at_canonical.score * neighbor.contribution_weight * mis_neighbor;
         } else {
-            let radiance = evaluate_reflected_light(surface, neighbor.light_index, neighbor.light_uv);
-            other = unpack_reservoir(neighbor, max_confidence, radiance);
+            // A reservoir stores the target score at the surface that created
+            // it. Reusing that score at this surface gives a sample non-zero
+            // selection weight even when it is occluded or its BRDF is black
+            // here; if selected, that sample then shades to zero and creates
+            // the persistent dark patches temporal reuse used to exhibit.
+            // Re-evaluate both visibility and the target at the recipient.
+            let evaluated = estimate_target_score_with_occlusion(
+                surface, position, neighbor.light_index, neighbor.light_uv,
+                acc_struct, debug_len, 0x0000FFu);
+            let history = min(neighbor.confidence, max_confidence);
+            other.selected_light_index = neighbor.light_index;
+            other.selected_uv = neighbor.light_uv;
+            other.selected_target_score = evaluated.score;
+            other.selected_radiance = evaluated.radiance;
+            other.weight_sum = neighbor.contribution_weight * evaluated.score * history;
+            other.history = history;
         }
 
         if (DECOUPLED_SHADING) {
