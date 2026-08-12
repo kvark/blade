@@ -213,6 +213,23 @@ pub struct GBufferViews {
     pub motion: blade_graphics::TextureView,
 }
 
+/// Views of the current real-time lighting estimate.
+///
+/// Handed out by [`RayTracer::view_radiance`], primarily for an external
+/// denoiser or upscaler. These are the same two inputs selected for
+/// [`RayTracer::post_proc`]: if the built-in SVGF denoiser ran, they are its
+/// latest output; otherwise they are the raw ReSTIR estimate.
+///
+/// The diffuse lobe is demodulated. Compose the final linear radiance as
+/// `gbuffer.diffuse_albedo * diffuse + specular + gbuffer.emissive`.
+#[derive(Clone, Copy, Debug)]
+pub struct RadianceViews {
+    /// Demodulated diffuse illumination, in the renderer's radiance format.
+    pub diffuse: blade_graphics::TextureView,
+    /// Specular radiance, already tinted by the Fresnel reflectance.
+    pub specular: blade_graphics::TextureView,
+}
+
 pub struct SelectionInfo {
     pub std_deviation: mint::Vector3<f32>,
     pub std_deviation_history: u32,
@@ -618,6 +635,8 @@ struct PostProcParams {
     white_level: f32,
     accumulated: u32,
     encode_srgb: u32,
+    external_input: u32,
+    _pad: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -628,6 +647,7 @@ struct PostProcData {
     light_specular: blade_graphics::TextureView,
     t_accumulation: blade_graphics::TextureView,
     t_debug: blade_graphics::TextureView,
+    t_external: blade_graphics::TextureView,
     post_proc_params: PostProcParams,
     debug_params: DebugParams,
 }
@@ -1081,6 +1101,18 @@ impl RayTracer {
             specular_f0: self.targets.specular_f0.views[cur],
             emissive: self.targets.emissive.views[0],
             motion: self.targets.motion.views[0],
+        }
+    }
+
+    /// The real-time radiance that [`post_proc`](Self::post_proc) would use.
+    ///
+    /// The views remain valid until the next [`resize_screen`](Self::resize_screen).
+    /// Call this after [`render`](Self::render), so `post_proc_input_index`
+    /// identifies either the raw estimate or the last built-in denoising pass.
+    pub fn view_radiance(&self) -> RadianceViews {
+        RadianceViews {
+            diffuse: self.targets.light_diffuse.views[self.post_proc_input_index],
+            specular: self.targets.light_specular.views[self.post_proc_input_index],
         }
     }
 
@@ -1634,6 +1666,51 @@ impl RayTracer {
         debug_lines: &[DebugLine],
         debug_blits: &[DebugBlit],
     ) {
+        self.post_proc_impl(
+            pass,
+            None,
+            debug_config,
+            pp_config,
+            debug_lines,
+            debug_blits,
+        );
+    }
+
+    /// Bring an external linear-radiance texture to the screen.
+    ///
+    /// This is the output side of an external denoiser/upscaler integration.
+    /// In the final debug view, `color` replaces the renderer's internally
+    /// composed radiance and receives the same tone mapping and surface color
+    /// encoding as [`Self::post_proc`]. Other debug views remain available.
+    #[profiling::function]
+    pub fn post_proc_external(
+        &self,
+        pass: &mut blade_graphics::RenderCommandEncoder,
+        color: blade_graphics::TextureView,
+        debug_config: DebugConfig,
+        pp_config: PostProcConfig,
+        debug_lines: &[DebugLine],
+        debug_blits: &[DebugBlit],
+    ) {
+        self.post_proc_impl(
+            pass,
+            Some(color),
+            debug_config,
+            pp_config,
+            debug_lines,
+            debug_blits,
+        );
+    }
+
+    fn post_proc_impl(
+        &self,
+        pass: &mut blade_graphics::RenderCommandEncoder,
+        external: Option<blade_graphics::TextureView>,
+        debug_config: DebugConfig,
+        pp_config: PostProcConfig,
+        debug_lines: &[DebugLine],
+        debug_blits: &[DebugBlit],
+    ) {
         let cur = self.frame_index % 2;
         if let mut pc = pass.with(&self.post_proc_pipeline) {
             let debug_params = self.make_debug_params(&debug_config);
@@ -1646,6 +1723,7 @@ impl RayTracer {
                     light_specular: self.targets.light_specular.views[self.post_proc_input_index],
                     t_accumulation: self.targets.accumulation.views[0],
                     t_debug: self.targets.debug.views[0],
+                    t_external: external.unwrap_or(self.dummy.white_view),
                     post_proc_params: PostProcParams {
                         tone_map_enabled: pp_config.tone_map as u32,
                         average_lum: pp_config.average_luminocity,
@@ -1653,6 +1731,8 @@ impl RayTracer {
                         white_level: pp_config.white_level,
                         accumulated: self.show_accumulation as u32,
                         encode_srgb: (self.color_space == blade_graphics::ColorSpace::Srgb) as u32,
+                        external_input: external.is_some() as u32,
+                        _pad: 0,
                     },
                     debug_params,
                 },

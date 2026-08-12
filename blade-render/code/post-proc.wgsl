@@ -12,6 +12,9 @@ struct PostProcParams {
     accumulated: u32,
     // when set, the surface needs the values encoded for the display
     encode_srgb: u32,
+    // when set, final color comes from t_external
+    external_input: u32,
+    _pad: u32,
 }
 
 var t_diffuse_albedo: texture_2d<f32>;
@@ -21,6 +24,7 @@ var light_specular: texture_2d<f32>;
 // RGB is the sum of the radiance, alpha is the number of samples in it
 var t_accumulation: texture_2d<f32>;
 var t_debug: texture_2d<f32>;
+var t_external: texture_2d<f32>;
 var<uniform> post_proc_params: PostProcParams;
 var<uniform> debug_params: DebugParams;
 
@@ -43,7 +47,9 @@ fn postfx_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
     let illumination = textureLoad(light_diffuse, tc, 0);
     if (debug_params.view_mode == DebugMode_Final) {
         var color: vec3<f32>;
-        if (post_proc_params.accumulated != 0u) {
+        if (post_proc_params.external_input != 0u) {
+            color = textureLoad(t_external, tc, 0).xyz;
+        } else if (post_proc_params.accumulated != 0u) {
             // The canonical renderer produces the final radiance directly.
             let total = textureLoad(t_accumulation, tc, 0);
             color = total.xyz / max(total.w, 1.0);
