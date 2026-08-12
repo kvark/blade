@@ -206,6 +206,10 @@ pub fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
 }
 
 pub fn check(name: &str, pixels: &[u8], size: gpu::Extent) {
+    check_at(name, pixels, size, SSIM_THRESHOLD);
+}
+
+pub fn check_at(name: &str, pixels: &[u8], size: gpu::Extent, threshold: f64) {
     let dir = Path::new(REFERENCE_DIR);
     let reference_path = dir.join(format!("{name}.png"));
     let actual_path = dir.join(format!("{name}_actual.png"));
@@ -231,10 +235,10 @@ pub fn check(name: &str, pixels: &[u8], size: gpu::Extent) {
     );
     println!("{name}: SSIM = {ssim:.4}");
 
-    if ssim < SSIM_THRESHOLD {
+    if ssim < threshold {
         save_image(&actual_path, pixels, size);
         panic!(
-            "{name} snapshot SSIM = {ssim:.4} (threshold {SSIM_THRESHOLD})\n\
+            "{name} snapshot SSIM = {ssim:.4} (threshold {threshold})\n\
              Actual output saved to: {}",
             actual_path.display()
         );

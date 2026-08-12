@@ -1108,7 +1108,10 @@ fn render_ray_traced_grid_as(
         tap_confidence_near: 8,
         tap_confidence_far: 4,
         t_start: 0.01,
-        pairwise_mis: true,
+        // Exercise the standard re-evaluated-target reuse path. Its previous
+        // implementation could select a stale non-zero target that shaded to
+        // black at the receiving surface, creating persistent dark patches.
+        pairwise_mis: false,
         defensive_mis: 0.1,
     };
     let denoiser_config = blade_render::DenoiserConfig {
@@ -1197,7 +1200,7 @@ fn render_ray_traced_grid_as(
 #[ignore = "requires a working GPU context with ray tracing"]
 fn snapshot_pbr_ray_trace() {
     if let Some(pixels) = render_ray_traced_grid("pbr-ray-trace", RayTraceMode::Restir) {
-        snapshot::check("pbr-ray-trace", &pixels, RAY_TRACE_SIZE);
+        snapshot::check_at("pbr-ray-trace", &pixels, RAY_TRACE_SIZE, 0.99);
     }
 }
 
@@ -1318,8 +1321,9 @@ struct GBufferProbeData {
     output: gpu::TextureView,
 }
 
-/// The G-buffer views have to be bindable from outside the renderer, and they
-/// have to describe the frame that was just rendered.
+/// The G-buffer views have to be bindable from outside the renderer, and the
+/// explicit fill used after canonical path tracing has to describe the frame
+/// that was just rendered.
 ///
 /// The material grid is what makes the second half checkable: its columns
 /// sweep the roughness and its rows sweep the metalness, so a buffer that came
@@ -1334,9 +1338,10 @@ fn gbuffer_views_describe_the_rendered_frame() {
 
     let rendered = render_ray_traced_grid_as(
         "pbr-gbuffer",
-        RayTraceMode::Restir,
+        RayTraceMode::Canonical,
         Capture::Display,
         |renderer, context, encoder| {
+            renderer.fill_gbuffer(encoder, blade_render::DebugConfig::default());
             let format = gpu::TextureFormat::Rgba32Float;
             let target = snapshot::OffscreenTarget::new(context, size, format);
             // The probe writes through a storage binding rather than as a

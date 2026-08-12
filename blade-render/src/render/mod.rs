@@ -1478,19 +1478,20 @@ impl RayTracer {
         self.show_accumulation = true;
     }
 
-    /// Estimate the lighting with ReSTIR, reusing the samples of
-    /// the neighbors and of the previous frame.
-    #[profiling::function]
-    fn ray_trace(
+    /// Record the primary-surface geometry and material buffers for the
+    /// current camera and scene.
+    ///
+    /// [`RenderMode::RealTime`] does this as part of rendering. A sparse path
+    /// tracer followed by an external denoiser can call it once after path
+    /// accumulation instead of paying for the same primary rays on every
+    /// accumulated sample.
+    pub fn fill_gbuffer(
         &self,
         command_encoder: &mut blade_graphics::CommandEncoder,
         debug_config: DebugConfig,
-        ray_config: RayConfig,
     ) {
         let debug = self.make_debug_params(&debug_config);
         let (cur, prev) = self.work_indices();
-        assert_eq!(cur, self.post_proc_input_index);
-
         if let mut pass = command_encoder.compute("fill-gbuf") {
             let mut pc = pass.with(&self.fill_pipeline);
             let groups = self.fill_pipeline.get_dispatch_for(self.surface_size);
@@ -1519,6 +1520,22 @@ impl RayTracer {
             );
             pc.dispatch(groups);
         }
+    }
+
+    /// Estimate the lighting with ReSTIR, reusing the samples of
+    /// the neighbors and of the previous frame.
+    #[profiling::function]
+    fn ray_trace(
+        &self,
+        command_encoder: &mut blade_graphics::CommandEncoder,
+        debug_config: DebugConfig,
+        ray_config: RayConfig,
+    ) {
+        let debug = self.make_debug_params(&debug_config);
+        let (cur, prev) = self.work_indices();
+        assert_eq!(cur, self.post_proc_input_index);
+
+        self.fill_gbuffer(command_encoder, debug_config);
 
         if let mut pass = command_encoder.compute("ray-trace") {
             let mut pc = pass.with(&self.main_pipeline);
