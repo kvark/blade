@@ -151,6 +151,10 @@ jobs:
           install_runtime: true
           install_lavapipe: true
           cache: true
+          # The action queries GitHub for LavaPipe releases. Anonymous hosted
+          # runners share a tiny rate limit and made unrelated PRs fail before
+          # any Vulkan test ran.
+          github_token: ${{ github.token }}
 
       # One test at a time, as the GLES step below already does. Each of these
       # stands up its own GPU context, and the ray traced ones also build
