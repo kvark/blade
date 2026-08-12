@@ -26,6 +26,11 @@ Changelog for *Blade* project
   the width of a specular highlight from the roughness, none of which is
   recoverable from the color alone. The views belong to the renderer and stay
   valid until the next `resize_screen`.
+- render: `RayTracer::view_radiance` hands an external denoiser the current
+  demodulated diffuse and specular lighting views. `post_proc_external` accepts
+  the denoiser's composed linear-radiance result and runs it through Blade's
+  normal tone mapping and surface encoding, completing the round trip without
+  a readback or a second graphics context.
 - render: `PostProcConfig::tone_map` can be cleared to leave the composed
   radiance alone, so a frame can be captured as high dynamic range data rather
   than only as a picture. The exposure controls are unused when it is off, and
