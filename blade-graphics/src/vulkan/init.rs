@@ -486,6 +486,12 @@ fn inspect_adapter(
             vulkan_memory_model_features
         );
         crate::CooperativeMatrix::default()
+    } else if vulkan_memory_model_features.vulkan_memory_model_device_scope == vk::FALSE {
+        log::info!(
+            "No Vulkan device-scope memory model support (required for cooperative matrix). Features = {:?}",
+            vulkan_memory_model_features
+        );
+        crate::CooperativeMatrix::default()
     } else {
         // Query supported cooperative matrix configurations and find
         // square float configurations (Naga supports 8x8 and 16x16).
@@ -1086,6 +1092,7 @@ impl super::Context {
                 };
                 vulkan_memory_model = vk::PhysicalDeviceVulkanMemoryModelFeatures {
                     vulkan_memory_model: vk::TRUE,
+                    vulkan_memory_model_device_scope: vk::TRUE,
                     ..Default::default()
                 };
                 device_create_info = device_create_info
