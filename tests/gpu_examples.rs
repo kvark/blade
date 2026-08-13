@@ -1150,9 +1150,9 @@ fn render_ray_traced_grid_configured(
     let environment = test_config.black_environment.then(|| {
         let texture = harness.asset_hub.textures.baker.create_texture(
             "pbr-black-environment",
-            1,
-            1,
-            &[[0, 0, 0, 255]],
+            2,
+            2,
+            &[[0, 0, 0, 255]; 4],
         );
         harness.asset_hub.textures.insert(texture)
     });
