@@ -125,8 +125,13 @@ pub struct RayConfig {
     pub tap_radius: u32,
     pub tap_confidence_near: u32,
     pub tap_confidence_far: u32,
-    /// Evaluate MIS factor for ReSTIR in a pair-wise fashion.
-    /// Adds 2 extra visibility rays per reused sample.
+    /// Evaluate MIS factors for ReSTIR reuse pair-wise.
+    ///
+    /// This is the energy-preserving path when samples cross surfaces with
+    /// different target distributions. It adds two visibility rays per reused
+    /// sample. Clearing it selects a faster biased approximation and can
+    /// darken occluded geometry; it is suitable for experiments, not a
+    /// reference comparison.
     pub pairwise_mis: bool,
     /// Defensive MIS factor for the canonical sample.
     /// Can be between 0 and 1.
@@ -534,13 +539,17 @@ struct FillData<'a> {
 }
 
 #[derive(blade_macros::ShaderData)]
-struct MainData {
+struct MainData<'a> {
     camera: CameraParams,
     prev_camera: CameraParams,
     debug: DebugParams,
     parameters: MainParams,
     acc_struct: blade_graphics::AccelerationStructure,
     prev_acc_struct: blade_graphics::AccelerationStructure,
+    hit_entries: blade_graphics::BufferPiece,
+    index_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
+    vertex_buffers: &'a blade_graphics::BufferArray<MAX_RESOURCES>,
+    textures: &'a blade_graphics::TextureArray<MAX_RESOURCES>,
     sampler_linear: blade_graphics::Sampler,
     sampler_nearest: blade_graphics::Sampler,
     env_map: blade_graphics::TextureView,
@@ -1570,6 +1579,10 @@ impl RayTracer {
                     } else {
                         self.prev_acceleration_structure
                     },
+                    hit_entries: self.hit_buffer.into(),
+                    index_buffers: &self.index_buffers,
+                    vertex_buffers: &self.vertex_buffers,
+                    textures: &self.textures,
                     sampler_linear: self.samplers.linear,
                     sampler_nearest: self.samplers.nearest,
                     env_map: self.env_map.main_view,
