@@ -985,6 +985,31 @@ enum RayTraceMode {
     Canonical,
 }
 
+#[cfg(not(gles))]
+#[derive(Clone, Copy)]
+struct RayTraceTestConfig {
+    max_bounces: u32,
+    pairwise_mis: bool,
+    include_emissive_row: bool,
+    emissive_scale: f32,
+    black_environment: bool,
+    tap_count: u32,
+}
+
+#[cfg(not(gles))]
+impl Default for RayTraceTestConfig {
+    fn default() -> Self {
+        Self {
+            max_bounces: 3,
+            pairwise_mis: true,
+            include_emissive_row: true,
+            emissive_scale: 1.0,
+            black_environment: false,
+            tap_count: 2,
+        }
+    }
+}
+
 /// What the post processing should hand back.
 #[cfg(not(gles))]
 #[derive(Clone, Copy, PartialEq)]
@@ -1021,6 +1046,23 @@ fn render_ray_traced_grid_as(
     cache_name: &str,
     mode: RayTraceMode,
     capture: Capture,
+    inspect: impl FnOnce(&blade_render::RayTracer, &gpu::Context, &mut gpu::CommandEncoder),
+) -> Option<Vec<u8>> {
+    render_ray_traced_grid_configured(
+        cache_name,
+        mode,
+        capture,
+        RayTraceTestConfig::default(),
+        inspect,
+    )
+}
+
+#[cfg(not(gles))]
+fn render_ray_traced_grid_configured(
+    cache_name: &str,
+    mode: RayTraceMode,
+    capture: Capture,
+    test_config: RayTraceTestConfig,
     inspect: impl FnOnce(&blade_render::RayTracer, &gpu::Context, &mut gpu::CommandEncoder),
 ) -> Option<Vec<u8>> {
     // Metal acceleration structure APIs can throw uncatchable ObjC exceptions
@@ -1081,9 +1123,39 @@ fn render_ray_traced_grid_as(
 
     // A narrow specular lobe is hard on the real-time estimator,
     // so the smoothest materials are left out of these.
-    let objects = vec![blade_render::Object::from(
-        harness.create_grid_model([0.3, 1.0]),
-    )];
+    let model = if test_config.include_emissive_row && test_config.emissive_scale == 1.0 {
+        harness.create_grid_model([0.3, 1.0])
+    } else {
+        let mut geometries = pbr_scene::material_grid([0.3, 1.0]);
+        if test_config.include_emissive_row {
+            for geometry in geometries
+                .iter_mut()
+                .skip(pbr_scene::COLUMNS * (pbr_scene::ROWS - 1))
+            {
+                for channel in &mut geometry.emissive_factor {
+                    *channel *= test_config.emissive_scale;
+                }
+            }
+        } else {
+            geometries.truncate(pbr_scene::COLUMNS * (pbr_scene::ROWS - 1));
+        }
+        let model = harness
+            .asset_hub
+            .models
+            .baker
+            .create_model("pbr-material-grid-no-emissive", geometries);
+        harness.asset_hub.models.insert(model)
+    };
+    let objects = vec![blade_render::Object::from(model)];
+    let environment = test_config.black_environment.then(|| {
+        let texture = harness.asset_hub.textures.baker.create_texture(
+            "pbr-black-environment",
+            1,
+            1,
+            &[[0, 0, 0, 255]],
+        );
+        harness.asset_hub.textures.insert(texture)
+    });
     let mut temp = blade_render::FrameResources::default();
     harness
         .asset_hub
@@ -1101,17 +1173,16 @@ fn render_ray_traced_grid_as(
         num_brdf_samples: 4,
         // the dummy environment map has no importance sampling data
         environment_importance_sampling: false,
-        max_bounces: 3,
+        max_bounces: test_config.max_bounces,
         max_accumulated_samples: 0,
-        tap_count: 2,
+        tap_count: test_config.tap_count,
         tap_radius: 16,
         tap_confidence_near: 8,
         tap_confidence_far: 4,
         t_start: 0.01,
-        // Exercise the standard re-evaluated-target reuse path. Its previous
-        // implementation could select a stale non-zero target that shaded to
-        // black at the receiving surface, creating persistent dark patches.
-        pairwise_mis: false,
+        // Snapshots use the energy-preserving pairwise path. Dedicated
+        // regressions can disable reuse or isolate the cheaper approximation.
+        pairwise_mis: test_config.pairwise_mis,
         defensive_mis: 0.1,
     };
     let denoiser_config = blade_render::DenoiserConfig {
@@ -1126,7 +1197,7 @@ fn render_ray_traced_grid_as(
         renderer.build_scene(
             &mut command_encoder,
             &objects,
-            None,
+            environment,
             &harness.asset_hub,
             &context,
             &mut temp,
@@ -1224,6 +1295,149 @@ fn snapshot_pbr_canonical() {
     assert!(
         difference < CANONICAL_MAX_DIFFERENCE,
         "the real-time result is {difference:.2}/255 away from the canonical one"
+    );
+}
+
+/// ReSTIR and a canonical path trace must agree on direct reflected energy in
+/// linear HDR space.  A display-space snapshot can hide a dark estimator
+/// behind tone mapping, and a multi-bounce reference legitimately contains
+/// indirect transport the real-time pass does not attempt.
+#[cfg(not(gles))]
+#[test]
+#[ignore = "requires a working GPU context with ray tracing"]
+fn restir_direct_energy_matches_canonical() {
+    let base_config = RayTraceTestConfig {
+        // No secondary surface shading: this is exactly the environment
+        // transport ReSTIR estimates, without indirect fill.
+        max_bounces: 0,
+        pairwise_mis: false,
+        // Blade does not yet explicitly sample emissive geometry. Removing
+        // that row isolates the common environment-light estimator here; a
+        // separate scene regression exercises first-hit emission.
+        include_emissive_row: false,
+        emissive_scale: 1.0,
+        black_environment: false,
+        tap_count: 0,
+    };
+    let Some(reference_bytes) = render_ray_traced_grid_configured(
+        "pbr-canonical-direct-energy",
+        RayTraceMode::Canonical,
+        Capture::Hdr,
+        base_config,
+        |_, _, _| {},
+    ) else {
+        return;
+    };
+    let reference: &[f32] = bytemuck::cast_slice(&reference_bytes);
+    let luminance = |rgba: &[f32]| 0.3 * rgba[0] + 0.4 * rgba[1] + 0.3 * rgba[2];
+
+    // Pin both the canonical reservoir math and the production pairwise reuse
+    // path. The cheaper non-pairwise spatial approximation is intentionally
+    // excluded: different neighbor target distributions require MIS weights
+    // and otherwise lose roughly ten percent of the energy in this scene.
+    for (label, pairwise_mis, tap_count) in [("no reuse", false, 0), ("pairwise reuse", true, 2)] {
+        let config = RayTraceTestConfig {
+            pairwise_mis,
+            tap_count,
+            ..base_config
+        };
+        let Some(restir_bytes) = render_ray_traced_grid_configured(
+            &format!("pbr-restir-direct-energy-{}", label.replace(' ', "-")),
+            RayTraceMode::Restir,
+            Capture::Hdr,
+            config,
+            |_, _, _| {},
+        ) else {
+            return;
+        };
+        let restir: &[f32] = bytemuck::cast_slice(&restir_bytes);
+        assert_eq!(restir.len(), reference.len());
+
+        let mut restir_sum = 0.0f64;
+        let mut reference_sum = 0.0f64;
+        let mut compared = 0usize;
+        let mut unexpectedly_black = 0usize;
+        for (actual, expected) in restir.chunks_exact(4).zip(reference.chunks_exact(4)) {
+            let expected_luma = luminance(expected);
+            // The dummy environment is exactly white. Select the ordinary
+            // shaded material range, excluding that background.
+            if !(0.05..0.95).contains(&expected_luma) {
+                continue;
+            }
+            let actual_luma = luminance(actual);
+            restir_sum += actual_luma as f64;
+            reference_sum += expected_luma as f64;
+            compared += 1;
+            unexpectedly_black += (expected_luma > 0.15 && actual_luma < 0.02) as usize;
+        }
+        assert!(compared > 1_000, "only {compared} shaded pixels selected");
+        let energy_ratio = restir_sum / reference_sum;
+        let black_fraction = unexpectedly_black as f64 / compared as f64;
+        println!(
+            "ReSTIR {label}: energy ratio {energy_ratio:.4}, black pixels {unexpectedly_black}/{compared} ({:.2}%)",
+            100.0 * black_fraction,
+        );
+        assert!(
+            (0.95..1.05).contains(&energy_ratio),
+            "ReSTIR {label} carries {energy_ratio:.3}x the matched canonical direct energy"
+        );
+        assert!(
+            black_fraction < 0.02,
+            "{:.2}% of canonically lit pixels became black with {label}",
+            100.0 * black_fraction,
+        );
+    }
+}
+
+/// An emissive mesh hit by a ReSTIR candidate is a light source, not a black
+/// occluder. This scene has no environment radiance, so any light on the
+/// ordinary material rows must have arrived from the emissive row.
+#[cfg(not(gles))]
+#[test]
+#[ignore = "requires a working GPU context with ray tracing"]
+fn restir_receives_emissive_geometry() {
+    let config = RayTraceTestConfig {
+        max_bounces: 1,
+        pairwise_mis: true,
+        include_emissive_row: true,
+        emissive_scale: 20.0,
+        black_environment: true,
+        tap_count: 2,
+    };
+    let Some(bytes) = render_ray_traced_grid_configured(
+        "pbr-restir-emissive-energy",
+        RayTraceMode::Restir,
+        Capture::Hdr,
+        config,
+        |_, _, _| {},
+    ) else {
+        return;
+    };
+    let pixels: &[f32] = bytemuck::cast_slice(&bytes);
+    let mut energy = 0.0f64;
+    let mut peak = 0.0f32;
+    let mut peak_pixel = [0, 0];
+    // The emissive row reaches to roughly y=129. Stop at y=120 so neither
+    // those pixels nor the seven-pixel radius of the three SVGF passes can be
+    // mistaken for light received by the ordinary rows.
+    let ordinary_rows_end = RAY_TRACE_SIZE.height * 5 / 8;
+    for y in 0..ordinary_rows_end {
+        for x in 0..RAY_TRACE_SIZE.width {
+            let offset = ((y * RAY_TRACE_SIZE.width + x) * 4) as usize;
+            let texel = &pixels[offset..offset + 4];
+            let luma = 0.3 * texel[0] + 0.4 * texel[1] + 0.3 * texel[2];
+            energy += luma as f64;
+            if luma > peak {
+                peak = luma;
+                peak_pixel = [x, y];
+            }
+        }
+    }
+    let mean = energy / (ordinary_rows_end * RAY_TRACE_SIZE.width) as f64;
+    println!("ReSTIR emissive geometry: mean {mean:.6}, peak {peak:.3} at {peak_pixel:?}");
+    assert!(
+        mean > 1.0e-4 && peak > 0.01,
+        "ordinary surfaces received no measurable emissive-mesh light"
     );
 }
 

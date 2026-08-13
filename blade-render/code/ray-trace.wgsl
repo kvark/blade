@@ -1,4 +1,5 @@
 enable wgpu_ray_query;
+enable wgpu_binding_array;
 #include "quaternion.inc.wgsl"
 #include "random.inc.wgsl"
 #include "env-importance.inc.wgsl"
@@ -10,6 +11,7 @@ enable wgpu_ray_query;
 #include "env-light.inc.wgsl"
 #include "surface.inc.wgsl"
 #include "gbuf.inc.wgsl"
+#include "hit.inc.wgsl"
 
 const MAX_RESERVOIRS: u32 = 4u;
 // See "DECOUPLING SHADING AND REUSE" in
@@ -41,7 +43,6 @@ var<uniform> debug: DebugParams;
 var acc_struct: acceleration_structure;
 var prev_acc_struct: acceleration_structure;
 var env_map: texture_2d<f32>;
-var sampler_linear: sampler;
 var sampler_nearest: sampler;
 
 struct StoredReservoir {
@@ -245,34 +246,49 @@ fn sample_incoming_light(surface: Surface, from_light: bool, rng: ptr<function, 
 
 var<private> debug_len: f32;
 
-fn check_ray_occluded(acs: acceleration_structure, position: vec3<f32>, direction: vec3<f32>, debug_len: f32, debug_color: u32) -> bool {
+// Follow a direction to the first radiance source.  The old real-time path
+// treated every geometry hit as opaque shadowing and returned only the
+// environment for a miss.  That made emissive meshes visible to the camera
+// but incapable of lighting receivers, dropping real energy from any
+// comparison scene that contains emitters.
+//
+// A direction is the sample domain of both proposal strategies below, so the
+// first-hit emission is part of the same integrand as an unoccluded
+// environment lookup.  No extra light-selection probability is required.
+fn evaluate_incoming_radiance(
+    acs: acceleration_structure,
+    position: vec3<f32>,
+    direction: vec3<f32>,
+    debug_len: f32,
+    debug_color: u32,
+) -> vec3<f32> {
     var rq: ray_query;
-    let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
     rayQueryInitialize(&rq, acs,
-        RayDesc(flags, 0xFFu, parameters.t_start, camera.depth, position, direction)
+        RayDesc(RAY_FLAG_CULL_NO_OPAQUE, 0xFFu, parameters.t_start, camera.depth, position, direction)
     );
     rayQueryProceed(&rq);
     let intersection = rayQueryGetCommittedIntersection(&rq);
 
-    let occluded = intersection.kind != RAY_QUERY_INTERSECTION_NONE;
     if (DEBUG_MODE && debug_len > 0.0) {
-        let color = select(0xFFFFFFu, 0x808080u, occluded) & debug_color;
+        let hit = intersection.kind != RAY_QUERY_INTERSECTION_NONE;
+        let color = select(0xFFFFFFu, 0x808080u, hit) & debug_color;
         debug_line(position, position + debug_len * direction, color);
     }
-    return occluded;
-}
 
-fn evaluate_reflected_light(surface: Surface, light_index: u32, light_uv: vec2<f32>) -> Radiance {
-    if (light_index != 0u) {
-        return zero_radiance();
+    if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
+        return evaluate_environment(direction);
     }
-    let direction = map_equirect_uv_to_dir(light_uv);
-    let brdf = evaluate_surface_brdf(surface, direction);
-    if (is_brdf_black(brdf)) {
-        return zero_radiance();
-    }
-    let radiance = textureSampleLevel(env_map, sampler_nearest, light_uv, 0.0).xyz;
-    return reflect_light(brdf, radiance);
+
+    let entry = hit_entries[intersection.instance_custom_data + intersection.geometry_index];
+    let indices = fetch_triangle_indices(entry, intersection.primitive_index);
+    let vptr = &vertex_buffers[entry.vertex_buf].data;
+    let barycentrics = make_barycentrics(intersection.barycentrics);
+    let tex_coords = mat3x2(
+        (*vptr)[indices.x].tex_coords,
+        (*vptr)[indices.y].tex_coords,
+        (*vptr)[indices.z].tex_coords,
+    ) * barycentrics;
+    return sample_hit_emissive(entry, tex_coords, 0.0, 0u);
 }
 
 fn get_prev_pixel(pixel: vec2<i32>, pos_world: vec3<f32>) -> vec2<f32> {
@@ -313,17 +329,14 @@ fn estimate_target_score_with_occlusion(
         return zero_target_score();
     }
 
-    if (check_ray_occluded(acs, position, direction, debug_len, debug_color)) {
-        return zero_target_score();
-    } else {
-        //Note: same as `evaluate_reflected_light`
-        let radiance = textureSampleLevel(env_map, sampler_nearest, light_uv, 0.0).xyz;
-        return make_target_score(reflect_light(brdf, radiance), surface.diffuse_albedo);
-    }
+    let radiance = evaluate_incoming_radiance(
+        acs, position, direction, debug_len, debug_color,
+    );
+    return make_target_score(reflect_light(brdf, radiance), surface.diffuse_albedo);
 }
 
-fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debug_len: f32, debug_color: u32) -> BrdfLobes {
-    let dir = map_equirect_uv_to_dir(ls.uv);
+fn evaluate_sample(ls: ptr<function, LightSample>, surface: Surface, start_pos: vec3<f32>, debug_len: f32, debug_color: u32) -> BrdfLobes {
+    let dir = map_equirect_uv_to_dir((*ls).uv);
     if (dot(dir, surface.flat_normal) <= 0.0) {
         return zero_brdf();
     }
@@ -333,14 +346,13 @@ fn evaluate_sample(ls: LightSample, surface: Surface, start_pos: vec3<f32>, debu
         return zero_brdf();
     }
 
-    // Don't spend a ray on the samples that can't contribute much.
-    // Note: this is the weight the sample would get in the reservoir.
-    let target_score = compute_target_score(reflect_light(brdf, ls.radiance), surface.diffuse_albedo);
-    if (target_score < 0.01 * ls.pdf) {
-        return zero_brdf();
-    }
-
-    if (check_ray_occluded(acc_struct, start_pos, dir, debug_len, debug_color)) {
+    // Evaluate the actual first-hit radiance.  Besides supporting emissive
+    // geometry, this deliberately avoids the old absolute contribution
+    // cutoff, which biased dim surfaces toward black.
+    (*ls).radiance = evaluate_incoming_radiance(
+        acc_struct, start_pos, dir, debug_len, debug_color,
+    );
+    if (all((*ls).radiance <= vec3<f32>(0.0))) {
         return zero_brdf();
     }
 
@@ -375,8 +387,8 @@ fn compute_restir(surface: Surface, pixel: vec2<i32>, rng: ptr<function, RandomS
     var canonical = LiveReservoir();
     let num_initial = parameters.num_environment_samples + parameters.num_brdf_samples;
     for (var i = 0u; i < num_initial; i += 1u) {
-        let ls = sample_incoming_light(surface, i < parameters.num_environment_samples, rng);
-        let brdf = evaluate_sample(ls, surface, position, debug_len, 0x00FF00u);
+        var ls = sample_incoming_light(surface, i < parameters.num_environment_samples, rng);
+        let brdf = evaluate_sample(&ls, surface, position, debug_len, 0x00FF00u);
         if (is_brdf_black(brdf)) {
             bump_reservoir(&canonical, 1.0);
         } else {
