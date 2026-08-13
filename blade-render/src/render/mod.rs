@@ -109,9 +109,11 @@ pub struct RayConfig {
     pub num_brdf_samples: u32,
     /// Sample the environment map by importance rather than uniformly.
     pub environment_importance_sampling: bool,
-    /// Number of surfaces a path is allowed to hit.
+    /// Number of secondary surfaces a canonical path is allowed to hit.
     ///
-    /// Note: the real-time mode always stops at the first one.
+    /// The real-time mode ignores this field: it shades the primary surface
+    /// from directly visible environment or first-hit emission and does not
+    /// estimate indirect transport.
     pub max_bounces: u32,
     pub t_start: f32,
     /// Number of samples to accumulate before going idle, or 0 for no limit.
@@ -144,8 +146,13 @@ pub struct RayConfig {
 )]
 #[repr(u32)]
 pub enum RenderMode {
-    /// Real time: a single bounce, with the samples reused between
-    /// the neighbors and the frames, and the result denoised.
+    /// Direct illumination at the primary surface, with samples reused between
+    /// neighboring pixels and frames before the result is denoised.
+    ///
+    /// This is not a one-bounce global-illumination estimator: geometry hit by
+    /// a candidate contributes emission, but a non-emissive hit terminates the
+    /// candidate. Compare its energy to canonical mode with `max_bounces = 0`;
+    /// a multi-bounce canonical image also contains indirect fill.
     #[default]
     RealTime = 0,
     /// Reference: full paths with no reuse and no denoising, accumulated
