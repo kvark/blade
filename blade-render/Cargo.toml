@@ -67,3 +67,6 @@ allowed_external_types = [
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

@@ -1,5 +1,11 @@
-use crate::render::FrameResources;
 use std::mem;
+
+/// Temporary resources associated with a GPU frame.
+#[derive(Default)]
+pub struct FrameResources {
+    pub buffers: Vec<blade_graphics::Buffer>,
+    pub acceleration_structures: Vec<blade_graphics::AccelerationStructure>,
+}
 
 /// Utility object that encapsulates the logic
 /// of always rendering 1 frame at a time, and

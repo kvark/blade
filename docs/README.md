@@ -57,7 +57,8 @@ Blade-graphics can run on:
 - Android (OpenXR/Vulkan)
 - Web (WebGL2)
 
-The full-stack Blade Engine can only run on Vulkan with hardware Ray Tracing support.
+The full-stack Blade Engine supports its rasterizer on WebGL2. The ray-traced
+renderer remains available only on backends and devices with ray-query support.
 
 ## Research
 

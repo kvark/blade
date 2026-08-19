@@ -24,6 +24,7 @@ use std::{
 
 mod arena;
 mod flat;
+pub mod vfs;
 
 pub use flat::{Flat, round_up};
 
@@ -174,6 +175,10 @@ impl<B: Baker> Cooker<B> {
         let mut inner = self.inner.lock().unwrap();
         inner.dependencies.push(relative_path.to_path_buf());
         let full_path = self.base_path.join(relative_path);
+        if let Some(buf) = vfs::read(&full_path) {
+            buf.hash(&mut inner.hasher);
+            return buf;
+        }
         match fs::File::open(&full_path) {
             Ok(mut file) => {
                 // Read the file at the same time as we include the hash
@@ -299,6 +304,7 @@ fn check_target_relevancy(
 /// and scheduling tasks for cooking and serving assets.
 pub struct AssetManager<B: Baker> {
     target: PathBuf,
+    cache_enabled: bool,
     slots: arena::Arena<Slot<B::Output>>,
     #[allow(clippy::type_complexity)]
     paths: Mutex<HashMap<(PathBuf, B::Meta), Handle<B::Output>>>,
@@ -321,12 +327,22 @@ impl<B: Baker> AssetManager<B> {
     ///
     /// The `target` points to the folder to store cooked assets in.
     pub fn new(target: &Path, choir: &Arc<choir::Choir>, baker: B) -> Self {
-        if !target.is_dir() {
+        let cache_enabled = target.is_dir() || {
             log::info!("Creating target {}", target.display());
-            fs::create_dir_all(target).unwrap();
-        }
+            match fs::create_dir_all(target) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::info!(
+                        "Cooked asset cache is unavailable at {}: {error}",
+                        target.display()
+                    );
+                    false
+                }
+            }
+        };
         Self {
             target: target.to_path_buf(),
+            cache_enabled,
             slots: arena::Arena::new(64),
             paths: Mutex::default(),
             choir: Arc::clone(choir),
@@ -357,8 +373,6 @@ impl<B: Baker> AssetManager<B> {
         file_name: &Path,
         content: Option<&[u8]>,
     ) -> Option<(u32, &'a choir::RunningTask)> {
-        use std::{hash::Hasher as _, io::Write as _};
-
         let version = slot.version + 1;
         let (task_option, meta, data_ref) = (
             &mut slot.load_task,
@@ -375,10 +389,14 @@ impl<B: Baker> AssetManager<B> {
         let content = content.map(Vec::from);
         let mut hasher = DefaultHasher::new();
         TypeId::of::<B::Data<'static>>().hash(&mut hasher);
+        let cache_enabled = self.cache_enabled;
 
-        let load_task = if let Err(reason) =
+        let cache_status = if cache_enabled {
             check_target_relevancy(&target_path, &slot.base_path, hasher.clone())
-        {
+        } else {
+            Err(CookReason::NoTarget)
+        };
+        let load_task = if let Err(reason) = cache_status {
             log::info!(
                 "Cooking {:?}: {} version={}",
                 reason,
@@ -394,27 +412,30 @@ impl<B: Baker> AssetManager<B> {
                 .init(move |exe_context| {
                     let mut inner = cooker.inner.lock().unwrap();
                     assert!(!inner.result.is_empty());
-                    let mut file = fs::File::create(&target_path).unwrap_or_else(|e| {
-                        panic!("Unable to create {}: {}", target_path.display(), e)
-                    });
-                    file.write_all(&[0; 8]).unwrap(); // write zero hash first
-                    file.write_all(&[0; 8]).unwrap(); // write zero data offset
-                    // write down the dependencies
-                    file.write_all(&inner.dependencies.len().to_le_bytes())
-                        .unwrap();
-                    for dep in inner.dependencies.iter() {
-                        let dep_bytes = dep.to_str().unwrap().as_bytes();
-                        file.write_all(&dep_bytes.len().to_le_bytes()).unwrap();
-                        file.write_all(dep_bytes).unwrap();
+                    if cache_enabled {
+                        use std::{hash::Hasher as _, io::Write as _};
+                        let mut file = fs::File::create(&target_path).unwrap_or_else(|e| {
+                            panic!("Unable to create {}: {}", target_path.display(), e)
+                        });
+                        file.write_all(&[0; 8]).unwrap(); // write zero hash first
+                        file.write_all(&[0; 8]).unwrap(); // write zero data offset
+                        // write down the dependencies
+                        file.write_all(&inner.dependencies.len().to_le_bytes())
+                            .unwrap();
+                        for dep in inner.dependencies.iter() {
+                            let dep_bytes = dep.to_str().unwrap().as_bytes();
+                            file.write_all(&dep_bytes.len().to_le_bytes()).unwrap();
+                            file.write_all(dep_bytes).unwrap();
+                        }
+                        let data_offset = file.stream_position().unwrap();
+                        file.write_all(&inner.result).unwrap();
+                        // Write the real hash last, so that the cached file is not valid
+                        // unless everything went smooth.
+                        file.seek(SeekFrom::Start(0)).unwrap();
+                        let hash = inner.hasher.finish();
+                        file.write_all(&hash.to_le_bytes()).unwrap();
+                        file.write_all(&data_offset.to_le_bytes()).unwrap();
                     }
-                    let data_offset = file.stream_position().unwrap();
-                    file.write_all(&inner.result).unwrap();
-                    // Write the real hash last, so that the cached file is not valid
-                    // unless everything went smooth.
-                    file.seek(SeekFrom::Start(0)).unwrap();
-                    let hash = inner.hasher.finish();
-                    file.write_all(&hash.to_le_bytes()).unwrap();
-                    file.write_all(&data_offset.to_le_bytes()).unwrap();
 
                     let dr = data_ref;
                     if let Some(data) = unsafe { (*dr.data).take() } {

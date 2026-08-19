@@ -116,6 +116,15 @@ pub enum RenderBackend {
     Rasterizer,
 }
 
+impl RenderBackend {
+    pub(crate) const fn uses_ray_tracing(self) -> bool {
+        match self {
+            Self::RayTracer => true,
+            Self::Rasterizer => false,
+        }
+    }
+}
+
 fn default_render_backend() -> RenderBackend {
     RenderBackend::RayTracer
 }

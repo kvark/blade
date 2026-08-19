@@ -1,4 +1,3 @@
-#![cfg(not(any(gles, target_arch = "wasm32")))]
 #![allow(
     irrefutable_let_patterns,
     clippy::new_without_default,
@@ -16,6 +15,8 @@
 
 use blade_graphics as gpu;
 use std::{ops, path::PathBuf, sync::Arc};
+
+pub use blade_asset::vfs;
 
 pub mod config;
 mod trimesh;
@@ -390,6 +391,57 @@ enum Renderer {
     },
 }
 
+impl Renderer {
+    fn destroy(&mut self, gpu: &gpu::Context) {
+        match *self {
+            Self::RayTracer { ref mut inner, .. } => inner.destroy(gpu),
+            Self::Rasterizer { ref mut inner, .. } => inner.destroy(gpu),
+        }
+    }
+
+    fn surface_size(&self) -> gpu::Extent {
+        match *self {
+            Self::RayTracer { ref inner, .. } => inner.get_surface_size(),
+            Self::Rasterizer { ref inner, .. } => inner.get_surface_size(),
+        }
+    }
+
+    fn hot_reload(
+        &mut self,
+        asset_hub: &blade_render::AssetHub,
+        gpu: &gpu::Context,
+        sync_point: &gpu::SyncPoint,
+    ) {
+        match *self {
+            Self::RayTracer { ref mut inner, .. } => {
+                inner.hot_reload(asset_hub, gpu, sync_point);
+            }
+            Self::Rasterizer { ref mut inner, .. } => {
+                inner.hot_reload(asset_hub, gpu, sync_point);
+            }
+        }
+    }
+
+    fn resize_screen(
+        &mut self,
+        size: gpu::Extent,
+        encoder: &mut gpu::CommandEncoder,
+        gpu: &gpu::Context,
+    ) {
+        match *self {
+            Self::RayTracer {
+                ref mut inner,
+                ref mut frame_config,
+                ..
+            } => {
+                inner.resize_screen(size, encoder, gpu);
+                frame_config.reset_reservoirs = true;
+            }
+            Self::Rasterizer { ref mut inner, .. } => inner.resize_screen(size, encoder, gpu),
+        }
+    }
+}
+
 pub enum Presentation<'a> {
     #[cfg(not(target_os = "android"))]
     Window(&'a winit::window::Window),
@@ -460,14 +512,8 @@ impl Engine {
             return;
         }
         let sync_point = self.pacer.last_sync_point().unwrap();
-        match self.renderer {
-            Renderer::RayTracer { ref mut inner, .. } => {
-                inner.hot_reload(&self.asset_hub, &self.gpu_context, sync_point);
-            }
-            Renderer::Rasterizer { ref mut inner, .. } => {
-                inner.hot_reload(&self.asset_hub, &self.gpu_context, sync_point);
-            }
-        }
+        self.renderer
+            .hot_reload(&self.asset_hub, &self.gpu_context, sync_point);
     }
 
     fn update_render_objects(
@@ -513,9 +559,16 @@ impl Engine {
         load_tasks: &mut Vec<choir::RunningTask>,
         command_encoder: &mut gpu::CommandEncoder,
         temp: &mut blade_render::FrameResources,
+        run_tasks_inline: bool,
     ) -> bool {
         asset_hub.flush(command_encoder, &mut temp.buffers);
         load_tasks.retain(|task| !task.is_done());
+        if run_tasks_inline {
+            for task in load_tasks.iter() {
+                task.join_active();
+            }
+            load_tasks.retain(|task| !task.is_done());
+        }
         load_tasks.is_empty()
     }
 
@@ -535,15 +588,32 @@ impl Engine {
             #[cfg(target_os = "android")]
             Presentation::__Marker(_) => unreachable!(),
         };
-        let context_desc = gpu::ContextDesc {
+        let mut render_backend = config.render_backend;
+        let mut context_desc = gpu::ContextDesc {
             presentation: xr.is_none(),
             xr,
-            ray_tracing: matches!(config.render_backend, config::RenderBackend::RayTracer),
+            ray_tracing: config.render_backend.uses_ray_tracing(),
             validation: cfg!(debug_assertions),
             timing: true,
             ..Default::default()
         };
-        let gpu_context = Arc::new(unsafe { gpu::Context::init(context_desc).unwrap() });
+        let gpu_context = match unsafe { gpu::Context::init(context_desc.clone()) } {
+            Ok(context) => Arc::new(context),
+            Err(error) if context_desc.ray_tracing => {
+                log::warn!("Unable to initialize ray tracing ({error}); using rasterizer");
+                render_backend = config::RenderBackend::Rasterizer;
+                context_desc.ray_tracing = false;
+                Arc::new(unsafe { gpu::Context::init(context_desc).unwrap() })
+            }
+            Err(error) => panic!("Unable to initialize graphics: {error}"),
+        };
+        render_backend = match render_backend {
+            config::RenderBackend::RayTracer if gpu_context.capabilities().ray_query.is_empty() => {
+                log::warn!("Ray tracing is not supported on this GPU; using rasterizer");
+                config::RenderBackend::Rasterizer
+            }
+            backend => backend,
+        };
 
         // Note: the color space we ask the surface for is also the one
         // the renderers have to produce, see `RenderConfig`.
@@ -591,23 +661,35 @@ impl Engine {
             Presentation::__Marker(_) => unreachable!(),
         };
 
-        let num_workers = num_cpus::get_physical().max((num_cpus::get() * 3 + 2) / 4);
-        log::info!("Initializing Choir with {} workers", num_workers);
         let choir = choir::Choir::new();
-        let workers = (0..num_workers)
-            .map(|i| choir.add_worker(&format!("Worker-{}", i)))
-            .collect();
+        #[cfg(not(any(gles, target_arch = "wasm32")))]
+        let workers = {
+            let num_workers = num_cpus::get_physical().max((num_cpus::get() * 3 + 2) / 4);
+            log::info!("Initializing Choir with {} workers", num_workers);
+            (0..num_workers)
+                .map(|i| choir.add_worker(&format!("Worker-{i}")))
+                .collect::<Vec<_>>()
+        };
+        #[cfg(any(gles, target_arch = "wasm32"))]
+        let workers = {
+            log::info!("Choir tasks will run on the graphics context's owning thread");
+            Vec::new()
+        };
 
         let asset_cache_path = Self::asset_cache_path(config);
         let asset_hub = blade_render::AssetHub::new(&asset_cache_path, &choir, &gpu_context);
         let (shaders, shader_task) = blade_render::Shaders::load(
             config.shader_path.as_ref(),
             &asset_hub,
-            matches!(config.render_backend, config::RenderBackend::RayTracer),
+            render_backend.uses_ray_tracing(),
         );
 
         log::info!("Spinning up the renderer");
-        shader_task.join();
+        if workers.is_empty() {
+            shader_task.join_active();
+        } else {
+            shader_task.join();
+        }
         let mut pacer = blade_render::util::FramePacer::new(&gpu_context);
         let (command_encoder, _) = pacer.begin_frame();
 
@@ -617,7 +699,7 @@ impl Engine {
             color_space,
             max_debug_lines: 1 << 14,
         };
-        let renderer = match config.render_backend {
+        let renderer = match render_backend {
             config::RenderBackend::RayTracer => Renderer::RayTracer {
                 inner: blade_render::RayTracer::new(
                     command_encoder,
@@ -715,14 +797,7 @@ impl Engine {
                 self.gpu_context.destroy_xr_surface(xr_surface);
             }
         }
-        match self.renderer {
-            Renderer::RayTracer { ref mut inner, .. } => {
-                inner.destroy(&self.gpu_context);
-            }
-            Renderer::Rasterizer { ref mut inner, .. } => {
-                inner.destroy(&self.gpu_context);
-            }
-        }
+        self.renderer.destroy(&self.gpu_context);
         for mut ps in self.particle_systems.drain() {
             ps.destroy(&self.gpu_context);
         }
@@ -826,10 +901,7 @@ impl Engine {
         // wants to borrow `self` mutably, and `command_encoder` blocks that.
         let surface_config = Self::make_surface_config(physical_size);
         let new_render_size = surface_config.size;
-        let current_render_size = match self.renderer {
-            Renderer::RayTracer { ref inner, .. } => inner.get_surface_size(),
-            Renderer::Rasterizer { ref inner, .. } => inner.get_surface_size(),
-        };
+        let current_render_size = self.renderer.surface_size();
         if new_render_size != current_render_size {
             log::info!("Resizing to {}", new_render_size);
             self.pacer.wait_for_previous_frame(&self.gpu_context);
@@ -845,19 +917,8 @@ impl Engine {
 
         let (command_encoder, temp) = self.pacer.begin_frame();
         if new_render_size != current_render_size {
-            match self.renderer {
-                Renderer::RayTracer {
-                    ref mut inner,
-                    ref mut frame_config,
-                    ..
-                } => {
-                    inner.resize_screen(new_render_size, command_encoder, &self.gpu_context);
-                    frame_config.reset_reservoirs = true;
-                }
-                Renderer::Rasterizer { ref mut inner, .. } => {
-                    inner.resize_screen(new_render_size, command_encoder, &self.gpu_context);
-                }
-            }
+            self.renderer
+                .resize_screen(new_render_size, command_encoder, &self.gpu_context);
         }
         if let Renderer::RayTracer {
             ref mut frame_config,
@@ -874,6 +935,7 @@ impl Engine {
             &mut self.load_tasks,
             command_encoder,
             temp,
+            self.workers.is_empty(),
         );
 
         // We should be able to update TLAS and render content
@@ -1115,18 +1177,14 @@ impl Engine {
         let view_count = frame.xr_view_count() as usize;
 
         let (command_encoder, temp) = self.pacer.begin_frame();
-        match self.renderer {
-            Renderer::RayTracer {
-                ref mut inner,
-                ref mut frame_config,
-                ..
-            } => {
-                inner.resize_screen(target_size, command_encoder, &self.gpu_context);
-                frame_config.reset_variance = self.debug.mouse_pos.is_none();
-            }
-            Renderer::Rasterizer { ref mut inner, .. } => {
-                inner.resize_screen(target_size, command_encoder, &self.gpu_context);
-            }
+        self.renderer
+            .resize_screen(target_size, command_encoder, &self.gpu_context);
+        if let Renderer::RayTracer {
+            ref mut frame_config,
+            ..
+        } = self.renderer
+        {
+            frame_config.reset_variance = self.debug.mouse_pos.is_none();
         }
 
         let can_render = Self::flush_assets_and_check_ready(
@@ -1134,6 +1192,7 @@ impl Engine {
             &mut self.load_tasks,
             command_encoder,
             temp,
+            self.workers.is_empty(),
         );
 
         if can_render {
@@ -1405,6 +1464,10 @@ impl Engine {
         name: &str,
         effect: &blade_particle::ParticleEffect,
     ) -> usize {
+        if !self.gpu_context.capabilities().compute {
+            log::warn!("Particle compute is not available on this graphics device");
+            return usize::MAX;
+        }
         let pipeline = self.particle_pipeline.get_or_insert_with(|| {
             blade_particle::ParticlePipeline::new(
                 &self.gpu_context,
@@ -1422,6 +1485,9 @@ impl Engine {
 
     /// Trigger a burst of particles at a world position.
     pub fn particle_burst(&mut self, handle: usize, count: u32, position: [f32; 3]) {
+        if handle == usize::MAX {
+            return;
+        }
         if let Some(system) = self.particle_systems.get_mut(handle) {
             system.burst(count, position);
         }
@@ -1489,8 +1555,8 @@ impl Engine {
             });
         egui::CollapsingHeader::new("Debug")
             .default_open(true)
-            .show(ui, |ui| {
-                if matches!(&self.renderer, Renderer::RayTracer { .. }) {
+            .show(ui, |ui| match self.renderer {
+                Renderer::RayTracer { .. } => {
                     self.debug.populate_hud(ui);
                     blade_helpers::populate_debug_selection(
                         &mut self.debug.mouse_pos,
@@ -1498,7 +1564,8 @@ impl Engine {
                         &self.asset_hub,
                         ui,
                     );
-                } else {
+                }
+                Renderer::Rasterizer { .. } => {
                     ui.label("Ray-tracing debug views are not available in raster mode.");
                 }
             });
@@ -1635,10 +1702,7 @@ impl Engine {
     }
 
     pub fn screen_aspect(&self) -> f32 {
-        let size = match self.renderer {
-            Renderer::RayTracer { ref inner, .. } => inner.get_surface_size(),
-            Renderer::Rasterizer { ref inner, .. } => inner.get_surface_size(),
-        };
+        let size = self.renderer.surface_size();
         size.width as f32 / size.height.max(1) as f32
     }
 

@@ -47,13 +47,23 @@ pub struct Surface {
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Buffer {
-    raw: glow::Buffer,
+    raw: Option<glow::Buffer>,
     size: u64,
     data: *mut u8,
 }
 
 unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
+
+impl Default for Buffer {
+    fn default() -> Self {
+        Self {
+            raw: None,
+            size: 0,
+            data: std::ptr::null_mut(),
+        }
+    }
+}
 
 impl Buffer {
     pub fn data(&self) -> *mut u8 {
@@ -65,7 +75,7 @@ impl Buffer {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq)]
 enum TextureInner {
     Renderbuffer {
         raw: glow::Renderbuffer,
@@ -74,6 +84,8 @@ enum TextureInner {
         raw: glow::Texture,
         target: BindTarget,
     },
+    #[default]
+    Uninit,
 }
 
 impl TextureInner {
@@ -83,6 +95,7 @@ impl TextureInner {
                 panic!("Unexpected renderbuffer");
             }
             Self::Texture { raw, target } => (raw, target),
+            Self::Uninit => panic!("Unexpected uninitialized texture"),
         }
     }
 }
@@ -94,7 +107,7 @@ pub struct Texture {
     format: crate::TextureFormat,
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq)]
 pub struct TextureView {
     inner: TextureInner,
     target_size: [u16; 2],
@@ -106,7 +119,7 @@ pub struct Sampler {
     raw: glow::Sampler,
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq)]
 pub struct AccelerationStructure {}
 
 type SlotList = Vec<u32>;
@@ -176,7 +189,7 @@ struct BufferPart {
 impl From<crate::BufferPiece> for BufferPart {
     fn from(piece: crate::BufferPiece) -> Self {
         Self {
-            raw: piece.buffer.raw,
+            raw: piece.buffer.raw.expect("null GLES buffer"),
             offset: piece.offset,
             data: piece.buffer.data,
         }
@@ -420,6 +433,7 @@ pub struct PassEncoder<'a, P> {
 
 pub type ComputeCommandEncoder<'a> = PassEncoder<'a, ComputePipeline>;
 pub type RenderCommandEncoder<'a> = PassEncoder<'a, RenderPipeline>;
+pub type TransferCommandEncoder<'a> = PassEncoder<'a, ()>;
 
 pub struct PipelineEncoder<'a> {
     commands: &'a mut Vec<Command>,
@@ -462,6 +476,8 @@ struct ExecutionContext {
 impl Context {
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
+            compute: self.capabilities.contains(Capabilities::BUFFER_STORAGE),
+            indirect_draw: false,
             binding_array: false,
             ray_query: crate::ShaderVisibility::empty(),
             sample_count_mask: 0x1 | 0x4, //TODO: accurate info

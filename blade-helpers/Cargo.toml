@@ -30,6 +30,3 @@ allowed_external_types = [
     "mint::*",
     "winit::*",
 ]
-
-[lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }

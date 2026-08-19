@@ -1,4 +1,4 @@
-use crate::{AssetHub, CameraParams, DummyResources, Object, Shaders, Vertex};
+use crate::{AssetHub, CameraParams, DummyResources, Object, RenderConfig, Shaders, Vertex};
 use blade_graphics as gpu;
 use std::mem;
 
@@ -67,7 +67,6 @@ struct RasterDrawParams {
 struct RasterMainData {
     frame_params: RasterFrameParams,
     draw_params: RasterDrawParams,
-    vertices: gpu::BufferPiece,
     samp: gpu::Sampler,
     base_color_tex: gpu::TextureView,
     normal_tex: gpu::TextureView,
@@ -96,11 +95,15 @@ impl RasterPipelines {
         shader.check_struct_size::<RasterFrameParams>();
         shader.check_struct_size::<RasterDrawParams>();
         let main_layout = <RasterMainData as gpu::ShaderData>::layout();
+        let vertex_layout = <Vertex as gpu::Vertex>::layout();
         gpu.create_render_pipeline(gpu::RenderPipelineDesc {
             name: "raster",
             data_layouts: &[&main_layout],
             vertex: shader.at("raster_vs"),
-            vertex_fetches: &[],
+            vertex_fetches: &[gpu::VertexFetchState {
+                layout: &vertex_layout,
+                instanced: false,
+            }],
             primitive: gpu::PrimitiveState {
                 topology: gpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
@@ -149,7 +152,7 @@ impl RasterPipelines {
 
     fn init(
         shaders: &Shaders,
-        config: &crate::render::RenderConfig,
+        config: &RenderConfig,
         gpu: &gpu::Context,
         shader_man: &blade_asset::AssetManager<crate::shader::Baker>,
     ) -> Result<Self, &'static str> {
@@ -181,13 +184,16 @@ impl Rasterizer {
         gpu: &gpu::Context,
         shaders: Shaders,
         shader_man: &blade_asset::AssetManager<crate::shader::Baker>,
-        config: &crate::render::RenderConfig,
+        config: &RenderConfig,
     ) -> Self {
         let pipelines = RasterPipelines::init(&shaders, config, gpu, shader_man).unwrap();
-        #[cfg(target_os = "android")]
-        let debug = None;
-        #[cfg(not(target_os = "android"))]
-        let debug = {
+        let capabilities = gpu.capabilities();
+        let debug = if cfg!(target_os = "android")
+            || !capabilities.compute
+            || !capabilities.indirect_draw
+        {
+            None
+        } else {
             let sh_draw = shader_man[shaders.debug_draw].raw.as_ref().unwrap();
             let sh_blit = shader_man[shaders.debug_blit].raw.as_ref().unwrap();
             Some(crate::render::DebugRender::init(
@@ -367,7 +373,6 @@ impl Rasterizer {
                                     0.0,
                                 ],
                             },
-                            vertices: model.vertex_buffer.at(0),
                             samp: self.sampler_linear,
                             base_color_tex: texture_or_white(material.base_color_texture),
                             normal_tex,
@@ -380,19 +385,22 @@ impl Rasterizer {
 
                     let vertex_count = geometry.vertex_range.end - geometry.vertex_range.start;
                     let index_count = geometry.triangle_count * 3;
+                    let vertex_offset =
+                        geometry.vertex_range.start as u64 * mem::size_of::<Vertex>() as u64;
+                    pc.bind_vertex(0, model.vertex_buffer.at(vertex_offset));
                     match geometry.index_type {
                         Some(index_type) => {
                             pc.draw_indexed(
                                 model.index_buffer.at(geometry.index_offset),
                                 index_type,
                                 index_count,
-                                geometry.vertex_range.start as i32,
+                                0,
                                 0,
                                 1,
                             );
                         }
                         None => {
-                            pc.draw(geometry.vertex_range.start, vertex_count, 0, 1);
+                            pc.draw(0, vertex_count, 0, 1);
                         }
                     }
                 }

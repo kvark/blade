@@ -114,7 +114,7 @@ impl crate::traits::ResourceDevice for super::Context {
         };
 
         super::Buffer {
-            raw,
+            raw: Some(raw),
             size: desc.size,
             data,
         }
@@ -132,7 +132,7 @@ impl crate::traits::ResourceDevice for super::Context {
             };
             unsafe {
                 let data = slice::from_raw_parts(buffer.data, buffer.size as usize);
-                gl.bind_buffer(raw_target, Some(buffer.raw));
+                gl.bind_buffer(raw_target, buffer.raw);
                 // On WebGL the storage is allocated here on first sync:
                 // `bufferData` both allocates and uploads (buffer orphaning).
                 #[cfg(target_arch = "wasm32")]
@@ -145,7 +145,7 @@ impl crate::traits::ResourceDevice for super::Context {
 
     fn destroy_buffer(&self, buffer: super::Buffer) {
         let gl = self.lock();
-        unsafe { gl.delete_buffer(buffer.raw) };
+        unsafe { gl.delete_buffer(buffer.raw.expect("null GLES buffer")) };
         if !buffer.data.is_null()
             && !self
                 .capabilities
@@ -312,6 +312,7 @@ impl crate::traits::ResourceDevice for super::Context {
             super::TextureInner::Texture { raw, .. } => unsafe {
                 gl.delete_texture(raw);
             },
+            super::TextureInner::Uninit => {}
         }
     }
 

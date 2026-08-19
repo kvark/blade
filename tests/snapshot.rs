@@ -187,11 +187,13 @@ fn compute_ssim(a: &[u8], b: &[u8], width: usize, height: usize) -> f64 {
 }
 
 /// Read a reference image, for cross-checking two renderers against each other.
+#[allow(dead_code)]
 pub fn load(name: &str) -> (Vec<u8>, gpu::Extent) {
     load_reference(&Path::new(REFERENCE_DIR).join(format!("{name}.png")))
 }
 
 /// Mean absolute difference of the color channels, in 0..255 units.
+#[allow(dead_code)]
 pub fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
     assert_eq!(a.len(), b.len());
     let mut sum = 0.0;

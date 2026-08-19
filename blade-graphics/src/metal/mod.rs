@@ -535,6 +535,8 @@ impl Context {
     ) -> crate::Capabilities {
         use metal::MTLDevice as _;
         crate::Capabilities {
+            compute: true,
+            indirect_draw: true,
             binding_array: false,
             ray_query: if device.supportsFamily(metal::MTLGPUFamily::Apple6) {
                 crate::ShaderVisibility::all()

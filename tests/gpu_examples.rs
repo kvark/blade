@@ -13,7 +13,6 @@ use std::slice;
 #[allow(dead_code)]
 #[path = "../examples/bunnymark/example.rs"]
 mod bunnymark_example;
-#[cfg(not(gles))]
 mod pbr_scene;
 #[cfg(not(gles))]
 #[path = "../examples/ray-query/example.rs"]
@@ -21,7 +20,6 @@ mod ray_query_example;
 mod snapshot;
 
 /// Directory with the renderer shaders, needed by the asset hub.
-#[cfg(not(gles))]
 const SHADER_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/blade-render/code");
 
 // --- Sky snapshot test structs ---
@@ -809,7 +807,6 @@ const CANONICAL_FRAMES: usize = 32;
 #[cfg(not(gles))]
 const CANONICAL_MAX_DIFFERENCE: f64 = 12.0;
 
-#[cfg(not(gles))]
 struct PbrHarness {
     context: std::sync::Arc<gpu::Context>,
     choir: std::sync::Arc<choir::Choir>,
@@ -818,15 +815,17 @@ struct PbrHarness {
     shaders: blade_render::Shaders,
 }
 
-#[cfg(not(gles))]
 impl PbrHarness {
     /// Bring up the asset hub and cook the renderer shaders.
     fn new(context: gpu::Context, cache_name: &str, ray_tracing: bool) -> Self {
         let context = std::sync::Arc::new(context);
         let choir = choir::Choir::new();
+        #[cfg(not(any(gles, target_arch = "wasm32")))]
         let workers = (0..2)
             .map(|i| choir.add_worker(&format!("{cache_name}-{i}")))
-            .collect();
+            .collect::<Vec<_>>();
+        #[cfg(any(gles, target_arch = "wasm32"))]
+        let workers = Vec::new();
         let cache_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join("test-assets")
@@ -834,7 +833,11 @@ impl PbrHarness {
         let asset_hub = blade_render::AssetHub::new(&cache_path, &choir, &context);
         let (shaders, shader_task) =
             blade_render::Shaders::load(SHADER_DIR.as_ref(), &asset_hub, ray_tracing);
-        shader_task.join();
+        if workers.is_empty() {
+            shader_task.join_active();
+        } else {
+            shader_task.join();
+        }
         Self {
             context,
             choir,
@@ -867,7 +870,6 @@ impl PbrHarness {
 
 /// Rasterize a grid of spheres covering the metallic-roughness space,
 /// plus a row of emissive materials.
-#[cfg(not(gles))]
 #[test]
 #[ignore = "requires a working GPU context"]
 fn snapshot_pbr_raster() {
@@ -1699,7 +1701,6 @@ fn gbuffer_views_describe_the_rendered_frame() {
 }
 
 /// Cook and serve a glTF model, checking that the PBR factors survive the trip.
-#[cfg(not(gles))]
 #[test]
 #[ignore = "requires a working GPU context"]
 fn gltf_material_test() {
@@ -1719,7 +1720,11 @@ fn gltf_material_test() {
             front_face: blade_render::model::FrontFace::CounterClockwise,
         },
     );
-    task.clone().join();
+    if harness.workers.is_empty() {
+        task.join_active();
+    } else {
+        task.join();
+    }
 
     // The uploads have to be flushed before the buffers can be destroyed.
     let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {

@@ -464,6 +464,33 @@ impl crate::traits::TransferEncoder for super::PassEncoder<'_, ()> {
 }
 
 #[hidden_trait::expose]
+impl crate::traits::AccelerationStructureEncoder for super::PassEncoder<'_, ()> {
+    type AccelerationStructure = super::AccelerationStructure;
+    type AccelerationStructureMesh = crate::AccelerationStructureMesh;
+    type BufferPiece = crate::BufferPiece;
+
+    fn build_bottom_level(
+        &mut self,
+        _acceleration_structure: super::AccelerationStructure,
+        _meshes: &[crate::AccelerationStructureMesh],
+        _scratch_data: crate::BufferPiece,
+    ) {
+        unimplemented!("acceleration structures are not available on GLES")
+    }
+
+    fn build_top_level(
+        &mut self,
+        _acceleration_structure: super::AccelerationStructure,
+        _bottom_level: &[super::AccelerationStructure],
+        _instance_count: u32,
+        _instance_data: crate::BufferPiece,
+        _scratch_data: crate::BufferPiece,
+    ) {
+        unimplemented!("acceleration structures are not available on GLES")
+    }
+}
+
+#[hidden_trait::expose]
 impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_> {
     fn bind<D: crate::ShaderData>(&mut self, group: u32, data: &D) {
         data.fill(super::PipelineContext {
@@ -513,7 +540,7 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
     fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
         assert_eq!(index, 0);
         self.commands.push(super::Command::BindVertex {
-            buffer: vertex_buf.buffer.raw,
+            buffer: vertex_buf.buffer.raw.expect("null GLES buffer"),
         });
         for (i, info) in self.vertex_attributes.iter().enumerate() {
             if info.buffer_index == index {
@@ -950,6 +977,7 @@ impl super::Command {
                                 0,
                             );
                         }
+                        super::TextureInner::Uninit => unreachable!("uninitialized texture"),
                     }
 
                     gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(framebuf_to));
@@ -971,6 +999,7 @@ impl super::Command {
                                 0,
                             );
                         }
+                        super::TextureInner::Uninit => unreachable!("uninitialized texture"),
                     }
 
                     debug_assert_eq!(
@@ -1023,6 +1052,7 @@ impl super::Command {
                             mip_level,
                         );
                     }
+                    super::TextureInner::Uninit => unreachable!("uninitialized texture"),
                 },
                 Self::InvalidateAttachment(attachment) => {
                     gl.invalidate_framebuffer(glow::DRAW_FRAMEBUFFER, &[attachment]);

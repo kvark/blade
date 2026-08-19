@@ -74,6 +74,12 @@ impl Baker {
     }
 }
 
+// SAFETY: GLES asset tasks are executed inline on the context's owning thread.
+#[cfg(any(gles, target_arch = "wasm32"))]
+unsafe impl Send for Baker {}
+#[cfg(any(gles, target_arch = "wasm32"))]
+unsafe impl Sync for Baker {}
+
 fn parse_impl(
     text_raw: &[u8],
     base_path: &Path,
@@ -156,8 +162,14 @@ impl blade_asset::Baker for Baker {
                 naga_module: None,
             });
         if let Err(e) = raw {
-            let _ = fs::write(FAILURE_DUMP_NAME, source);
-            log::warn!("Shader compilation failed: {e:?}, source dumped as '{FAILURE_DUMP_NAME}'.")
+            match fs::write(FAILURE_DUMP_NAME, source) {
+                Ok(()) => log::warn!(
+                    "Shader compilation failed: {e:?}, source dumped as '{FAILURE_DUMP_NAME}'."
+                ),
+                Err(write_error) => log::warn!(
+                    "Shader compilation failed: {e:?}; unable to dump source: {write_error}"
+                ),
+            }
         }
         Shader { raw }
     }
