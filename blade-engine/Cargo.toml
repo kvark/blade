@@ -35,5 +35,8 @@ openxr = { workspace = true }
 [target.'cfg(not(target_os = "android"))'.dependencies]
 winit = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }

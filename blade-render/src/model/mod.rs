@@ -9,25 +9,48 @@ use std::{
 
 const PRELOAD_TEXTURES: bool = false;
 
+const fn texture_format(
+    compressed: blade_graphics::TextureFormat,
+    uncompressed: blade_graphics::TextureFormat,
+) -> blade_graphics::TextureFormat {
+    if cfg!(target_arch = "wasm32") {
+        uncompressed
+    } else {
+        compressed
+    }
+}
+
 const META_BASE_COLOR: crate::texture::Meta = crate::texture::Meta {
-    format: blade_graphics::TextureFormat::Bc1UnormSrgb,
+    format: texture_format(
+        blade_graphics::TextureFormat::Bc1UnormSrgb,
+        blade_graphics::TextureFormat::Rgba8UnormSrgb,
+    ),
     generate_mips: true,
     y_flip: false,
 };
 const META_NORMAL: crate::texture::Meta = crate::texture::Meta {
-    //Note: "texpresso" doesn't know how to produce signed normalized
-    format: blade_graphics::TextureFormat::Bc5Unorm,
+    // "texpresso" doesn't know how to produce signed normalized.
+    format: texture_format(
+        blade_graphics::TextureFormat::Bc5Unorm,
+        blade_graphics::TextureFormat::Rgba8Unorm,
+    ),
     generate_mips: false,
     y_flip: false,
 };
-//Note: the metallic-roughness values are linear, so no sRGB here
 const META_METALLIC_ROUGHNESS: crate::texture::Meta = crate::texture::Meta {
-    format: blade_graphics::TextureFormat::Bc1Unorm,
+    // Metallic-roughness values are linear, so no sRGB here.
+    format: texture_format(
+        blade_graphics::TextureFormat::Bc1Unorm,
+        blade_graphics::TextureFormat::Rgba8Unorm,
+    ),
     generate_mips: true,
     y_flip: false,
 };
 const META_EMISSIVE: crate::texture::Meta = crate::texture::Meta {
-    format: blade_graphics::TextureFormat::Bc1UnormSrgb,
+    format: texture_format(
+        blade_graphics::TextureFormat::Bc1UnormSrgb,
+        blade_graphics::TextureFormat::Rgba8UnormSrgb,
+    ),
     generate_mips: true,
     y_flip: false,
 };
@@ -362,6 +385,61 @@ struct Transfer {
     size: u64,
 }
 
+struct BufferUpload {
+    stage: blade_graphics::Buffer,
+    dst: blade_graphics::Buffer,
+    size: u64,
+    target: blade_graphics::BufferTarget,
+}
+
+impl BufferUpload {
+    fn new(
+        gpu: &blade_graphics::Context,
+        name: &'static str,
+        size: u64,
+        target: blade_graphics::BufferTarget,
+    ) -> Self {
+        let dst = gpu.create_buffer(blade_graphics::BufferDesc {
+            name,
+            size,
+            memory: blade_graphics::Memory::Device,
+        });
+        let stage = if cfg!(target_arch = "wasm32") {
+            dst
+        } else {
+            gpu.create_buffer(blade_graphics::BufferDesc {
+                name: "model staging",
+                size,
+                memory: blade_graphics::Memory::Upload,
+            })
+        };
+
+        Self {
+            stage,
+            dst,
+            size,
+            target,
+        }
+    }
+
+    fn finish(self, baker: &Baker) {
+        if cfg!(target_arch = "wasm32") {
+            baker.gpu_context.sync_buffer(self.dst, self.target);
+        } else {
+            baker
+                .pending_operations
+                .lock()
+                .unwrap()
+                .transfers
+                .push(Transfer {
+                    stage: self.stage,
+                    dst: self.dst,
+                    size: self.size,
+                });
+        }
+    }
+}
+
 #[derive(Debug)]
 struct BlasConstruct {
     meshes: Vec<blade_graphics::AccelerationStructureMesh>,
@@ -434,6 +512,7 @@ impl Baker {
                 temp_buffers.push(transfer.stage);
             }
         }
+        // Skip when `build_blas` queued nothing (`ray_query` empty).
         if !pending_ops.blas_constructs.is_empty() {
             let mut pass = encoder.acceleration_structure("BLAS");
             for construct in pending_ops.blas_constructs.drain(..) {
@@ -520,6 +599,12 @@ impl Baker {
         }
     }
 }
+
+// SAFETY: GLES asset tasks are executed inline on the context's owning thread.
+#[cfg(any(gles, target_arch = "wasm32"))]
+unsafe impl Send for Baker {}
+#[cfg(any(gles, target_arch = "wasm32"))]
+unsafe impl Sync for Baker {}
 
 /// Description of a procedural model geometry.
 ///
@@ -661,6 +746,13 @@ impl Baker {
             index_offset += geo.indices.len() as u64 * 4;
             transform_offset += mem::size_of::<blade_graphics::Transform>() as u64;
         }
+
+        self.gpu_context
+            .sync_buffer(vertex_buffer, blade_graphics::BufferTarget::Data);
+        self.gpu_context
+            .sync_buffer(index_buffer, blade_graphics::BufferTarget::Index);
+        self.gpu_context
+            .sync_buffer(transform_buffer, blade_graphics::BufferTarget::Data);
 
         Model {
             name: name.to_string(),
@@ -925,16 +1017,14 @@ impl blade_asset::Baker for Baker {
             .map(|geo| geo.vertices.len())
             .sum::<usize>();
         let total_vertex_size = (total_vertices * mem::size_of::<crate::Vertex>()) as u64;
-        let vertex_buffer = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
-            name: "vertex",
-            size: total_vertex_size,
-            memory: blade_graphics::Memory::Device,
-        });
-        let vertex_stage = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
-            name: "vertex stage",
-            size: total_vertex_size,
-            memory: blade_graphics::Memory::Upload,
-        });
+        let vertex_upload = BufferUpload::new(
+            &self.gpu_context,
+            "vertex",
+            total_vertex_size,
+            blade_graphics::BufferTarget::Data,
+        );
+        let vertex_buffer = vertex_upload.dst;
+        let vertex_stage = vertex_upload.stage;
 
         let total_indices = model
             .geometries
@@ -943,29 +1033,25 @@ impl blade_asset::Baker for Baker {
             .sum::<usize>();
         let total_index_size = total_indices as u64 * 4
             + model.geometries.len() as u64 * blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT;
-        let index_buffer = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
-            name: "index",
-            size: total_index_size,
-            memory: blade_graphics::Memory::Device,
-        });
-        let index_stage = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
-            name: "index stage",
-            size: total_index_size,
-            memory: blade_graphics::Memory::Upload,
-        });
+        let index_upload = BufferUpload::new(
+            &self.gpu_context,
+            "index",
+            total_index_size,
+            blade_graphics::BufferTarget::Index,
+        );
+        let index_buffer = index_upload.dst;
+        let index_stage = index_upload.stage;
 
         let total_transform_size =
             (model.geometries.len() * mem::size_of::<blade_graphics::Transform>()) as u64;
-        let transform_buffer = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
-            name: "transform",
-            size: total_transform_size,
-            memory: blade_graphics::Memory::Device,
-        });
-        let transform_stage = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
-            name: "transform stage",
-            size: total_transform_size,
-            memory: blade_graphics::Memory::Upload,
-        });
+        let transform_upload = BufferUpload::new(
+            &self.gpu_context,
+            "transform",
+            total_transform_size,
+            blade_graphics::BufferTarget::Data,
+        );
+        let transform_buffer = transform_upload.dst;
+        let transform_stage = transform_upload.stage;
 
         let mut meshes = Vec::with_capacity(model.geometries.len());
         let vertex_stride = mem::size_of::<super::Vertex>() as u32;
@@ -1034,24 +1120,9 @@ impl blade_asset::Baker for Baker {
         assert!(index_offset <= total_index_size);
         assert_eq!(transform_offset, total_transform_size);
 
-        {
-            let mut pending_ops = self.pending_operations.lock().unwrap();
-            pending_ops.transfers.push(Transfer {
-                stage: vertex_stage,
-                dst: vertex_buffer,
-                size: total_vertex_size,
-            });
-            pending_ops.transfers.push(Transfer {
-                stage: index_stage,
-                dst: index_buffer,
-                size: total_index_size,
-            });
-            pending_ops.transfers.push(Transfer {
-                stage: transform_stage,
-                dst: transform_buffer,
-                size: total_transform_size,
-            });
-        }
+        vertex_upload.finish(self);
+        index_upload.finish(self);
+        transform_upload.finish(self);
         let acceleration_structure = self.build_blas(str::from_utf8(model.name).unwrap(), meshes);
 
         Model {

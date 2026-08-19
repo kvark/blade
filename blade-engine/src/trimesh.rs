@@ -1,4 +1,4 @@
-use std::unimplemented;
+use std::{path::Path, unimplemented};
 
 #[derive(Default)]
 pub struct TriMesh {
@@ -71,7 +71,11 @@ impl TriMesh {
 pub fn load(path: &str) -> TriMesh {
     use base64::engine::{Engine as _, general_purpose::URL_SAFE as ENCODING_ENGINE};
 
-    let gltf::Gltf { document, mut blob } = gltf::Gltf::open(path).unwrap();
+    let gltf::Gltf { document, mut blob } = if let Some(bytes) = crate::vfs::read(Path::new(path)) {
+        gltf::Gltf::from_slice(&bytes).unwrap()
+    } else {
+        gltf::Gltf::open(path).unwrap()
+    };
     // extract buffers
     let mut data_buffers = Vec::new();
     for buffer in document.buffers() {

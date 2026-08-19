@@ -8,23 +8,9 @@ pub struct DebugBlit {
     pub target_size: [u32; 2],
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DebugPoint {
-    pub pos: [f32; 3],
-    pub color: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DebugLine {
-    pub a: DebugPoint,
-    pub b: DebugPoint,
-}
-
 #[derive(blade_macros::ShaderData)]
 struct DebugDrawData {
-    camera: super::CameraParams,
+    camera: crate::CameraParams,
     debug_lines: blade_graphics::BufferPiece,
     depth: blade_graphics::TextureView,
 }
@@ -76,8 +62,8 @@ fn create_draw_pipeline(
     format: blade_graphics::TextureFormat,
     gpu: &blade_graphics::Context,
 ) -> blade_graphics::RenderPipeline {
-    shader.check_struct_size::<DebugPoint>();
-    shader.check_struct_size::<DebugLine>();
+    shader.check_struct_size::<crate::DebugPoint>();
+    shader.check_struct_size::<crate::DebugLine>();
     let layout = <DebugDrawData as blade_graphics::ShaderData>::layout();
     gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
         name: "debug-draw",
@@ -233,7 +219,7 @@ impl DebugRender {
         self.draw_pipeline = create_blit_pipeline(shader, self.surface_format, gpu);
     }
 
-    fn add_lines(&self, lines: &[DebugLine]) -> (blade_graphics::BufferPiece, u32) {
+    fn add_lines(&self, lines: &[crate::DebugLine]) -> (blade_graphics::BufferPiece, u32) {
         let required_size = lines.len() as u64 * self.line_size as u64;
         let old_offset = self.cpu_lines_offset.get();
         let (original_offset, count) =
@@ -250,7 +236,7 @@ impl DebugRender {
         unsafe {
             ptr::copy_nonoverlapping(
                 lines.as_ptr(),
-                self.cpu_lines_buffer.data().add(original_offset as usize) as *mut DebugLine,
+                self.cpu_lines_buffer.data().add(original_offset as usize) as *mut crate::DebugLine,
                 count,
             );
         }
@@ -262,8 +248,8 @@ impl DebugRender {
 
     pub(crate) fn render_lines(
         &self,
-        debug_lines: &[DebugLine],
-        camera: super::CameraParams,
+        debug_lines: &[crate::DebugLine],
+        camera: crate::CameraParams,
         depth: blade_graphics::TextureView,
         pass: &mut blade_graphics::RenderCommandEncoder,
     ) {

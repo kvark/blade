@@ -1,11 +1,10 @@
-#![cfg(not(any(gles, target_arch = "wasm32")))]
-
 mod camera;
 mod hud;
 
 pub use blade_render::Camera;
 pub use camera::ControlledCamera;
-pub use hud::{ExposeHud, populate_debug_selection, populate_render_mode};
+pub use hud::ExposeHud;
+pub use hud::{populate_debug_selection, populate_render_mode};
 
 pub fn default_ray_config() -> blade_render::RayConfig {
     blade_render::RayConfig {

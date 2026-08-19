@@ -2,6 +2,17 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- engine/render: support the raster rendering path on WebGL2. Raster vertex
+  data now uses ordinary vertex attributes, model and texture uploads observe
+  WebGL's buffer binding classes, and the renderer validates its shaders by
+  exporting them as WebGL2 GLSL ES 3.00.
+- gfx/engine/render: expose compute and indirect-draw support as runtime device
+  capabilities and use them for optional engine features. WebGL-only context
+  affinity and upload mechanics remain private target-specific implementation
+  details.
+  - breaking: `Capabilities` gained `compute` and `indirect_draw` fields.
+- render/gles: keep WebGL contexts thread-affine. The engine runs GPU asset
+  tasks inline on the context's owning thread.
 - gles: `sync_buffer` takes a `BufferTarget` argument naming the buffer's
   binding class (`Data` or `Index`). WebGL2 permanently assigns a buffer to
   the element-array class or the general data class on its first bind, so the

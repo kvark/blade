@@ -101,6 +101,12 @@ impl Baker {
     }
 }
 
+// SAFETY: GLES asset tasks are executed inline on the context's owning thread.
+#[cfg(any(gles, target_arch = "wasm32"))]
+unsafe impl Send for Baker {}
+#[cfg(any(gles, target_arch = "wasm32"))]
+unsafe impl Sync for Baker {}
+
 impl Baker {
     /// Create a texture directly from RGBA u8 pixel data (4 bytes per pixel).
     /// Uses `Rgba8Unorm` format which supports linear filtering on all GPUs.
@@ -146,6 +152,7 @@ impl Baker {
         unsafe {
             ptr::copy_nonoverlapping(byte_data.as_ptr(), stage.data(), byte_data.len());
         }
+        self.gpu_context.sync_buffer(stage, gpu::BufferTarget::Data);
 
         let bytes_per_row = width * 4;
         let mut pending_ops = self.pending_operations.lock().unwrap();
@@ -304,19 +311,16 @@ impl blade_asset::Baker for Baker {
                 }
 
                 let dst_format = match meta.format {
-                    Tf::Bc1Unorm | Tf::Bc1UnormSrgb => texpresso::Format::Bc1,
-                    Tf::Bc2Unorm | Tf::Bc2UnormSrgb => texpresso::Format::Bc2,
-                    Tf::Bc3Unorm | Tf::Bc3UnormSrgb => texpresso::Format::Bc3,
-                    Tf::Bc4Unorm | Tf::Bc4Snorm => texpresso::Format::Bc4,
-                    Tf::Bc5Unorm | Tf::Bc5Snorm => texpresso::Format::Bc5,
+                    Tf::Bc1Unorm | Tf::Bc1UnormSrgb => Some(texpresso::Format::Bc1),
+                    Tf::Bc2Unorm | Tf::Bc2UnormSrgb => Some(texpresso::Format::Bc2),
+                    Tf::Bc3Unorm | Tf::Bc3UnormSrgb => Some(texpresso::Format::Bc3),
+                    Tf::Bc4Unorm | Tf::Bc4Snorm => Some(texpresso::Format::Bc4),
+                    Tf::Bc5Unorm | Tf::Bc5Snorm => Some(texpresso::Format::Bc5),
+                    Tf::Rgba8Unorm | Tf::Rgba8UnormSrgb => None,
                     other => panic!("Unsupported destination format {:?}", other),
                 };
 
                 let mut src_mips = vec![data];
-                let mut mips = {
-                    let compressed_size = dst_format.compressed_size(src.width, src.height);
-                    vec![vec![0u8; compressed_size]]
-                };
                 let base_extent = blade_graphics::Extent {
                     width: src.width as u32,
                     height: src.height as u32,
@@ -352,69 +356,91 @@ impl blade_asset::Baker for Baker {
                             cur_extent.height as _,
                         );
                         src_mips.push(cur_data);
+                    }
+                }
+
+                if let Some(dst_format) = dst_format {
+                    let mut mips = {
+                        let compressed_size = dst_format.compressed_size(src.width, src.height);
+                        vec![vec![0u8; compressed_size]]
+                    };
+                    for i in 1..src_mips.len() {
+                        let cur_extent = base_extent.at_mip_level(i as u32);
                         let compressed_size = dst_format
                             .compressed_size(cur_extent.width as _, cur_extent.height as _);
                         mips.push(vec![0u8; compressed_size]);
                     }
+
+                    struct CompressTask {
+                        src: Vec<LdrTexel>,
+                        dst_ptr: *mut u8,
+                    }
+                    unsafe impl Send for CompressTask {}
+                    unsafe impl Sync for CompressTask {}
+
+                    let compress_task = exe_context
+                        .fork("compress")
+                        .init_iter(
+                            src_mips
+                                .into_iter()
+                                .zip(mips.iter_mut())
+                                .map(|(src, dst)| CompressTask {
+                                    src,
+                                    dst_ptr: dst.as_mut_ptr(),
+                                })
+                                .enumerate(),
+                            move |_, (i, task)| {
+                                let extent = base_extent.at_mip_level(i as u32);
+                                let compressed_size = dst_format
+                                    .compressed_size(extent.width as _, extent.height as _);
+                                let params = texpresso::Params {
+                                    //TODO: make this configurable
+                                    algorithm: texpresso::Algorithm::RangeFit,
+                                    ..Default::default()
+                                };
+                                let dst = unsafe {
+                                    slice::from_raw_parts_mut(task.dst_ptr, compressed_size)
+                                };
+                                let raw = unsafe {
+                                    slice::from_raw_parts(
+                                        task.src.as_ptr() as *const u8,
+                                        task.src.len() * 4,
+                                    )
+                                };
+                                dst_format.compress(
+                                    raw,
+                                    extent.width as _,
+                                    extent.height as _,
+                                    params,
+                                    dst,
+                                );
+                            },
+                        )
+                        .run();
+
+                    exe_context
+                        .fork("finish")
+                        .init(move |_| {
+                            cooker.finish(CookedImage {
+                                name: &[],
+                                extent: [base_extent.width, base_extent.height, base_extent.depth],
+                                format: TextureFormatWrap(meta.format),
+                                mips: mips.iter().map(|data| CookedMip { data }).collect(),
+                            });
+                        })
+                        .depend_on(&compress_task);
+                } else {
+                    let mips: Vec<Vec<u8>> = src_mips
+                        .into_iter()
+                        .map(|mip| mip.iter().flat_map(|texel| texel.iter().copied()).collect())
+                        .collect();
+                    cooker.finish(CookedImage {
+                        name: &[],
+                        extent: [base_extent.width, base_extent.height, base_extent.depth],
+                        format: TextureFormatWrap(meta.format),
+                        mips: mips.iter().map(|data| CookedMip { data }).collect(),
+                    });
                 }
-
-                struct CompressTask {
-                    src: Vec<LdrTexel>,
-                    dst_ptr: *mut u8,
-                }
-                unsafe impl Send for CompressTask {}
-                unsafe impl Sync for CompressTask {}
-
-                let compress_task = exe_context
-                    .fork("compress")
-                    .init_iter(
-                        src_mips
-                            .into_iter()
-                            .zip(mips.iter_mut())
-                            .map(|(src, dst)| CompressTask {
-                                src,
-                                dst_ptr: dst.as_mut_ptr(),
-                            })
-                            .enumerate(),
-                        move |_, (i, task)| {
-                            let extent = base_extent.at_mip_level(i as u32);
-                            let compressed_size =
-                                dst_format.compressed_size(extent.width as _, extent.height as _);
-                            let params = texpresso::Params {
-                                //TODO: make this configurable
-                                algorithm: texpresso::Algorithm::RangeFit,
-                                ..Default::default()
-                            };
-                            let dst =
-                                unsafe { slice::from_raw_parts_mut(task.dst_ptr, compressed_size) };
-                            let raw = unsafe {
-                                slice::from_raw_parts(
-                                    task.src.as_ptr() as *const u8,
-                                    task.src.len() * 4,
-                                )
-                            };
-                            dst_format.compress(
-                                raw,
-                                extent.width as _,
-                                extent.height as _,
-                                params,
-                                dst,
-                            );
-                        },
-                    )
-                    .run();
-
-                exe_context
-                    .fork("finish")
-                    .init(move |_| {
-                        cooker.finish(CookedImage {
-                            name: &[],
-                            extent: [base_extent.width, base_extent.height, base_extent.depth],
-                            format: TextureFormatWrap(meta.format),
-                            mips: mips.iter().map(|data| CookedMip { data }).collect(),
-                        });
-                    })
-                    .depend_on(&compress_task);
             }
             PlainData::Hdr(data) => {
                 //TODO: compress as BC6E
@@ -490,6 +516,8 @@ impl blade_asset::Baker for Baker {
             unsafe {
                 ptr::copy_nonoverlapping(mip.data.as_ptr(), stage.data(), mip.data.len());
             }
+            self.gpu_context
+                .sync_buffer(stage, blade_graphics::BufferTarget::Data);
 
             let block_info = image.format.0.block_info();
             let extent = base_extent.at_mip_level(i as u32);

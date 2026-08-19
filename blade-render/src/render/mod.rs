@@ -1,12 +1,12 @@
 mod debug;
 
-use crate::{CameraParams, DummyResources, EnvironmentMap};
+use crate::{CameraParams, DebugLine, DummyResources, EnvironmentMap, RenderConfig, Shaders};
 use debug::{DebugEntry, DebugVariance};
 
+pub use debug::DebugBlit;
 pub(crate) use debug::DebugRender;
-pub use debug::{DebugBlit, DebugLine, DebugPoint};
 
-use std::{collections::HashMap, mem, num::NonZeroU32, path::Path, ptr};
+use std::{collections::HashMap, mem, num::NonZeroU32, ptr};
 
 const MAX_RESOURCES: u32 = 8192;
 const RADIANCE_FORMAT: blade_graphics::TextureFormat = blade_graphics::TextureFormat::Rgba16Float;
@@ -27,20 +27,6 @@ fn mat3_transform(t_orig: &blade_graphics::Transform) -> glam::Mat3 {
         y_axis: t.y.into(),
         z_axis: t.z.into(),
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct RenderConfig {
-    pub surface_size: blade_graphics::Extent,
-    pub surface_info: blade_graphics::SurfaceInfo,
-    /// Color space to produce the image in, matching the one the
-    /// surface was configured with.
-    ///
-    /// `Linear` leaves the encoding to the platform, which is what an sRGB
-    /// surface format does for us. `Srgb` means the values are passed to the
-    /// display as they are, so we have to encode them ourselves.
-    pub color_space: blade_graphics::ColorSpace,
-    pub max_debug_lines: u32,
 }
 
 struct Samplers {
@@ -691,46 +677,6 @@ struct HitEntry {
     emissive_factor: [f32; 4],
 }
 
-#[derive(Clone, PartialEq)]
-pub struct Shaders {
-    pub(crate) env_prepare: blade_asset::Handle<crate::Shader>,
-    pub(crate) fill_gbuf: blade_asset::Handle<crate::Shader>,
-    pub(crate) ray_trace: blade_asset::Handle<crate::Shader>,
-    pub(crate) path_trace: blade_asset::Handle<crate::Shader>,
-    pub(crate) a_trous: blade_asset::Handle<crate::Shader>,
-    pub(crate) post_proc: blade_asset::Handle<crate::Shader>,
-    pub(crate) raster: blade_asset::Handle<crate::Shader>,
-    pub(crate) debug_draw: blade_asset::Handle<crate::Shader>,
-    pub(crate) debug_blit: blade_asset::Handle<crate::Shader>,
-}
-
-impl Shaders {
-    pub fn load(
-        path: &Path,
-        asset_hub: &crate::AssetHub,
-        ray_tracing: bool,
-    ) -> (Self, choir::RunningTask) {
-        let mut ctx = asset_hub.open_context(path, "shader finish");
-        let noop = if ray_tracing {
-            None
-        } else {
-            Some(ctx.load_shader("noop.wgsl"))
-        };
-        let shaders = Self {
-            env_prepare: noop.unwrap_or_else(|| ctx.load_shader("env-prepare.wgsl")),
-            fill_gbuf: noop.unwrap_or_else(|| ctx.load_shader("fill-gbuf.wgsl")),
-            ray_trace: noop.unwrap_or_else(|| ctx.load_shader("ray-trace.wgsl")),
-            path_trace: noop.unwrap_or_else(|| ctx.load_shader("path-trace.wgsl")),
-            a_trous: noop.unwrap_or_else(|| ctx.load_shader("a-trous.wgsl")),
-            post_proc: noop.unwrap_or_else(|| ctx.load_shader("post-proc.wgsl")),
-            raster: ctx.load_shader("raster.wgsl"),
-            debug_draw: ctx.load_shader("debug-draw.wgsl"),
-            debug_blit: ctx.load_shader("debug-blit.wgsl"),
-        };
-        (shaders, ctx.close())
-    }
-}
-
 struct ShaderPipelines {
     fill: blade_graphics::ComputePipeline,
     main: blade_graphics::ComputePipeline,
@@ -879,11 +825,7 @@ pub struct FrameConfig {
 }
 
 /// Temporary resources associated with a GPU frame.
-#[derive(Default)]
-pub struct FrameResources {
-    pub buffers: Vec<blade_graphics::Buffer>,
-    pub acceleration_structures: Vec<blade_graphics::AccelerationStructure>,
-}
+pub use crate::util::FrameResources;
 
 impl RayTracer {
     /// Create a new renderer with a given configuration.

@@ -18,33 +18,39 @@ mod env_map;
 pub use dummy::DummyResources;
 pub use env_map::EnvironmentMap;
 
-#[cfg(not(any(gles, target_arch = "wasm32")))]
 mod asset_hub;
-#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub mod model;
-#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub mod raster;
-#[cfg(not(any(gles, target_arch = "wasm32")))]
-mod render;
-#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub mod shader;
-#[cfg(not(any(gles, target_arch = "wasm32")))]
+mod shaders;
 pub mod texture;
-#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub mod util;
 
-#[cfg(not(any(gles, target_arch = "wasm32")))]
+mod render;
+
 pub use asset_hub::*;
-#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub use model::{Model, ProceduralGeometry};
-#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub use raster::{RasterConfig, Rasterizer};
-#[cfg(not(any(gles, target_arch = "wasm32")))]
-pub use render::*;
-#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub use shader::Shader;
-#[cfg(not(any(gles, target_arch = "wasm32")))]
+pub use shaders::{RenderConfig, Shaders};
 pub use texture::Texture;
+pub use util::FrameResources;
+
+pub use render::*;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DebugPoint {
+    pub pos: [f32; 3],
+    pub color: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DebugLine {
+    pub a: DebugPoint,
+    pub b: DebugPoint,
+}
 
 // Has to match the `Vertex` in shaders
 #[repr(C)]
@@ -77,7 +83,6 @@ pub struct Camera {
     pub fov: Option<Fov>,
 }
 
-#[cfg(not(any(gles, target_arch = "wasm32")))]
 pub struct Object {
     pub model: blade_asset::Handle<Model>,
     pub transform: blade_graphics::Transform,
@@ -87,7 +92,6 @@ pub struct Object {
     pub color_tint: [f32; 4],
 }
 
-#[cfg(not(any(gles, target_arch = "wasm32")))]
 impl From<blade_asset::Handle<Model>> for Object {
     fn from(model: blade_asset::Handle<Model>) -> Self {
         Self {
@@ -99,7 +103,6 @@ impl From<blade_asset::Handle<Model>> for Object {
     }
 }
 
-#[cfg(not(any(gles, target_arch = "wasm32")))]
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 struct CameraParams {

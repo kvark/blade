@@ -241,6 +241,10 @@ impl CooperativeMatrix {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Capabilities {
+    /// Compute pipeline support.
+    pub compute: bool,
+    /// Indirect draw command support.
+    pub indirect_draw: bool,
     /// Support binding arrays of handles.
     pub binding_array: bool,
     /// Which shader stages support ray queries.

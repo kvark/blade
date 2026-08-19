@@ -104,3 +104,82 @@ fn parse_wgsl() {
         }
     }
 }
+
+/// Keep the portable renderer within the GLSL ES 3.00 feature set exposed by
+/// WebGL2. WGSL validation alone does not catch backend-only resources such as
+/// shader-storage buffers.
+#[test]
+fn raster_exports_to_webgl2() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let shader_dir = root.join("blade-render").join("code");
+    let shader_raw = fs::read(shader_dir.join("raster.wgsl")).unwrap();
+    let cooker = blade_asset::Cooker::new(&shader_dir, Default::default());
+    let source = blade_render::shader::parse_shader(&shader_raw, &cooker, &HashMap::new());
+    let mut module =
+        wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+    let info = Validator::new(
+        naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS,
+        naga::valid::Capabilities::empty(),
+    )
+    .validate(&module)
+    .unwrap();
+
+    let vertex_ep_index = module
+        .entry_points
+        .iter()
+        .position(|ep| ep.name == "raster_vs")
+        .unwrap();
+    let vertex_ty = module.entry_points[vertex_ep_index].function.arguments[0].ty;
+    let mut ty = module.types[vertex_ty].clone();
+    let naga::TypeInner::Struct {
+        ref mut members, ..
+    } = ty.inner
+    else {
+        panic!("raster vertex input is not a struct");
+    };
+    for (location, member) in members.iter_mut().enumerate() {
+        member.binding = Some(naga::Binding::Location {
+            location: location as u32,
+            interpolation: None,
+            sampling: None,
+            blend_src: None,
+            per_primitive: false,
+        });
+    }
+    module.types.replace(vertex_ty, ty);
+
+    for entry_point in ["raster_vs", "raster_fs"] {
+        let stage = module
+            .entry_points
+            .iter()
+            .find(|ep| ep.name == entry_point)
+            .unwrap()
+            .stage;
+        let options = naga::back::glsl::Options {
+            version: naga::back::glsl::Version::Embedded {
+                version: 300,
+                is_webgl: true,
+            },
+            writer_flags: naga::back::glsl::WriterFlags::ADJUST_COORDINATE_SPACE,
+            binding_map: Default::default(),
+            zero_initialize_workgroup_memory: false,
+        };
+        let pipeline_options = naga::back::glsl::PipelineOptions {
+            shader_stage: stage,
+            entry_point: entry_point.to_string(),
+            multiview: None,
+        };
+        let mut glsl = String::new();
+        let mut writer = naga::back::glsl::Writer::new(
+            &mut glsl,
+            &module,
+            &info,
+            &options,
+            &pipeline_options,
+            Default::default(),
+        )
+        .unwrap();
+        writer.write().unwrap();
+        assert!(glsl.starts_with("#version 300 es"));
+    }
+}

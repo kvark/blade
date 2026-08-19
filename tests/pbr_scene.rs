@@ -3,7 +3,6 @@
 //! The columns vary the roughness, the rows vary the metalness,
 //! and the last row is emissive. Both the rasterizer and the ray tracer
 //! render it, so their results can be compared side by side.
-#![cfg(not(gles))]
 #![allow(dead_code)]
 
 use std::f32::consts::PI;

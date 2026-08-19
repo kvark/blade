@@ -121,6 +121,8 @@ struct AdapterCapabilities {
 impl AdapterCapabilities {
     fn to_capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
+            compute: true,
+            indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.ray_tracing {
                 Some(_) => crate::ShaderVisibility::all(),
@@ -1468,6 +1470,8 @@ impl super::Context {
 
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
+            compute: true,
+            indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.device.ray_tracing {
                 Some(_) => crate::ShaderVisibility::all(),
