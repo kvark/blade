@@ -18,6 +18,29 @@ fn conflate<T: PartialEq>(iter: impl Iterator<Item = T> + Clone) -> Box<[T]> {
     }
 }
 
+/// Naga names each UBO `{Type}_block_{id}{Stage}` independently per entry point.
+/// GLSL ES 3.00 / WebGL2 then fails to link when VS and FS expose the same field
+/// (`frame_params`) from two differently named blocks. Drop the stage suffix so
+/// matching structs share a block name. ES 3.20 uses `layout(binding=N)` instead
+/// and does not need this.
+fn strip_stage_from_uniform_block_names(
+    source: &mut String,
+    reflection: &mut glsl::ReflectionInfo,
+) {
+    for name in reflection.uniforms.values_mut() {
+        let stripped = name
+            .strip_suffix("Vertex")
+            .or_else(|| name.strip_suffix("Fragment"))
+            .or_else(|| name.strip_suffix("Compute"));
+        let Some(stripped) = stripped else {
+            continue;
+        };
+        let stripped = stripped.to_string();
+        *source = source.replace(name.as_str(), &stripped);
+        *name = stripped;
+    }
+}
+
 impl super::Context {
     unsafe fn create_pipeline(
         &self,
@@ -171,7 +194,10 @@ impl super::Context {
                     Default::default(),
                 )
                 .unwrap();
-                let reflection = writer.write().unwrap();
+                let mut reflection = writer.write().unwrap();
+                if !force_explicit_bindings {
+                    strip_stage_from_uniform_block_names(&mut source, &mut reflection);
+                }
 
                 log::debug!(
                     "Naga generated shader for entry point '{}' and stage {:?}\n{}",

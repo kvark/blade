@@ -148,6 +148,7 @@ fn raster_exports_to_webgl2() {
     }
     module.types.replace(vertex_ty, ty);
 
+    let mut stage_blocks: Vec<Vec<String>> = Vec::new();
     for entry_point in ["raster_vs", "raster_fs"] {
         let stage = module
             .entry_points
@@ -179,7 +180,27 @@ fn raster_exports_to_webgl2() {
             Default::default(),
         )
         .unwrap();
-        writer.write().unwrap();
+        let mut reflection = writer.write().unwrap();
+        // Mirror blade-graphics GLES ES 3.00: drop Naga's per-stage UBO suffix
+        // so VS/FS share a block name. WebGL2 will not link otherwise.
+        for name in reflection.uniforms.values_mut() {
+            let stripped = name
+                .strip_suffix("Vertex")
+                .or_else(|| name.strip_suffix("Fragment"))
+                .or_else(|| name.strip_suffix("Compute"));
+            if let Some(stripped) = stripped {
+                let stripped = stripped.to_string();
+                glsl = glsl.replace(name.as_str(), &stripped);
+                *name = stripped;
+            }
+        }
         assert!(glsl.starts_with("#version 300 es"));
+        let mut blocks: Vec<String> = reflection.uniforms.values().cloned().collect();
+        blocks.sort();
+        stage_blocks.push(blocks);
     }
+    assert_eq!(
+        stage_blocks[0], stage_blocks[1],
+        "WebGL2 requires matching uniform block names in vertex and fragment shaders"
+    );
 }
