@@ -181,20 +181,16 @@ fn raster_exports_to_webgl2() {
         )
         .unwrap();
         let mut reflection = writer.write().unwrap();
-        // Mirror blade-graphics GLES ES 3.00: drop Naga's per-stage UBO suffix
-        // so VS/FS share a block name. WebGL2 will not link otherwise.
-        for name in reflection.uniforms.values_mut() {
-            let stripped = name
-                .strip_suffix("Vertex")
-                .or_else(|| name.strip_suffix("Fragment"))
-                .or_else(|| name.strip_suffix("Compute"));
-            if let Some(stripped) = stripped {
-                let stripped = stripped.to_string();
-                glsl = glsl.replace(name.as_str(), &stripped);
-                *name = stripped;
-            }
-        }
+        unify_uniform_block_names(&mut glsl, &mut reflection, &module);
         assert!(glsl.starts_with("#version 300 es"));
+        for (&handle, glsl_name) in reflection.uniforms.iter() {
+            let var_name = module.global_variables[handle].name.as_deref().unwrap();
+            assert_eq!(
+                glsl_name.as_str(),
+                format!("{}_block", var_name.trim_end_matches('_')),
+                "block name for '{var_name}' should come from the IR global, not naga's generated identifier"
+            );
+        }
         let mut blocks: Vec<String> = reflection.uniforms.values().cloned().collect();
         blocks.sort();
         stage_blocks.push(blocks);
@@ -203,4 +199,24 @@ fn raster_exports_to_webgl2() {
         stage_blocks[0], stage_blocks[1],
         "WebGL2 requires matching uniform block names in vertex and fragment shaders"
     );
+}
+
+/// Mirrors `blade_graphics` GLES `unify_uniform_block_names`: treat naga's
+/// generated identifier as opaque and replace it with a name taken from the
+/// IR global that `ReflectionInfo::uniforms` points at.
+fn unify_uniform_block_names(
+    glsl: &mut String,
+    reflection: &mut naga::back::glsl::ReflectionInfo,
+    module: &naga::Module,
+) {
+    for (&handle, glsl_name) in reflection.uniforms.iter_mut() {
+        let Some(ref var_name) = module.global_variables[handle].name else {
+            continue;
+        };
+        let block_name = format!("{}_block", var_name.trim_end_matches('_'));
+        if glsl_name.as_str() != block_name {
+            *glsl = glsl.replacen(glsl_name.as_str(), &block_name, 1);
+            *glsl_name = block_name;
+        }
+    }
 }

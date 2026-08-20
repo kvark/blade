@@ -18,26 +18,36 @@ fn conflate<T: PartialEq>(iter: impl Iterator<Item = T> + Clone) -> Box<[T]> {
     }
 }
 
-/// Naga names each UBO `{Type}_block_{id}{Stage}` independently per entry point.
-/// GLSL ES 3.00 / WebGL2 then fails to link when VS and FS expose the same field
-/// (`frame_params`) from two differently named blocks. Drop the stage suffix so
-/// matching structs share a block name. ES 3.20 uses `layout(binding=N)` instead
-/// and does not need this.
-fn strip_stage_from_uniform_block_names(
+/// WebGL2 / GLSL ES 3.00 links uniform blocks by name. Naga's GLSL backend
+/// names each block independently per entry point, so the same IR global
+/// becomes two different identifiers in VS and FS and the program fails to
+/// link ("Ambiguous field 'frame_params' in blocks … which don't have
+/// instance names").
+///
+/// [`glsl::ReflectionInfo::uniforms`] already maps each IR global to the
+/// identifier naga actually wrote. Rename those identifiers to a stable name
+/// taken from the global itself so both stages agree. The generated string is
+/// treated as opaque; we do not parse naga's `{Type}_block_{id}{Stage}` format.
+fn unify_uniform_block_names(
     source: &mut String,
     reflection: &mut glsl::ReflectionInfo,
+    module: &naga::Module,
 ) {
-    for name in reflection.uniforms.values_mut() {
-        let stripped = name
-            .strip_suffix("Vertex")
-            .or_else(|| name.strip_suffix("Fragment"))
-            .or_else(|| name.strip_suffix("Compute"));
-        let Some(stripped) = stripped else {
+    for (&handle, glsl_name) in reflection.uniforms.iter_mut() {
+        let Some(ref var_name) = module.global_variables[handle].name else {
             continue;
         };
-        let stripped = stripped.to_string();
-        *source = source.replace(name.as_str(), &stripped);
-        *name = stripped;
+        // Block name and member name live in different GLSL namespaces, but
+        // keep a `_block` suffix so a `glGetUniformBlockIndex` query cannot
+        // be confused with the member that occupies the global scope of an
+        // unnamed block. Trim a trailing `_` so we don't emit `__`, which is
+        // reserved in GLSL.
+        let block_name = format!("{}_block", var_name.trim_end_matches('_'));
+        if glsl_name.as_str() == block_name {
+            continue;
+        }
+        *source = source.replacen(glsl_name.as_str(), &block_name, 1);
+        *glsl_name = block_name;
     }
 }
 
@@ -196,7 +206,7 @@ impl super::Context {
                 .unwrap();
                 let mut reflection = writer.write().unwrap();
                 if !force_explicit_bindings {
-                    strip_stage_from_uniform_block_names(&mut source, &mut reflection);
+                    unify_uniform_block_names(&mut source, &mut reflection, &module);
                 }
 
                 log::debug!(
