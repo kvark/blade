@@ -11,15 +11,13 @@ struct Uniforms {
 };
 var<uniform> r_uniforms: Uniforms;
 
-//Note: avoiding `vec2<f32>` in order to keep the scalar alignment
+// Matches epaint::Vertex (pos, uv, color) so we can fetch from a vertex buffer
+// instead of a storage buffer — WebGL2 has no SSBOs.
 struct Vertex {
-    pos_x: f32,
-    pos_y: f32,
-    tex_coord_x: f32,
-    tex_coord_y: f32,
+    pos: vec2<f32>,
+    uv: vec2<f32>,
     color: u32,
 }
-var<storage, read> r_vertex_data: array<Vertex>;
 
 fn linear_from_gamma(srgb: vec3<f32>) -> vec3<f32> {
     let cutoff = srgb < vec3<f32>(0.04045);
@@ -29,16 +27,13 @@ fn linear_from_gamma(srgb: vec3<f32>) -> vec3<f32> {
 }
 
 @vertex
-fn vs_main(
-    @builtin(vertex_index) v_index: u32,
-) -> VertexOutput {
-    let input = r_vertex_data[v_index];
+fn vs_main(input: Vertex) -> VertexOutput {
     var out: VertexOutput;
-    out.tex_coord = vec2<f32>(input.tex_coord_x, input.tex_coord_y);
+    out.tex_coord = input.uv;
     out.color = unpack4x8unorm(input.color);
     out.position = vec4<f32>(
-        2.0 * input.pos_x / r_uniforms.screen_size.x - 1.0,
-        1.0 - 2.0 * input.pos_y / r_uniforms.screen_size.y,
+        2.0 * input.pos.x / r_uniforms.screen_size.x - 1.0,
+        1.0 - 2.0 * input.pos.y / r_uniforms.screen_size.y,
         0.0,
         1.0,
     );

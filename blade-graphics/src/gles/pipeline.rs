@@ -18,6 +18,39 @@ fn conflate<T: PartialEq>(iter: impl Iterator<Item = T> + Clone) -> Box<[T]> {
     }
 }
 
+/// WebGL2 / GLSL ES 3.00 links uniform blocks by name. Naga's GLSL backend
+/// names each block independently per entry point, so the same IR global
+/// becomes two different identifiers in VS and FS and the program fails to
+/// link ("Ambiguous field 'frame_params' in blocks … which don't have
+/// instance names").
+///
+/// [`glsl::ReflectionInfo::uniforms`] already maps each IR global to the
+/// identifier naga actually wrote. Rename those identifiers to a stable name
+/// taken from the global itself so both stages agree. The generated string is
+/// treated as opaque; we do not parse naga's `{Type}_block_{id}{Stage}` format.
+fn unify_uniform_block_names(
+    source: &mut String,
+    reflection: &mut glsl::ReflectionInfo,
+    module: &naga::Module,
+) {
+    for (&handle, glsl_name) in reflection.uniforms.iter_mut() {
+        let Some(ref var_name) = module.global_variables[handle].name else {
+            continue;
+        };
+        // Block name and member name live in different GLSL namespaces, but
+        // keep a `_block` suffix so a `glGetUniformBlockIndex` query cannot
+        // be confused with the member that occupies the global scope of an
+        // unnamed block. Trim a trailing `_` so we don't emit `__`, which is
+        // reserved in GLSL.
+        let block_name = format!("{}_block", var_name.trim_end_matches('_'));
+        if glsl_name.as_str() == block_name {
+            continue;
+        }
+        *source = source.replacen(glsl_name.as_str(), &block_name, 1);
+        *glsl_name = block_name;
+    }
+}
+
 impl super::Context {
     unsafe fn create_pipeline(
         &self,
@@ -171,7 +204,10 @@ impl super::Context {
                     Default::default(),
                 )
                 .unwrap();
-                let reflection = writer.write().unwrap();
+                let mut reflection = writer.write().unwrap();
+                if !force_explicit_bindings {
+                    unify_uniform_block_names(&mut source, &mut reflection, &module);
+                }
 
                 log::debug!(
                     "Naga generated shader for entry point '{}' and stage {:?}\n{}",
