@@ -231,7 +231,11 @@ impl RasterPipelines {
                     clamp: 0.0,
                 },
             }),
-            fragment: None,
+            fragment: if cfg!(gles) {
+                Some(shader.at("raster_shadow_fs"))
+            } else {
+                None
+            },
             color_targets: &[],
             multisample_state: gpu::MultisampleState::default(),
         })
