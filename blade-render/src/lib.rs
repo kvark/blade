@@ -30,7 +30,7 @@ mod render;
 
 pub use asset_hub::*;
 pub use model::{Model, ProceduralGeometry};
-pub use raster::{RasterConfig, Rasterizer};
+pub use raster::{DirectionalShadowConfig, RasterConfig, Rasterizer};
 pub use shader::Shader;
 pub use shaders::{RenderConfig, Shaders};
 pub use texture::Texture;

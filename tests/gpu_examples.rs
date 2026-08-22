@@ -29,11 +29,13 @@ const SHADER_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/blade-render/code
 struct SkyFrameParams {
     view_proj: [f32; 16],
     inv_view_proj: [f32; 16],
+    light_view_proj: [f32; 16],
     camera_pos: [f32; 4],
     light_dir: [f32; 4],
     light_color: [f32; 4],
     ambient_color: [f32; 4],
     settings: [f32; 4],
+    shadow_params: [f32; 4],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -723,12 +725,14 @@ fn snapshot_space_sky() {
     let frame_params = SkyFrameParams {
         view_proj: view_proj.to_cols_array(),
         inv_view_proj: inv_view_proj.to_cols_array(),
+        light_view_proj: glam::Mat4::IDENTITY.to_cols_array(),
         camera_pos: [0.0, 0.0, 0.0, 1.0],
         light_dir: [0.0, -1.0, 0.0, 0.0],
         light_color: [1.0, 1.0, 1.0, 0.0],
         ambient_color: [0.0, 0.0, 0.0, 1.0], // w=1.0 -> space_sky mode
         // x=0: no environment map, y=1: encode for a non-sRGB surface
         settings: [0.0, 1.0, 0.0, 0.0],
+        shadow_params: [0.0; 4],
     };
 
     // Render
@@ -918,6 +922,29 @@ fn snapshot_pbr_raster() {
         .asset_hub
         .flush(&mut command_encoder, &mut temp_buffers);
 
+    let raster_config = blade_render::RasterConfig {
+        light_dir: mint::Vector3 {
+            x: 0.4,
+            y: 0.5,
+            z: 1.0,
+        },
+        // Exercise the depth prepass and shadow resource bindings without changing
+        // this material-reference snapshot's expected lighting.
+        directional_shadows: Some(blade_render::DirectionalShadowConfig {
+            resolution: 512,
+            strength: 0.0,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    rasterizer.render_directional_shadows(
+        &mut command_encoder,
+        &pbr_scene::camera(),
+        &objects,
+        &harness.asset_hub,
+        raster_config,
+    );
+
     command_encoder.init_texture(target.texture);
     command_encoder.init_texture(rasterizer.depth_texture());
     if let mut pass = command_encoder.render(
@@ -941,14 +968,7 @@ fn snapshot_pbr_raster() {
             &objects,
             &harness.asset_hub,
             None,
-            blade_render::RasterConfig {
-                light_dir: mint::Vector3 {
-                    x: 0.4,
-                    y: 0.5,
-                    z: 1.0,
-                },
-                ..Default::default()
-            },
+            raster_config,
         );
     }
 
