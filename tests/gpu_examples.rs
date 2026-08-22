@@ -918,6 +918,29 @@ fn snapshot_pbr_raster() {
         .asset_hub
         .flush(&mut command_encoder, &mut temp_buffers);
 
+    let raster_config = blade_render::RasterConfig {
+        light_dir: mint::Vector3 {
+            x: 0.4,
+            y: 0.5,
+            z: 1.0,
+        },
+        // Exercise the depth prepass and shadow resource bindings without changing
+        // this material-reference snapshot's expected lighting.
+        directional_shadows: Some(blade_render::DirectionalShadowConfig {
+            resolution: 512,
+            strength: 0.0,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    rasterizer.render_directional_shadows(
+        &mut command_encoder,
+        &pbr_scene::camera(),
+        &objects,
+        &harness.asset_hub,
+        raster_config,
+    );
+
     command_encoder.init_texture(target.texture);
     command_encoder.init_texture(rasterizer.depth_texture());
     if let mut pass = command_encoder.render(
@@ -941,14 +964,7 @@ fn snapshot_pbr_raster() {
             &objects,
             &harness.asset_hub,
             None,
-            blade_render::RasterConfig {
-                light_dir: mint::Vector3 {
-                    x: 0.4,
-                    y: 0.5,
-                    z: 1.0,
-                },
-                ..Default::default()
-            },
+            raster_config,
         );
     }
 

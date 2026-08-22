@@ -15,6 +15,35 @@ pub struct RasterConfig {
     pub ambient_color: mint::Vector3<f32>,
     /// When true, the sky fallback renders stars instead of a blue gradient.
     pub space_sky: bool,
+    /// Optional real-time directional shadow-map effect.
+    pub directional_shadows: Option<DirectionalShadowConfig>,
+}
+
+/// Controls the rasterizer's camera-relative directional shadow map.
+#[derive(Clone, Copy, Debug)]
+pub struct DirectionalShadowConfig {
+    /// Width and height of the square shadow map.
+    pub resolution: u32,
+    /// Half-width of the shadowed world-space region around the camera.
+    pub distance: f32,
+    /// Total depth captured along the light direction.
+    pub depth: f32,
+    /// Fraction of direct lighting removed in full shadow.
+    pub strength: f32,
+    /// World-space receiver offset along its shading normal.
+    pub normal_bias: f32,
+}
+
+impl Default for DirectionalShadowConfig {
+    fn default() -> Self {
+        Self {
+            resolution: 512,
+            distance: 70.0,
+            depth: 240.0,
+            strength: 0.88,
+            normal_bias: 0.06,
+        }
+    }
 }
 
 impl Default for RasterConfig {
@@ -37,6 +66,7 @@ impl Default for RasterConfig {
                 z: 0.05,
             },
             space_sky: false,
+            directional_shadows: None,
         }
     }
 }
@@ -46,11 +76,13 @@ impl Default for RasterConfig {
 struct RasterFrameParams {
     view_proj: [f32; 16],
     inv_view_proj: [f32; 16],
+    light_view_proj: [f32; 16],
     camera_pos: [f32; 4],
     light_dir: [f32; 4],
     light_color: [f32; 4],
     ambient_color: [f32; 4],
     settings: [f32; 4],
+    shadow_params: [f32; 4],
 }
 
 #[repr(C)]
@@ -63,6 +95,18 @@ struct RasterDrawParams {
     material: [f32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct ShadowFrameParams {
+    light_view_proj: [f32; 16],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct ShadowDrawParams {
+    model: [f32; 16],
+}
+
 #[derive(blade_macros::ShaderData)]
 struct RasterMainData {
     frame_params: RasterFrameParams,
@@ -72,6 +116,14 @@ struct RasterMainData {
     normal_tex: gpu::TextureView,
     metallic_roughness_tex: gpu::TextureView,
     emissive_tex: gpu::TextureView,
+    shadow_samp: gpu::Sampler,
+    shadow_tex: gpu::TextureView,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct RasterShadowData {
+    shadow_frame_params: ShadowFrameParams,
+    shadow_draw_params: ShadowDrawParams,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -84,6 +136,7 @@ struct RasterSkyData {
 struct RasterPipelines {
     main: gpu::RenderPipeline,
     sky: gpu::RenderPipeline,
+    shadow: gpu::RenderPipeline,
 }
 
 impl RasterPipelines {
@@ -150,6 +203,40 @@ impl RasterPipelines {
         })
     }
 
+    fn create_shadow(shader: &gpu::Shader, gpu: &gpu::Context) -> gpu::RenderPipeline {
+        shader.check_struct_size::<ShadowFrameParams>();
+        shader.check_struct_size::<ShadowDrawParams>();
+        let shadow_layout = <RasterShadowData as gpu::ShaderData>::layout();
+        let vertex_layout = <Vertex as gpu::Vertex>::layout();
+        gpu.create_render_pipeline(gpu::RenderPipelineDesc {
+            name: "raster-shadow",
+            data_layouts: &[&shadow_layout],
+            vertex: shader.at("raster_shadow_vs"),
+            vertex_fetches: &[gpu::VertexFetchState {
+                layout: &vertex_layout,
+                instanced: false,
+            }],
+            primitive: gpu::PrimitiveState {
+                topology: gpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: Some(gpu::DepthStencilState {
+                format: gpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: gpu::CompareFunction::Less,
+                stencil: gpu::StencilState::default(),
+                bias: gpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+            }),
+            fragment: None,
+            color_targets: &[],
+            multisample_state: gpu::MultisampleState::default(),
+        })
+    }
+
     fn init(
         shaders: &Shaders,
         config: &RenderConfig,
@@ -160,6 +247,7 @@ impl RasterPipelines {
         Ok(Self {
             main: Self::create_main(shader, config.surface_info, gpu),
             sky: Self::create_sky(shader, config.surface_info, gpu),
+            shadow: Self::create_shadow(shader, gpu),
         })
     }
 }
@@ -168,10 +256,14 @@ pub struct Rasterizer {
     shaders: Shaders,
     pipelines: RasterPipelines,
     sampler_linear: gpu::Sampler,
+    sampler_shadow: gpu::Sampler,
     debug: Option<crate::render::DebugRender>,
     dummy: DummyResources,
     depth_texture: gpu::Texture,
     depth_view: gpu::TextureView,
+    shadow_texture: gpu::Texture,
+    shadow_view: gpu::TextureView,
+    shadow_size: u32,
     surface_size: gpu::Extent,
     surface_info: gpu::SurfaceInfo,
     color_space: gpu::ColorSpace,
@@ -214,16 +306,31 @@ impl Rasterizer {
             mipmap_filter: gpu::FilterMode::Linear,
             ..Default::default()
         });
+        let sampler_shadow = gpu.create_sampler(gpu::SamplerDesc {
+            name: "raster-shadow",
+            address_modes: [gpu::AddressMode::ClampToEdge; 3],
+            mag_filter: gpu::FilterMode::Linear,
+            min_filter: gpu::FilterMode::Linear,
+            mipmap_filter: gpu::FilterMode::Nearest,
+            compare: Some(gpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
         let (depth_texture, depth_view) = Self::create_depth_target(config.surface_size, gpu);
-
+        // The engine can safely replace this default when raster configuration changes.
+        let shadow_size = DirectionalShadowConfig::default().resolution;
+        let (shadow_texture, shadow_view) = Self::create_shadow_target(shadow_size, gpu);
         Self {
             shaders,
             pipelines,
             sampler_linear,
+            sampler_shadow,
             debug,
             dummy,
             depth_texture,
             depth_view,
+            shadow_texture,
+            shadow_view,
+            shadow_size,
             surface_size: config.surface_size,
             surface_info: config.surface_info,
             color_space: config.color_space,
@@ -237,9 +344,13 @@ impl Rasterizer {
         self.dummy.destroy(gpu);
         gpu.destroy_texture_view(self.depth_view);
         gpu.destroy_texture(self.depth_texture);
+        gpu.destroy_texture_view(self.shadow_view);
+        gpu.destroy_texture(self.shadow_texture);
         gpu.destroy_sampler(self.sampler_linear);
+        gpu.destroy_sampler(self.sampler_shadow);
         gpu.destroy_render_pipeline(&mut self.pipelines.main);
         gpu.destroy_render_pipeline(&mut self.pipelines.sky);
+        gpu.destroy_render_pipeline(&mut self.pipelines.shadow);
     }
 
     #[profiling::function]
@@ -269,6 +380,7 @@ impl Rasterizer {
         {
             self.pipelines.main = RasterPipelines::create_main(shader, self.surface_info, gpu);
             self.pipelines.sky = RasterPipelines::create_sky(shader, self.surface_info, gpu);
+            self.pipelines.shadow = RasterPipelines::create_shadow(shader, gpu);
         }
 
         true
@@ -286,6 +398,23 @@ impl Rasterizer {
         self.depth_texture
     }
 
+    pub fn directional_shadow_resolution(&self) -> u32 {
+        self.shadow_size
+    }
+
+    /// Resize the shadow map. The caller must ensure earlier GPU work using the
+    /// map has completed; `blade-engine::Engine::set_raster_config` does this.
+    pub fn set_directional_shadow_resolution(&mut self, size: u32, gpu: &gpu::Context) {
+        let size = size.clamp(256, 4096);
+        if size == self.shadow_size {
+            return;
+        }
+        gpu.destroy_texture_view(self.shadow_view);
+        gpu.destroy_texture(self.shadow_texture);
+        (self.shadow_texture, self.shadow_view) = Self::create_shadow_target(size, gpu);
+        self.shadow_size = size;
+    }
+
     pub fn resize_screen(
         &mut self,
         size: gpu::Extent,
@@ -301,6 +430,73 @@ impl Rasterizer {
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;
         self.surface_size = size;
+    }
+
+    /// Render the directional-light depth prepass used by the main raster pass.
+    ///
+    /// Keeping this as an explicit encoder-level operation lets `blade-engine`
+    /// schedule additional effects before it opens the final color render pass.
+    #[profiling::function]
+    pub fn render_directional_shadows(
+        &self,
+        encoder: &mut gpu::CommandEncoder,
+        camera: &crate::Camera,
+        objects: &[Object],
+        asset_hub: &AssetHub,
+        config: RasterConfig,
+    ) {
+        let Some(shadow_config) = config.directional_shadows else {
+            return;
+        };
+        let light_view_proj = make_light_view_proj(camera, config.light_dir, shadow_config);
+        encoder.init_texture(self.shadow_texture);
+        if let mut pass = encoder.render(
+            "directional shadows",
+            gpu::RenderTargetSet {
+                colors: &[],
+                depth_stencil: Some(gpu::RenderTarget {
+                    view: self.shadow_view,
+                    init_op: gpu::InitOp::Clear(gpu::TextureColor::White),
+                    finish_op: gpu::FinishOp::Store,
+                }),
+            },
+        ) {
+            let mut pc = pass.with(&self.pipelines.shadow);
+            for object in objects {
+                let model = &asset_hub.models[object.model];
+                let object_transform = mat4_transform(&object.transform);
+                for geometry in &model.geometries {
+                    let world_transform = object_transform * mat4_transform(&geometry.transform);
+                    pc.bind(
+                        0,
+                        &RasterShadowData {
+                            shadow_frame_params: ShadowFrameParams {
+                                light_view_proj: light_view_proj.to_cols_array(),
+                            },
+                            shadow_draw_params: ShadowDrawParams {
+                                model: world_transform.to_cols_array(),
+                            },
+                        },
+                    );
+                    let vertex_count = geometry.vertex_range.end - geometry.vertex_range.start;
+                    let index_count = geometry.triangle_count * 3;
+                    let vertex_offset =
+                        geometry.vertex_range.start as u64 * mem::size_of::<Vertex>() as u64;
+                    pc.bind_vertex(0, model.vertex_buffer.at(vertex_offset));
+                    match geometry.index_type {
+                        Some(index_type) => pc.draw_indexed(
+                            model.index_buffer.at(geometry.index_offset),
+                            index_type,
+                            index_count,
+                            0,
+                            0,
+                            1,
+                        ),
+                        None => pc.draw(0, vertex_count, 0, 1),
+                    }
+                }
+            }
+        }
     }
 
     #[profiling::function]
@@ -380,28 +576,25 @@ impl Rasterizer {
                                 material.metallic_roughness_texture,
                             ),
                             emissive_tex: texture_or_white(material.emissive_texture),
+                            shadow_samp: self.sampler_shadow,
+                            shadow_tex: self.shadow_view,
                         },
                     );
-
                     let vertex_count = geometry.vertex_range.end - geometry.vertex_range.start;
                     let index_count = geometry.triangle_count * 3;
                     let vertex_offset =
                         geometry.vertex_range.start as u64 * mem::size_of::<Vertex>() as u64;
                     pc.bind_vertex(0, model.vertex_buffer.at(vertex_offset));
                     match geometry.index_type {
-                        Some(index_type) => {
-                            pc.draw_indexed(
-                                model.index_buffer.at(geometry.index_offset),
-                                index_type,
-                                index_count,
-                                0,
-                                0,
-                                1,
-                            );
-                        }
-                        None => {
-                            pc.draw(0, vertex_count, 0, 1);
-                        }
+                        Some(index_type) => pc.draw_indexed(
+                            model.index_buffer.at(geometry.index_offset),
+                            index_type,
+                            index_count,
+                            0,
+                            0,
+                            1,
+                        ),
+                        None => pc.draw(0, vertex_count, 0, 1),
                     }
                 }
             }
@@ -491,6 +684,34 @@ impl Rasterizer {
         (texture, view)
     }
 
+    fn create_shadow_target(size: u32, gpu: &gpu::Context) -> (gpu::Texture, gpu::TextureView) {
+        let texture = gpu.create_texture(gpu::TextureDesc {
+            name: "directional shadow map",
+            size: gpu::Extent {
+                width: size,
+                height: size,
+                depth: 1,
+            },
+            format: gpu::TextureFormat::Depth32Float,
+            array_layer_count: 1,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: gpu::TextureDimension::D2,
+            usage: gpu::TextureUsage::TARGET | gpu::TextureUsage::RESOURCE,
+            external: None,
+        });
+        let view = gpu.create_texture_view(
+            texture,
+            gpu::TextureViewDesc {
+                name: "directional shadow map",
+                format: gpu::TextureFormat::Depth32Float,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &gpu::TextureSubresources::default(),
+            },
+        );
+        (texture, view)
+    }
+
     fn make_camera_params(&self, camera: &crate::Camera) -> CameraParams {
         let fov_x = 2.0
             * ((camera.fov_y * 0.5).tan() * self.surface_size.width as f32
@@ -542,9 +763,15 @@ impl Rasterizer {
         let view_proj = proj * view;
         let inv_view_proj = view_proj.inverse();
         let light_dir = glam::Vec3::from(config.light_dir).normalize_or_zero();
+        let light_view_proj = config
+            .directional_shadows
+            .map(|shadow| make_light_view_proj(camera, config.light_dir, shadow))
+            .unwrap_or(glam::Mat4::IDENTITY);
+        let shadow = config.directional_shadows.unwrap_or_default();
         RasterFrameParams {
             view_proj: view_proj.to_cols_array(),
             inv_view_proj: inv_view_proj.to_cols_array(),
+            light_view_proj: light_view_proj.to_cols_array(),
             camera_pos: [pos.x, pos.y, pos.z, 1.0],
             light_dir: [light_dir.x, light_dir.y, light_dir.z, 0.0],
             light_color: {
@@ -562,8 +789,39 @@ impl Rasterizer {
                 0.0,
                 0.0,
             ],
+            shadow_params: [
+                config.directional_shadows.is_some() as u32 as f32,
+                shadow.strength.clamp(0.0, 1.0),
+                shadow.normal_bias.max(0.0),
+                1.0 / self.shadow_size as f32,
+            ],
         }
     }
+}
+
+fn make_light_view_proj(
+    camera: &crate::Camera,
+    light_dir: mint::Vector3<f32>,
+    config: DirectionalShadowConfig,
+) -> glam::Mat4 {
+    let center = glam::Vec3::from(camera.pos);
+    let light_dir = glam::Vec3::from(light_dir).normalize_or_zero();
+    let light_dir = if light_dir.length_squared() > 1e-5 {
+        light_dir
+    } else {
+        glam::Vec3::Y
+    };
+    let depth = config.depth.max(2.0);
+    let extent = config.distance.max(1.0);
+    let eye = center + light_dir * (depth * 0.5);
+    let up = if light_dir.dot(glam::Vec3::Y).abs() < 0.95 {
+        glam::Vec3::Y
+    } else {
+        glam::Vec3::Z
+    };
+    let view = glam::Mat4::look_at_rh(eye, center, up);
+    let projection = glam::Mat4::orthographic_rh(-extent, extent, -extent, extent, 0.1, depth);
+    projection * view
 }
 
 impl gpu::Vertex for Vertex {

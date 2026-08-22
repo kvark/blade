@@ -4,6 +4,7 @@
 struct RasterFrameParams {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
+    light_view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
     // direction towards the light
     light_dir: vec4<f32>,
@@ -12,6 +13,8 @@ struct RasterFrameParams {
     ambient_color: vec4<f32>,
     // x: environment map enabled, y: the surface needs sRGB encoding
     settings: vec4<f32>,
+    // x: enabled, y: strength, z: receiver normal bias, w: texel size
+    shadow_params: vec4<f32>,
 }
 
 struct RasterDrawParams {
@@ -21,6 +24,14 @@ struct RasterDrawParams {
     emissive_factor: vec4<f32>,
     // x: normal scale, y: metalness, z: roughness
     material: vec4<f32>,
+}
+
+struct ShadowFrameParams {
+    light_view_proj: mat4x4<f32>,
+}
+
+struct ShadowDrawParams {
+    model: mat4x4<f32>,
 }
 
 struct Vertex {
@@ -48,6 +59,17 @@ var normal_tex: texture_2d<f32>;
 // green channel is roughness, blue channel is metalness
 var metallic_roughness_tex: texture_2d<f32>;
 var emissive_tex: texture_2d<f32>;
+var shadow_samp: sampler_comparison;
+var shadow_tex: texture_depth_2d;
+
+var<uniform> shadow_frame_params: ShadowFrameParams;
+var<uniform> shadow_draw_params: ShadowDrawParams;
+
+@vertex
+fn raster_shadow_vs(input: Vertex) -> @builtin(position) vec4<f32> {
+    let world = shadow_draw_params.model * vec4<f32>(input.position, 1.0);
+    return shadow_frame_params.light_view_proj * world;
+}
 
 fn decode_normal(raw: u32) -> vec3<f32> {
     return unpack4x8snorm(raw).xyz;
@@ -79,6 +101,30 @@ fn map_equirect_dir_to_uv(dir: vec3<f32>) -> vec2<f32> {
     return vec2<f32>((yaw / PI + 1.0) * 0.5, pitch / PI + 0.5);
 }
 
+fn directional_shadow(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
+    if (frame_params.shadow_params.x < 0.5) {
+        return 1.0;
+    }
+    let receiver = world_pos + n * frame_params.shadow_params.z;
+    let clip = frame_params.light_view_proj * vec4<f32>(receiver, 1.0);
+    let ndc = clip.xyz / clip.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (ndc.z <= 0.0 || ndc.z >= 1.0 || any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
+        return 1.0;
+    }
+
+    // Four bilinear comparison samples give a compact 4x4 percentage-closer filter.
+    let texel = frame_params.shadow_params.w;
+    let reference = ndc.z;
+    var visibility = 0.0;
+    visibility += textureSampleCompare(shadow_tex, shadow_samp, uv + vec2<f32>(-0.75, -0.75) * texel, reference);
+    visibility += textureSampleCompare(shadow_tex, shadow_samp, uv + vec2<f32>( 0.75, -0.75) * texel, reference);
+    visibility += textureSampleCompare(shadow_tex, shadow_samp, uv + vec2<f32>(-0.75,  0.75) * texel, reference);
+    visibility += textureSampleCompare(shadow_tex, shadow_samp, uv + vec2<f32>( 0.75,  0.75) * texel, reference);
+    visibility *= 0.25;
+    return mix(1.0, visibility, frame_params.shadow_params.y);
+}
+
 @fragment
 fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let mr_sample = textureSample(metallic_roughness_tex, samp, input.uv);
@@ -104,7 +150,8 @@ fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let l = normalize(frame_params.light_dir.xyz);
 
     let brdf = evaluate_brdf(mat, n, v, l);
-    let light = (mat.diffuse_albedo * brdf.diffuse + brdf.specular) * frame_params.light_color.xyz;
+    let visibility = directional_shadow(input.world_pos, n);
+    let light = (mat.diffuse_albedo * brdf.diffuse + brdf.specular) * frame_params.light_color.xyz * visibility;
     let ambient = evaluate_ambient(mat) * frame_params.ambient_color.xyz;
     let emissive = draw_params.emissive_factor.rgb * textureSample(emissive_tex, samp, input.uv).rgb;
     let color = ambient + light + emissive;
