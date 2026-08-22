@@ -71,6 +71,10 @@ fn raster_shadow_vs(input: Vertex) -> @builtin(position) vec4<f32> {
     return shadow_frame_params.light_view_proj * world;
 }
 
+// GLES requires a fragment stage even for a depth-only render pass.
+@fragment
+fn raster_shadow_fs() {}
+
 fn decode_normal(raw: u32) -> vec3<f32> {
     return unpack4x8snorm(raw).xyz;
 }
