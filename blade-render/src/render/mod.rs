@@ -93,6 +93,12 @@ pub struct RayConfig {
     /// The canonical mode continues the path along each of them,
     /// so this is also its number of paths per pixel.
     pub num_brdf_samples: u32,
+    /// Randomize the primary ray within each pixel in canonical mode.
+    ///
+    /// Disable this when radiance must correspond to a separately rasterized
+    /// center-sampled G-buffer. Converged reference renders should leave it on
+    /// for antialiasing.
+    pub jitter_primary_rays: bool,
     /// Sample the environment map by importance rather than uniformly.
     pub environment_importance_sampling: bool,
     /// Number of secondary surfaces a canonical path is allowed to hit.
@@ -577,6 +583,8 @@ struct PathTraceParams {
     t_start: f32,
     environment_importance_sampling: u32,
     reset_accumulation: u32,
+    jitter_primary_rays: u32,
+    _pad: [u32; 3],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -1417,6 +1425,8 @@ impl RayTracer {
                     t_start: config.t_start,
                     environment_importance_sampling: config.environment_importance_sampling as u32,
                     reset_accumulation: self.reset_accumulation as u32,
+                    jitter_primary_rays: config.jitter_primary_rays as u32,
+                    _pad: [0; 3],
                 },
                 acc_struct: self.acceleration_structure,
                 hit_entries: self.hit_buffer.into(),

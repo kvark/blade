@@ -35,6 +35,10 @@ struct PathTraceParams {
     environment_importance_sampling: u32,
     // when set, the previous accumulation is discarded
     reset_accumulation: u32,
+    jitter_primary_rays: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 var<uniform> camera: CameraParams;
@@ -235,8 +239,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let num_paths = max(parameters.num_brdf_samples, 1u);
     var sum = vec3<f32>(0.0);
     for (var i = 0u; i < num_paths; i += 1u) {
-        // Jitter within the pixel, which anti-aliases for free.
-        let jitter = vec2<f32>(random_gen(&rng), random_gen(&rng));
+        // Sparse captures may need the radiance ray to agree with a separately
+        // rasterized center-sampled G-buffer. References retain stochastic
+        // subpixel coverage for antialiasing.
+        let jitter = select(
+            vec2<f32>(0.5),
+            vec2<f32>(random_gen(&rng), random_gen(&rng)),
+            parameters.jitter_primary_rays != 0u,
+        );
         let ray_dir = get_ray_direction_at(camera, vec2<f32>(global_id.xy) + jitter);
         sum += trace_path(ray_dir, &rng);
     }
