@@ -10,6 +10,7 @@ pub fn default_ray_config() -> blade_render::RayConfig {
     blade_render::RayConfig {
         num_environment_samples: 1,
         num_brdf_samples: 1,
+        jitter_primary_rays: true,
         environment_importance_sampling: true,
         max_bounces: 3,
         max_accumulated_samples: 0,
