@@ -34,6 +34,7 @@ pub struct Transform {
     pub position: mint::Vector3<f32>,
     pub orientation: mint::Quaternion<f32>,
 }
+
 impl Default for Transform {
     fn default() -> Self {
         Self {
@@ -204,6 +205,12 @@ fn make_quaternion(degrees: mint::Vector3<f32>) -> nalgebra::geometry::UnitQuate
         degrees.y.to_radians(),
         degrees.z.to_radians(),
     )
+}
+
+fn static_trimesh_flags() -> rapier3d::geometry::TriMeshFlags {
+    // Shared triangle edges are not real surface features. Pseudo-normal correction
+    // prevents rounded dynamic shapes from catching on an otherwise smooth mesh.
+    rapier3d::geometry::TriMeshFlags::FIX_INTERNAL_EDGES
 }
 
 trait UiValue {
@@ -877,10 +884,18 @@ impl Engine {
     /// Has no effect when the ray-tracer backend is active.
     pub fn set_raster_config(&mut self, config: blade_render::RasterConfig) {
         if let Renderer::Rasterizer {
+            ref mut inner,
             ref mut raster_config,
-            ..
         } = self.renderer
         {
+            if let Some(shadows) = config.directional_shadows {
+                let requested = shadows.resolution.clamp(256, 4096);
+                if requested != inner.directional_shadow_resolution() {
+                    // Shadow-map replacement must not race the preceding frame.
+                    self.pacer.wait_for_previous_frame(&self.gpu_context);
+                    inner.set_directional_shadow_resolution(requested, &self.gpu_context);
+                }
+            }
             *raster_config = config;
         }
     }
@@ -1092,6 +1107,15 @@ impl Engine {
                     depth: MAX_DEPTH,
                     fov: None,
                 };
+                if can_render {
+                    inner.render_directional_shadows(
+                        command_encoder,
+                        &render_camera,
+                        &self.render_objects,
+                        &self.asset_hub,
+                        *raster_config,
+                    );
+                }
                 command_encoder.init_texture(inner.depth_texture());
                 if let mut pass = command_encoder.render(
                     "raster",
@@ -1314,6 +1338,15 @@ impl Engine {
                             down: (-xr_view.fov.angle_down).max(0.0),
                         }),
                     };
+                    if can_render {
+                        inner.render_directional_shadows(
+                            command_encoder,
+                            &render_camera,
+                            &self.render_objects,
+                            &self.asset_hub,
+                            raster_config,
+                        );
+                    }
                     if let mut pass = command_encoder.render(
                         "xr-raster",
                         gpu::RenderTargetSet {
@@ -1726,10 +1759,7 @@ impl Engine {
         transform: Transform,
         dynamic_input: DynamicInput,
     ) -> ObjectHandle {
-        use rapier3d::{
-            dynamics::MassProperties,
-            geometry::{ColliderBuilder, TriMeshFlags},
-        };
+        use rapier3d::{dynamics::MassProperties, geometry::ColliderBuilder};
 
         let mut visuals = Vec::new();
         for visual in config.visuals.iter() {
@@ -1823,7 +1853,10 @@ impl Engine {
                             .expect("Unable to build convex mesh")
                     } else {
                         assert_eq!(border_radius, 0.0);
-                        let flags = TriMeshFlags::empty();
+                        // Shared triangle edges are not real surface features. Without
+                        // pseudo-normal correction, a rounded dynamic shape can catch on
+                        // those edges even when the rendered mesh looks perfectly smooth.
+                        let flags = static_trimesh_flags();
                         ColliderBuilder::trimesh_with_flags(
                             trimesh.points,
                             trimesh.triangles,
@@ -2110,6 +2143,21 @@ impl Engine {
         body.set_position(transform.into_isometry(), true);
     }
 
+    /// Enable swept collision detection for a fast-moving physics object.
+    ///
+    /// This is useful for vehicles and projectiles that may cross a thin collider or
+    /// several terrain triangles during one fixed simulation step.
+    pub fn set_ccd_enabled(&mut self, handle: ObjectHandle, enabled: bool) {
+        let object = &self.objects[handle.0];
+        let body = self
+            .physics
+            .rigid_bodies
+            .get_mut(object.rigid_body)
+            .expect("object rigid body");
+        body.enable_ccd(enabled);
+        body.wake_up(true);
+    }
+
     /// Set a per-object color tint that multiplies the model's material colors.
     /// Default is [1, 1, 1, 1] (no tint).
     pub fn set_color_tint(&mut self, handle: ObjectHandle, tint: [f32; 4]) {
@@ -2206,5 +2254,16 @@ impl Engine {
 
     pub fn set_debug_pixel(&mut self, mouse_pos: Option<[i32; 2]>) {
         self.debug.mouse_pos = mouse_pos;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn static_triangle_meshes_fix_internal_contact_edges() {
+        assert!(
+            super::static_trimesh_flags()
+                .contains(rapier3d::geometry::TriMeshFlags::FIX_INTERNAL_EDGES)
+        );
     }
 }
