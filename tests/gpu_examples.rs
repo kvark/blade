@@ -994,6 +994,7 @@ struct RayTraceTestConfig {
     emissive_scale: f32,
     black_environment: bool,
     tap_count: u32,
+    denoise: bool,
 }
 
 #[cfg(not(gles))]
@@ -1006,6 +1007,7 @@ impl Default for RayTraceTestConfig {
             emissive_scale: 1.0,
             black_environment: false,
             tap_count: 2,
+            denoise: true,
         }
     }
 }
@@ -1221,7 +1223,7 @@ fn render_ray_traced_grid_configured(
             },
             debug_config,
             ray_config,
-            Some(denoiser_config),
+            test_config.denoise.then_some(denoiser_config),
         );
     }
 
@@ -1318,6 +1320,7 @@ fn restir_direct_energy_matches_canonical() {
         emissive_scale: 1.0,
         black_environment: false,
         tap_count: 0,
+        denoise: true,
     };
     let Some(reference_bytes) = render_ray_traced_grid_configured(
         "pbr-canonical-direct-energy",
@@ -1403,6 +1406,7 @@ fn restir_receives_emissive_geometry() {
         emissive_scale: 20.0,
         black_environment: true,
         tap_count: 2,
+        denoise: true,
     };
     let Some(bytes) = render_ray_traced_grid_configured(
         "pbr-restir-emissive-energy",
@@ -1438,6 +1442,94 @@ fn restir_receives_emissive_geometry() {
     assert!(
         mean > 1.0e-4 && peak > 0.01,
         "ordinary surfaces received no measurable emissive-mesh light"
+    );
+}
+
+/// The spatial filter must redistribute radiance, not destroy it. Its old
+/// centre-normalized bilateral weights were asymmetric: a noisy bright pixel
+/// accepted a dark neighbour that rejected it in return. Three passes lost
+/// visible energy even when the ReSTIR estimate entering SVGF was correct.
+#[cfg(not(gles))]
+#[test]
+#[ignore = "requires a working GPU context with ray tracing"]
+fn svgf_preserves_restir_energy() {
+    let base = RayTraceTestConfig {
+        max_bounces: 0,
+        pairwise_mis: true,
+        include_emissive_row: false,
+        emissive_scale: 1.0,
+        black_environment: false,
+        tap_count: 2,
+        denoise: false,
+    };
+    let Some(reference_bytes) = render_ray_traced_grid_configured(
+        "pbr-restir-svgf-energy-reference",
+        RayTraceMode::Canonical,
+        Capture::Hdr,
+        RayTraceTestConfig {
+            denoise: true,
+            ..base
+        },
+        |_, _, _| {},
+    ) else {
+        return;
+    };
+    let Some(raw_bytes) = render_ray_traced_grid_configured(
+        "pbr-restir-svgf-energy-raw",
+        RayTraceMode::Restir,
+        Capture::Hdr,
+        base,
+        |_, _, _| {},
+    ) else {
+        return;
+    };
+    let Some(filtered_bytes) = render_ray_traced_grid_configured(
+        "pbr-restir-svgf-energy-filtered",
+        RayTraceMode::Restir,
+        Capture::Hdr,
+        RayTraceTestConfig {
+            denoise: true,
+            ..base
+        },
+        |_, _, _| {},
+    ) else {
+        return;
+    };
+    let raw: &[f32] = bytemuck::cast_slice(&raw_bytes);
+    let filtered: &[f32] = bytemuck::cast_slice(&filtered_bytes);
+    assert_eq!(raw.len(), filtered.len());
+    let reference: &[f32] = bytemuck::cast_slice(&reference_bytes);
+    assert_eq!(raw.len(), reference.len());
+
+    // The white background is exactly one. Select canonically shaded sphere
+    // interiors, excluding both background and near-black silhouette pixels;
+    // the same mask is applied to raw and filtered ReSTIR.
+    let luminance = |rgba: &[f32]| 0.3 * rgba[0] + 0.4 * rgba[1] + 0.3 * rgba[2];
+    let energy = |pixels: &[f32]| -> (f64, usize) {
+        pixels
+            .chunks_exact(4)
+            .zip(reference.chunks_exact(4))
+            .filter_map(|(actual, expected)| {
+                (0.05..0.95)
+                    .contains(&luminance(expected))
+                    .then_some(luminance(actual) as f64)
+            })
+            .fold((0.0, 0), |(sum, count), value| (sum + value, count + 1))
+    };
+    let (raw_energy, raw_values) = energy(raw);
+    let (filtered_energy, filtered_values) = energy(filtered);
+    assert_eq!(raw_values, filtered_values);
+    assert!(
+        raw_values > 1_000,
+        "only {raw_values} shaded pixels selected"
+    );
+    assert!(raw_energy > 0.0, "the regression scene carried no light");
+    let ratio = filtered_energy / raw_energy;
+    println!("SVGF / raw ReSTIR received energy: {ratio:.4}");
+    assert!(
+        (0.98..1.02).contains(&ratio),
+        "SVGF changed received radiance energy by {:.1}%",
+        (ratio - 1.0) * 100.0,
     );
 }
 

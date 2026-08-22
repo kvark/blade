@@ -133,10 +133,8 @@ fn atrous3x3(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let center_ilm = textureLoad(input, center, 0);
     let center_luma = dot(center_ilm.xyz, LUMA);
-    let variance = sqrt(center_ilm.w);
     let center_suf = read_surface(center);
-    var sum_weight = GAUSSIAN_WEIGHTS[0] * GAUSSIAN_WEIGHTS[0];
-    var sum_ilm = w4(sum_weight) * center_ilm;
+    var filtered_ilm = center_ilm;
 
     for (var yy=-1; yy<=1; yy+=1) {
         for (var xx=-1; xx<=1; xx+=1) {
@@ -153,12 +151,21 @@ fn atrous3x3(@builtin(global_invocation_id) global_id: vec3<u32>) {
             //Note: should we use a projected depth instead of the surface one?
             weight *= compare_depths(surface.depth, center_suf.depth);
             let other_ilm = textureLoad(input, p, 0);
+            // The luminance gate must be symmetric. Using only the centre's
+            // variance lets a noisy bright pixel accept a dark neighbour while
+            // the dark pixel rejects the bright one, which systematically
+            // moves radiance out of highlights and shadowed geometry.
+            let variance = sqrt(max(center_ilm.w, other_ilm.w));
             weight *= compare_luminance(center_luma, dot(other_ilm.xyz, LUMA), variance);
-            sum_ilm += w4(weight) * other_ilm;
-            sum_weight += weight;
+
+            // Rejected neighbour weight stays on the centre instead of
+            // renormalising the surviving neighbours. Every pair then applies
+            // equal and opposite RGB deltas, so an A-trous pass conserves
+            // linear radiance over the frame. The Gaussian neighbour weights
+            // sum to less than one, keeping this a convex update.
+            filtered_ilm += w4(weight) * (other_ilm - center_ilm);
         }
     }
 
-    let filtered_ilm = select(center_ilm, sum_ilm / w4(sum_weight), sum_weight > MIN_WEIGHT);
     textureStore(output, global_id.xy, filtered_ilm);
 }
