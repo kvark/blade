@@ -14,6 +14,7 @@ impl ExposeHud for blade_render::RayConfig {
                 .text("Num BRDF samples")
                 .logarithmic(true),
         );
+        ui.checkbox(&mut self.jitter_primary_rays, "Jitter primary rays");
         ui.checkbox(
             &mut self.environment_importance_sampling,
             "Env importance sampling",

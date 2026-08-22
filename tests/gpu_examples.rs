@@ -1195,6 +1195,7 @@ fn render_ray_traced_grid_configured(
             RayTraceMode::Canonical => 1,
         },
         num_brdf_samples: 4,
+        jitter_primary_rays: true,
         // the dummy environment map has no importance sampling data
         environment_importance_sampling: false,
         max_bounces: test_config.max_bounces,
