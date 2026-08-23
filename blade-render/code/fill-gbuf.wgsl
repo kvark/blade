@@ -20,7 +20,7 @@ var out_diffuse_albedo: texture_storage_2d<rgba8unorm, write>;
 // RGB is the specular reflectance at normal incidence, alpha is the roughness
 var out_specular_f0: texture_storage_2d<rgba8unorm, write>;
 var out_emissive: texture_storage_2d<rgba16float, write>;
-var out_motion: texture_storage_2d<rg8snorm, write>;
+var out_motion: texture_storage_2d<rg16float, write>;
 var out_debug: texture_storage_2d<rgba8unorm, write>;
 
 fn debug_raw_normal(pos: vec3<f32>, normal_raw: u32, rotation: vec4<f32>, debug_len: f32, color: u32) {

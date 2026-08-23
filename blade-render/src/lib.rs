@@ -83,6 +83,56 @@ pub struct Camera {
     pub fov: Option<Fov>,
 }
 
+impl Camera {
+    /// Shift the projection by a subpixel offset without moving the camera.
+    ///
+    /// `jitter` is measured in target-pixel units, with positive X right and
+    /// positive Y down. Path rays, the G-buffer, and motion vectors all consume
+    /// the resulting asymmetric projection.
+    pub fn with_projection_jitter(mut self, jitter: [f32; 2], target_size: [u32; 2]) -> Self {
+        assert!(target_size.into_iter().all(|extent| extent != 0));
+        assert!(jitter.into_iter().all(f32::is_finite));
+        let (extent, center) = match self.fov {
+            Some(fov) => {
+                let tangent = [
+                    fov.left.tan(),
+                    fov.right.tan(),
+                    fov.up.tan(),
+                    fov.down.tan(),
+                ];
+                (
+                    [
+                        0.5 * (tangent[0] + tangent[1]),
+                        0.5 * (tangent[2] + tangent[3]),
+                    ],
+                    [
+                        0.5 * (tangent[1] - tangent[0]),
+                        0.5 * (tangent[2] - tangent[3]),
+                    ],
+                )
+            }
+            None => {
+                let y = (0.5 * self.fov_y).tan();
+                (
+                    [y * target_size[0] as f32 / target_size[1] as f32, y],
+                    [0.0; 2],
+                )
+            }
+        };
+        let center = [
+            center[0] + 2.0 * jitter[0] * extent[0] / target_size[0] as f32,
+            center[1] - 2.0 * jitter[1] * extent[1] / target_size[1] as f32,
+        ];
+        self.fov = Some(Fov {
+            left: (extent[0] - center[0]).atan(),
+            right: (extent[0] + center[0]).atan(),
+            up: (extent[1] + center[1]).atan(),
+            down: (extent[1] - center[1]).atan(),
+        });
+        self
+    }
+}
+
 pub struct Object {
     pub model: blade_asset::Handle<Model>,
     pub transform: blade_graphics::Transform,
@@ -110,5 +160,120 @@ struct CameraParams {
     depth: f32,
     orientation: [f32; 4],
     fov: [f32; 2],
+    film_offset: [f32; 2],
     target_size: [u32; 2],
+    _pad: [u32; 2],
+}
+
+impl CameraParams {
+    fn new(camera: &Camera, target_size: [u32; 2]) -> Self {
+        let (fov, film_offset) = match camera.fov {
+            Some(fov) => {
+                let tangent = [
+                    fov.left.tan(),
+                    fov.right.tan(),
+                    fov.up.tan(),
+                    fov.down.tan(),
+                ];
+                let half_extent = [
+                    0.5 * (tangent[0] + tangent[1]),
+                    0.5 * (tangent[2] + tangent[3]),
+                ];
+                (
+                    [2.0 * half_extent[0].atan(), 2.0 * half_extent[1].atan()],
+                    [
+                        0.5 * (tangent[1] - tangent[0]),
+                        0.5 * (tangent[2] - tangent[3]),
+                    ],
+                )
+            }
+            None => {
+                let fov_x = 2.0
+                    * ((camera.fov_y * 0.5).tan() * target_size[0] as f32 / target_size[1] as f32)
+                        .atan();
+                ([fov_x, camera.fov_y], [0.0; 2])
+            }
+        };
+        Self {
+            position: camera.pos.into(),
+            depth: camera.depth,
+            orientation: camera.rot.into(),
+            fov,
+            film_offset,
+            target_size,
+            _pad: [0; 2],
+        }
+    }
+}
+
+#[cfg(test)]
+mod camera_tests {
+    use super::*;
+
+    fn camera(fov: Option<Fov>) -> Camera {
+        Camera {
+            pos: [0.0; 3].into(),
+            rot: mint::Quaternion::from([0.0, 0.0, 0.0, 1.0]),
+            fov_y: 0.8,
+            depth: 100.0,
+            fov,
+        }
+    }
+
+    #[test]
+    fn symmetric_camera_has_no_film_offset() {
+        let params = CameraParams::new(&camera(None), [1600, 900]);
+        assert_eq!(params.film_offset, [0.0; 2]);
+        assert_eq!(params.fov[1], 0.8);
+    }
+
+    #[test]
+    fn asymmetric_camera_preserves_each_frustum_edge() {
+        let fov = Fov {
+            left: 0.4,
+            right: 0.6,
+            up: 0.5,
+            down: 0.3,
+        };
+        let params = CameraParams::new(&camera(Some(fov)), [1600, 900]);
+        let extent = [(0.5 * params.fov[0]).tan(), (0.5 * params.fov[1]).tan()];
+        for (actual, expected) in [
+            (params.film_offset[0] - extent[0], -fov.left.tan()),
+            (params.film_offset[0] + extent[0], fov.right.tan()),
+            (params.film_offset[1] + extent[1], fov.up.tan()),
+            (params.film_offset[1] - extent[1], -fov.down.tan()),
+        ] {
+            assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+        }
+    }
+
+    #[test]
+    fn projection_jitter_is_measured_in_target_pixels() {
+        let size = [128, 64];
+        let jitter = [0.25, -0.125];
+        let fov = camera(None)
+            .with_projection_jitter(jitter, size)
+            .fov
+            .unwrap();
+        let tangent = [
+            fov.left.tan(),
+            fov.right.tan(),
+            fov.up.tan(),
+            fov.down.tan(),
+        ];
+        let extent = [
+            0.5 * (tangent[0] + tangent[1]),
+            0.5 * (tangent[2] + tangent[3]),
+        ];
+        let center = [
+            0.5 * (tangent[1] - tangent[0]),
+            0.5 * (tangent[2] - tangent[3]),
+        ];
+        let expected = [
+            2.0 * jitter[0] * extent[0] / size[0] as f32,
+            -2.0 * jitter[1] * extent[1] / size[1] as f32,
+        ];
+        assert!((center[0] - expected[0]).abs() < 1e-6);
+        assert!((center[1] - expected[1]).abs() < 1e-6);
+    }
 }

@@ -717,17 +717,7 @@ impl Rasterizer {
     }
 
     fn make_camera_params(&self, camera: &crate::Camera) -> CameraParams {
-        let fov_x = 2.0
-            * ((camera.fov_y * 0.5).tan() * self.surface_size.width as f32
-                / self.surface_size.height as f32)
-                .atan();
-        CameraParams {
-            position: camera.pos.into(),
-            depth: camera.depth,
-            orientation: camera.rot.into(),
-            fov: [fov_x, camera.fov_y],
-            target_size: [self.surface_size.width, self.surface_size.height],
-        }
+        CameraParams::new(camera, [self.surface_size.width, self.surface_size.height])
     }
 
     fn make_frame_params(
