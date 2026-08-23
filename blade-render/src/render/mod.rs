@@ -212,8 +212,10 @@ pub struct GBufferViews {
     pub specular_f0: blade_graphics::TextureView,
     /// Emitted radiance, in the renderer's radiance format.
     pub emissive: blade_graphics::TextureView,
-    /// `Rg8Snorm`. Screen space motion since the previous frame, scaled by
-    /// `MOTION_SCALE` from `gbuf.inc.wgsl`.
+    /// `Rg16Float`. Screen space motion since the previous frame, scaled by
+    /// `MOTION_SCALE` from `gbuf.inc.wgsl`. Half precision keeps subpixel
+    /// reprojection accurate enough for temporal upscaling; `Rg8Snorm` stepped
+    /// by roughly 0.4 pixels after decoding.
     pub motion: blade_graphics::TextureView,
 }
 
@@ -398,7 +400,7 @@ impl RestirTargets {
             emissive: RenderTarget::new("emissive", RADIANCE_FORMAT, size, encoder, gpu),
             motion: RenderTarget::new(
                 "motion",
-                blade_graphics::TextureFormat::Rg8Snorm,
+                blade_graphics::TextureFormat::Rg16Float,
                 size,
                 encoder,
                 gpu,
@@ -1302,17 +1304,7 @@ impl RayTracer {
     }
 
     fn make_camera_params(&self, camera: &super::Camera) -> CameraParams {
-        let fov_x = 2.0
-            * ((camera.fov_y * 0.5).tan() * self.surface_size.width as f32
-                / self.surface_size.height as f32)
-                .atan();
-        CameraParams {
-            position: camera.pos.into(),
-            depth: camera.depth,
-            orientation: camera.rot.into(),
-            fov: [fov_x, camera.fov_y],
-            target_size: [self.surface_size.width, self.surface_size.height],
-        }
+        CameraParams::new(camera, [self.surface_size.width, self.surface_size.height])
     }
 
     fn work_indices(&self) -> (usize, usize) {
