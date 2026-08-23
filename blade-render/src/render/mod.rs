@@ -236,6 +236,21 @@ pub struct RadianceViews {
     pub specular: blade_graphics::TextureView,
 }
 
+/// Accumulated canonical path-tracing output, split by the primary response.
+///
+/// Every view is `Rgba32Float`: RGB is a radiance sum and alpha is the common
+/// sample count. `diffuse` has the primary albedo divided out, `specular`
+/// retains Fresnel tint, and `emissive` contains light seen directly by the
+/// camera. `total` is accumulated separately so stochastic primary coverage
+/// remains exact at material boundaries.
+#[derive(Clone, Copy, Debug)]
+pub struct AccumulatedRadianceViews {
+    pub total: blade_graphics::TextureView,
+    pub diffuse: blade_graphics::TextureView,
+    pub specular: blade_graphics::TextureView,
+    pub emissive: blade_graphics::TextureView,
+}
+
 pub struct SelectionInfo {
     pub std_deviation: mint::Vector3<f32>,
     pub std_deviation_history: u32,
@@ -333,6 +348,10 @@ struct RestirTargets {
     /// Sum of the radiance of the canonical renderer, with the
     /// number of the accumulated samples in the alpha channel.
     accumulation: RenderTarget<1>,
+    /// Canonical primary-lobe sums. Alpha repeats the common sample count.
+    accumulation_diffuse: RenderTarget<1>,
+    accumulation_specular: RenderTarget<1>,
+    accumulation_emissive: RenderTarget<1>,
     camera_params: [CameraParams; 2],
 }
 
@@ -420,6 +439,27 @@ impl RestirTargets {
                 encoder,
                 gpu,
             ),
+            accumulation_diffuse: RenderTarget::new(
+                "accumulation-diffuse",
+                blade_graphics::TextureFormat::Rgba32Float,
+                size,
+                encoder,
+                gpu,
+            ),
+            accumulation_specular: RenderTarget::new(
+                "accumulation-specular",
+                blade_graphics::TextureFormat::Rgba32Float,
+                size,
+                encoder,
+                gpu,
+            ),
+            accumulation_emissive: RenderTarget::new(
+                "accumulation-emissive",
+                blade_graphics::TextureFormat::Rgba32Float,
+                size,
+                encoder,
+                gpu,
+            ),
             camera_params: [CameraParams::default(); 2],
         }
     }
@@ -439,6 +479,9 @@ impl RestirTargets {
         self.light_diffuse.destroy(gpu);
         self.light_specular.destroy(gpu);
         self.accumulation.destroy(gpu);
+        self.accumulation_diffuse.destroy(gpu);
+        self.accumulation_specular.destroy(gpu);
+        self.accumulation_emissive.destroy(gpu);
     }
 }
 
@@ -603,6 +646,9 @@ struct PathTraceData<'a> {
     env_map: blade_graphics::TextureView,
     env_weights: blade_graphics::TextureView,
     accumulator: blade_graphics::TextureView,
+    accumulator_diffuse: blade_graphics::TextureView,
+    accumulator_specular: blade_graphics::TextureView,
+    accumulator_emissive: blade_graphics::TextureView,
 }
 
 #[repr(C)]
@@ -1084,6 +1130,20 @@ impl RayTracer {
         }
     }
 
+    /// Canonical path-tracing sums after [`render`](Self::render) in
+    /// [`RenderMode::Canonical`].
+    ///
+    /// Unlike [`view_radiance`](Self::view_radiance), these are unnormalised
+    /// accumulators. Divide RGB by alpha before consuming a view.
+    pub fn view_accumulated_radiance(&self) -> AccumulatedRadianceViews {
+        AccumulatedRadianceViews {
+            total: self.targets.accumulation.views[0],
+            diffuse: self.targets.accumulation_diffuse.views[0],
+            specular: self.targets.accumulation_specular.views[0],
+            emissive: self.targets.accumulation_emissive.views[0],
+        }
+    }
+
     #[profiling::function]
     pub fn resize_screen(
         &mut self,
@@ -1430,6 +1490,9 @@ impl RayTracer {
                 env_map: self.env_map.main_view,
                 env_weights: self.env_map.weight_view,
                 accumulator: self.targets.accumulation.views[0],
+                accumulator_diffuse: self.targets.accumulation_diffuse.views[0],
+                accumulator_specular: self.targets.accumulation_specular.views[0],
+                accumulator_emissive: self.targets.accumulation_emissive.views[0],
             },
         );
         pc.dispatch(groups);
