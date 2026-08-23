@@ -46,8 +46,14 @@ var<uniform> parameters: PathTraceParams;
 var acc_struct: acceleration_structure;
 var env_map: texture_2d<f32>;
 var sampler_nearest: sampler;
-// RGB is the sum of the radiance, alpha is the number of samples in it
+// RGB is the sum of the radiance, alpha is the number of samples in it.
+// The total remains separate because stochastic primary coverage cannot be
+// reconstructed by multiplying the accumulated diffuse illumination by one
+// centre-sampled albedo after the fact.
 var accumulator: texture_storage_2d<rgba32float, read_write>;
+var accumulator_diffuse: texture_storage_2d<rgba32float, read_write>;
+var accumulator_specular: texture_storage_2d<rgba32float, read_write>;
+var accumulator_emissive: texture_storage_2d<rgba32float, read_write>;
 
 struct PathVertex {
     position: vec3<f32>,
@@ -124,12 +130,36 @@ fn mis_weight(count: f32, pdf: f32, other_count: f32, other_pdf: f32) -> f32 {
     return select(0.0, count * pdf / total, total > 0.0);
 }
 
-// Estimate the light arriving at the camera through a single path.
-fn trace_path(start_dir: vec3<f32>, rng: ptr<function, RandomState>) -> vec3<f32> {
+// Radiance split by the primary surface's response. `diffuse` has its primary
+// albedo divided out; `specular` retains Fresnel tint. Their sum is not used to
+// reconstruct `total`, since primary-ray jitter may visit several materials.
+struct PathRadiance {
+    total: vec3<f32>,
+    diffuse: vec3<f32>,
+    specular: vec3<f32>,
+    emissive: vec3<f32>,
+}
+
+fn zero_path_radiance() -> PathRadiance {
+    return PathRadiance(
+        vec3<f32>(0.0),
+        vec3<f32>(0.0),
+        vec3<f32>(0.0),
+        vec3<f32>(0.0),
+    );
+}
+
+// Estimate the light arriving at the camera through a single path while
+// retaining the lobe selected at its first surface.
+fn trace_path(start_dir: vec3<f32>, rng: ptr<function, RandomState>) -> PathRadiance {
     let importance = parameters.environment_importance_sampling != 0u;
     let num_light = f32(parameters.num_environment_samples);
-    var radiance = vec3<f32>(0.0);
-    var throughput = vec3<f32>(1.0);
+    var radiance = zero_path_radiance();
+    var primary_albedo = vec3<f32>(1.0);
+    // Throughput after the primary response, kept as two paths so everything
+    // found at later vertices can still be attributed to that first lobe.
+    var diffuse_throughput = vec3<f32>(0.0);
+    var specular_throughput = vec3<f32>(0.0);
     var position = camera.position;
     var direction = start_dir;
     // Density of the sample that generated the current ray, which is
@@ -142,20 +172,29 @@ fn trace_path(start_dir: vec3<f32>, rng: ptr<function, RandomState>) -> vec3<f32
         let intersection = trace_ray(position, direction, t_min);
         if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
             if (bsdf_pdf < 0.0) {
-                radiance += throughput * evaluate_environment_background(direction);
+                // The G-buffer represents the sky as a white diffuse surface.
+                radiance.diffuse += evaluate_environment_background(direction);
             } else {
                 // The light sampling at the previous vertex could have found
                 // this direction as well, so the two have to be weighted.
                 let light_pdf = compute_light_pdf(map_equirect_dir_to_uv(direction), importance);
                 let weight = mis_weight(1.0, bsdf_pdf, num_light, light_pdf);
-                radiance += throughput * evaluate_environment(direction) * weight;
+                let incoming = evaluate_environment(direction) * weight;
+                radiance.diffuse += diffuse_throughput * incoming;
+                radiance.specular += specular_throughput * incoming;
             }
             break;
         }
 
         let vertex = resolve_hit(intersection);
         let view_dir = -direction;
-        radiance += throughput * vertex.emissive;
+        if (bounce == 0u) {
+            primary_albedo = vertex.material.diffuse_albedo;
+            radiance.emissive += vertex.emissive;
+        } else {
+            radiance.diffuse += diffuse_throughput * vertex.emissive;
+            radiance.specular += specular_throughput * vertex.emissive;
+        }
         position = vertex.position;
         t_min = parameters.t_start;
 
@@ -173,14 +212,22 @@ fn trace_path(start_dir: vec3<f32>, rng: ptr<function, RandomState>) -> vec3<f32
                 continue;
             }
             let light_dir = map_equirect_uv_to_dir(ls.uv);
-            let bsdf = evaluate_bsdf(vertex.material, vertex.normal, view_dir, light_dir);
-            if (dot(light_dir, vertex.flat_normal) <= 0.0 || all(bsdf <= vec3<f32>(0.0))
+            let lobes = evaluate_brdf(vertex.material, vertex.normal, view_dir, light_dir);
+            if (dot(light_dir, vertex.flat_normal) <= 0.0 || is_brdf_black(lobes)
                 || is_occluded(position, light_dir)) {
                 continue;
             }
             let other_pdf = compute_bsdf_pdf(vertex.material, vertex.normal, view_dir, light_dir);
             let weight = mis_weight(num_light, ls.pdf, bsdf_count, other_pdf) / (num_light * ls.pdf);
-            radiance += throughput * bsdf * ls.radiance * weight;
+            let incoming = ls.radiance * weight;
+            if (bounce == 0u) {
+                radiance.diffuse += lobes.diffuse * incoming;
+                radiance.specular += lobes.specular * incoming;
+            } else {
+                let bsdf = vertex.material.diffuse_albedo * lobes.diffuse + lobes.specular;
+                radiance.diffuse += diffuse_throughput * bsdf * incoming;
+                radiance.specular += specular_throughput * bsdf * incoming;
+            }
         }
 
         if (!will_extend) {
@@ -193,27 +240,50 @@ fn trace_path(start_dir: vec3<f32>, rng: ptr<function, RandomState>) -> vec3<f32
         if (bs.pdf <= 0.0 || dot(bs.dir, vertex.flat_normal) <= 0.0) {
             break;
         }
-        let bsdf = evaluate_bsdf(vertex.material, vertex.normal, view_dir, bs.dir);
-        throughput *= bsdf / bs.pdf;
+        let lobes = evaluate_brdf(vertex.material, vertex.normal, view_dir, bs.dir);
+        if (bounce == 0u) {
+            diffuse_throughput = vec3<f32>(lobes.diffuse / bs.pdf);
+            specular_throughput = lobes.specular / bs.pdf;
+        } else {
+            let bsdf = vertex.material.diffuse_albedo * lobes.diffuse + lobes.specular;
+            diffuse_throughput *= bsdf / bs.pdf;
+            specular_throughput *= bsdf / bs.pdf;
+        }
         bsdf_pdf = bs.pdf;
         direction = bs.dir;
 
         // Russian roulette on the remaining energy.
         if (bounce >= ROULETTE_START) {
+            let throughput = primary_albedo * diffuse_throughput + specular_throughput;
             let probability = clamp(compute_luminocity(throughput), 0.05, 1.0);
             if (random_gen(rng) >= probability) {
                 break;
             }
-            throughput /= probability;
+            diffuse_throughput /= probability;
+            specular_throughput /= probability;
         }
+        let throughput = primary_albedo * diffuse_throughput + specular_throughput;
         if (all(throughput <= vec3<f32>(0.0))) {
             break;
         }
     }
 
     // A single bad path would poison the accumulator forever.
-    let is_finite = all(radiance == radiance);
-    return select(vec3<f32>(0.0), min(radiance, vec3<f32>(MAX_RADIANCE)), is_finite);
+    radiance.total = primary_albedo * radiance.diffuse + radiance.specular + radiance.emissive;
+    let is_finite = all(radiance.total == radiance.total)
+        && all(radiance.diffuse == radiance.diffuse)
+        && all(radiance.specular == radiance.specular)
+        && all(radiance.emissive == radiance.emissive);
+    if (!is_finite) {
+        return zero_path_radiance();
+    }
+    // Scale the split and total together, preserving exact reconstruction.
+    let scale = min(vec3<f32>(1.0), vec3<f32>(MAX_RADIANCE) / max(radiance.total, vec3<f32>(1.0e-20)));
+    radiance.total *= scale;
+    radiance.diffuse *= scale;
+    radiance.specular *= scale;
+    radiance.emissive *= scale;
+    return radiance;
 }
 
 @compute @workgroup_size(8, 4)
@@ -223,6 +293,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     var total = vec4<f32>(0.0);
+    var total_diffuse = vec4<f32>(0.0);
+    var total_specular = vec4<f32>(0.0);
+    var total_emissive = vec4<f32>(0.0);
     if (parameters.reset_accumulation == 0u) {
         total = textureLoad(accumulator, global_id.xy);
         if (parameters.max_accumulated_samples != 0u
@@ -230,6 +303,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Converged enough, leave the accumulator alone.
             return;
         }
+        total_diffuse = textureLoad(accumulator_diffuse, global_id.xy);
+        total_specular = textureLoad(accumulator_specular, global_id.xy);
+        total_emissive = textureLoad(accumulator_emissive, global_id.xy);
     }
 
     let global_index = global_id.y * camera.target_size.x + global_id.x;
@@ -237,7 +313,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Each of the material samples at the primary hit starts a path of its own.
     let num_paths = max(parameters.num_brdf_samples, 1u);
-    var sum = vec3<f32>(0.0);
+    var sum = zero_path_radiance();
     for (var i = 0u; i < num_paths; i += 1u) {
         // Sparse captures may need the radiance ray to agree with a separately
         // rasterized center-sampled G-buffer. References retain stochastic
@@ -248,8 +324,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             parameters.jitter_primary_rays != 0u,
         );
         let ray_dir = get_ray_direction_at(camera, vec2<f32>(global_id.xy) + jitter);
-        sum += trace_path(ray_dir, &rng);
+        let sample = trace_path(ray_dir, &rng);
+        sum.total += sample.total;
+        sum.diffuse += sample.diffuse;
+        sum.specular += sample.specular;
+        sum.emissive += sample.emissive;
     }
 
-    textureStore(accumulator, global_id.xy, total + vec4<f32>(sum, f32(num_paths)));
+    let count = f32(num_paths);
+    textureStore(accumulator, global_id.xy, total + vec4<f32>(sum.total, count));
+    textureStore(accumulator_diffuse, global_id.xy, total_diffuse + vec4<f32>(sum.diffuse, count));
+    textureStore(accumulator_specular, global_id.xy, total_specular + vec4<f32>(sum.specular, count));
+    textureStore(accumulator_emissive, global_id.xy, total_emissive + vec4<f32>(sum.emissive, count));
 }
