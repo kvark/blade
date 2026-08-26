@@ -66,7 +66,7 @@ impl DescriptorCounts {
 #[derive(Debug)]
 pub struct DescriptorPool {
     sub_pools: Vec<vk::DescriptorPool>,
-    growth_iter: usize,
+    front_max_sets: u32,
     per_set: DescriptorCounts,
 }
 
@@ -160,7 +160,7 @@ impl super::Device {
             self.create_descriptor_sub_pool(COUNT_BASE, DescriptorCounts::default());
         DescriptorPool {
             sub_pools: vec![sub_pool],
-            growth_iter: 0,
+            front_max_sets: COUNT_BASE,
             per_set,
         }
     }
@@ -182,6 +182,7 @@ impl super::Device {
             let required = pool.per_set.max(layout.descriptor_counts);
             let (sub_pool, per_set) = self.create_descriptor_sub_pool(COUNT_BASE, required);
             pool.sub_pools.insert(0, sub_pool);
+            pool.front_max_sets = COUNT_BASE;
             pool.per_set = per_set;
         }
 
@@ -196,10 +197,13 @@ impl super::Device {
                 Err(other) => panic!("Unexpected descriptor allocation error: {:?}", other),
             };
 
-            let next_max_sets = COUNT_BASE.pow(pool.growth_iter as u32 + 1);
-            pool.growth_iter += 1;
+            let next_max_sets = pool
+                .front_max_sets
+                .checked_mul(2)
+                .expect("descriptor pool set count overflow");
             let (sub_pool, per_set) = self.create_descriptor_sub_pool(next_max_sets, pool.per_set);
             pool.sub_pools.insert(0, sub_pool);
+            pool.front_max_sets = next_max_sets;
             pool.per_set = per_set;
         }
     }
