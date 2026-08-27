@@ -905,26 +905,15 @@ impl Engine {
 
     /// Replace the local lights used by the raster forward pass.
     ///
-    /// The fragment shader evaluates at most `MAX_POINT_LIGHTS` of these and
-    /// shades with the most promising one (with a stochastic alternative).
+    /// The fragment shader samples one of up to `MAX_POINT_LIGHTS` of these
+    /// with probability proportional to a local score.
     pub fn set_point_lights(&mut self, lights: &[blade_render::PointLight]) {
         if let Renderer::Rasterizer {
             ref mut raster_config,
             ..
         } = self.renderer
         {
-            raster_config.point_lights =
-                [blade_render::PointLight::default(); blade_render::MAX_POINT_LIGHTS];
-            raster_config.point_light_count =
-                lights.len().min(blade_render::MAX_POINT_LIGHTS) as u32;
-            for (slot, light) in raster_config
-                .point_lights
-                .iter_mut()
-                .zip(lights.iter())
-                .take(blade_render::MAX_POINT_LIGHTS)
-            {
-                *slot = *light;
-            }
+            raster_config.point_lights = lights.to_vec();
         }
     }
 
@@ -1148,7 +1137,7 @@ impl Engine {
                         &render_camera,
                         &self.render_objects,
                         &self.asset_hub,
-                        *raster_config,
+                        raster_config.clone(),
                     );
                 }
                 command_encoder.init_texture(inner.depth_texture());
@@ -1174,7 +1163,7 @@ impl Engine {
                             &self.render_objects,
                             &self.asset_hub,
                             self.environment_map,
-                            *raster_config,
+                            raster_config.clone(),
                         );
                         if let Some(ref pipeline) = self.particle_pipeline {
                             let target_size = gpu::Extent {
@@ -1362,7 +1351,7 @@ impl Engine {
             }
             Renderer::Rasterizer {
                 ref mut inner,
-                raster_config,
+                ref raster_config,
             } => {
                 command_encoder.init_texture(inner.depth_texture());
                 for eye in 0..view_count {
@@ -1392,7 +1381,7 @@ impl Engine {
                             &render_camera,
                             &self.render_objects,
                             &self.asset_hub,
-                            raster_config,
+                            raster_config.clone(),
                         );
                     }
                     if let mut pass = command_encoder.render(
@@ -1417,7 +1406,7 @@ impl Engine {
                                 &self.render_objects,
                                 &self.asset_hub,
                                 self.environment_map,
-                                raster_config,
+                                raster_config.clone(),
                             );
                         }
                         inner.render_debug_lines(

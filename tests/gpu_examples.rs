@@ -942,7 +942,7 @@ fn snapshot_pbr_raster() {
         &pbr_scene::camera(),
         &objects,
         &harness.asset_hub,
-        raster_config,
+        raster_config.clone(),
     );
 
     command_encoder.init_texture(target.texture);

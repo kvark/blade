@@ -1,9 +1,17 @@
 #include "brdf.inc.wgsl"
 #include "color.inc.wgsl"
 
+#use MAX_POINT_LIGHTS
+
 struct PointLight {
     pos_radius: vec4<f32>,
     color: vec4<f32>,
+}
+
+struct PointLightParams {
+    // x: submitted light count, y: stochastic seed
+    count_seed: vec4<f32>,
+    lights: array<PointLight, MAX_POINT_LIGHTS>,
 }
 
 struct RasterFrameParams {
@@ -17,11 +25,9 @@ struct RasterFrameParams {
     // w component is a flag for the procedural space sky
     ambient_color: vec4<f32>,
     // x: environment map enabled, y: the surface needs sRGB encoding
-    // z: point light count, w: stochastic seed
     settings: vec4<f32>,
     // x: enabled, y: strength, z: receiver normal bias, w: texel size
     shadow_params: vec4<f32>,
-    point_lights: array<PointLight, 8>,
 }
 
 struct RasterDrawParams {
@@ -59,6 +65,7 @@ struct VertexOutput {
 }
 
 var<uniform> frame_params: RasterFrameParams;
+var<uniform> light_params: PointLightParams;
 var<uniform> draw_params: RasterDrawParams;
 var samp: sampler;
 var base_color_tex: texture_2d<f32>;
@@ -96,6 +103,9 @@ fn raster_vs(input: Vertex) -> VertexOutput {
     let pos_world = draw_params.model * vec4<f32>(input.position, 1.0);
     out.clip_pos = frame_params.view_proj * pos_world;
     out.world_pos = pos_world.xyz;
+    // GLES 3.00 requires matching uniform blocks in vs+fs. The multiply is
+    // zero, so lighting does not leak into the vertex stage.
+    out.world_pos.x += light_params.count_seed.x * 0.0;
     let n = normalize(quat_rotate(draw_params.normal_quat, decode_normal(input.normal)));
     let t = normalize(quat_rotate(draw_params.normal_quat, decode_normal(input.tangent)));
     let b = normalize(cross(n, t)) * input.bitangent_sign;
@@ -153,45 +163,35 @@ fn point_light_score(light: PointLight, world_pos: vec3<f32>, n: vec3<f32>) -> f
 }
 
 fn shade_point_light(mat: Material, n: vec3<f32>, v: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
-    let count = u32(frame_params.settings.z);
+    let count = min(u32(light_params.count_seed.x), MAX_POINT_LIGHTS);
     if (count == 0u) {
         return vec3<f32>(0.0);
     }
 
-    var scores: array<f32, 8>;
-    var best_i = 0u;
-    var best_score = 0.0;
-    var sum_score = 0.0;
-    for (var i = 0u; i < 8u; i++) {
+    // Weighted reservoir over the submitted lights. Each fragment independently
+    // samples one light with probability proportional to its local score.
+    // TODO: spatial acceleration once scenes carry more local lights than this cap.
+    var chosen = 0u;
+    var weight_sum = 0.0;
+    for (var i = 0u; i < MAX_POINT_LIGHTS; i++) {
         if (i >= count) {
-            scores[i] = 0.0;
+            break;
+        }
+        let score = point_light_score(light_params.lights[i], world_pos, n);
+        if (score <= 0.0) {
             continue;
         }
-        let score = point_light_score(frame_params.point_lights[i], world_pos, n);
-        scores[i] = score;
-        sum_score += score;
-        if (score > best_score) {
-            best_score = score;
-            best_i = i;
+        weight_sum += score;
+        let u = hash31(world_pos + vec3<f32>(f32(i), light_params.count_seed.y, score));
+        if (u * weight_sum < score) {
+            chosen = i;
         }
     }
-
-    var chosen = best_i;
-    // Most fragments take the winner. A minority pick weighted-random so a
-    // second nearby crystal still contributes without an 8-light inner loop.
-    if (sum_score > 1e-5 && hash31(world_pos + frame_params.settings.w) > 0.72) {
-        var acc = 0.0;
-        let pick = hash31(world_pos * 3.1 + frame_params.settings.www) * sum_score;
-        for (var i = 0u; i < count; i++) {
-            acc += scores[i];
-            if (pick <= acc) {
-                chosen = i;
-                break;
-            }
-        }
+    if (weight_sum <= 0.0) {
+        return vec3<f32>(0.0);
     }
 
-    let light = frame_params.point_lights[chosen];
+    let light = light_params.lights[chosen];
     let delta = light.pos_radius.xyz - world_pos;
     let dist2 = max(dot(delta, delta), 0.04);
     let dist = sqrt(dist2);
