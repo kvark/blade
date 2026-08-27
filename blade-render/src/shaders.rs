@@ -26,6 +26,7 @@ pub struct Shaders {
     pub(crate) a_trous: blade_asset::Handle<crate::Shader>,
     pub(crate) post_proc: blade_asset::Handle<crate::Shader>,
     pub(crate) raster: blade_asset::Handle<crate::Shader>,
+    pub(crate) skin: blade_asset::Handle<crate::Shader>,
     pub(crate) debug_draw: blade_asset::Handle<crate::Shader>,
     pub(crate) debug_blit: blade_asset::Handle<crate::Shader>,
 }
@@ -50,6 +51,12 @@ impl Shaders {
             a_trous: noop.unwrap_or_else(|| ctx.load_shader("a-trous.wgsl")),
             post_proc: noop.unwrap_or_else(|| ctx.load_shader("post-proc.wgsl")),
             raster: ctx.load_shader("raster.wgsl"),
+            // GLES keeps vertex-stage skinning; the compute shader is native-only.
+            skin: if cfg!(gles) {
+                ctx.load_shader("noop.wgsl")
+            } else {
+                ctx.load_shader("skin.wgsl")
+            },
             debug_draw: ctx.load_shader("debug-draw.wgsl"),
             debug_blit: ctx.load_shader("debug-blit.wgsl"),
         };

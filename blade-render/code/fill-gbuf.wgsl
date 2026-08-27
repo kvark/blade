@@ -23,8 +23,10 @@ var out_emissive: texture_storage_2d<rgba16float, write>;
 var out_motion: texture_storage_2d<rg16float, write>;
 var out_debug: texture_storage_2d<rgba8unorm, write>;
 
-fn debug_raw_normal(pos: vec3<f32>, normal_raw: u32, rotation: vec4<f32>, debug_len: f32, color: u32) {
-    let nw = normalize(qrot(rotation, decode_normal(normal_raw)));
+fn debug_raw_normal(
+    pos: vec3<f32>, normal_raw: u32, entry: HitEntry, object_to_world: mat4x3<f32>, debug_len: f32, color: u32,
+) {
+    let nw = hit_normal(entry, object_to_world, decode_normal(normal_raw));
     debug_line(pos, pos + debug_len * nw, color);
 }
 
@@ -64,28 +66,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             (*vptr)[indices.y],
             (*vptr)[indices.z],
         );
+        let prev_vptr = &vertex_buffers[entry.prev_vertex_buf].data;
+        let prev_vertices = array<Vertex, 3>(
+            (*prev_vptr)[indices.x],
+            (*prev_vptr)[indices.y],
+            (*prev_vptr)[indices.z],
+        );
 
         let positions_object = entry.geometry_to_object * mat3x4(
-            vec4<f32>(vertices[0].pos, 1.0), vec4<f32>(vertices[1].pos, 1.0), vec4<f32>(vertices[2].pos, 1.0)
+            vec4<f32>(vertices[0].position, 1.0), vec4<f32>(vertices[1].position, 1.0), vec4<f32>(vertices[2].position, 1.0)
+        );
+        let prev_positions_object = entry.prev_geometry_to_object * mat3x4(
+            vec4<f32>(prev_vertices[0].position, 1.0), vec4<f32>(prev_vertices[1].position, 1.0), vec4<f32>(prev_vertices[2].position, 1.0)
         );
         let positions = intersection.object_to_world * mat3x4(
             vec4<f32>(positions_object[0], 1.0), vec4<f32>(positions_object[1], 1.0), vec4<f32>(positions_object[2], 1.0)
         );
-        flat_normal = entry.winding * normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
+        flat_normal = hit_winding(entry) * normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
 
         let barycentrics = make_barycentrics(intersection.barycentrics);
         let position_object = vec4<f32>(positions_object * barycentrics, 1.0);
         let tex_coords = mat3x2(vertices[0].tex_coords, vertices[1].tex_coords, vertices[2].tex_coords) * barycentrics;
         let normal_geo = normalize(mat3x3(decode_normal(vertices[0].normal), decode_normal(vertices[1].normal), decode_normal(vertices[2].normal)) * barycentrics);
         let tangent_geo = normalize(mat3x3(decode_normal(vertices[0].tangent), decode_normal(vertices[1].tangent), decode_normal(vertices[2].tangent)) * barycentrics);
-        let bitangent_geo = normalize(cross(normal_geo, tangent_geo)) * vertices[0].bitangent_sign;
-
         let lod = 0.0; //TODO: this is actually complicated
 
-        let geo_to_world_rot = normalize(unpack4x8snorm(entry.geometry_to_world_rotation));
-        let tangent_space_geo = mat3x3(tangent_geo, bitangent_geo, normal_geo);
+        let tangent_space_world = hit_tangent_space(
+            entry, intersection.object_to_world, normal_geo, tangent_geo, vertices[0].bitangent_sign,
+        );
         let normal_local = sample_hit_normal_map(entry, tex_coords, lod, debug.texture_flags);
-        var normal = qrot(geo_to_world_rot, tangent_space_geo * normal_local);
+        var normal = tangent_space_world * normal_local;
         basis = shortest_arc_quat(vec3<f32>(0.0, 0.0, 1.0), normalize(normal));
 
         let hit_position = camera.position + intersection.t * ray_dir;
@@ -99,9 +109,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             debug_buf.entry.flat_normal = flat_normal;
         }
         if (enable_debug && (debug.draw_flags & DebugDrawFlags_SPACE) != 0u) {
-            let normal_w = 0.15 * intersection.t * qrot(geo_to_world_rot, normal_geo);
-            let tangent_w = 0.05 * intersection.t * qrot(geo_to_world_rot, tangent_geo);
-            let bitangent_w = 0.05 * intersection.t * qrot(geo_to_world_rot, bitangent_geo);
+            let normal_w = 0.15 * intersection.t * tangent_space_world[2];
+            let tangent_w = 0.05 * intersection.t * tangent_space_world[0];
+            let bitangent_w = 0.05 * intersection.t * tangent_space_world[1];
             debug_line(hit_position, hit_position + normal_w, 0xFF8000u);
             debug_line(hit_position - 0.5 * tangent_w, hit_position + tangent_w, 0x8080FFu);
             debug_line(hit_position - 0.5 * bitangent_w, hit_position + bitangent_w, 0x80FF80u);
@@ -114,9 +124,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let poly_center = (positions[0].xyz + positions[1].xyz + positions[2].xyz) / 3.0;
             debug_line(poly_center, poly_center + 0.2 * debug_len * flat_normal, 0xFF00FFu);
             // note: dynamic indexing into positions isn't allowed by WGSL yet
-            debug_raw_normal(positions[0].xyz, vertices[0].normal, geo_to_world_rot, 0.5*debug_len, 0xFFFF00u);
-            debug_raw_normal(positions[1].xyz, vertices[1].normal, geo_to_world_rot, 0.5*debug_len, 0xFFFF00u);
-            debug_raw_normal(positions[2].xyz, vertices[2].normal, geo_to_world_rot, 0.5*debug_len, 0xFFFF00u);
+            debug_raw_normal(positions[0].xyz, vertices[0].normal, entry, intersection.object_to_world, 0.5*debug_len, 0xFFFF00u);
+            debug_raw_normal(positions[1].xyz, vertices[1].normal, entry, intersection.object_to_world, 0.5*debug_len, 0xFFFF00u);
+            debug_raw_normal(positions[2].xyz, vertices[2].normal, entry, intersection.object_to_world, 0.5*debug_len, 0xFFFF00u);
             // draw tangent space
             debug_line(hit_position, hit_position + debug_len * qrot(basis, vec3<f32>(1.0, 0.0, 0.0)), 0x0000FFu);
             debug_line(hit_position, hit_position + debug_len * qrot(basis, vec3<f32>(0.0, 1.0, 0.0)), 0x00FF00u);
@@ -163,7 +173,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
         }
 
-        let prev_position = (entry.prev_object_to_world * position_object).xyz;
+        let prev_position_object = vec4<f32>(prev_positions_object * barycentrics, 1.0);
+        let prev_position = (entry.prev_object_to_world * prev_position_object).xyz;
         let prev_screen = get_projected_pixel_float(prev_camera, prev_position);
         //TODO: consider just storing integers here?
         //TODO: technically this "0.5" is just a waste compute on both packing and unpacking

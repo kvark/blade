@@ -1,5 +1,6 @@
 #include "brdf.inc.wgsl"
 #include "color.inc.wgsl"
+#include "skin.inc.wgsl"
 
 #use MAX_POINT_LIGHTS
 
@@ -32,6 +33,8 @@ struct RasterFrameParams {
 
 struct RasterDrawParams {
     model: mat4x4<f32>,
+    // Rotation of the object/geometry transform. Skinning assumes uniform
+    // scale, so a quaternion is sufficient for normals.
     normal_quat: vec4<f32>,
     base_color_factor: vec4<f32>,
     emissive_factor: vec4<f32>,
@@ -45,14 +48,6 @@ struct ShadowFrameParams {
 
 struct ShadowDrawParams {
     model: mat4x4<f32>,
-}
-
-struct Vertex {
-    position: vec3<f32>,
-    bitangent_sign: f32,
-    tex_coords: vec2<f32>,
-    normal: u32,
-    tangent: u32,
 }
 
 struct VertexOutput {
@@ -85,35 +80,67 @@ fn raster_shadow_vs(input: Vertex) -> @builtin(position) vec4<f32> {
     return shadow_frame_params.light_view_proj * world;
 }
 
+@vertex
+fn raster_shadow_skinned_vs(input: Vertex, skin_input: SkinVertex) -> @builtin(position) vec4<f32> {
+    let skinned = apply_affine(skin_blend(skin_input), input.position);
+    let world = shadow_draw_params.model * vec4<f32>(skinned, 1.0);
+    return shadow_frame_params.light_view_proj * world;
+}
+
 // GLES requires a fragment stage even for a depth-only render pass.
 @fragment
 fn raster_shadow_fs() {}
-
-fn decode_normal(raw: u32) -> vec3<f32> {
-    return unpack4x8snorm(raw).xyz;
-}
 
 fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
 }
 
-@vertex
-fn raster_vs(input: Vertex) -> VertexOutput {
+fn raster_vertex(
+    input: Vertex,
+    position: vec3<f32>,
+    normal: vec3<f32>,
+    tangent: vec3<f32>,
+    bitangent_sign: f32,
+) -> VertexOutput {
     var out: VertexOutput;
-    let pos_world = draw_params.model * vec4<f32>(input.position, 1.0);
+    let pos_world = draw_params.model * vec4<f32>(position, 1.0);
     out.clip_pos = frame_params.view_proj * pos_world;
     out.world_pos = pos_world.xyz;
     // GLES 3.00 requires matching uniform blocks in vs+fs. The multiply is
     // zero, so lighting does not leak into the vertex stage.
     out.world_pos.x += light_params.count_seed.x * 0.0;
-    let n = normalize(quat_rotate(draw_params.normal_quat, decode_normal(input.normal)));
-    let t = normalize(quat_rotate(draw_params.normal_quat, decode_normal(input.tangent)));
-    let b = normalize(cross(n, t)) * input.bitangent_sign;
+    let n = normalize(quat_rotate(draw_params.normal_quat, normal));
+    let t = normalize(quat_rotate(draw_params.normal_quat, tangent));
+    let b = normalize(cross(n, t)) * bitangent_sign;
     out.normal = n;
     out.tangent = t;
     out.bitangent = b;
     out.uv = input.tex_coords;
     return out;
+}
+
+@vertex
+fn raster_vs(input: Vertex) -> VertexOutput {
+    return raster_vertex(
+        input,
+        input.position,
+        decode_normal(input.normal),
+        decode_normal(input.tangent),
+        input.bitangent_sign,
+    );
+}
+
+@vertex
+fn raster_skinned_vs(input: Vertex, skin_input: SkinVertex) -> VertexOutput {
+    let skin = skin_blend(skin_input);
+    let linear = skin_linear(skin);
+    return raster_vertex(
+        input,
+        apply_affine(skin, input.position),
+        linear * decode_normal(input.normal),
+        linear * decode_normal(input.tangent),
+        input.bitangent_sign * sign(determinant(linear)),
+    );
 }
 
 fn map_equirect_dir_to_uv(dir: vec3<f32>) -> vec2<f32> {

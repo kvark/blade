@@ -356,21 +356,19 @@ enum Command {
         offset: u32,
         size: u32,
     },
-    BindVertex {
+    SetVertexAttribute {
+        index: u32,
         buffer: glow::Buffer,
+        format: crate::VertexFormat,
+        offset: i32,
+        stride: i32,
+        instanced: bool,
     },
     BindBuffer {
         target: BindTarget,
         slot: u32,
         buffer: BufferPart,
         size: u32,
-    },
-    SetVertexAttribute {
-        index: u32,
-        format: crate::VertexFormat,
-        offset: i32,
-        stride: i32,
-        instanced: bool,
     },
     DisableVertexAttributes {
         count: u32,

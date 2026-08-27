@@ -50,6 +50,7 @@ fn sphere(center: [f32; 3], radius: f32) -> (Vec<blade_render::Vertex>, Vec<u32>
                 tex_coords: [segment as f32 / SEGMENTS as f32, ring as f32 / RINGS as f32],
                 normal: encode_normal(normal),
                 tangent: encode_normal([-sin_phi, 0.0, cos_phi]),
+                ..Default::default()
             });
         }
     }

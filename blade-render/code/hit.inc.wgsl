@@ -2,15 +2,8 @@
 //
 // Requires `brdf.inc.wgsl` for the material model,
 // and `debug-param.inc.wgsl` for the texture flags.
+#include "vertex.inc.wgsl"
 
-// Has to match the host!
-struct Vertex {
-    pos: vec3<f32>,
-    bitangent_sign: f32,
-    tex_coords: vec2<f32>,
-    normal: u32,
-    tangent: u32,
-}
 struct VertexBuffer {
     data: array<Vertex>,
 }
@@ -22,10 +15,10 @@ struct IndexBuffer {
 struct HitEntry {
     index_buf: u32,
     vertex_buf: u32,
-    winding: f32,
-    // packed quaternion
-    geometry_to_world_rotation: u32,
+    prev_vertex_buf: u32,
+    flags: u32,
     geometry_to_object: mat4x3<f32>,
+    prev_geometry_to_object: mat4x3<f32>,
     prev_object_to_world: mat4x3<f32>,
     base_color_texture: u32,
     // packed color factor
@@ -46,8 +39,36 @@ var<storage, read> hit_entries: array<HitEntry>;
 var textures: binding_array<texture_2d<f32>>;
 var sampler_linear: sampler;
 
-fn decode_normal(raw: u32) -> vec3<f32> {
-    return unpack4x8snorm(raw).xyz;
+fn affine_linear(transform: mat4x3<f32>) -> mat3x3<f32> {
+    return mat3x3<f32>(transform[0], transform[1], transform[2]);
+}
+
+fn hit_winding(entry: HitEntry) -> f32 {
+    return select(1.0, -1.0, (entry.flags & 1u) != 0u);
+}
+
+fn hit_normal(entry: HitEntry, object_to_world: mat4x3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    // Skinning assumes uniform scale, so the linear part acts on normals
+    // like a rotation after normalization.
+    let linear = affine_linear(object_to_world) * affine_linear(entry.geometry_to_object);
+    return normalize(linear * normal);
+}
+
+fn hit_tangent_space(
+    entry: HitEntry,
+    object_to_world: mat4x3<f32>,
+    normal: vec3<f32>,
+    tangent: vec3<f32>,
+    bitangent_sign: f32,
+) -> mat3x3<f32> {
+    let linear = affine_linear(object_to_world) * affine_linear(entry.geometry_to_object);
+    let n = hit_normal(entry, object_to_world, normal);
+    return tangent_basis(
+        n,
+        linear * tangent,
+        bitangent_sign,
+        sign(determinant(linear)),
+    );
 }
 
 fn fetch_triangle_indices(entry: HitEntry, primitive_index: u32) -> vec3<u32> {

@@ -23,14 +23,17 @@ pub mod model;
 pub mod raster;
 pub mod shader;
 mod shaders;
+mod skin;
 pub mod texture;
 pub mod util;
 
 mod render;
 
 pub use asset_hub::*;
-pub use model::{Model, ProceduralGeometry};
-pub use raster::{DirectionalShadowConfig, MAX_POINT_LIGHTS, PointLight, RasterConfig, Rasterizer};
+pub use model::{MAX_JOINTS_PER_DRAW, Model, Pose, ProceduralGeometry};
+pub use raster::{
+    DirectionalShadowConfig, MAX_POINT_LIGHTS, ObjectSkin, PointLight, RasterConfig, Rasterizer,
+};
 pub use shader::Shader;
 pub use shaders::{RenderConfig, Shaders};
 pub use texture::Texture;
@@ -52,15 +55,113 @@ pub struct DebugLine {
     pub b: DebugPoint,
 }
 
-// Has to match the `Vertex` in shaders
+// Has to match the `Vertex` in `code/vertex.inc.wgsl`.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub bitangent_sign: f32,
     pub tex_coords: [f32; 2],
     pub normal: u32,
     pub tangent: u32,
+}
+
+/// Per-vertex skinning data, kept in a separate buffer so that the base
+/// vertex layout is identical for skinned and rigid models.
+///
+/// Has to match the `SkinVertex` in `code/skin.inc.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct SkinVertex {
+    /// Packed indices into the geometry's compact joint palette.
+    pub joints: [u8; 4],
+    /// Packed unorm8 linear-blend skinning weights corresponding to `joints`.
+    pub weights: [u8; 4],
+}
+
+impl SkinVertex {
+    pub fn packed_skin(joints: [u32; 4], weights: [f32; 4]) -> Self {
+        let joints = joints.map(|joint| {
+            assert!(
+                joint <= u8::MAX as u32,
+                "joint index {joint} does not fit in 8 bits"
+            );
+            joint as u8
+        });
+        let weights = weights.map(|weight| weight.max(0.0));
+        let sum = weights.iter().sum::<f32>();
+        if !sum.is_finite() || sum <= 0.0 {
+            return Self {
+                joints,
+                weights: [255, 0, 0, 0],
+            };
+        }
+
+        let scaled = weights.map(|weight| weight / sum * 255.0);
+        let mut packed = scaled.map(|weight| weight.floor() as u8);
+        let mut remainder = 255 - packed.iter().map(|&weight| u16::from(weight)).sum::<u16>();
+        while remainder != 0 {
+            let index = (0..4)
+                .max_by(|&a, &b| {
+                    (scaled[a] - f32::from(packed[a]))
+                        .total_cmp(&(scaled[b] - f32::from(packed[b])))
+                })
+                .unwrap();
+            packed[index] += 1;
+            remainder -= 1;
+        }
+        Self {
+            joints,
+            weights: packed,
+        }
+    }
+
+    pub fn skin_joints(self) -> [u32; 4] {
+        self.joints.map(u32::from)
+    }
+
+    pub fn skin_weights(self) -> [f32; 4] {
+        self.weights.map(|weight| weight as f32 / 255.0)
+    }
+}
+
+impl Default for SkinVertex {
+    fn default() -> Self {
+        Self {
+            joints: [0; 4],
+            weights: [255, 0, 0, 0],
+        }
+    }
+}
+
+#[cfg(test)]
+mod vertex_tests {
+    #[test]
+    fn packed_skin_weights_preserve_unity() {
+        for weights in [[0.25; 4], [0.5, 0.5, 0.0, 0.0], [0.1, 0.2, 0.3, 0.4]] {
+            let packed = super::SkinVertex::packed_skin([0; 4], weights);
+            assert_eq!(
+                packed
+                    .weights
+                    .iter()
+                    .map(|&weight| u16::from(weight))
+                    .sum::<u16>(),
+                255
+            );
+        }
+    }
+}
+
+impl Default for Vertex {
+    fn default() -> Self {
+        Self {
+            position: [0.0; 3],
+            bitangent_sign: 0.0,
+            tex_coords: [0.0; 2],
+            normal: 0,
+            tangent: 0,
+        }
+    }
 }
 
 /// Asymmetric field-of-view angles (in radians).
@@ -140,6 +241,19 @@ pub struct Object {
     /// Per-object color tint multiplied with the material's base_color_factor.
     /// Default: [1.0, 1.0, 1.0, 1.0] (no tint).
     pub color_tint: [f32; 4],
+    /// Fully evaluated pose used to render this object.
+    pub pose: Option<Pose>,
+    /// Pose used when this object was rendered in the previous frame.
+    ///
+    /// Advance this together with [`Self::prev_transform`] by calling
+    /// [`Self::flip`] after the current values have been submitted.
+    pub prev_pose: Option<Pose>,
+    /// Per-instance BLAS storage for posed or skinned meshes.
+    ///
+    /// Persist this object across frames so the ray tracer can refit it.
+    pub blas: ObjectBlas,
+    /// Per-instance compute-skinned vertex buffers for native raster.
+    pub skin: ObjectSkin,
 }
 
 impl From<blade_asset::Handle<Model>> for Object {
@@ -149,7 +263,34 @@ impl From<blade_asset::Handle<Model>> for Object {
             transform: blade_graphics::IDENTITY_TRANSFORM,
             prev_transform: blade_graphics::IDENTITY_TRANSFORM,
             color_tint: [1.0; 4],
+            pose: None,
+            prev_pose: None,
+            blas: ObjectBlas::default(),
+            skin: ObjectSkin::default(),
         }
+    }
+}
+
+impl Object {
+    /// Copy the current transform and pose into the previous-frame slots.
+    ///
+    /// Call this after the object has been submitted for a frame, before
+    /// assigning a new transform or pose.
+    pub fn flip(&mut self) {
+        self.prev_transform = self.transform;
+        self.prev_pose.clone_from(&self.pose);
+    }
+
+    /// Release per-instance GPU storage after prior GPU work has completed.
+    pub fn destroy_gpu(&mut self, gpu: &blade_graphics::Context) {
+        self.blas.destroy(gpu);
+        self.skin.destroy(gpu);
+    }
+
+    /// Release per-instance GPU storage when this frame's fence signals.
+    pub fn retire_gpu(&mut self, temp: &mut FrameResources) {
+        self.blas.retire(temp);
+        self.skin.retire(temp);
     }
 }
 

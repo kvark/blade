@@ -91,6 +91,10 @@ fn parse_wgsl() {
         "MAX_POINT_LIGHTS".to_string(),
         Expansion::Size(blade_render::MAX_POINT_LIGHTS as u32),
     );
+    expansions.insert(
+        "MAX_JOINTS_PER_DRAW".to_string(),
+        Expansion::Size(blade_render::MAX_JOINTS_PER_DRAW as u32),
+    );
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut directories = vec![root.join("blade-render").join("code")];
@@ -123,6 +127,10 @@ fn raster_exports_to_webgl2() {
         "MAX_POINT_LIGHTS".to_string(),
         blade_render::shader::Expansion::Size(blade_render::MAX_POINT_LIGHTS as u32),
     );
+    expansions.insert(
+        "MAX_JOINTS_PER_DRAW".to_string(),
+        blade_render::shader::Expansion::Size(blade_render::MAX_JOINTS_PER_DRAW as u32),
+    );
     let source = blade_render::shader::parse_shader(&shader_raw, &cooker, &expansions);
     let mut module =
         wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
@@ -133,32 +141,40 @@ fn raster_exports_to_webgl2() {
     .validate(&module)
     .unwrap();
 
-    let vertex_ep_index = module
-        .entry_points
-        .iter()
-        .position(|ep| ep.name == "raster_vs")
-        .unwrap();
-    let vertex_ty = module.entry_points[vertex_ep_index].function.arguments[0].ty;
-    let mut ty = module.types[vertex_ty].clone();
-    let naga::TypeInner::Struct {
-        ref mut members, ..
-    } = ty.inner
-    else {
-        panic!("raster vertex input is not a struct");
-    };
-    for (location, member) in members.iter_mut().enumerate() {
-        member.binding = Some(naga::Binding::Location {
-            location: location as u32,
-            interpolation: None,
-            sampling: None,
-            blend_src: None,
-            per_primitive: false,
-        });
+    // Assign locations to the vertex inputs of the exported entry points,
+    // mirroring `blade_graphics`'s `fill_vertex_locations`.
+    let mut location = 0u32;
+    for entry_point in ["raster_vs", "raster_skinned_vs"] {
+        let ep_index = module
+            .entry_points
+            .iter()
+            .position(|ep| ep.name == entry_point)
+            .unwrap();
+        let arguments = module.entry_points[ep_index].function.arguments.clone();
+        for argument in arguments {
+            let mut ty = module.types[argument.ty].clone();
+            let naga::TypeInner::Struct {
+                ref mut members, ..
+            } = ty.inner
+            else {
+                panic!("{entry_point} vertex input is not a struct");
+            };
+            for member in members.iter_mut() {
+                member.binding = Some(naga::Binding::Location {
+                    location,
+                    interpolation: None,
+                    sampling: None,
+                    blend_src: None,
+                    per_primitive: false,
+                });
+                location += 1;
+            }
+            module.types.replace(argument.ty, ty);
+        }
     }
-    module.types.replace(vertex_ty, ty);
 
     let mut stage_blocks: Vec<Vec<String>> = Vec::new();
-    for entry_point in ["raster_vs", "raster_fs"] {
+    for entry_point in ["raster_vs", "raster_skinned_vs", "raster_fs"] {
         let stage = module
             .entry_points
             .iter()
@@ -205,8 +221,14 @@ fn raster_exports_to_webgl2() {
         stage_blocks.push(blocks);
     }
     assert_eq!(
-        stage_blocks[0], stage_blocks[1],
+        stage_blocks[0], stage_blocks[2],
         "WebGL2 requires matching uniform block names in vertex and fragment shaders"
+    );
+    assert!(
+        stage_blocks[1]
+            .iter()
+            .any(|name| name == "skinning_params_block"),
+        "the skinned vertex variant must retain its joint palette"
     );
 }
 

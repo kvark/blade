@@ -2,6 +2,21 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- render/engine: skeletal animation from glTF skins and TRS clips with step,
+  linear, and cubic-spline interpolation. `Engine::set_animation` drives
+  `AnimationPlayer` playback, which evaluates `AnimationModel` into a `Pose`;
+  `Object` carries the pose and `Object::flip` advances motion-vector history.
+  Skinning runs in a compute pass on native backends (feeding per-instance BLAS
+  build/refit for the ray tracer), and in the vertex stage on GLES. Covered by
+  a minimal animated GLB fixture with raster snapshots.
+  - breaking: skinning data (packed 8-bit joints and unorm8 weights) moved to
+    a separate `SkinVertex` buffer, keeping the base `Vertex` at 32 bytes.
+    Render `Object` gained `pose`/`prev_pose` and `flip`. Raster skinning
+    parameters are bound to a second slot for skinned pipelines only.
+    `AccelerationStructureDesc` gained `updatable`, and the encoder gained
+    `update_bottom_level` for refitting animated BLASes.
+  - skinning assumes uniform scale: assets with non-uniform rest or animated
+    scale log a warning at load, and their normals may be slightly skewed.
 - engine/render: support the raster rendering path on WebGL2. Raster vertex
   data now uses ordinary vertex attributes, model and texture uploads observe
   WebGL's buffer binding classes, and the renderer validates its shaders by

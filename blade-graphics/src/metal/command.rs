@@ -573,7 +573,10 @@ impl crate::traits::AccelerationStructureEncoder
         meshes: &[crate::AccelerationStructureMesh],
         scratch_data: crate::BufferPiece,
     ) {
-        let descriptor = super::make_bottom_level_acceleration_structure_desc(meshes);
+        let descriptor = super::make_bottom_level_acceleration_structure_desc(
+            meshes,
+            acceleration_structure.updatable,
+        );
         self.raw
             .buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
                 acceleration_structure.as_ref(),
@@ -581,6 +584,28 @@ impl crate::traits::AccelerationStructureEncoder
                 scratch_data.buffer.as_ref(),
                 scratch_data.offset as usize,
             );
+    }
+
+    fn update_bottom_level(
+        &mut self,
+        acceleration_structure: super::AccelerationStructure,
+        meshes: &[crate::AccelerationStructureMesh],
+        scratch_data: crate::BufferPiece,
+    ) {
+        let descriptor = super::make_bottom_level_acceleration_structure_desc(
+            meshes,
+            acceleration_structure.updatable,
+        );
+        unsafe {
+            self.raw
+                .refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
+                    acceleration_structure.as_ref(),
+                    &descriptor,
+                    Some(acceleration_structure.as_ref()),
+                    Some(scratch_data.buffer.as_ref()),
+                    scratch_data.offset as usize,
+                );
+        }
     }
 
     fn build_top_level(
