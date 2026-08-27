@@ -494,6 +494,7 @@ pub struct Engine {
     choir: Arc<choir::Choir>,
     data_path: String,
     time_ahead: f32,
+    last_dt: f32,
 }
 
 impl Engine {
@@ -784,6 +785,7 @@ impl Engine {
             choir,
             data_path: config.data_path.clone(),
             time_ahead: 0.0,
+            last_dt: 0.016,
         }
     }
 
@@ -817,6 +819,7 @@ impl Engine {
     #[profiling::function]
     pub fn update(&mut self, dt: f32) {
         self.choir.check_panic();
+        self.last_dt = dt;
         self.time_ahead += dt;
         while self.time_ahead >= self.physics.integration_params.dt {
             self.physics.step();
@@ -897,6 +900,31 @@ impl Engine {
                 }
             }
             *raster_config = config;
+        }
+    }
+
+    /// Replace the local lights used by the raster forward pass.
+    ///
+    /// The fragment shader evaluates at most `MAX_POINT_LIGHTS` of these and
+    /// shades with the most promising one (with a stochastic alternative).
+    pub fn set_point_lights(&mut self, lights: &[blade_render::PointLight]) {
+        if let Renderer::Rasterizer {
+            ref mut raster_config,
+            ..
+        } = self.renderer
+        {
+            raster_config.point_lights =
+                [blade_render::PointLight::default(); blade_render::MAX_POINT_LIGHTS];
+            raster_config.point_light_count =
+                lights.len().min(blade_render::MAX_POINT_LIGHTS) as u32;
+            for (slot, light) in raster_config
+                .point_lights
+                .iter_mut()
+                .zip(lights.iter())
+                .take(blade_render::MAX_POINT_LIGHTS)
+            {
+                *slot = *light;
+            }
         }
     }
 
@@ -1003,6 +1031,13 @@ impl Engine {
                         denoiser_enabled.then_some(*denoiser_config),
                     );
                 }
+            }
+        }
+
+        if let Some(ref pipeline) = self.particle_pipeline {
+            let dt = self.last_dt.clamp(0.001, 0.05);
+            for (_, system) in self.particle_systems.iter_mut() {
+                system.update(pipeline, command_encoder, dt);
             }
         }
 
@@ -1131,16 +1166,29 @@ impl Engine {
                             finish_op: gpu::FinishOp::Store,
                         }),
                     },
-                ) && can_render
-                {
-                    inner.render(
-                        &mut pass,
-                        &render_camera,
-                        &self.render_objects,
-                        &self.asset_hub,
-                        self.environment_map,
-                        *raster_config,
-                    );
+                ) {
+                    if can_render {
+                        inner.render(
+                            &mut pass,
+                            &render_camera,
+                            &self.render_objects,
+                            &self.asset_hub,
+                            self.environment_map,
+                            *raster_config,
+                        );
+                        if let Some(ref pipeline) = self.particle_pipeline {
+                            let target_size = gpu::Extent {
+                                width: physical_size.width,
+                                height: physical_size.height,
+                                depth: 1,
+                            };
+                            let particle_camera =
+                                Self::make_particle_camera(&render_camera, target_size);
+                            for (_, system) in self.particle_systems.iter() {
+                                system.draw(pipeline, &mut pass, &particle_camera);
+                            }
+                        }
+                    }
                 }
 
                 // GUI is a dev-only overlay, so a separate pass keeps the raster path simpler.

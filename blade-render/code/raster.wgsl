@@ -1,6 +1,11 @@
 #include "brdf.inc.wgsl"
 #include "color.inc.wgsl"
 
+struct PointLight {
+    pos_radius: vec4<f32>,
+    color: vec4<f32>,
+}
+
 struct RasterFrameParams {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
@@ -12,9 +17,11 @@ struct RasterFrameParams {
     // w component is a flag for the procedural space sky
     ambient_color: vec4<f32>,
     // x: environment map enabled, y: the surface needs sRGB encoding
+    // z: point light count, w: stochastic seed
     settings: vec4<f32>,
     // x: enabled, y: strength, z: receiver normal bias, w: texel size
     shadow_params: vec4<f32>,
+    point_lights: array<PointLight, 8>,
 }
 
 struct RasterDrawParams {
@@ -129,6 +136,73 @@ fn directional_shadow(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
     return mix(1.0, visibility, frame_params.shadow_params.y);
 }
 
+fn hash31(p: vec3<f32>) -> f32 {
+    return fract(sin(dot(p, vec3<f32>(127.1, 311.7, 74.7))) * 43758.5453);
+}
+
+fn point_light_score(light: PointLight, world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
+    let delta = light.pos_radius.xyz - world_pos;
+    let dist2 = max(dot(delta, delta), 0.04);
+    let dist = sqrt(dist2);
+    let range = max(light.pos_radius.w, 0.01);
+    let falloff = max(1.0 - dist / range, 0.0);
+    let ldir = delta / dist;
+    let ndotl = max(dot(n, ldir), 0.0);
+    let intensity = max(light.color.x, max(light.color.y, light.color.z));
+    return intensity * falloff * falloff * (0.2 + 0.8 * ndotl);
+}
+
+fn shade_point_light(mat: Material, n: vec3<f32>, v: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+    let count = u32(frame_params.settings.z);
+    if (count == 0u) {
+        return vec3<f32>(0.0);
+    }
+
+    var scores: array<f32, 8>;
+    var best_i = 0u;
+    var best_score = 0.0;
+    var sum_score = 0.0;
+    for (var i = 0u; i < 8u; i++) {
+        if (i >= count) {
+            scores[i] = 0.0;
+            continue;
+        }
+        let score = point_light_score(frame_params.point_lights[i], world_pos, n);
+        scores[i] = score;
+        sum_score += score;
+        if (score > best_score) {
+            best_score = score;
+            best_i = i;
+        }
+    }
+
+    var chosen = best_i;
+    // Most fragments take the winner. A minority pick weighted-random so a
+    // second nearby crystal still contributes without an 8-light inner loop.
+    if (sum_score > 1e-5 && hash31(world_pos + frame_params.settings.w) > 0.72) {
+        var acc = 0.0;
+        let pick = hash31(world_pos * 3.1 + frame_params.settings.www) * sum_score;
+        for (var i = 0u; i < count; i++) {
+            acc += scores[i];
+            if (pick <= acc) {
+                chosen = i;
+                break;
+            }
+        }
+    }
+
+    let light = frame_params.point_lights[chosen];
+    let delta = light.pos_radius.xyz - world_pos;
+    let dist2 = max(dot(delta, delta), 0.04);
+    let dist = sqrt(dist2);
+    let range = max(light.pos_radius.w, 0.01);
+    let falloff = max(1.0 - dist / range, 0.0);
+    let ldir = delta / dist;
+    let brdf = evaluate_brdf(mat, n, v, ldir);
+    let atten = falloff * falloff / dist2;
+    return (mat.diffuse_albedo * brdf.diffuse + brdf.specular) * light.color.xyz * atten;
+}
+
 @fragment
 fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let mr_sample = textureSample(metallic_roughness_tex, samp, input.uv);
@@ -158,7 +232,8 @@ fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let light = (mat.diffuse_albedo * brdf.diffuse + brdf.specular) * frame_params.light_color.xyz * visibility;
     let ambient = evaluate_ambient(mat) * frame_params.ambient_color.xyz;
     let emissive = draw_params.emissive_factor.rgb * textureSample(emissive_tex, samp, input.uv).rgb;
-    let color = ambient + light + emissive;
+    let local = shade_point_light(mat, n, v, input.world_pos);
+    let color = ambient + light + local + emissive;
 
     let mapped = color / (color + vec3<f32>(1.0));
     return vec4<f32>(encode_surface_color(mapped, frame_params.settings.y > 0.5), 1.0);

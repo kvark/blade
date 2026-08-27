@@ -2,6 +2,36 @@ use crate::{AssetHub, CameraParams, DummyResources, Object, RenderConfig, Shader
 use blade_graphics as gpu;
 use std::mem;
 
+/// Maximum local lights evaluated in the forward pass. The fragment shader
+/// picks one of these (highest score, with a stochastic alternative).
+pub const MAX_POINT_LIGHTS: usize = 8;
+
+/// A local omni light. Radius is a hard cutoff in world units.
+#[derive(Clone, Copy, Debug)]
+pub struct PointLight {
+    pub position: mint::Vector3<f32>,
+    pub color: mint::Vector3<f32>,
+    pub radius: f32,
+}
+
+impl Default for PointLight {
+    fn default() -> Self {
+        Self {
+            position: mint::Vector3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            color: mint::Vector3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            radius: 1.0,
+        }
+    }
+}
+
 /// Configuration of the rasterized frame.
 ///
 /// Note: the surface appearance is described by the materials of the
@@ -17,6 +47,10 @@ pub struct RasterConfig {
     pub space_sky: bool,
     /// Optional real-time directional shadow-map effect.
     pub directional_shadows: Option<DirectionalShadowConfig>,
+    /// Local lights considered by the forward pass. Only the first
+    /// `point_light_count` entries are used.
+    pub point_lights: [PointLight; MAX_POINT_LIGHTS],
+    pub point_light_count: u32,
 }
 
 /// Controls the rasterizer's camera-relative directional shadow map.
@@ -67,6 +101,8 @@ impl Default for RasterConfig {
             },
             space_sky: false,
             directional_shadows: None,
+            point_lights: [PointLight::default(); MAX_POINT_LIGHTS],
+            point_light_count: 0,
         }
     }
 }
@@ -83,6 +119,14 @@ struct RasterFrameParams {
     ambient_color: [f32; 4],
     settings: [f32; 4],
     shadow_params: [f32; 4],
+    point_lights: [PointLightGpu; MAX_POINT_LIGHTS],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct PointLightGpu {
+    pos_radius: [f32; 4],
+    color: [f32; 4],
 }
 
 #[repr(C)]
@@ -790,8 +834,8 @@ impl Rasterizer {
                 env_map_enabled as u32 as f32,
                 // the surface may expect us to encode the values ourselves
                 (self.color_space == gpu::ColorSpace::Srgb) as u32 as f32,
-                0.0,
-                0.0,
+                config.point_light_count.min(MAX_POINT_LIGHTS as u32) as f32,
+                pos.x + pos.y * 1.37 + pos.z * 9.17,
             ],
             shadow_params: [
                 config.directional_shadows.is_some() as u32 as f32,
@@ -799,8 +843,33 @@ impl Rasterizer {
                 shadow.normal_bias.max(0.0),
                 1.0 / self.shadow_size as f32,
             ],
+            point_lights: pack_point_lights(&config),
         }
     }
+}
+
+fn pack_point_lights(config: &RasterConfig) -> [PointLightGpu; MAX_POINT_LIGHTS] {
+    let mut lights = [PointLightGpu {
+        pos_radius: [0.0; 4],
+        color: [0.0; 4],
+    }; MAX_POINT_LIGHTS];
+    let count = (config.point_light_count as usize).min(MAX_POINT_LIGHTS);
+    for (slot, src) in lights
+        .iter_mut()
+        .zip(config.point_lights.iter())
+        .take(count)
+    {
+        *slot = PointLightGpu {
+            pos_radius: [
+                src.position.x,
+                src.position.y,
+                src.position.z,
+                src.radius.max(0.01),
+            ],
+            color: [src.color.x, src.color.y, src.color.z, 0.0],
+        };
+    }
+    lights
 }
 
 fn make_light_view_proj(
