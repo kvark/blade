@@ -496,7 +496,7 @@ impl Rasterizer {
         camera: &crate::Camera,
         objects: &[Object],
         asset_hub: &AssetHub,
-        config: RasterConfig,
+        config: &RasterConfig,
     ) {
         let Some(shadow_config) = config.directional_shadows else {
             return;
@@ -560,11 +560,11 @@ impl Rasterizer {
         objects: &[Object],
         asset_hub: &AssetHub,
         environment_map: Option<blade_asset::Handle<crate::Texture>>,
-        config: RasterConfig,
+        config: &RasterConfig,
     ) {
         let env_map_enabled = environment_map.is_some();
-        let frame_params = self.make_frame_params(camera, &config, env_map_enabled);
-        let light_params = pack_point_lights(&config, camera);
+        let frame_params = self.make_frame_params(camera, config, env_map_enabled);
+        let light_params = pack_point_lights(config, camera);
         if let mut pc = pass.with(&self.pipelines.main) {
             for object in objects.iter() {
                 let model = &asset_hub.models[object.model];
@@ -684,10 +684,10 @@ impl Rasterizer {
         camera: &crate::Camera,
         environment_map: Option<blade_asset::Handle<crate::Texture>>,
         asset_hub: &AssetHub,
-        config: RasterConfig,
+        config: &RasterConfig,
     ) {
         let env_map_enabled = environment_map.is_some();
-        let frame_params = self.make_frame_params(camera, &config, env_map_enabled);
+        let frame_params = self.make_frame_params(camera, config, env_map_enabled);
         let env_map = environment_map
             .map(|handle| asset_hub.textures[handle].view)
             .unwrap_or(self.dummy.black_view);
