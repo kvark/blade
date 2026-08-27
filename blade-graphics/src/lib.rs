@@ -727,6 +727,9 @@ pub struct AccelerationStructureDesc<'a> {
     pub name: &'a str,
     pub ty: AccelerationStructureType,
     pub size: u64,
+    /// When set, the BLAS can later be refit with
+    /// [`AccelerationStructureEncoder::update_bottom_level`].
+    pub updatable: bool,
 }
 
 #[non_exhaustive]
@@ -780,9 +783,11 @@ impl Default for AccelerationStructureInstance {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AccelerationStructureSizes {
-    /// Size of the permanent GPU data
+    // TODO: let the size query take `updatable` if conservative sizing becomes costly.
+    /// Permanent GPU data. For a BLAS this is large enough for either a
+    /// one-shot or a refittable structure.
     pub data: u64,
-    /// Size of the scratch space
+    /// Scratch space. For a BLAS this covers a full build and a later refit.
     pub scratch: u64,
 }
 

@@ -478,6 +478,15 @@ impl crate::traits::AccelerationStructureEncoder for super::PassEncoder<'_, ()> 
         unimplemented!("acceleration structures are not available on GLES")
     }
 
+    fn update_bottom_level(
+        &mut self,
+        _acceleration_structure: super::AccelerationStructure,
+        _meshes: &[crate::AccelerationStructureMesh],
+        _scratch_data: crate::BufferPiece,
+    ) {
+        unimplemented!("acceleration structures are not available on GLES")
+    }
+
     fn build_top_level(
         &mut self,
         _acceleration_structure: super::AccelerationStructure,
@@ -538,14 +547,12 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_> {
     type BufferPiece = crate::BufferPiece;
 
     fn bind_vertex(&mut self, index: u32, vertex_buf: crate::BufferPiece) {
-        assert_eq!(index, 0);
-        self.commands.push(super::Command::BindVertex {
-            buffer: vertex_buf.buffer.raw.expect("null GLES buffer"),
-        });
+        let buffer = vertex_buf.buffer.raw.expect("null GLES buffer");
         for (i, info) in self.vertex_attributes.iter().enumerate() {
             if info.buffer_index == index {
                 self.commands.push(super::Command::SetVertexAttribute {
                     index: i as u32,
+                    buffer,
                     format: info.attrib.format,
                     offset: (vertex_buf.offset + info.attrib.offset as u64)
                         .try_into()
@@ -1220,16 +1227,15 @@ impl super::Command {
                         size as i32,
                     );
                 }
-                Self::BindVertex { buffer } => {
-                    gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
-                }
                 Self::SetVertexAttribute {
                     index,
+                    buffer,
                     format,
                     offset,
                     stride,
                     instanced,
                 } => {
+                    gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
                     let (data_size, data_type) = format.describe();
                     match data_type {
                         glow::FLOAT => gl.vertex_attrib_pointer_f32(

@@ -98,7 +98,7 @@ fn resolve_hit(intersection: RayIntersection) -> PathVertex {
     );
 
     let positions_object = entry.geometry_to_object * mat3x4(
-        vec4<f32>(vertices[0].pos, 1.0), vec4<f32>(vertices[1].pos, 1.0), vec4<f32>(vertices[2].pos, 1.0)
+        vec4<f32>(vertices[0].position, 1.0), vec4<f32>(vertices[1].position, 1.0), vec4<f32>(vertices[2].position, 1.0)
     );
     let positions = intersection.object_to_world * mat3x4(
         vec4<f32>(positions_object[0], 1.0), vec4<f32>(positions_object[1], 1.0), vec4<f32>(positions_object[2], 1.0)
@@ -108,16 +108,16 @@ fn resolve_hit(intersection: RayIntersection) -> PathVertex {
     let tex_coords = mat3x2(vertices[0].tex_coords, vertices[1].tex_coords, vertices[2].tex_coords) * barycentrics;
     let normal_geo = normalize(mat3x3(decode_normal(vertices[0].normal), decode_normal(vertices[1].normal), decode_normal(vertices[2].normal)) * barycentrics);
     let tangent_geo = normalize(mat3x3(decode_normal(vertices[0].tangent), decode_normal(vertices[1].tangent), decode_normal(vertices[2].tangent)) * barycentrics);
-    let bitangent_geo = normalize(cross(normal_geo, tangent_geo)) * vertices[0].bitangent_sign;
-    let tangent_space_geo = mat3x3(tangent_geo, bitangent_geo, normal_geo);
-    let geo_to_world_rot = normalize(unpack4x8snorm(entry.geometry_to_world_rotation));
+    let tangent_space_world = hit_tangent_space(
+        entry, intersection.object_to_world, normal_geo, tangent_geo, vertices[0].bitangent_sign,
+    );
 
     let lod = 0.0; //TODO: ray differentials
     var vertex: PathVertex;
     vertex.position = positions * barycentrics;
-    vertex.flat_normal = entry.winding * normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
+    vertex.flat_normal = hit_winding(entry) * normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
     let normal_local = sample_hit_normal_map(entry, tex_coords, lod, 0u);
-    vertex.normal = normalize(qrot(geo_to_world_rot, tangent_space_geo * normal_local));
+    vertex.normal = normalize(tangent_space_world * normal_local);
     vertex.material = sample_hit_material(entry, tex_coords, lod, 0u);
     vertex.emissive = sample_hit_emissive(entry, tex_coords, lod, 0u);
     return vertex;

@@ -178,6 +178,7 @@ impl Sampler {
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct AccelerationStructure {
     raw: *mut ProtocolObject<dyn metal::MTLAccelerationStructure>,
+    updatable: bool,
 }
 
 unsafe impl Send for AccelerationStructure {}
@@ -187,6 +188,7 @@ impl Default for AccelerationStructure {
     fn default() -> Self {
         Self {
             raw: ptr::null_mut(),
+            updatable: false,
         }
     }
 }
@@ -717,6 +719,7 @@ impl Drop for Context {
 
 fn make_bottom_level_acceleration_structure_desc(
     meshes: &[crate::AccelerationStructureMesh],
+    updatable: bool,
 ) -> Retained<metal::MTLPrimitiveAccelerationStructureDescriptor> {
     let mut geometry_descriptors = Vec::with_capacity(meshes.len());
     for mesh in meshes {
@@ -751,5 +754,8 @@ fn make_bottom_level_acceleration_structure_desc(
         objc2_foundation::NSArray::from_retained_slice(&geometry_descriptors);
     let accel_descriptor = metal::MTLPrimitiveAccelerationStructureDescriptor::descriptor();
     accel_descriptor.setGeometryDescriptors(Some(&geometry_descriptor_array));
+    if updatable {
+        accel_descriptor.setUsage(metal::MTLAccelerationStructureUsage::Refit);
+    }
     accel_descriptor
 }

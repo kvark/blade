@@ -192,6 +192,7 @@ pub fn generate_asteroid_mesh(
                 tex_coords: [0.0, 0.0],
                 normal: encoded_normal,
                 tangent: encode_normal([1.0, 0.0, 0.0]),
+                ..Default::default()
             });
         }
         indices.push(base_idx);
@@ -284,6 +285,7 @@ pub fn generate_planet_model(
                 tex_coords: [0.0, 0.0],
                 normal: encode_normal(normal),
                 tangent: encode_normal([1.0, 0.0, 0.0]),
+                ..Default::default()
             });
         }
         idxs.extend_from_slice(&[base, base + 1, base + 2]);
@@ -348,6 +350,7 @@ fn generate_ring_band(
             tex_coords: [0.0, 0.0],
             normal: en,
             tangent: encode_normal([1.0, 0.0, 0.0]),
+            ..Default::default()
         });
         // Outer vertex
         vertices.push(blade_render::Vertex {
@@ -356,6 +359,7 @@ fn generate_ring_band(
             tex_coords: [0.0, 0.0],
             normal: en,
             tangent: encode_normal([1.0, 0.0, 0.0]),
+            ..Default::default()
         });
     }
 
@@ -472,6 +476,7 @@ pub fn generate_laser_mesh(length: f32, radius: f32) -> (Vec<blade_render::Verte
                 tex_coords: [0.0, 0.0],
                 normal: en,
                 tangent: encode_normal([0.0, 0.0, 1.0]),
+                ..Default::default()
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);

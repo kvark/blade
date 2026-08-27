@@ -1,6 +1,9 @@
 mod debug;
 
-use crate::{CameraParams, DebugLine, DummyResources, EnvironmentMap, RenderConfig, Shaders};
+use crate::{
+    CameraParams, DebugLine, DummyResources, EnvironmentMap, RenderConfig, Shaders,
+    skin::{self, SkinPass},
+};
 use debug::{DebugEntry, DebugVariance};
 
 pub use debug::DebugBlit;
@@ -20,15 +23,6 @@ fn mat4_transform(t: &blade_graphics::Transform) -> glam::Mat4 {
     }
     .transpose()
 }
-fn mat3_transform(t_orig: &blade_graphics::Transform) -> glam::Mat3 {
-    let t = mint::ColumnMatrix3x4::from(*t_orig);
-    glam::Mat3 {
-        x_axis: t.x.into(),
-        y_axis: t.y.into(),
-        z_axis: t.z.into(),
-    }
-}
-
 struct Samplers {
     nearest: blade_graphics::Sampler,
     linear: blade_graphics::Sampler,
@@ -506,9 +500,14 @@ pub struct RayTracer {
     fill_pipeline: blade_graphics::ComputePipeline,
     main_pipeline: blade_graphics::ComputePipeline,
     path_trace_pipeline: blade_graphics::ComputePipeline,
+    skin: SkinPass,
     post_proc_pipeline: blade_graphics::RenderPipeline,
     blur: Blur,
+    /// Owned by the ray tracer until the next scene build.
     acceleration_structure: blade_graphics::AccelerationStructure,
+    /// Non-owning handle to the old scene used for this frame's motion queries.
+    /// Its ownership is transferred to the current `FrameResources` in
+    /// `build_scene` and it must never be destroyed directly by the ray tracer.
     prev_acceleration_structure: blade_graphics::AccelerationStructure,
     env_map: EnvironmentMap,
     dummy: DummyResources,
@@ -524,6 +523,8 @@ pub struct RayTracer {
     color_space: blade_graphics::ColorSpace,
     frame_index: usize,
     frame_scene_built: usize,
+    scene_models: Vec<blade_asset::Handle<crate::Model>>,
+    scene_topology_changed: bool,
     is_frozen: bool,
     reset_accumulation: bool,
     show_accumulation: bool,
@@ -715,11 +716,12 @@ struct PostProcData {
 struct HitEntry {
     index_buf: u32,
     vertex_buf: u32,
-    winding: f32,
-    geometry_to_world_rotation: [i8; 4],
+    prev_vertex_buf: u32,
+    flags: u32,
     //Note: it's technically `mat4x3` on WGSL side,
     // but it's aligned and sized the same way as `mat4`.
     geometry_to_object: mint::ColumnMatrix4<f32>,
+    prev_geometry_to_object: mint::ColumnMatrix4<f32>,
     prev_object_to_world: mint::ColumnMatrix4<f32>,
     base_color_texture: u32,
     base_color_factor: [u8; 4],
@@ -731,6 +733,94 @@ struct HitEntry {
     emissive_texture: u32,
     //Note: aligned to 16 bytes, matching `vec4` on the WGSL side
     emissive_factor: [f32; 4],
+}
+
+struct AnimatedBlasWork {
+    acceleration_structure: blade_graphics::AccelerationStructure,
+    meshes: Vec<blade_graphics::AccelerationStructureMesh>,
+    scratch: blade_graphics::Buffer,
+    update: bool,
+}
+
+struct AnimatedBlasSlot {
+    vertex_buffer: blade_graphics::Buffer,
+    acceleration_structure: blade_graphics::AccelerationStructure,
+    scratch: blade_graphics::Buffer,
+    model: blade_asset::Handle<crate::Model>,
+    geometries: Box<[AnimatedGeometrySignature]>,
+}
+
+#[derive(PartialEq)]
+struct AnimatedGeometrySignature {
+    vertex_range: std::ops::Range<u32>,
+    index_buffer: blade_graphics::Buffer,
+    index_offset: u64,
+    index_type: Option<blade_graphics::IndexType>,
+    triangle_count: u32,
+    opaque: bool,
+}
+
+impl AnimatedGeometrySignature {
+    fn matches(&self, model: &crate::Model, geometry: &crate::model::Geometry) -> bool {
+        self.vertex_range == geometry.vertex_range
+            && self.index_buffer == model.index_buffer
+            && self.index_offset == geometry.index_offset
+            && self.index_type == geometry.index_type
+            && self.triangle_count == geometry.triangle_count
+            && self.opaque != model.materials[geometry.material_index].transparent
+    }
+}
+
+impl AnimatedBlasSlot {
+    fn matches(&self, handle: blade_asset::Handle<crate::Model>, model: &crate::Model) -> bool {
+        self.model == handle
+            && self.geometries.len() == model.geometries.len()
+            && self
+                .geometries
+                .iter()
+                .zip(&model.geometries)
+                .all(|(signature, geometry)| signature.matches(model, geometry))
+    }
+
+    fn destroy(self, gpu: &blade_graphics::Context) {
+        gpu.destroy_buffer(self.vertex_buffer);
+        gpu.destroy_acceleration_structure(self.acceleration_structure);
+        gpu.destroy_buffer(self.scratch);
+    }
+
+    fn retire(self, temp: &mut FrameResources) {
+        temp.buffers.push(self.vertex_buffer);
+        temp.acceleration_structures
+            .push(self.acceleration_structure);
+        temp.buffers.push(self.scratch);
+    }
+}
+
+/// Per-object GPU storage for a posed or skinned instance.
+///
+/// Persist this with the [`crate::Object`] across frames so BLASes can be refit.
+#[derive(Default)]
+pub struct ObjectBlas {
+    generations: crate::util::RollingBuffer<AnimatedBlasSlot, 3>,
+    /// Dynamic vertex generation used by the immediately preceding scene.
+    previous_generation: Option<usize>,
+}
+
+impl ObjectBlas {
+    /// Release the per-instance resources after prior GPU work has completed.
+    pub fn destroy(&mut self, gpu: &blade_graphics::Context) {
+        for slot in self.generations.drain() {
+            slot.destroy(gpu);
+        }
+        self.previous_generation = None;
+    }
+
+    pub(crate) fn retire(&mut self, temp: &mut FrameResources) {
+        for slot in self.generations.drain() {
+            slot.retire(temp);
+        }
+        self.previous_generation = None;
+    }
 }
 
 struct ShaderPipelines {
@@ -904,6 +994,8 @@ impl RayTracer {
         );
 
         let sp = ShaderPipelines::init(&shaders, config, gpu, shader_man).unwrap();
+        let skin = SkinPass::new(shader_man[shaders.skin].raw.as_ref().unwrap(), gpu)
+            .expect("compute skinning is required for the ray tracer");
         let debug = {
             let sh_draw = shader_man[shaders.debug_draw].raw.as_ref().unwrap();
             let sh_blit = shader_man[shaders.debug_blit].raw.as_ref().unwrap();
@@ -946,6 +1038,7 @@ impl RayTracer {
             fill_pipeline: sp.fill,
             main_pipeline: sp.main,
             path_trace_pipeline: sp.path_trace,
+            skin,
             post_proc_pipeline: sp.post_proc,
             blur: Blur {
                 temporal_accum_pipeline: sp.temporal_accum,
@@ -967,6 +1060,8 @@ impl RayTracer {
             color_space: config.color_space,
             frame_index: 0,
             frame_scene_built: 0,
+            scene_models: Vec::new(),
+            scene_topology_changed: false,
             is_frozen: false,
             reset_accumulation: true,
             show_accumulation: false,
@@ -982,9 +1077,6 @@ impl RayTracer {
             gpu.destroy_buffer(self.hit_buffer);
         }
         gpu.destroy_acceleration_structure(self.acceleration_structure);
-        if self.prev_acceleration_structure != blade_graphics::AccelerationStructure::default() {
-            gpu.destroy_acceleration_structure(self.prev_acceleration_structure);
-        }
         // env map, dummy, and debug
         self.env_map.destroy(gpu);
         self.dummy.destroy(gpu);
@@ -998,6 +1090,7 @@ impl RayTracer {
         gpu.destroy_compute_pipeline(&mut self.fill_pipeline);
         gpu.destroy_compute_pipeline(&mut self.main_pipeline);
         gpu.destroy_compute_pipeline(&mut self.path_trace_pipeline);
+        self.skin.destroy(gpu);
         gpu.destroy_render_pipeline(&mut self.post_proc_pipeline);
     }
 
@@ -1014,6 +1107,7 @@ impl RayTracer {
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.fill_gbuf));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.ray_trace));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.path_trace));
+        tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.skin));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.a_trous));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.post_proc));
         tasks.extend(asset_hub.shaders.hot_reload(&mut self.shaders.debug_draw));
@@ -1047,6 +1141,11 @@ impl RayTracer {
             && let Ok(ref shader) = asset_hub.shaders[self.shaders.path_trace].raw
         {
             self.path_trace_pipeline = ShaderPipelines::create_path_trace(shader, gpu);
+        }
+        if self.shaders.skin != old.skin
+            && let Ok(ref shader) = asset_hub.shaders[self.shaders.skin].raw
+        {
+            self.skin.recreate(shader, gpu);
         }
         if self.shaders.a_trous != old.a_trous
             && let Ok(ref shader) = asset_hub.shaders[self.shaders.a_trous].raw
@@ -1160,12 +1259,18 @@ impl RayTracer {
     pub fn build_scene(
         &mut self,
         command_encoder: &mut blade_graphics::CommandEncoder,
-        objects: &[crate::Object],
+        objects: &mut [crate::Object],
         env_map: Option<blade_asset::Handle<crate::Texture>>,
         asset_hub: &crate::AssetHub,
         gpu: &blade_graphics::Context,
         temp: &mut FrameResources,
     ) {
+        let scene_models: Vec<_> = objects.iter().map(|object| object.model).collect();
+        self.scene_topology_changed = self.acceleration_structure
+            != blade_graphics::AccelerationStructure::default()
+            && scene_models != self.scene_models;
+        self.scene_models = scene_models;
+
         let (env_view, env_extent) = match env_map {
             Some(handle) => {
                 let asset = &asset_hub.textures[handle];
@@ -1176,12 +1281,14 @@ impl RayTracer {
         self.env_map
             .assign(env_view, env_extent, command_encoder, gpu);
 
+        self.prev_acceleration_structure = std::mem::take(&mut self.acceleration_structure);
         if self.prev_acceleration_structure != blade_graphics::AccelerationStructure::default() {
+            // The old current scene becomes the previous scene used by this
+            // frame. Transfer ownership to this frame so FramePacer destroys
+            // it only after this frame's fence signals.
             temp.acceleration_structures
                 .push(self.prev_acceleration_structure);
         }
-        self.prev_acceleration_structure = self.acceleration_structure;
-
         let geometry_count = objects
             .iter()
             .map(|object| {
@@ -1219,6 +1326,9 @@ impl RayTracer {
         let mut geometry_index = 0;
         let mut instances = Vec::with_capacity(objects.len());
         let mut blases = Vec::with_capacity(objects.len());
+        let mut dynamic_blas_work = Vec::new();
+        let mut skin_jobs = Vec::new();
+        let mut vertex_copies = Vec::new();
         let mut texture_indices =
             HashMap::<blade_asset::Handle<crate::Texture>, blade_graphics::ResourceIndex>::new();
         // Note: this only borrows `self.textures`, so the buffer arrays stay available.
@@ -1234,28 +1344,186 @@ impl RayTracer {
                 }
             };
 
-        for object in objects {
-            let m3_object = mat3_transform(&object.transform);
+        for object in objects.iter_mut() {
+            let transform = object.transform;
+            let prev_transform = object.prev_transform;
+            let pose = object.pose.clone();
+            let prev_pose = object.prev_pose.clone();
             let model = &asset_hub.models[object.model];
+            let pose = pose.as_ref();
+            let prev_pose = prev_pose.as_ref();
+            let dynamic = model
+                .geometries
+                .iter()
+                .any(|geometry| geometry.skin_index.is_some())
+                || pose.is_some();
+            let geometry_transforms: Vec<_> = model
+                .geometries
+                .iter()
+                .map(|geometry| model.geometry_transform(geometry, pose))
+                .collect();
+            let prev_geometry_transforms: Vec<_> = model
+                .geometries
+                .iter()
+                .map(|geometry| model.geometry_transform(geometry, prev_pose))
+                .collect();
+
+            let (
+                active_vertex_buffer,
+                previous_vertex_buffer,
+                current_baked,
+                previous_baked,
+                current_generation,
+            ) = if dynamic {
+                let vertex_count = model.vertex_count();
+                let vertex_size = (vertex_count * mem::size_of::<crate::Vertex>()) as u64;
+                let previous_vertex_buffer = object
+                    .blas
+                    .previous_generation
+                    .and_then(|index| object.blas.generations.get(index))
+                    .filter(|slot| slot.matches(object.model, model))
+                    .map(|slot| slot.vertex_buffer);
+                let (generation, slot) = object.blas.generations.next_indexed();
+                let reuse = slot
+                    .as_ref()
+                    .is_some_and(|slot| slot.matches(object.model, model));
+                if !reuse {
+                    if let Some(old) = slot.take() {
+                        old.retire(temp);
+                    }
+                    let vertex_buffer = gpu.create_buffer(blade_graphics::BufferDesc {
+                        name: "animated vertices",
+                        size: vertex_size.max(1),
+                        memory: blade_graphics::Memory::Device,
+                    });
+                    let vertex_stride = mem::size_of::<crate::Vertex>() as u32;
+                    let size_meshes: Vec<_> = model
+                        .geometries
+                        .iter()
+                        .map(|geometry| blade_graphics::AccelerationStructureMesh {
+                            vertex_data: vertex_buffer
+                                .at(geometry.vertex_range.start as u64 * vertex_stride as u64),
+                            vertex_format: blade_graphics::VertexFormat::F32Vec3,
+                            vertex_stride,
+                            vertex_count: geometry.vertex_range.end - geometry.vertex_range.start,
+                            index_data: model.index_buffer.at(geometry.index_offset),
+                            index_type: geometry.index_type,
+                            triangle_count: geometry.triangle_count,
+                            transform_data: blade_graphics::Buffer::default().into(),
+                            is_opaque: !model.materials[geometry.material_index].transparent,
+                        })
+                        .collect();
+                    let sizes = gpu.get_bottom_level_acceleration_structure_sizes(&size_meshes);
+                    let acceleration_structure = gpu.create_acceleration_structure(
+                        blade_graphics::AccelerationStructureDesc {
+                            name: "animated BLAS",
+                            ty: blade_graphics::AccelerationStructureType::BottomLevel,
+                            size: sizes.data,
+                            updatable: true,
+                        },
+                    );
+                    let scratch = gpu.create_buffer(blade_graphics::BufferDesc {
+                        name: "animated BLAS scratch",
+                        size: sizes.scratch,
+                        memory: blade_graphics::Memory::Device,
+                    });
+                    *slot = Some(AnimatedBlasSlot {
+                        vertex_buffer,
+                        acceleration_structure,
+                        scratch,
+                        model: object.model,
+                        geometries: model
+                            .geometries
+                            .iter()
+                            .map(|geometry| AnimatedGeometrySignature {
+                                vertex_range: geometry.vertex_range.clone(),
+                                index_buffer: model.index_buffer,
+                                index_offset: geometry.index_offset,
+                                index_type: geometry.index_type,
+                                triangle_count: geometry.triangle_count,
+                                opaque: !model.materials[geometry.material_index].transparent,
+                            })
+                            .collect(),
+                    });
+                }
+                let slot = slot.as_ref().unwrap();
+                let vertex_buffer = slot.vertex_buffer;
+                skin::queue_model(
+                    model,
+                    pose,
+                    Some(&geometry_transforms),
+                    vertex_buffer,
+                    0,
+                    &mut skin_jobs,
+                    &mut vertex_copies,
+                );
+
+                let vertex_stride = mem::size_of::<crate::Vertex>() as u32;
+                let meshes: Vec<_> = model
+                    .geometries
+                    .iter()
+                    .map(|geometry| blade_graphics::AccelerationStructureMesh {
+                        vertex_data: vertex_buffer
+                            .at(geometry.vertex_range.start as u64 * vertex_stride as u64),
+                        vertex_format: blade_graphics::VertexFormat::F32Vec3,
+                        vertex_stride,
+                        vertex_count: geometry.vertex_range.end - geometry.vertex_range.start,
+                        index_data: model.index_buffer.at(geometry.index_offset),
+                        index_type: geometry.index_type,
+                        triangle_count: geometry.triangle_count,
+                        transform_data: blade_graphics::Buffer::default().into(),
+                        is_opaque: !model.materials[geometry.material_index].transparent,
+                    })
+                    .collect();
+                dynamic_blas_work.push(AnimatedBlasWork {
+                    acceleration_structure: slot.acceleration_structure,
+                    meshes,
+                    scratch: slot.scratch,
+                    update: reuse,
+                });
+                let (previous_vertex_buffer, previous_baked) = match previous_vertex_buffer {
+                    Some(buffer) => (buffer, true),
+                    None if skin::model_needs_vertex_skin(model) => (vertex_buffer, true),
+                    None => (model.vertex_buffer, false),
+                };
+                (
+                    vertex_buffer,
+                    previous_vertex_buffer,
+                    true,
+                    previous_baked,
+                    Some(generation),
+                )
+            } else {
+                (model.vertex_buffer, model.vertex_buffer, false, false, None)
+            };
+            object.blas.previous_generation = current_generation;
+
             instances.push(blade_graphics::AccelerationStructureInstance {
                 acceleration_structure_index: blases.len() as u32,
-                transform: object.transform,
+                transform,
                 mask: 0xFF,
                 custom_index: geometry_index as u32,
             });
-            blases.push(model.acceleration_structure);
+            blases.push(if dynamic {
+                dynamic_blas_work.last().unwrap().acceleration_structure
+            } else {
+                model.acceleration_structure
+            });
 
-            for geometry in model.geometries.iter() {
+            for (geometry_index_in_model, geometry) in model.geometries.iter().enumerate() {
+                let geometry_transform = if current_baked {
+                    blade_graphics::IDENTITY_TRANSFORM
+                } else {
+                    geometry_transforms[geometry_index_in_model]
+                };
+                let prev_geometry_transform = if previous_baked {
+                    blade_graphics::IDENTITY_TRANSFORM
+                } else {
+                    prev_geometry_transforms[geometry_index_in_model]
+                };
                 let material = &model.materials[geometry.material_index];
                 let vertex_offset =
                     geometry.vertex_range.start as u64 * mem::size_of::<crate::Vertex>() as u64;
-                let geometry_to_world_rotation = {
-                    let m3_geo = mat3_transform(&geometry.transform);
-                    let m3_normal = (m3_object * m3_geo).inverse().transpose();
-                    let quat = glam::Quat::from_mat3(&m3_normal);
-                    let qv = glam::Vec4::from(quat) * 127.0;
-                    [qv.x as i8, qv.y as i8, qv.z as i8, qv.w as i8]
-                };
 
                 let hit_entry = HitEntry {
                     index_buf: match geometry.index_type {
@@ -1266,16 +1534,24 @@ impl RayTracer {
                     },
                     vertex_buf: self
                         .vertex_buffers
-                        .alloc(model.vertex_buffer.at(vertex_offset)),
-                    winding: model.winding,
-                    geometry_to_world_rotation,
+                        .alloc(active_vertex_buffer.at(vertex_offset)),
+                    prev_vertex_buf: self
+                        .vertex_buffers
+                        .alloc(previous_vertex_buffer.at(vertex_offset)),
+                    flags: u32::from(model.winding < 0.0),
                     geometry_to_object: mint::ColumnMatrix4::from(mint::RowMatrix4 {
-                        x: geometry.transform.x,
-                        y: geometry.transform.y,
-                        z: geometry.transform.z,
+                        x: geometry_transform.x,
+                        y: geometry_transform.y,
+                        z: geometry_transform.z,
                         w: [0.0, 0.0, 0.0, 1.0].into(),
                     }),
-                    prev_object_to_world: mat4_transform(&object.prev_transform).into(),
+                    prev_geometry_to_object: mint::ColumnMatrix4::from(mint::RowMatrix4 {
+                        x: prev_geometry_transform.x,
+                        y: prev_geometry_transform.y,
+                        z: prev_geometry_transform.z,
+                        w: [0.0, 0.0, 0.0, 1.0].into(),
+                    }),
+                    prev_object_to_world: mat4_transform(&prev_transform).into(),
                     base_color_texture: alloc_texture(material.base_color_texture, dummy_white),
                     base_color_factor: {
                         let c = material.base_color_factor;
@@ -1324,6 +1600,32 @@ impl RayTracer {
             geometry_count
         );
 
+        skin::encode(
+            command_encoder,
+            Some(&self.skin),
+            &vertex_copies,
+            &skin_jobs,
+        );
+
+        if !dynamic_blas_work.is_empty() {
+            let mut encoder = command_encoder.acceleration_structure("animated BLAS");
+            for work in &dynamic_blas_work {
+                if work.update {
+                    encoder.update_bottom_level(
+                        work.acceleration_structure,
+                        &work.meshes,
+                        work.scratch.into(),
+                    );
+                } else {
+                    encoder.build_bottom_level(
+                        work.acceleration_structure,
+                        &work.meshes,
+                        work.scratch.into(),
+                    );
+                }
+            }
+        }
+
         // Needs to be a separate encoder in order to force synchronization
         let sizes = gpu.get_top_level_acceleration_structure_sizes(instances.len() as u32);
         self.acceleration_structure =
@@ -1331,6 +1633,7 @@ impl RayTracer {
                 name: "TLAS",
                 ty: blade_graphics::AccelerationStructureType::TopLevel,
                 size: sizes.data,
+                updatable: false,
             });
         let instance_buf = gpu.create_acceleration_structure_instance_buffer(&instances, &blases);
         let scratch_buf = gpu.create_buffer(blade_graphics::BufferDesc {
@@ -1381,6 +1684,7 @@ impl RayTracer {
         camera: &crate::Camera,
         config: FrameConfig,
     ) {
+        let reset_reservoirs = config.reset_reservoirs || self.scene_topology_changed;
         let mut transfer = command_encoder.transfer("prepare");
 
         if config.debug_draw {
@@ -1390,14 +1694,14 @@ impl RayTracer {
             self.debug.enable_draw(&mut transfer, false);
         }
 
-        if config.reset_reservoirs || config.reset_variance {
+        if reset_reservoirs || config.reset_variance {
             self.debug.reset_variance(&mut transfer);
         } else {
             self.debug.update_variance(&mut transfer);
         }
         self.debug.update_entry(&mut transfer);
 
-        if config.reset_reservoirs {
+        if reset_reservoirs {
             if !config.debug_draw {
                 self.debug.reset_lines(&mut transfer);
             }
@@ -1418,8 +1722,9 @@ impl RayTracer {
         let cur = self.frame_index % 2;
         let camera_params = self.make_camera_params(camera);
         // A moving camera invalidates the accumulation of the canonical renderer.
-        self.reset_accumulation =
-            config.reset_accumulation || camera_params != self.targets.camera_params[cur ^ 1];
+        self.reset_accumulation = config.reset_accumulation
+            || self.scene_topology_changed
+            || camera_params != self.targets.camera_params[cur ^ 1];
         self.show_accumulation = false;
         self.targets.camera_params[cur] = camera_params;
         self.post_proc_input_index = cur;
@@ -1586,6 +1891,7 @@ impl RayTracer {
                     },
                     acc_struct: self.acceleration_structure,
                     prev_acc_struct: if self.frame_scene_built < self.frame_index
+                        || self.scene_topology_changed
                         || self.prev_acceleration_structure
                             == blade_graphics::AccelerationStructure::default()
                     {
@@ -1825,5 +2131,15 @@ impl RayTracer {
                 .get(&db_e.normal_texture)
                 .cloned(),
         }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    #[test]
+    fn animated_hit_entry_matches_shader_layout() {
+        assert_eq!(std::mem::size_of::<super::HitEntry>(), 256);
+        assert_eq!(std::mem::size_of::<crate::Vertex>(), 32);
+        assert_eq!(std::mem::size_of::<crate::SkinVertex>(), 8);
     }
 }

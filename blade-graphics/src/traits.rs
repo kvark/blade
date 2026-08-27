@@ -106,6 +106,23 @@ pub trait AccelerationStructureEncoder {
         scratch_data: Self::BufferPiece,
     );
 
+    /// Refit an existing bottom-level acceleration structure in place.
+    ///
+    /// The destination must have been created with
+    /// [`crate::AccelerationStructureDesc::updatable`]. Topology (triangle
+    /// counts and index buffers) stays the same; vertex positions may change.
+    ///
+    /// When the meshes' vertex data is written on the GPU (e.g. a skinning
+    /// compute pass), the caller is responsible for the storage-to-acceleration-
+    /// structure barrier on encoders with `manual_barriers` enabled. Encoders
+    /// with automatic pass history insert it implicitly.
+    fn update_bottom_level(
+        &mut self,
+        acceleration_structure: Self::AccelerationStructure,
+        meshes: &[Self::AccelerationStructureMesh],
+        scratch_data: Self::BufferPiece,
+    );
+
     fn build_top_level(
         &mut self,
         acceleration_structure: Self::AccelerationStructure,

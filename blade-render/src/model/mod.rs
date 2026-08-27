@@ -1,11 +1,20 @@
 use std::{
     borrow::Cow,
-    collections::hash_map::{Entry, HashMap},
-    fmt, hash, mem,
+    fmt, mem,
     ops::Range,
     ptr, str,
     sync::{Arc, Mutex},
 };
+
+#[cfg(feature = "asset")]
+use std::{
+    collections::hash_map::{Entry, HashMap},
+    hash,
+};
+
+mod skinning;
+use skinning::{CookedNode, CookedSkin, Skin, SkinNode};
+pub use skinning::{MAX_JOINTS_PER_DRAW, Pose};
 
 const PRELOAD_TEXTURES: bool = false;
 
@@ -65,6 +74,26 @@ fn encode_normal(v: [f32; 3]) -> u32 {
     pack4x8snorm([v[0], v[1], v[2], 0.0])
 }
 
+pub(crate) fn mat4_to_transform(matrix: glam::Mat4) -> blade_graphics::Transform {
+    let columns = mint::ColumnMatrix3x4 {
+        x: matrix.x_axis.truncate().into(),
+        y: matrix.y_axis.truncate().into(),
+        z: matrix.z_axis.truncate().into(),
+        w: matrix.w_axis.truncate().into(),
+    };
+    mint::RowMatrix3x4::from(columns)
+}
+
+pub(crate) fn mat4_from_transform(transform: &blade_graphics::Transform) -> glam::Mat4 {
+    glam::Mat4 {
+        x_axis: transform.x.into(),
+        y_axis: transform.y.into(),
+        z_axis: transform.z.into(),
+        w_axis: glam::Vec4::W,
+    }
+    .transpose()
+}
+
 pub struct Geometry {
     pub name: String,
     pub vertex_range: Range<u32>,
@@ -73,6 +102,9 @@ pub struct Geometry {
     pub triangle_count: u32,
     pub transform: blade_graphics::Transform,
     pub material_index: usize,
+    pub(crate) node_index: usize,
+    pub(crate) skin_index: Option<usize>,
+    pub(crate) joint_palette: Vec<u32>,
 }
 
 /// Surface appearance, following the glTF 2.0 metallic-roughness model.
@@ -118,9 +150,22 @@ pub struct Model {
     pub geometries: Vec<Geometry>,
     pub materials: Vec<Material>,
     pub vertex_buffer: blade_graphics::Buffer,
+    pub skin_vertex_buffer: blade_graphics::Buffer,
     pub index_buffer: blade_graphics::Buffer,
     pub transform_buffer: blade_graphics::Buffer,
     pub acceleration_structure: blade_graphics::AccelerationStructure,
+    pub(crate) nodes: Vec<SkinNode>,
+    pub(crate) bind_pose: Pose,
+    pub(crate) skins: Vec<Skin>,
+}
+
+impl Model {
+    pub(crate) fn vertex_count(&self) -> usize {
+        self.geometries
+            .last()
+            .map(|geometry| geometry.vertex_range.end as usize)
+            .unwrap_or(0)
+    }
 }
 
 #[derive(blade_macros::Flat, Default)]
@@ -149,18 +194,26 @@ struct CookedMaterial<'a> {
 struct CookedGeometry<'a> {
     name: Cow<'a, [u8]>,
     vertices: Cow<'a, [crate::Vertex]>,
+    skin_vertices: Cow<'a, [crate::SkinVertex]>,
     indices: Cow<'a, [u32]>,
     transform: [f32; 12],
     material_index: u32,
+    node_index: u32,
+    skin_index: u32,
+    joint_palette: Cow<'a, [u32]>,
 }
 
+#[cfg(feature = "asset")]
 #[derive(Clone, PartialEq)]
 struct GltfVertex {
     position: [f32; 3],
     normal: [f32; 3],
     tangent: [f32; 4],
     tex_coords: [f32; 2],
+    joints: [u32; 4],
+    weights: [f32; 4],
 }
+#[cfg(feature = "asset")]
 impl Default for GltfVertex {
     fn default() -> Self {
         Self {
@@ -168,10 +221,14 @@ impl Default for GltfVertex {
             normal: [0.0, 1.0, 0.0],
             tangent: [1.0, 0.0, 0.0, 0.0],
             tex_coords: [0.0; 2],
+            joints: [0; 4],
+            weights: [1.0, 0.0, 0.0, 0.0],
         }
     }
 }
+#[cfg(feature = "asset")]
 impl Eq for GltfVertex {}
+#[cfg(feature = "asset")]
 impl hash::Hash for GltfVertex {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         for f in self.position.iter() {
@@ -184,6 +241,10 @@ impl hash::Hash for GltfVertex {
             f.to_bits().hash(state);
         }
         for f in self.tex_coords.iter() {
+            f.to_bits().hash(state);
+        }
+        self.joints.hash(state);
+        for f in self.weights.iter() {
             f.to_bits().hash(state);
         }
     }
@@ -215,30 +276,88 @@ impl mikktspace::Geometry for FlattenedGeometry {
 #[cfg(feature = "asset")]
 impl FlattenedGeometry {
     #[profiling::function]
-    fn reconstruct_indices(self) -> (Vec<u32>, Vec<crate::Vertex>) {
+    fn reconstruct_indices(
+        self,
+        skin_joint_count: Option<usize>,
+    ) -> (
+        Vec<u32>,
+        Vec<crate::Vertex>,
+        Vec<crate::SkinVertex>,
+        Vec<u32>,
+    ) {
         let mut indices = Vec::with_capacity(self.0.len());
-        let mut vertices = Vec::new();
+        let mut unique = Vec::new();
         let mut cache = HashMap::new();
         for v in self.0.iter() {
             let i = match cache.entry(v.clone()) {
                 Entry::Occupied(e) => *e.get(),
                 Entry::Vacant(e) => {
-                    let i = vertices.len() as u32;
-                    let t = &v.tangent;
-                    vertices.push(crate::Vertex {
-                        position: v.position,
-                        bitangent_sign: t[3],
-                        tex_coords: v.tex_coords,
-                        normal: encode_normal(v.normal),
-                        tangent: encode_normal([t[0], t[1], t[2]]),
-                    });
+                    let i = unique.len() as u32;
+                    unique.push(v.clone());
                     *e.insert(i)
                 }
             };
             indices.push(i);
         }
+        let mut joint_palette = Vec::new();
+        if let Some(joint_count) = skin_joint_count {
+            let mut palette_lookup = HashMap::new();
+            for vertex in &mut unique {
+                let weight_sum: f32 = vertex.weights.iter().sum();
+                if weight_sum > 0.0 {
+                    for weight in &mut vertex.weights {
+                        *weight /= weight_sum;
+                    }
+                } else {
+                    vertex.weights = [1.0, 0.0, 0.0, 0.0];
+                }
+                for influence in 0..4 {
+                    if vertex.weights[influence] == 0.0 {
+                        vertex.joints[influence] = 0;
+                        continue;
+                    }
+                    let source_joint = vertex.joints[influence];
+                    assert!(
+                        (source_joint as usize) < joint_count,
+                        "vertex references joint {source_joint}, but its skin has only {joint_count} joints"
+                    );
+                    let palette_index = match palette_lookup.entry(source_joint) {
+                        Entry::Occupied(entry) => *entry.get(),
+                        Entry::Vacant(entry) => {
+                            let index = joint_palette.len() as u32;
+                            joint_palette.push(source_joint);
+                            *entry.insert(index)
+                        }
+                    };
+                    vertex.joints[influence] = palette_index;
+                }
+            }
+            assert!(
+                joint_palette.len() <= skinning::MAX_JOINTS_PER_DRAW,
+                "a mesh primitive uses {} joints; at most {} are supported per draw",
+                joint_palette.len(),
+                skinning::MAX_JOINTS_PER_DRAW,
+            );
+        }
+        let vertices: Vec<_> = unique
+            .iter()
+            .map(|v| {
+                let t = v.tangent;
+                crate::Vertex {
+                    position: v.position,
+                    bitangent_sign: t[3],
+                    tex_coords: v.tex_coords,
+                    normal: encode_normal(v.normal),
+                    tangent: encode_normal([t[0], t[1], t[2]]),
+                }
+            })
+            .collect();
+        let skin_vertices: Vec<_> = unique
+            .iter()
+            .map(|v| crate::SkinVertex::packed_skin(v.joints, v.weights))
+            .collect();
         log::debug!("Compacted {}->{}", self.0.len(), vertices.len());
-        (indices, vertices)
+        (indices, vertices, skin_vertices, joint_palette)
     }
 }
 
@@ -248,6 +367,8 @@ pub struct CookedModel<'a> {
     winding: f32,
     materials: Vec<CookedMaterial<'a>>,
     geometries: Vec<CookedGeometry<'a>>,
+    nodes: Vec<CookedNode>,
+    skins: Vec<CookedSkin<'a>>,
 }
 
 #[cfg(feature = "asset")]
@@ -258,12 +379,15 @@ impl CookedModel<'_> {
         parent_transform: glam::Mat4,
         data_buffers: &[Vec<u8>],
         flattened_geos: &mut Vec<FlattenedGeometry>,
+        default_material_index: Option<u32>,
     ) {
         let local_transform = glam::Mat4::from_cols_array_2d(&g_node.transform().matrix());
         let global_transform = parent_transform * local_transform;
 
         if let Some(g_mesh) = g_node.mesh() {
             let name = g_node.name().unwrap_or("");
+            let node_index = g_node.index() as u32;
+            let skin_index = g_node.skin().map_or(u32::MAX, |skin| skin.index() as u32);
             let col_matrix = mint::ColumnMatrix3x4 {
                 x: global_transform.x_axis.truncate().into(),
                 y: global_transform.y_axis.truncate().into(),
@@ -284,14 +408,7 @@ impl CookedModel<'_> {
                 }
                 let material_index = match g_primitive.material().index() {
                     Some(index) => index as u32,
-                    None => {
-                        log::warn!(
-                            "Skipping primitive '{}'[{}] for having default material",
-                            name,
-                            prim_index
-                        );
-                        continue;
-                    }
+                    None => default_material_index.expect("missing glTF default material"),
                 };
 
                 let reader = g_primitive.reader(|buffer| Some(&data_buffers[buffer.index()]));
@@ -331,6 +448,26 @@ impl CookedModel<'_> {
                     } else {
                         log::warn!("No normals in {name}");
                     }
+                    if let Some(iter) = reader.read_tangents() {
+                        assert_eq!(pre_vertices.len(), iter.len());
+                        for (v, tangent) in pre_vertices.iter_mut().zip(iter) {
+                            v.tangent = tangent;
+                        }
+                    }
+                    if let Some(iter) = reader.read_joints(0) {
+                        for (v, joints) in pre_vertices.iter_mut().zip(iter.into_u16()) {
+                            v.joints = joints.map(u32::from);
+                        }
+                    } else if skin_index != u32::MAX {
+                        log::warn!("Skinned geometry {name} has no JOINTS_0 attribute");
+                    }
+                    if let Some(iter) = reader.read_weights(0) {
+                        for (v, weights) in pre_vertices.iter_mut().zip(iter.into_f32()) {
+                            v.weights = weights;
+                        }
+                    } else if skin_index != u32::MAX {
+                        log::warn!("Skinned geometry {name} has no WEIGHTS_0 attribute");
+                    }
 
                     // Untangle from the index buffer
                     match reader.read_indices() {
@@ -346,15 +483,25 @@ impl CookedModel<'_> {
                 self.geometries.push(CookedGeometry {
                     name: Cow::Owned(name.as_bytes().to_owned()),
                     vertices: Cow::Borrowed(&[]),
+                    skin_vertices: Cow::Borrowed(&[]),
                     indices: Cow::Borrowed(&[]),
                     transform,
                     material_index,
+                    node_index,
+                    skin_index,
+                    joint_palette: Cow::Borrowed(&[]),
                 });
             }
         }
 
         for child in g_node.children() {
-            self.populate_gltf(child, global_transform, data_buffers, flattened_geos);
+            self.populate_gltf(
+                child,
+                global_transform,
+                data_buffers,
+                flattened_geos,
+                default_material_index,
+            );
         }
     }
 }
@@ -648,6 +795,21 @@ impl Baker {
             memory: blade_graphics::Memory::Shared,
         });
 
+        // Filled with the identity skin data. It's only read for posed
+        // models, so that the skinning pass can bake the pose.
+        let total_skin_vertex_size = (total_vertices * mem::size_of::<crate::SkinVertex>()) as u64;
+        let skin_vertex_buffer = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
+            name: "proc skin vertex",
+            size: total_skin_vertex_size,
+            memory: blade_graphics::Memory::Shared,
+        });
+        unsafe {
+            let skin_ptr = skin_vertex_buffer.data() as *mut crate::SkinVertex;
+            for index in 0..total_vertices {
+                ptr::write(skin_ptr.add(index), crate::SkinVertex::default());
+            }
+        }
+
         let total_indices: usize = geometries.iter().map(|g| g.indices.len()).sum();
         let total_index_size = total_indices as u64 * 4
             + geometries.len() as u64 * blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT;
@@ -740,6 +902,9 @@ impl Baker {
                 triangle_count,
                 transform,
                 material_index,
+                node_index: 0,
+                skin_index: None,
+                joint_palette: Vec::new(),
             });
 
             start_vertex += geo.vertices.len() as u32;
@@ -749,6 +914,8 @@ impl Baker {
 
         self.gpu_context
             .sync_buffer(vertex_buffer, blade_graphics::BufferTarget::Data);
+        self.gpu_context
+            .sync_buffer(skin_vertex_buffer, blade_graphics::BufferTarget::Data);
         self.gpu_context
             .sync_buffer(index_buffer, blade_graphics::BufferTarget::Index);
         self.gpu_context
@@ -760,9 +927,18 @@ impl Baker {
             geometries: model_geometries,
             materials,
             vertex_buffer,
+            skin_vertex_buffer,
             index_buffer,
             transform_buffer,
             acceleration_structure: self.build_blas(name, meshes),
+            nodes: vec![SkinNode {
+                parent_index: u32::MAX,
+                translation: glam::Vec3::ZERO,
+                rotation: glam::Quat::IDENTITY,
+                scale: glam::Vec3::ONE,
+            }],
+            bind_pose: Pose::from_node_matrices(vec![glam::Mat4::IDENTITY]),
+            skins: Vec::new(),
         }
     }
 
@@ -786,6 +962,7 @@ impl Baker {
                 name,
                 ty: blade_graphics::AccelerationStructureType::BottomLevel,
                 size: sizes.data,
+                updatable: false,
             },
         );
         let scratch = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
@@ -823,7 +1000,7 @@ impl blade_asset::Baker for Baker {
         match extension {
             #[cfg(feature = "asset")]
             "gltf" | "glb" => {
-                use base64::engine::{Engine as _, general_purpose::URL_SAFE as ENCODING_ENGINE};
+                use base64::engine::{Engine as _, general_purpose::STANDARD as ENCODING_ENGINE};
 
                 let gltf::Gltf { document, mut blob } = gltf::Gltf::from_slice(source).unwrap();
                 // extract buffers
@@ -860,6 +1037,8 @@ impl blade_asset::Baker for Baker {
                     },
                     materials: Vec::new(),
                     geometries: Vec::new(),
+                    nodes: skinning::cook_nodes(&document),
+                    skins: skinning::cook_skins(&document, &buffers),
                 };
                 for g_material in document.materials() {
                     let pbr = g_material.pbr_metallic_roughness();
@@ -924,6 +1103,39 @@ impl blade_asset::Baker for Baker {
                     });
                 }
 
+                let default_material_index = document
+                    .meshes()
+                    .flat_map(|mesh| mesh.primitives())
+                    .any(|primitive| primitive.material().index().is_none())
+                    .then(|| {
+                        let index = model.materials.len() as u32;
+                        model.materials.push(CookedMaterial {
+                            base_color: TextureReference {
+                                source_index: !0,
+                                ..Default::default()
+                            },
+                            base_color_factor: [1.0; 4],
+                            normal: TextureReference {
+                                source_index: !0,
+                                ..Default::default()
+                            },
+                            normal_scale: 0.0,
+                            metallic_roughness: TextureReference {
+                                source_index: !0,
+                                ..Default::default()
+                            },
+                            metalness: 1.0,
+                            roughness: 1.0,
+                            emissive: TextureReference {
+                                source_index: !0,
+                                ..Default::default()
+                            },
+                            emissive_factor: [0.0; 3],
+                            transparent: false,
+                        });
+                        index
+                    });
+
                 let mut flattened_geos = Vec::new();
                 for g_scene in document.scenes() {
                     for g_node in g_scene.nodes() {
@@ -932,6 +1144,7 @@ impl blade_asset::Baker for Baker {
                             glam::Mat4::IDENTITY,
                             &buffers,
                             &mut flattened_geos,
+                            default_material_index,
                         );
                     }
                 }
@@ -940,6 +1153,16 @@ impl blade_asset::Baker for Baker {
                     !model.geometries.is_empty(),
                     "Empty models are not supported yet"
                 );
+                let skin_joint_counts: Vec<_> =
+                    document.skins().map(|skin| skin.joints().len()).collect();
+                let geometry_skin_joint_counts: Vec<_> = model
+                    .geometries
+                    .iter()
+                    .map(|geometry| {
+                        (geometry.skin_index != u32::MAX)
+                            .then(|| skin_joint_counts[geometry.skin_index as usize])
+                    })
+                    .collect();
                 let model_shared = Arc::new(Mutex::new(model));
                 let model_clone = Arc::clone(&model_shared);
                 let gen_tangents = exe_context.choir().spawn("generate tangents").init_iter(
@@ -949,11 +1172,14 @@ impl blade_asset::Baker for Baker {
                             let ok = mikktspace::generate_tangents(&mut fg);
                             assert!(ok, "MikkTSpace failed");
                         }
-                        let (indices, vertices) = fg.reconstruct_indices();
+                        let (indices, vertices, skin_vertices, joint_palette) =
+                            fg.reconstruct_indices(geometry_skin_joint_counts[index]);
                         let mut model = model_clone.lock().unwrap();
                         let geo = &mut model.geometries[index];
                         geo.vertices = Cow::Owned(vertices);
+                        geo.skin_vertices = Cow::Owned(skin_vertices);
                         geo.indices = Cow::Owned(indices);
+                        geo.joint_palette = Cow::Owned(joint_palette);
                     },
                 );
 
@@ -983,6 +1209,9 @@ impl blade_asset::Baker for Baker {
     }
 
     fn serve(&self, model: CookedModel<'_>, exe_context: &choir::ExecutionContext) -> Self::Output {
+        let nodes: Vec<_> = model.nodes.into_iter().map(SkinNode::from).collect();
+        let bind_pose = skinning::bind_pose(&nodes);
+        let skins: Vec<_> = model.skins.into_iter().map(Skin::from).collect();
         let mut materials = Vec::with_capacity(model.materials.len());
         for material in model.materials.iter() {
             materials.push(Material {
@@ -1025,6 +1254,16 @@ impl blade_asset::Baker for Baker {
         );
         let vertex_buffer = vertex_upload.dst;
         let vertex_stage = vertex_upload.stage;
+
+        let total_skin_vertex_size = (total_vertices * mem::size_of::<crate::SkinVertex>()) as u64;
+        let skin_vertex_upload = BufferUpload::new(
+            &self.gpu_context,
+            "skin vertex",
+            total_skin_vertex_size,
+            blade_graphics::BufferTarget::Data,
+        );
+        let skin_vertex_buffer = skin_vertex_upload.dst;
+        let skin_vertex_stage = skin_vertex_upload.stage;
 
         let total_indices = model
             .geometries
@@ -1072,6 +1311,11 @@ impl blade_asset::Baker for Baker {
                     geometry.vertices.len(),
                 );
                 ptr::copy_nonoverlapping(
+                    geometry.skin_vertices.as_ptr(),
+                    (skin_vertex_stage.data() as *mut crate::SkinVertex).add(start_vertex as usize),
+                    geometry.skin_vertices.len(),
+                );
+                ptr::copy_nonoverlapping(
                     geometry.indices.as_ptr(),
                     index_stage.data().add(index_offset as usize) as *mut u32,
                     geometry.indices.len(),
@@ -1111,6 +1355,10 @@ impl blade_asset::Baker for Baker {
                 triangle_count,
                 transform: geometry.transform.into(),
                 material_index: geometry.material_index as usize,
+                node_index: geometry.node_index as usize,
+                skin_index: (geometry.skin_index != u32::MAX)
+                    .then_some(geometry.skin_index as usize),
+                joint_palette: geometry.joint_palette.to_vec(),
             });
             start_vertex += geometry.vertices.len() as u32;
             index_offset += geometry.indices.len() as u64 * 4;
@@ -1121,6 +1369,7 @@ impl blade_asset::Baker for Baker {
         assert_eq!(transform_offset, total_transform_size);
 
         vertex_upload.finish(self);
+        skin_vertex_upload.finish(self);
         index_upload.finish(self);
         transform_upload.finish(self);
         let acceleration_structure = self.build_blas(str::from_utf8(model.name).unwrap(), meshes);
@@ -1131,9 +1380,13 @@ impl blade_asset::Baker for Baker {
             geometries,
             materials,
             vertex_buffer,
+            skin_vertex_buffer,
             index_buffer,
             transform_buffer,
             acceleration_structure,
+            nodes,
+            bind_pose,
+            skins,
         }
     }
 
@@ -1143,7 +1396,33 @@ impl blade_asset::Baker for Baker {
                 .destroy_acceleration_structure(model.acceleration_structure);
         }
         self.gpu_context.destroy_buffer(model.vertex_buffer);
+        if model.skin_vertex_buffer != blade_graphics::Buffer::default() {
+            self.gpu_context.destroy_buffer(model.skin_vertex_buffer);
+        }
         self.gpu_context.destroy_buffer(model.index_buffer);
         self.gpu_context.destroy_buffer(model.transform_buffer);
+    }
+}
+
+#[cfg(all(test, feature = "asset"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compacts_and_normalizes_joint_palettes() {
+        let vertex = GltfVertex {
+            joints: [5, 2, 0, 0],
+            weights: [0.75, 0.25, 0.0, 0.0],
+            ..Default::default()
+        };
+        let geometry = FlattenedGeometry(vec![vertex; 3].into_boxed_slice());
+        let (_, _, skin_vertices, palette) = geometry.reconstruct_indices(Some(6));
+        assert_eq!(palette, [5, 2]);
+        assert_eq!(skin_vertices[0].skin_joints(), [0, 1, 0, 0]);
+        let weights = skin_vertices[0].skin_weights();
+        assert!((weights[0] - 0.75).abs() < 1.0 / 255.0);
+        assert!((weights[1] - 0.25).abs() < 1.0 / 255.0);
+        assert_eq!(weights[2], 0.0);
+        assert_eq!(weights[3], 0.0);
     }
 }

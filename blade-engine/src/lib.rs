@@ -18,9 +18,14 @@ use std::{ops, path::PathBuf, sync::Arc};
 
 pub use blade_asset::vfs;
 
+mod animation;
 pub mod config;
 mod trimesh;
 
+pub use animation::{
+    AnimationChannel, AnimationClip, AnimationInterpolation, AnimationModel, AnimationPlayer,
+    AnimationProperty,
+};
 pub use blade_particle;
 
 const ZERO_V3: mint::Vector3<f32> = mint::Vector3 {
@@ -207,6 +212,15 @@ fn make_quaternion(degrees: mint::Vector3<f32>) -> nalgebra::geometry::UnitQuate
     )
 }
 
+fn make_render_transform(matrix: nalgebra::Matrix4<f32>) -> gpu::Transform {
+    let matrix = matrix.transpose();
+    gpu::Transform {
+        x: matrix.column(0).into(),
+        y: matrix.column(1).into(),
+        z: matrix.column(2).into(),
+    }
+}
+
 fn static_trimesh_flags() -> rapier3d::geometry::TriMeshFlags {
     // Shared triangle edges are not real surface features. Pseudo-normal correction
     // prevents rounded dynamic shapes from catching on an otherwise smooth mesh.
@@ -351,16 +365,17 @@ impl ops::IndexMut<JointHandle> for Physics {
 
 struct Visual {
     model: blade_asset::Handle<blade_render::Model>,
+    animation_model: Option<blade_asset::Handle<AnimationModel>>,
     similarity: nalgebra::geometry::Similarity3<f32>,
 }
 
 struct Object {
     name: String,
     rigid_body: rapier3d::dynamics::RigidBodyHandle,
-    prev_isometry: nalgebra::Isometry3<f32>,
     colliders: Vec<rapier3d::geometry::ColliderHandle>,
     visuals: Vec<Visual>,
     color_tint: [f32; 4],
+    animation: Option<AnimationPlayer>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -447,6 +462,17 @@ impl Renderer {
             Self::Rasterizer { ref mut inner, .. } => inner.resize_screen(size, encoder, gpu),
         }
     }
+
+    fn reset_scene_history(&mut self) {
+        if let Self::RayTracer {
+            ref mut frame_config,
+            ..
+        } = *self
+        {
+            frame_config.reset_reservoirs = true;
+            frame_config.reset_accumulation = true;
+        }
+    }
 }
 
 pub enum Presentation<'a> {
@@ -476,6 +502,7 @@ pub struct Engine {
     load_tasks: Vec<choir::RunningTask>,
     gui_painter: Option<blade_egui::GuiPainter>,
     asset_hub: blade_render::AssetHub,
+    animation_models: blade_asset::AssetManager<animation::Baker>,
     target_surface: TargetSurface,
     gpu_context: Arc<gpu::Context>,
     environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
@@ -483,6 +510,7 @@ pub struct Engine {
     selected_object_handle: Option<ObjectHandle>,
     selected_collider: Option<rapier3d::geometry::ColliderHandle>,
     render_objects: Vec<blade_render::Object>,
+    retired_render_objects: Vec<blade_render::Object>,
     debug: blade_render::DebugConfig,
     extra_debug_lines: Vec<blade_render::DebugLine>,
     contact_events: Vec<ContactEvent>,
@@ -526,41 +554,85 @@ impl Engine {
     }
 
     fn update_render_objects(
-        physics: &mut Physics,
-        objects: &mut slab::Slab<Object>,
-        render_objects: &mut Vec<blade_render::Object>,
+        physics: &Physics,
+        objects: &slab::Slab<Object>,
+        render_objects: &mut [blade_render::Object],
+        animation_models: &blade_asset::AssetManager<animation::Baker>,
         time_ahead: f32,
     ) {
-        render_objects.clear();
-        for (_, object) in objects.iter_mut() {
+        let mut render_objects = render_objects.iter_mut();
+        for (_, object) in objects {
             let isometry = physics
                 .rigid_bodies
                 .get(object.rigid_body)
                 .unwrap()
                 .predict_position_using_velocity_and_forces(time_ahead);
+            let animation_name = object.animation.and_then(|animation| {
+                object.visuals.iter().find_map(|visual| {
+                    let model = animation_models.get(visual.animation_model?)?;
+                    model
+                        .clips
+                        .get(animation.clip_index)
+                        .filter(|clip| !clip.name.is_empty())
+                        .map(|clip| clip.name.as_str())
+                })
+            });
 
-            for visual in object.visuals.iter() {
-                let mc = (isometry * visual.similarity).to_homogeneous().transpose();
-                let mp = (object.prev_isometry * visual.similarity)
-                    .to_homogeneous()
-                    .transpose();
-                render_objects.push(blade_render::Object {
-                    transform: gpu::Transform {
-                        x: mc.column(0).into(),
-                        y: mc.column(1).into(),
-                        z: mc.column(2).into(),
-                    },
-                    prev_transform: gpu::Transform {
-                        x: mp.column(0).into(),
-                        y: mp.column(1).into(),
-                        z: mp.column(2).into(),
-                    },
-                    model: visual.model,
-                    color_tint: object.color_tint,
+            for visual in &object.visuals {
+                let current_pose = object.animation.and_then(|mut animation| {
+                    let model = animation_models.get(visual.animation_model?)?;
+                    if let Some(name) = animation_name {
+                        animation.clip_index = model.animation_index(name)?;
+                    }
+                    animation.pose(model)
                 });
+                let Some(render_object) = render_objects.next() else {
+                    log::error!(
+                        "Object '{}' has {} visuals but only {} render objects were prepared",
+                        object.name,
+                        object.visuals.len(),
+                        render_objects.len()
+                    );
+                    return;
+                };
+                render_object.model = visual.model;
+                render_object.transform =
+                    make_render_transform((isometry * visual.similarity).to_homogeneous());
+                render_object.color_tint = object.color_tint;
+                render_object.pose = current_pose;
             }
-            object.prev_isometry = isometry;
         }
+        debug_assert!(render_objects.next().is_none());
+    }
+
+    fn render_object_range(objects: &slab::Slab<Object>, object_index: usize) -> ops::Range<usize> {
+        let start = objects
+            .iter()
+            .take_while(|&(index, _)| index < object_index)
+            .map(|(_, object)| object.visuals.len())
+            .sum();
+        let count = objects[object_index].visuals.len();
+        start..start + count
+    }
+
+    fn insert_render_objects(
+        physics: &Physics,
+        objects: &slab::Slab<Object>,
+        render_objects: &mut Vec<blade_render::Object>,
+        object_index: usize,
+    ) {
+        let range = Self::render_object_range(objects, object_index);
+        let object = &objects[object_index];
+        let isometry = physics.rigid_bodies[object.rigid_body].position();
+        let additions = object.visuals.iter().map(|visual| {
+            let mut render_object = blade_render::Object::from(visual.model);
+            render_object.transform =
+                make_render_transform((isometry * visual.similarity).to_homogeneous());
+            render_object.prev_transform = render_object.transform;
+            render_object.color_tint = object.color_tint;
+            render_object
+        });
+        render_objects.splice(range.start..range.start, additions);
     }
 
     fn flush_assets_and_check_ready(
@@ -687,6 +759,8 @@ impl Engine {
 
         let asset_cache_path = Self::asset_cache_path(config);
         let asset_hub = blade_render::AssetHub::new(&asset_cache_path, &choir, &gpu_context);
+        let animation_models =
+            blade_asset::AssetManager::new(&asset_cache_path, &choir, animation::Baker);
         let (shaders, shader_task) = blade_render::Shaders::load(
             config.shader_path.as_ref(),
             &asset_hub,
@@ -768,6 +842,7 @@ impl Engine {
             load_tasks: Vec::new(),
             gui_painter,
             asset_hub,
+            animation_models,
             target_surface,
             gpu_context,
             environment_map: None,
@@ -775,6 +850,7 @@ impl Engine {
             selected_object_handle: None,
             selected_collider: None,
             render_objects: Vec::new(),
+            retired_render_objects: Vec::new(),
             debug: blade_render::DebugConfig::default(),
             extra_debug_lines: Vec::new(),
             contact_events: Vec::new(),
@@ -808,7 +884,15 @@ impl Engine {
                 self.gpu_context.destroy_xr_surface(xr_surface);
             }
         }
+        for object in self.render_objects.iter_mut() {
+            object.destroy_gpu(&self.gpu_context);
+        }
+        for object in self.retired_render_objects.iter_mut() {
+            object.destroy_gpu(&self.gpu_context);
+        }
+        self.objects.clear();
         self.renderer.destroy(&self.gpu_context);
+        self.animation_models.clear();
         for mut ps in self.particle_systems.drain() {
             ps.destroy(&self.gpu_context);
         }
@@ -822,6 +906,11 @@ impl Engine {
     pub fn update(&mut self, dt: f32) {
         self.choir.check_panic();
         self.particle_clock += dt;
+        for (_, object) in self.objects.iter_mut() {
+            if let Some(ref mut animation) = object.animation {
+                animation.advance(dt);
+            }
+        }
         self.time_ahead += dt;
         while self.time_ahead >= self.physics.integration_params.dt {
             self.physics.step();
@@ -983,10 +1072,14 @@ impl Engine {
         // We should be able to update TLAS and render content
         // even while it's still being loaded.
         if can_render {
+            for mut render_object in self.retired_render_objects.drain(..) {
+                render_object.retire_gpu(temp);
+            }
             Self::update_render_objects(
-                &mut self.physics,
-                &mut self.objects,
+                &self.physics,
+                &self.objects,
                 &mut self.render_objects,
+                &self.animation_models,
                 self.time_ahead,
             );
             if let Renderer::RayTracer {
@@ -1001,7 +1094,7 @@ impl Engine {
             {
                 inner.build_scene(
                     command_encoder,
-                    &self.render_objects,
+                    &mut self.render_objects,
                     self.environment_map,
                     &self.asset_hub,
                     &self.gpu_context,
@@ -1143,6 +1236,13 @@ impl Engine {
                     fov: None,
                 };
                 if can_render {
+                    inner.prepare(
+                        command_encoder,
+                        &mut self.render_objects,
+                        &self.asset_hub,
+                        &self.gpu_context,
+                        temp,
+                    );
                     inner.render_directional_shadows(
                         command_encoder,
                         &render_camera,
@@ -1222,6 +1322,11 @@ impl Engine {
         if let Some(ref mut painter) = self.gui_painter {
             painter.after_submit(sync_point);
         }
+        if can_render {
+            for object in &mut self.render_objects {
+                object.flip();
+            }
+        }
 
         profiling::finish_frame!();
     }
@@ -1269,10 +1374,14 @@ impl Engine {
         );
 
         if can_render {
+            for mut render_object in self.retired_render_objects.drain(..) {
+                render_object.retire_gpu(temp);
+            }
             Self::update_render_objects(
-                &mut self.physics,
-                &mut self.objects,
+                &self.physics,
+                &self.objects,
                 &mut self.render_objects,
+                &self.animation_models,
                 self.time_ahead,
             );
         }
@@ -1304,7 +1413,7 @@ impl Engine {
                 if can_render {
                     inner.build_scene(
                         command_encoder,
-                        &self.render_objects,
+                        &mut self.render_objects,
                         self.environment_map,
                         &self.asset_hub,
                         &self.gpu_context,
@@ -1367,6 +1476,15 @@ impl Engine {
                 ref mut inner,
                 ref raster_config,
             } => {
+                if can_render {
+                    inner.prepare(
+                        command_encoder,
+                        &mut self.render_objects,
+                        &self.asset_hub,
+                        &self.gpu_context,
+                        temp,
+                    );
+                }
                 command_encoder.init_texture(inner.depth_texture());
                 for eye in 0..view_count {
                     let xr_view = frame.xr_view(eye as u32);
@@ -1444,6 +1562,11 @@ impl Engine {
         self.extra_debug_lines.clear();
         command_encoder.present(frame);
         self.pacer.end_frame(&self.gpu_context);
+        if can_render {
+            for object in &mut self.render_objects {
+                object.flip();
+            }
+        }
         profiling::finish_frame!();
         true
     }
@@ -1814,8 +1937,9 @@ impl Engine {
 
         let mut visuals = Vec::new();
         for visual in config.visuals.iter() {
+            let path = format!("{}/{}", self.data_path, visual.model);
             let (model, task) = self.asset_hub.models.load(
-                format!("{}/{}", self.data_path, visual.model),
+                &path,
                 blade_render::model::Meta {
                     generate_tangents: true,
                     front_face: match visual.front_face {
@@ -1826,6 +1950,8 @@ impl Engine {
             );
             visuals.push(Visual {
                 model,
+                // Loaded lazily by `set_animation`.
+                animation_model: None,
                 similarity: nalgebra::geometry::Similarity3::from_parts(
                     nalgebra::Vector3::from(visual.pos).into(),
                     make_quaternion(visual.rot),
@@ -1852,8 +1978,9 @@ impl Engine {
             None => Default::default(),
         };
 
+        let isometry = transform.into_isometry();
         let rigid_body = rapier3d::dynamics::RigidBodyBuilder::new(dynamic_input.into_rapier())
-            .position(transform.into_isometry())
+            .position(isometry)
             .additional_mass_properties(add_mass_properties)
             .build();
         let rb_handle = self.physics.rigid_bodies.insert(rigid_body);
@@ -1934,11 +2061,18 @@ impl Engine {
         let raw_handle = self.objects.insert(Object {
             name: config.name.clone(),
             rigid_body: rb_handle,
-            prev_isometry: nalgebra::Isometry3::default(),
             colliders,
             visuals,
             color_tint: [1.0; 4],
+            animation: None,
         });
+        Self::insert_render_objects(
+            &self.physics,
+            &self.objects,
+            &mut self.render_objects,
+            raw_handle,
+        );
+        self.renderer.reset_scene_history();
         self.physics.rigid_bodies[rb_handle].user_data = raw_handle as u128;
         ObjectHandle(raw_handle)
     }
@@ -1966,22 +2100,31 @@ impl Engine {
     ) -> ObjectHandle {
         let visual = Visual {
             model,
+            animation_model: None,
             similarity: nalgebra::geometry::Similarity3::identity(),
         };
 
+        let isometry = transform.into_isometry();
         let rigid_body = rapier3d::dynamics::RigidBodyBuilder::new(dynamic_input.into_rapier())
-            .position(transform.into_isometry())
+            .position(isometry)
             .build();
         let rb_handle = self.physics.rigid_bodies.insert(rigid_body);
 
         let raw_handle = self.objects.insert(Object {
             name: name.to_string(),
             rigid_body: rb_handle,
-            prev_isometry: nalgebra::Isometry3::default(),
             colliders: Vec::new(),
             visuals: vec![visual],
             color_tint: [1.0; 4],
+            animation: None,
         });
+        Self::insert_render_objects(
+            &self.physics,
+            &self.objects,
+            &mut self.render_objects,
+            raw_handle,
+        );
+        self.renderer.reset_scene_history();
         // Store ObjectHandle index in rigid body user_data for fast lookup in contacts
         self.physics.rigid_bodies[rb_handle].user_data = raw_handle as u128;
         ObjectHandle(raw_handle)
@@ -2060,24 +2203,33 @@ impl Engine {
 
     /// Remove an object and its physics state.
     pub fn remove_object(&mut self, handle: ObjectHandle) {
-        if let Some(object) = self.objects.try_remove(handle.0) {
-            for &collider in object.colliders.iter() {
-                self.physics.colliders.remove(
-                    collider,
-                    &mut self.physics.island_manager,
-                    &mut self.physics.rigid_bodies,
-                    false,
-                );
-            }
-            self.physics.rigid_bodies.remove(
-                object.rigid_body,
+        let Some(render_range) = self
+            .objects
+            .get(handle.0)
+            .map(|_| Self::render_object_range(&self.objects, handle.0))
+        else {
+            return;
+        };
+        let object = self.objects.remove(handle.0);
+        self.retired_render_objects
+            .extend(self.render_objects.drain(render_range));
+        self.renderer.reset_scene_history();
+        for &collider in object.colliders.iter() {
+            self.physics.colliders.remove(
+                collider,
                 &mut self.physics.island_manager,
-                &mut self.physics.colliders,
-                &mut self.physics.impulse_joints,
-                &mut self.physics.multibody_joints,
-                true,
+                &mut self.physics.rigid_bodies,
+                false,
             );
         }
+        self.physics.rigid_bodies.remove(
+            object.rigid_body,
+            &mut self.physics.island_manager,
+            &mut self.physics.colliders,
+            &mut self.physics.impulse_joints,
+            &mut self.physics.multibody_joints,
+            true,
+        );
     }
 
     pub fn wake_up(&mut self, object: ObjectHandle) {
@@ -2213,6 +2365,32 @@ impl Engine {
     /// Default is [1, 1, 1, 1] (no tint).
     pub fn set_color_tint(&mut self, handle: ObjectHandle, tint: [f32; 4]) {
         self.objects[handle.0].color_tint = tint;
+    }
+
+    /// Start, replace, or stop skeletal animation playback for an object.
+    ///
+    /// The clip index selects from the first animated visual. Other visuals use
+    /// the same named clip, or the same index when it is unnamed.
+    ///
+    /// Animation data for the object's models is loaded on demand, so calling
+    /// this for the first time may delay rendering until the load completes.
+    /// Models without a source file (e.g. procedural ones) can't be animated.
+    pub fn set_animation(&mut self, handle: ObjectHandle, animation: Option<AnimationPlayer>) {
+        if animation.is_some() {
+            for visual in self.objects[handle.0].visuals.iter_mut() {
+                if visual.animation_model.is_some() {
+                    continue;
+                }
+                let Some(path) = self.asset_hub.models.get_main_source_path(visual.model) else {
+                    log::warn!("Unable to animate a model without a source path");
+                    continue;
+                };
+                let (animation_model, task) = self.animation_models.load(path, animation::Meta);
+                visual.animation_model = Some(animation_model);
+                self.load_tasks.push(task.clone());
+            }
+        }
+        self.objects[handle.0].animation = animation;
     }
 
     pub fn set_joint_motor(

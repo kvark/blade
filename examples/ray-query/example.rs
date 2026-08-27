@@ -137,6 +137,7 @@ impl Example {
             name: "triangle",
             ty: gpu::AccelerationStructureType::BottomLevel,
             size: blas_sizes.data,
+            updatable: false,
         });
 
         let x_angle = 0.5f32;
@@ -171,6 +172,7 @@ impl Example {
             name: "TLAS",
             ty: gpu::AccelerationStructureType::TopLevel,
             size: tlas_sizes.data,
+            updatable: false,
         });
         let tlas_scratch_offset =
             (blas_sizes.scratch | (gpu::limits::ACCELERATION_STRUCTURE_SCRATCH_ALIGNMENT - 1)) + 1;

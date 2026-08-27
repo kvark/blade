@@ -914,10 +914,11 @@ fn snapshot_pbr_raster() {
         },
     );
 
-    let objects = vec![blade_render::Object::from(
+    let mut objects = vec![blade_render::Object::from(
         harness.create_grid_model([0.05, 1.0]),
     )];
     let mut temp_buffers = Vec::new();
+    let mut frame_resources = blade_render::FrameResources::default();
     harness
         .asset_hub
         .flush(&mut command_encoder, &mut temp_buffers);
@@ -937,6 +938,13 @@ fn snapshot_pbr_raster() {
         }),
         ..Default::default()
     };
+    rasterizer.prepare(
+        &mut command_encoder,
+        &mut objects,
+        &harness.asset_hub,
+        &context,
+        &mut frame_resources,
+    );
     rasterizer.render_directional_shadows(
         &mut command_encoder,
         &pbr_scene::camera(),
@@ -977,6 +985,195 @@ fn snapshot_pbr_raster() {
 
     for buffer in temp_buffers {
         context.destroy_buffer(buffer);
+    }
+    for buffer in frame_resources.buffers {
+        context.destroy_buffer(buffer);
+    }
+    for object in objects.iter_mut() {
+        object.destroy_gpu(&context);
+    }
+    rasterizer.destroy(&context);
+    context.destroy_command_encoder(&mut command_encoder);
+    target.destroy(&context);
+    harness.destroy();
+}
+
+/// Load the repository's minimal animated GLB and render three exact clip
+/// keyframes. This keeps the reference deterministic while covering glTF skin
+/// cooking, joint palettes, non-uniform scale normals, and both skinned raster
+/// pipelines (main and directional shadow).
+#[test]
+#[ignore = "requires a working GPU context"]
+fn snapshot_animated_skin() {
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    let size = gpu::Extent {
+        width: 256,
+        height: 256,
+        depth: 1,
+    };
+    let format = gpu::TextureFormat::Rgba8UnormSrgb;
+    let harness = PbrHarness::new(context, "animated-skin-raster", false);
+    let context = std::sync::Arc::clone(&harness.context);
+    let target = snapshot::OffscreenTarget::new(&context, size, format);
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("assets")
+        .join("animated_skin.glb");
+    let (model, task) = harness.asset_hub.models.load(
+        path,
+        blade_render::model::Meta {
+            generate_tangents: false,
+            front_face: blade_render::model::FrontFace::CounterClockwise,
+        },
+    );
+    if harness.workers.is_empty() {
+        task.join_active();
+    } else {
+        task.join();
+    }
+
+    let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "snapshot-animated-skin",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    command_encoder.start();
+    let mut rasterizer = blade_render::Rasterizer::new(
+        &mut command_encoder,
+        &context,
+        harness.shaders.clone(),
+        &harness.asset_hub.shaders,
+        &blade_render::RenderConfig {
+            surface_size: size,
+            surface_info: gpu::SurfaceInfo {
+                format,
+                alpha: gpu::AlphaMode::Ignored,
+            },
+            color_space: gpu::ColorSpace::Linear,
+            max_debug_lines: 1,
+        },
+    );
+    let mut temp_buffers = Vec::new();
+    let mut frame_resources = blade_render::FrameResources::default();
+    harness
+        .asset_hub
+        .flush(&mut command_encoder, &mut temp_buffers);
+
+    let keyframes = [
+        (0.0, glam::Quat::IDENTITY, glam::Vec3::ONE),
+        (
+            0.5,
+            glam::Quat::from_rotation_z(45.0f32.to_radians()),
+            glam::Vec3::new(1.6, 0.7, 0.55),
+        ),
+        (
+            1.0,
+            glam::Quat::from_rotation_z(-35.0f32.to_radians()),
+            glam::Vec3::new(0.7, 1.4, 1.5),
+        ),
+    ];
+    let mut objects: Vec<_> = keyframes
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_time, rotation, scale))| {
+            let mut object = blade_render::Object::from(model);
+            object.transform.x.w = index as f32 * 2.0 - 2.0;
+            object.prev_transform = object.transform;
+            object.pose = Some(blade_render::Pose::from_node_matrices(vec![
+                glam::Mat4::IDENTITY,
+                glam::Mat4::IDENTITY,
+                glam::Mat4::from_scale_rotation_translation(scale, rotation, glam::Vec3::Y),
+            ]));
+            object
+        })
+        .collect();
+    let camera = blade_render::Camera {
+        pos: [0.0, 1.0, 6.0].into(),
+        rot: mint::Quaternion {
+            v: [0.0; 3].into(),
+            s: 1.0,
+        },
+        fov_y: 0.8,
+        depth: 100.0,
+        fov: None,
+    };
+    let raster_config = blade_render::RasterConfig {
+        clear_color: gpu::TextureColor::OpaqueBlack,
+        light_dir: mint::Vector3 {
+            x: 0.4,
+            y: 0.3,
+            z: 1.0,
+        },
+        light_color: mint::Vector3 {
+            x: 2.0,
+            y: 2.0,
+            z: 2.0,
+        },
+        ambient_color: mint::Vector3 {
+            x: 0.08,
+            y: 0.08,
+            z: 0.08,
+        },
+        directional_shadows: Some(blade_render::DirectionalShadowConfig {
+            strength: 0.5,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    rasterizer.prepare(
+        &mut command_encoder,
+        &mut objects,
+        &harness.asset_hub,
+        &context,
+        &mut frame_resources,
+    );
+    rasterizer.render_directional_shadows(
+        &mut command_encoder,
+        &camera,
+        &objects,
+        &harness.asset_hub,
+        &raster_config,
+    );
+    command_encoder.init_texture(target.texture);
+    command_encoder.init_texture(rasterizer.depth_texture());
+    if let mut pass = command_encoder.render(
+        "raster-animated-skin",
+        gpu::RenderTargetSet {
+            colors: &[gpu::RenderTarget {
+                view: target.view,
+                init_op: gpu::InitOp::Clear(raster_config.clear_color),
+                finish_op: gpu::FinishOp::Store,
+            }],
+            depth_stencil: Some(gpu::RenderTarget {
+                view: rasterizer.depth_view(),
+                init_op: gpu::InitOp::Clear(gpu::TextureColor::White),
+                finish_op: gpu::FinishOp::Discard,
+            }),
+        },
+    ) {
+        rasterizer.render(
+            &mut pass,
+            &camera,
+            &objects,
+            &harness.asset_hub,
+            None,
+            &raster_config,
+        );
+    }
+
+    let pixels = target.read_pixels(&context, &mut command_encoder);
+    snapshot::check("animated-skin", &pixels, size);
+
+    for buffer in temp_buffers {
+        context.destroy_buffer(buffer);
+    }
+    for buffer in frame_resources.buffers {
+        context.destroy_buffer(buffer);
+    }
+    for object in objects.iter_mut() {
+        object.destroy_gpu(&context);
     }
     rasterizer.destroy(&context);
     context.destroy_command_encoder(&mut command_encoder);
@@ -1170,7 +1367,7 @@ fn render_ray_traced_grid_configured(
             .create_model("pbr-material-grid-no-emissive", geometries);
         harness.asset_hub.models.insert(model)
     };
-    let objects = vec![blade_render::Object::from(model)];
+    let mut objects = vec![blade_render::Object::from(model)];
     let environment = test_config.black_environment.then(|| {
         let texture = harness.asset_hub.textures.baker.create_texture(
             "pbr-black-environment",
@@ -1221,7 +1418,7 @@ fn render_ray_traced_grid_configured(
     for frame_index in 0..frame_count {
         renderer.build_scene(
             &mut command_encoder,
-            &objects,
+            &mut objects,
             environment,
             &harness.asset_hub,
             &context,
@@ -1284,6 +1481,9 @@ fn render_ray_traced_grid_configured(
     for acceleration_structure in temp.acceleration_structures {
         context.destroy_acceleration_structure(acceleration_structure);
     }
+    for object in objects.iter_mut() {
+        object.destroy_gpu(&context);
+    }
     renderer.destroy(&context);
     context.destroy_command_encoder(&mut command_encoder);
     target.destroy(&context);
@@ -1298,6 +1498,221 @@ fn snapshot_pbr_ray_trace() {
     if let Some(pixels) = render_ray_traced_grid("pbr-ray-trace", RayTraceMode::Restir) {
         snapshot::check("pbr-ray-trace", &pixels, RAY_TRACE_SIZE);
     }
+}
+
+/// Exercise BLAS reuse and fenced retirement while poses and object count change.
+#[cfg(not(gles))]
+#[test]
+#[ignore = "requires a working GPU context with ray tracing"]
+fn animated_blas_memory_stays_bounded() {
+    if cfg!(target_os = "macos") {
+        println!("Skipping: ray tracing stress test not supported on macOS CI");
+        return;
+    }
+    let context = unsafe {
+        match gpu::Context::init(gpu::ContextDesc {
+            ray_tracing: true,
+            ..Default::default()
+        }) {
+            Ok(context) => context,
+            Err(error) => {
+                println!("Skipping: GPU context with ray tracing not available: {error:?}");
+                return;
+            }
+        }
+    };
+    if !context
+        .capabilities()
+        .ray_query
+        .contains(gpu::ShaderVisibility::COMPUTE)
+    {
+        println!("Skipping: ray_query compute not supported");
+        return;
+    }
+
+    const OBJECT_COUNT: usize = 64;
+    const FRAME_COUNT: usize = 32;
+    const WARM_UP_FRAMES: usize = 8;
+    const MAX_LATE_GROWTH: u64 = 64 << 20;
+
+    let harness = PbrHarness::new(context, "animated-blas-stress", true);
+    let context = std::sync::Arc::clone(&harness.context);
+    let size = gpu::Extent {
+        width: 16,
+        height: 16,
+        depth: 1,
+    };
+    let mut pacer = blade_render::util::FramePacer::new(&context);
+    let (encoder, temp) = pacer.begin_frame();
+    let mut renderer = blade_render::RayTracer::new(
+        encoder,
+        &context,
+        harness.shaders.clone(),
+        &harness.asset_hub.shaders,
+        &blade_render::RenderConfig {
+            surface_size: size,
+            surface_info: gpu::SurfaceInfo {
+                format: gpu::TextureFormat::Rgba8Unorm,
+                alpha: gpu::AlphaMode::Ignored,
+            },
+            color_space: gpu::ColorSpace::Linear,
+            max_debug_lines: 1,
+        },
+    );
+    let model = harness
+        .asset_hub
+        .models
+        .insert(harness.asset_hub.models.baker.create_model(
+            "animated-blas-triangle",
+            vec![blade_render::ProceduralGeometry {
+                name: "triangle".into(),
+                vertices: vec![
+                    blade_render::Vertex {
+                        position: [-0.25, -0.25, 0.0],
+                        ..Default::default()
+                    },
+                    blade_render::Vertex {
+                        position: [0.25, -0.25, 0.0],
+                        ..Default::default()
+                    },
+                    blade_render::Vertex {
+                        position: [0.0, 0.25, 0.0],
+                        ..Default::default()
+                    },
+                ],
+                indices: vec![0, 1, 2],
+                ..Default::default()
+            }],
+        ));
+    harness.asset_hub.flush(encoder, &mut temp.buffers);
+    pacer.end_frame(&context);
+
+    let make_object = |index: usize| {
+        let mut object = blade_render::Object::from(model);
+        let slot = index % OBJECT_COUNT;
+        let x = (slot % 8) as f32 - 3.5;
+        let y = (slot / 8) as f32 - 3.5;
+        object.transform.x.w = x;
+        object.transform.y.w = y;
+        object.prev_transform = object.transform;
+        object
+    };
+    let mut objects: Vec<_> = (0..OBJECT_COUNT).map(make_object).collect();
+    let mut next_object_index = OBJECT_COUNT;
+    let camera = blade_render::Camera {
+        pos: [0.0, 0.0, 12.0].into(),
+        rot: mint::Quaternion {
+            v: [0.0; 3].into(),
+            s: 1.0,
+        },
+        fov_y: 0.8,
+        depth: 100.0,
+        fov: None,
+    };
+    let ray_config = blade_render::RayConfig {
+        num_environment_samples: 1,
+        num_brdf_samples: 1,
+        jitter_primary_rays: false,
+        environment_importance_sampling: false,
+        max_bounces: 0,
+        t_start: 0.01,
+        max_accumulated_samples: 0,
+        tap_count: 2,
+        tap_radius: 4,
+        tap_confidence_near: 4,
+        tap_confidence_far: 2,
+        pairwise_mis: true,
+        defensive_mis: 0.1,
+    };
+    let mut late_memory_usage = Vec::new();
+
+    for frame_index in 0..FRAME_COUNT {
+        let (encoder, temp) = pacer.begin_frame();
+        if frame_index != 0 && frame_index % 8 == 0 {
+            for mut object in objects.drain(..16) {
+                object.retire_gpu(temp);
+            }
+        } else if frame_index % 8 == 4 {
+            while objects.len() < OBJECT_COUNT {
+                objects.push(make_object(next_object_index));
+                next_object_index += 1;
+            }
+        }
+
+        let clip = (frame_index / 4) & 1;
+        for (index, object) in objects.iter_mut().enumerate() {
+            let phase = frame_index as f32 * 0.17 + index as f32 * 0.03;
+            let offset = if clip == 0 {
+                phase.sin() * 0.1
+            } else {
+                phase.cos() * 0.1 + 0.25
+            };
+            object.pose = (frame_index % 8 != 2).then(|| {
+                blade_render::Pose::from_node_matrices(vec![glam::Mat4::from_translation(
+                    glam::Vec3::new(0.0, offset, 0.0),
+                )])
+            });
+        }
+
+        renderer.build_scene(
+            encoder,
+            &mut objects,
+            None,
+            &harness.asset_hub,
+            &context,
+            temp,
+        );
+        assert!(temp.acceleration_structures.len() >= usize::from(frame_index != 0));
+        renderer.prepare(
+            encoder,
+            &camera,
+            blade_render::FrameConfig {
+                reset_variance: frame_index == 0,
+                reset_reservoirs: frame_index == 0,
+                reset_accumulation: frame_index == 0,
+                ..Default::default()
+            },
+        );
+        renderer.render(
+            encoder,
+            blade_render::RenderMode::RealTime,
+            blade_render::DebugConfig::default(),
+            ray_config,
+            None,
+        );
+        pacer.end_frame(&context);
+        for object in &mut objects {
+            object.flip();
+        }
+
+        let usage = context.memory_stats().usage;
+        if usage != 0 && frame_index >= WARM_UP_FRAMES {
+            late_memory_usage.push(usage);
+        }
+    }
+
+    if let (Some(min), Some(max)) = (
+        late_memory_usage.iter().min(),
+        late_memory_usage.iter().max(),
+    ) {
+        println!(
+            "animated BLAS late-frame device memory: {:.1}–{:.1} MiB",
+            *min as f64 / (1 << 20) as f64,
+            *max as f64 / (1 << 20) as f64,
+        );
+        assert!(
+            max - min <= MAX_LATE_GROWTH,
+            "animated BLAS memory kept growing after warm-up: {} MiB",
+            (max - min) >> 20,
+        );
+    }
+
+    pacer.destroy(&context);
+    for object in objects.iter_mut() {
+        object.destroy_gpu(&context);
+    }
+    renderer.destroy(&context);
+    harness.destroy();
 }
 
 /// Render the same grid with the canonical renderer, and confirm that the

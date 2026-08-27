@@ -362,6 +362,7 @@ pub struct AccelerationStructure {
     raw: vk::AccelerationStructureKHR,
     buffer: vk::Buffer,
     memory_handle: usize,
+    updatable: bool,
 }
 
 #[derive(Debug, Default)]
@@ -990,6 +991,7 @@ impl Device {
     fn map_acceleration_structure_meshes(
         &self,
         meshes: &[crate::AccelerationStructureMesh],
+        updatable: bool,
     ) -> BottomLevelAccelerationStructureInput<'_> {
         let mut total_primitive_count = 0;
         let mut max_primitive_counts = Vec::with_capacity(meshes.len());
@@ -1049,9 +1051,13 @@ impl Device {
             };
             geometries.push(geometry);
         }
+        let mut flags = vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE;
+        if updatable {
+            flags |= vk::BuildAccelerationStructureFlagsKHR::ALLOW_UPDATE;
+        }
         let build_info = vk::AccelerationStructureBuildGeometryInfoKHR {
             ty: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
-            flags: vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE,
+            flags,
             mode: vk::BuildAccelerationStructureModeKHR::BUILD,
             geometry_count: geometries.len() as u32,
             p_geometries: geometries.as_ptr(),

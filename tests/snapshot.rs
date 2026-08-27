@@ -36,6 +36,10 @@ pub fn shader_source(name: &str) -> String {
         Expansion::Size(blade_render::MAX_POINT_LIGHTS as u32),
     );
     expansions.insert(
+        "MAX_JOINTS_PER_DRAW".to_string(),
+        Expansion::Size(blade_render::MAX_JOINTS_PER_DRAW as u32),
+    );
+    expansions.insert(
         "DEBUG_MODE".to_string(),
         Expansion::Bool(cfg!(debug_assertions)),
     );

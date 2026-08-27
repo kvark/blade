@@ -350,6 +350,15 @@ impl<B: Baker> AssetManager<B> {
         }
     }
 
+    /// Access the asset if it is ready, returning `None` otherwise.
+    pub fn get(&self, handle: Handle<B::Output>) -> Option<&B::Output> {
+        let slot = &self.slots[handle.inner];
+        if handle.version != slot.version {
+            return None;
+        }
+        slot.data.as_ref()
+    }
+
     pub fn get_main_source_path(&self, handle: Handle<B::Output>) -> Option<&PathBuf> {
         self.slots[handle.inner].sources.first()
     }

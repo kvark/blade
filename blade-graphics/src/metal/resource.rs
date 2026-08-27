@@ -88,17 +88,21 @@ impl super::Context {
         &self,
         meshes: &[crate::AccelerationStructureMesh],
     ) -> crate::AccelerationStructureSizes {
-        let descriptor = super::make_bottom_level_acceleration_structure_desc(meshes);
-        let accel_sizes = self
-            .device
-            .lock()
-            .unwrap()
-            .accelerationStructureSizesWithDescriptor(&descriptor);
-
-        crate::AccelerationStructureSizes {
-            data: accel_sizes.accelerationStructureSize as u64,
-            scratch: accel_sizes.buildScratchBufferSize as u64,
+        let mut sizes = crate::AccelerationStructureSizes::default();
+        for updatable in [false, true] {
+            let descriptor =
+                super::make_bottom_level_acceleration_structure_desc(meshes, updatable);
+            let queried = self
+                .device
+                .lock()
+                .unwrap()
+                .accelerationStructureSizesWithDescriptor(&descriptor);
+            sizes.data = sizes.data.max(queried.accelerationStructureSize as u64);
+            sizes.scratch = sizes.scratch.max(
+                (queried.buildScratchBufferSize as u64).max(queried.refitScratchBufferSize as u64),
+            );
         }
+        sizes
     }
 
     pub fn get_top_level_acceleration_structure_sizes(
@@ -388,6 +392,7 @@ impl crate::traits::ResourceDevice for super::Context {
 
         super::AccelerationStructure {
             raw: Retained::into_raw(object),
+            updatable: desc.updatable,
         }
     }
 

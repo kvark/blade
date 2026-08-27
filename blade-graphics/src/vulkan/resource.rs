@@ -261,22 +261,30 @@ impl super::Context {
         &self,
         meshes: &[crate::AccelerationStructureMesh],
     ) -> crate::AccelerationStructureSizes {
-        let blas_input = self.device.map_acceleration_structure_meshes(meshes);
-        let rt = self.device.ray_tracing.as_ref().unwrap();
-        let mut sizes_raw = vk::AccelerationStructureBuildSizesInfoKHR::default();
-        unsafe {
-            rt.acceleration_structure
-                .get_acceleration_structure_build_sizes(
-                    vk::AccelerationStructureBuildTypeKHR::DEVICE,
-                    &blas_input.build_info,
-                    &blas_input.max_primitive_counts,
-                    &mut sizes_raw,
-                )
-        };
-        crate::AccelerationStructureSizes {
-            data: sizes_raw.acceleration_structure_size,
-            scratch: sizes_raw.build_scratch_size,
+        let mut sizes = crate::AccelerationStructureSizes::default();
+        for updatable in [false, true] {
+            let blas_input = self
+                .device
+                .map_acceleration_structure_meshes(meshes, updatable);
+            let rt = self.device.ray_tracing.as_ref().unwrap();
+            let mut sizes_raw = vk::AccelerationStructureBuildSizesInfoKHR::default();
+            unsafe {
+                rt.acceleration_structure
+                    .get_acceleration_structure_build_sizes(
+                        vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                        &blas_input.build_info,
+                        &blas_input.max_primitive_counts,
+                        &mut sizes_raw,
+                    )
+            };
+            sizes.data = sizes.data.max(sizes_raw.acceleration_structure_size);
+            sizes.scratch = sizes.scratch.max(
+                sizes_raw
+                    .build_scratch_size
+                    .max(sizes_raw.update_scratch_size),
+            );
         }
+        sizes
     }
 
     pub fn get_top_level_acceleration_structure_sizes(
@@ -683,6 +691,7 @@ impl crate::traits::ResourceDevice for super::Context {
             raw,
             buffer,
             memory_handle: allocation.handle,
+            updatable: desc.updatable,
         }
     }
 

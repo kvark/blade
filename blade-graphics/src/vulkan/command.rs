@@ -907,22 +907,22 @@ impl Drop for super::TransferCommandEncoder<'_> {
     }
 }
 
-#[hidden_trait::expose]
-impl crate::traits::AccelerationStructureEncoder
-    for super::AccelerationStructureCommandEncoder<'_>
-{
-    type AccelerationStructure = crate::AccelerationStructure;
-    type AccelerationStructureMesh = crate::AccelerationStructureMesh;
-    type BufferPiece = crate::BufferPiece;
-
-    fn build_bottom_level(
+impl super::AccelerationStructureCommandEncoder<'_> {
+    fn encode_bottom_level(
         &mut self,
         acceleration_structure: super::AccelerationStructure,
         meshes: &[crate::AccelerationStructureMesh],
         scratch_data: crate::BufferPiece,
+        mode: vk::BuildAccelerationStructureModeKHR,
     ) {
         let rt = self.device.ray_tracing.as_ref().unwrap();
-        let mut blas_input = self.device.map_acceleration_structure_meshes(meshes);
+        let mut blas_input = self
+            .device
+            .map_acceleration_structure_meshes(meshes, acceleration_structure.updatable);
+        blas_input.build_info.mode = mode;
+        if mode == vk::BuildAccelerationStructureModeKHR::UPDATE {
+            blas_input.build_info.src_acceleration_structure = acceleration_structure.raw;
+        }
         blas_input.build_info.dst_acceleration_structure = acceleration_structure.raw;
         let scratch_address = self.device.get_device_address(&scratch_data);
         assert_eq!(
@@ -941,6 +941,43 @@ impl crate::traits::AccelerationStructureEncoder
                 &[&blas_input.build_range_infos],
             );
         }
+    }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::AccelerationStructureEncoder
+    for super::AccelerationStructureCommandEncoder<'_>
+{
+    type AccelerationStructure = crate::AccelerationStructure;
+    type AccelerationStructureMesh = crate::AccelerationStructureMesh;
+    type BufferPiece = crate::BufferPiece;
+
+    fn build_bottom_level(
+        &mut self,
+        acceleration_structure: super::AccelerationStructure,
+        meshes: &[crate::AccelerationStructureMesh],
+        scratch_data: crate::BufferPiece,
+    ) {
+        self.encode_bottom_level(
+            acceleration_structure,
+            meshes,
+            scratch_data,
+            vk::BuildAccelerationStructureModeKHR::BUILD,
+        );
+    }
+
+    fn update_bottom_level(
+        &mut self,
+        acceleration_structure: super::AccelerationStructure,
+        meshes: &[crate::AccelerationStructureMesh],
+        scratch_data: crate::BufferPiece,
+    ) {
+        self.encode_bottom_level(
+            acceleration_structure,
+            meshes,
+            scratch_data,
+            vk::BuildAccelerationStructureModeKHR::UPDATE,
+        );
     }
 
     fn build_top_level(

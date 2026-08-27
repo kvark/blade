@@ -282,6 +282,9 @@ impl Example {
         self.workers.clear();
         self.pacer.destroy(&self.context);
         self.gui_painter.destroy(&self.context);
+        for object in self.objects.iter_mut() {
+            object.destroy_gpu(&self.context);
+        }
         self.renderer.destroy(&self.context);
         self.asset_hub.destroy();
         self.context.destroy_surface(&mut self.surface);
@@ -342,12 +345,10 @@ impl Example {
                 },
             );
             load_finish.depend_on(model_task);
-            self.objects.push(blade_render::Object {
-                model,
-                transform: config_object.transform,
-                prev_transform: config_object.transform,
-                color_tint: [1.0; 4],
-            });
+            let mut object = blade_render::Object::from(model);
+            object.transform = config_object.transform;
+            object.prev_transform = config_object.transform;
+            self.objects.push(object);
             self.object_extras.push(ObjectExtra {
                 path: PathBuf::from(config_object.path),
             });
@@ -442,7 +443,7 @@ impl Example {
             assert_eq!(self.objects.len(), self.object_extras.len());
             self.renderer.build_scene(
                 command_encoder,
-                &self.objects,
+                &mut self.objects,
                 self.environment_map,
                 &self.asset_hub,
                 &self.context,
@@ -791,12 +792,10 @@ impl Example {
             },
         );
         self.scene_load_task = Some(model_task.clone());
-        self.objects.push(blade_render::Object {
-            model,
-            transform,
-            prev_transform: transform,
-            color_tint: [1.0; 4],
-        });
+        let mut object = blade_render::Object::from(model);
+        object.transform = transform;
+        object.prev_transform = transform;
+        self.objects.push(object);
         self.object_extras.push(ObjectExtra {
             path: file_path.to_owned(),
         });
