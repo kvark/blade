@@ -1,6 +1,19 @@
 #include "brdf.inc.wgsl"
 #include "color.inc.wgsl"
 
+#use MAX_POINT_LIGHTS
+
+struct PointLight {
+    pos_radius: vec4<f32>,
+    color: vec4<f32>,
+}
+
+struct PointLightParams {
+    // x: submitted light count, y: stochastic seed
+    count_seed: vec4<f32>,
+    lights: array<PointLight, MAX_POINT_LIGHTS>,
+}
+
 struct RasterFrameParams {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
@@ -52,6 +65,7 @@ struct VertexOutput {
 }
 
 var<uniform> frame_params: RasterFrameParams;
+var<uniform> light_params: PointLightParams;
 var<uniform> draw_params: RasterDrawParams;
 var samp: sampler;
 var base_color_tex: texture_2d<f32>;
@@ -89,6 +103,9 @@ fn raster_vs(input: Vertex) -> VertexOutput {
     let pos_world = draw_params.model * vec4<f32>(input.position, 1.0);
     out.clip_pos = frame_params.view_proj * pos_world;
     out.world_pos = pos_world.xyz;
+    // GLES 3.00 requires matching uniform blocks in vs+fs. The multiply is
+    // zero, so lighting does not leak into the vertex stage.
+    out.world_pos.x += light_params.count_seed.x * 0.0;
     let n = normalize(quat_rotate(draw_params.normal_quat, decode_normal(input.normal)));
     let t = normalize(quat_rotate(draw_params.normal_quat, decode_normal(input.tangent)));
     let b = normalize(cross(n, t)) * input.bitangent_sign;
@@ -129,6 +146,63 @@ fn directional_shadow(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
     return mix(1.0, visibility, frame_params.shadow_params.y);
 }
 
+fn hash31(p: vec3<f32>) -> f32 {
+    return fract(sin(dot(p, vec3<f32>(127.1, 311.7, 74.7))) * 43758.5453);
+}
+
+fn point_light_score(light: PointLight, world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
+    let delta = light.pos_radius.xyz - world_pos;
+    let dist2 = max(dot(delta, delta), 0.04);
+    let dist = sqrt(dist2);
+    let range = max(light.pos_radius.w, 0.01);
+    let falloff = max(1.0 - dist / range, 0.0);
+    let ldir = delta / dist;
+    let ndotl = max(dot(n, ldir), 0.0);
+    let intensity = max(light.color.x, max(light.color.y, light.color.z));
+    return intensity * falloff * falloff * (0.2 + 0.8 * ndotl);
+}
+
+fn shade_point_light(mat: Material, n: vec3<f32>, v: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+    let count = min(u32(light_params.count_seed.x), MAX_POINT_LIGHTS);
+    if (count == 0u) {
+        return vec3<f32>(0.0);
+    }
+
+    // Weighted reservoir over the submitted lights. Each fragment independently
+    // samples one light with probability proportional to its local score.
+    // TODO: spatial acceleration once scenes carry more local lights than this cap.
+    var chosen = 0u;
+    var weight_sum = 0.0;
+    for (var i = 0u; i < MAX_POINT_LIGHTS; i++) {
+        if (i >= count) {
+            break;
+        }
+        let score = point_light_score(light_params.lights[i], world_pos, n);
+        if (score <= 0.0) {
+            continue;
+        }
+        weight_sum += score;
+        let u = hash31(world_pos + vec3<f32>(f32(i), light_params.count_seed.y, score));
+        if (u * weight_sum < score) {
+            chosen = i;
+        }
+    }
+    if (weight_sum <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+
+    let light = light_params.lights[chosen];
+    let delta = light.pos_radius.xyz - world_pos;
+    let dist2 = max(dot(delta, delta), 0.04);
+    let dist = sqrt(dist2);
+    let range = max(light.pos_radius.w, 0.01);
+    let falloff = max(1.0 - dist / range, 0.0);
+    let ldir = delta / dist;
+    let brdf = evaluate_brdf(mat, n, v, ldir);
+    let atten = falloff * falloff / dist2;
+    return (mat.diffuse_albedo * brdf.diffuse + brdf.specular) * light.color.xyz * atten;
+}
+
 @fragment
 fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let mr_sample = textureSample(metallic_roughness_tex, samp, input.uv);
@@ -158,7 +232,8 @@ fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let light = (mat.diffuse_albedo * brdf.diffuse + brdf.specular) * frame_params.light_color.xyz * visibility;
     let ambient = evaluate_ambient(mat) * frame_params.ambient_color.xyz;
     let emissive = draw_params.emissive_factor.rgb * textureSample(emissive_tex, samp, input.uv).rgb;
-    let color = ambient + light + emissive;
+    let local = shade_point_light(mat, n, v, input.world_pos);
+    let color = ambient + light + local + emissive;
 
     let mapped = color / (color + vec3<f32>(1.0));
     return vec4<f32>(encode_surface_color(mapped, frame_params.settings.y > 0.5), 1.0);

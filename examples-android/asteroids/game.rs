@@ -507,6 +507,7 @@ pub fn setup_game(engine: &mut blade_engine::Engine) -> GameState {
         },
         space_sky: true,
         directional_shadows: None,
+        ..Default::default()
     });
 
     // Gas giant with rings in the distance.

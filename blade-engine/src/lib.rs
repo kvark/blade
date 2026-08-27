@@ -494,6 +494,8 @@ pub struct Engine {
     choir: Arc<choir::Choir>,
     data_path: String,
     time_ahead: f32,
+    particle_clock: f32,
+    last_particle_clock: f32,
 }
 
 impl Engine {
@@ -784,6 +786,8 @@ impl Engine {
             choir,
             data_path: config.data_path.clone(),
             time_ahead: 0.0,
+            particle_clock: 0.0,
+            last_particle_clock: 0.0,
         }
     }
 
@@ -817,6 +821,7 @@ impl Engine {
     #[profiling::function]
     pub fn update(&mut self, dt: f32) {
         self.choir.check_panic();
+        self.particle_clock += dt;
         self.time_ahead += dt;
         while self.time_ahead >= self.physics.integration_params.dt {
             self.physics.step();
@@ -875,6 +880,12 @@ impl Engine {
         }
     }
 
+    fn take_particle_dt(&mut self) -> f32 {
+        let dt = (self.particle_clock - self.last_particle_clock).clamp(0.0, 0.05);
+        self.last_particle_clock = self.particle_clock;
+        dt
+    }
+
     /// Drain contact events from the last physics update.
     pub fn drain_contacts(&mut self) -> impl Iterator<Item = ContactEvent> + '_ {
         self.contact_events.drain(..)
@@ -900,6 +911,21 @@ impl Engine {
         }
     }
 
+    /// Replace the local lights used by the raster forward pass.
+    ///
+    /// The fragment shader samples one of up to `MAX_POINT_LIGHTS` of these
+    /// with probability proportional to a local score.
+    pub fn set_point_lights(&mut self, lights: &[blade_render::PointLight]) {
+        if let Renderer::Rasterizer {
+            ref mut raster_config,
+            ..
+        } = self.renderer
+        {
+            raster_config.point_lights.clear();
+            raster_config.point_lights.extend_from_slice(lights);
+        }
+    }
+
     #[profiling::function]
     #[cfg(not(target_os = "android"))]
     pub fn render(
@@ -910,6 +936,7 @@ impl Engine {
         physical_size: winit::dpi::PhysicalSize<u32>,
         scale_factor: f32,
     ) {
+        let particle_dt = self.take_particle_dt();
         self.hot_reload_if_needed();
 
         // Note: the resize is split in 2 parts because `wait_for_previous_frame`
@@ -1003,6 +1030,14 @@ impl Engine {
                         denoiser_enabled.then_some(*denoiser_config),
                     );
                 }
+            }
+        }
+
+        if particle_dt > 0.0
+            && let Some(ref pipeline) = self.particle_pipeline
+        {
+            for (_, system) in self.particle_systems.iter_mut() {
+                system.update(pipeline, command_encoder, particle_dt);
             }
         }
 
@@ -1113,7 +1148,7 @@ impl Engine {
                         &render_camera,
                         &self.render_objects,
                         &self.asset_hub,
-                        *raster_config,
+                        raster_config,
                     );
                 }
                 command_encoder.init_texture(inner.depth_texture());
@@ -1131,16 +1166,29 @@ impl Engine {
                             finish_op: gpu::FinishOp::Store,
                         }),
                     },
-                ) && can_render
-                {
-                    inner.render(
-                        &mut pass,
-                        &render_camera,
-                        &self.render_objects,
-                        &self.asset_hub,
-                        self.environment_map,
-                        *raster_config,
-                    );
+                ) {
+                    if can_render {
+                        inner.render(
+                            &mut pass,
+                            &render_camera,
+                            &self.render_objects,
+                            &self.asset_hub,
+                            self.environment_map,
+                            raster_config,
+                        );
+                        if let Some(ref pipeline) = self.particle_pipeline {
+                            let target_size = gpu::Extent {
+                                width: physical_size.width,
+                                height: physical_size.height,
+                                depth: 1,
+                            };
+                            let particle_camera =
+                                Self::make_particle_camera(&render_camera, target_size);
+                            for (_, system) in self.particle_systems.iter() {
+                                system.draw(pipeline, &mut pass, &particle_camera);
+                            }
+                        }
+                    }
                 }
 
                 // GUI is a dev-only overlay, so a separate pass keeps the raster path simpler.
@@ -1185,6 +1233,7 @@ impl Engine {
     /// rendered (for example while transitioning session state).
     #[profiling::function]
     pub fn render_xr(&mut self) -> bool {
+        let particle_dt = self.take_particle_dt();
         self.hot_reload_if_needed();
 
         let xr_surface = match self.target_surface {
@@ -1229,9 +1278,11 @@ impl Engine {
         }
 
         // Update particle systems (compute passes)
-        if let Some(ref pipeline) = self.particle_pipeline {
+        if particle_dt > 0.0
+            && let Some(ref pipeline) = self.particle_pipeline
+        {
             for (_, system) in self.particle_systems.iter_mut() {
-                system.update(pipeline, command_encoder, 0.016);
+                system.update(pipeline, command_encoder, particle_dt);
             }
         }
 
@@ -1314,7 +1365,7 @@ impl Engine {
             }
             Renderer::Rasterizer {
                 ref mut inner,
-                raster_config,
+                ref raster_config,
             } => {
                 command_encoder.init_texture(inner.depth_texture());
                 for eye in 0..view_count {

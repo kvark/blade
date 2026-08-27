@@ -87,6 +87,10 @@ fn parse_wgsl() {
         Expansion::from_bitflags::<blade_render::DebugTextureFlags>(),
     );
     expansions.insert("DEBUG_MODE".to_string(), Expansion::Bool(true));
+    expansions.insert(
+        "MAX_POINT_LIGHTS".to_string(),
+        Expansion::Size(blade_render::MAX_POINT_LIGHTS as u32),
+    );
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut directories = vec![root.join("blade-render").join("code")];
@@ -114,7 +118,12 @@ fn raster_exports_to_webgl2() {
     let shader_dir = root.join("blade-render").join("code");
     let shader_raw = fs::read(shader_dir.join("raster.wgsl")).unwrap();
     let cooker = blade_asset::Cooker::new(&shader_dir, Default::default());
-    let source = blade_render::shader::parse_shader(&shader_raw, &cooker, &HashMap::new());
+    let mut expansions = HashMap::new();
+    expansions.insert(
+        "MAX_POINT_LIGHTS".to_string(),
+        blade_render::shader::Expansion::Size(blade_render::MAX_POINT_LIGHTS as u32),
+    );
+    let source = blade_render::shader::parse_shader(&shader_raw, &cooker, &expansions);
     let mut module =
         wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
     let info = Validator::new(

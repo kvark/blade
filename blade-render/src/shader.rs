@@ -22,6 +22,7 @@ pub struct Shader {
 pub enum Expansion {
     Values(HashMap<String, u32>),
     Bool(bool),
+    Size(u32),
 }
 impl Expansion {
     pub fn from_enum<E: strum::IntoEnumIterator + fmt::Debug + Into<u32>>() -> Self {
@@ -72,6 +73,11 @@ impl Baker {
         self.expansions
             .insert(name.to_string(), Expansion::Bool(value));
     }
+
+    pub fn register_size(&mut self, name: &str, value: u32) {
+        self.expansions
+            .insert(name.to_string(), Expansion::Size(value));
+    }
 }
 
 // SAFETY: GLES asset tasks are executed inline on the context's owning thread.
@@ -116,6 +122,9 @@ fn parse_impl(
                 }
                 Expansion::Bool(value) => {
                     writeln!(text_out, "const {}: bool = {};", type_name, value).unwrap();
+                }
+                Expansion::Size(value) => {
+                    writeln!(text_out, "const {}: u32 = {}u;", type_name, value).unwrap();
                 }
             }
         } else {

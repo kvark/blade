@@ -2,11 +2,41 @@ use crate::{AssetHub, CameraParams, DummyResources, Object, RenderConfig, Shader
 use blade_graphics as gpu;
 use std::mem;
 
+/// Maximum local lights the forward pass considers per fragment.
+/// Extra lights in `RasterConfig::point_lights` are ignored.
+pub const MAX_POINT_LIGHTS: usize = 8;
+
+/// A local omni light. Radius is a hard cutoff in world units.
+#[derive(Clone, Copy, Debug)]
+pub struct PointLight {
+    pub position: mint::Vector3<f32>,
+    pub color: mint::Vector3<f32>,
+    pub radius: f32,
+}
+
+impl Default for PointLight {
+    fn default() -> Self {
+        Self {
+            position: mint::Vector3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            color: mint::Vector3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            radius: 1.0,
+        }
+    }
+}
+
 /// Configuration of the rasterized frame.
 ///
 /// Note: the surface appearance is described by the materials of the
 /// models, this is only about the scene-wide lighting.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct RasterConfig {
     pub clear_color: gpu::TextureColor,
     /// Direction *towards* the single directional light.
@@ -17,6 +47,8 @@ pub struct RasterConfig {
     pub space_sky: bool,
     /// Optional real-time directional shadow-map effect.
     pub directional_shadows: Option<DirectionalShadowConfig>,
+    /// Local omni lights. The rasterizer uploads at most `MAX_POINT_LIGHTS`.
+    pub point_lights: Vec<PointLight>,
 }
 
 /// Controls the rasterizer's camera-relative directional shadow map.
@@ -67,6 +99,7 @@ impl Default for RasterConfig {
             },
             space_sky: false,
             directional_shadows: None,
+            point_lights: Vec::new(),
         }
     }
 }
@@ -83,6 +116,20 @@ struct RasterFrameParams {
     ambient_color: [f32; 4],
     settings: [f32; 4],
     shadow_params: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct PointLightGpu {
+    pos_radius: [f32; 4],
+    color: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct PointLightParams {
+    count_seed: [f32; 4],
+    lights: [PointLightGpu; MAX_POINT_LIGHTS],
 }
 
 #[repr(C)]
@@ -110,6 +157,7 @@ struct ShadowDrawParams {
 #[derive(blade_macros::ShaderData)]
 struct RasterMainData {
     frame_params: RasterFrameParams,
+    light_params: PointLightParams,
     draw_params: RasterDrawParams,
     samp: gpu::Sampler,
     base_color_tex: gpu::TextureView,
@@ -146,6 +194,7 @@ impl RasterPipelines {
         gpu: &gpu::Context,
     ) -> gpu::RenderPipeline {
         shader.check_struct_size::<RasterFrameParams>();
+        shader.check_struct_size::<PointLightParams>();
         shader.check_struct_size::<RasterDrawParams>();
         let main_layout = <RasterMainData as gpu::ShaderData>::layout();
         let vertex_layout = <Vertex as gpu::Vertex>::layout();
@@ -447,7 +496,7 @@ impl Rasterizer {
         camera: &crate::Camera,
         objects: &[Object],
         asset_hub: &AssetHub,
-        config: RasterConfig,
+        config: &RasterConfig,
     ) {
         let Some(shadow_config) = config.directional_shadows else {
             return;
@@ -511,10 +560,11 @@ impl Rasterizer {
         objects: &[Object],
         asset_hub: &AssetHub,
         environment_map: Option<blade_asset::Handle<crate::Texture>>,
-        config: RasterConfig,
+        config: &RasterConfig,
     ) {
         let env_map_enabled = environment_map.is_some();
         let frame_params = self.make_frame_params(camera, config, env_map_enabled);
+        let light_params = pack_point_lights(config, camera);
         if let mut pc = pass.with(&self.pipelines.main) {
             for object in objects.iter() {
                 let model = &asset_hub.models[object.model];
@@ -551,6 +601,7 @@ impl Rasterizer {
                         0,
                         &RasterMainData {
                             frame_params,
+                            light_params,
                             draw_params: RasterDrawParams {
                                 model: world_transform.to_cols_array(),
                                 normal_quat: normal_quat.to_array(),
@@ -633,7 +684,7 @@ impl Rasterizer {
         camera: &crate::Camera,
         environment_map: Option<blade_asset::Handle<crate::Texture>>,
         asset_hub: &AssetHub,
-        config: RasterConfig,
+        config: &RasterConfig,
     ) {
         let env_map_enabled = environment_map.is_some();
         let frame_params = self.make_frame_params(camera, config, env_map_enabled);
@@ -723,7 +774,7 @@ impl Rasterizer {
     fn make_frame_params(
         &self,
         camera: &crate::Camera,
-        config: RasterConfig,
+        config: &RasterConfig,
         env_map_enabled: bool,
     ) -> RasterFrameParams {
         let pos = glam::Vec3::from(camera.pos);
@@ -790,6 +841,42 @@ impl Rasterizer {
                 1.0 / self.shadow_size as f32,
             ],
         }
+    }
+}
+
+fn stochastic_light_seed(camera_pos: glam::Vec3) -> f32 {
+    camera_pos.dot(glam::Vec3::new(1.0, 1.37, 9.17))
+}
+
+fn pack_point_lights(config: &RasterConfig, camera: &crate::Camera) -> PointLightParams {
+    let mut lights = [PointLightGpu {
+        pos_radius: [0.0; 4],
+        color: [0.0; 4],
+    }; MAX_POINT_LIGHTS];
+    let count = config.point_lights.len().min(MAX_POINT_LIGHTS);
+    for (slot, src) in lights
+        .iter_mut()
+        .zip(config.point_lights.iter())
+        .take(count)
+    {
+        *slot = PointLightGpu {
+            pos_radius: [
+                src.position.x,
+                src.position.y,
+                src.position.z,
+                src.radius.max(0.01),
+            ],
+            color: [src.color.x, src.color.y, src.color.z, 0.0],
+        };
+    }
+    PointLightParams {
+        count_seed: [
+            count as f32,
+            stochastic_light_seed(glam::Vec3::from(camera.pos)),
+            0.0,
+            0.0,
+        ],
+        lights,
     }
 }
 
