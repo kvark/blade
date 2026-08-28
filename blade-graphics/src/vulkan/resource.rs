@@ -461,6 +461,14 @@ impl crate::traits::ResourceDevice for super::Context {
 
     fn sync_buffer(&self, _buffer: super::Buffer, _target: crate::BufferTarget) {}
 
+    fn sync_buffer_range(
+        &self,
+        _piece: crate::BufferPiece,
+        _size: u64,
+        _target: crate::BufferTarget,
+    ) {
+    }
+
     fn destroy_buffer(&self, buffer: super::Buffer) {
         log::info!(
             "Destroying buffer {:?}, handle {:?}",

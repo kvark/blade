@@ -89,6 +89,7 @@ impl BufferBelt {
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), bp.data(), data.len());
         }
+        gpu.sync_buffer_range(bp, data.len() as u64, self.desc.target);
         bp
     }
 
@@ -109,6 +110,7 @@ impl BufferBelt {
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr() as *const u8, bp.data(), total_bytes);
         }
+        gpu.sync_buffer_range(bp, total_bytes as u64, self.desc.target);
         bp
     }
 
@@ -119,16 +121,6 @@ impl BufferBelt {
         gpu: &gpu::Context,
     ) -> gpu::BufferPiece {
         unsafe { self.alloc_typed(data, gpu) }
-    }
-
-    /// Upload active CPU writes so the GPU can see them.
-    ///
-    /// Call this once after allocating, before submitting the command encoder
-    /// that uses the pieces. WebGL has no persistent mapping.
-    pub fn sync(&self, gpu: &gpu::Context) {
-        for (rb, _) in self.active.iter() {
-            gpu.sync_buffer(rb.raw, self.desc.target);
-        }
     }
 
     /// Mark the actively used buffers as used by GPU with a given sync point.

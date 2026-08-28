@@ -407,8 +407,6 @@ impl GuiPainter {
                 );
             }
         }
-        self.data_belt.sync(context);
-        self.index_belt.sync(context);
     }
 
     /// Call this after submitting work at the given `sync_point`.

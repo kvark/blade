@@ -2,11 +2,11 @@ Changelog for *Blade* project
 
 ## (TBD)
 
-- gles/egui: keep WebGL2 buffer bind classes honest. The upload belt now
-  records a `BufferTarget` and syncs once before submit, and the GUI painter
-  uses separate data and index belts. Mixing those in one WebGL buffer made
-  `texSubImage` see 0 bytes and `drawElements` bind an element-array target
-  to a generic buffer.
+- gles/egui: keep WebGL2 buffer bind classes honest. The upload belt records
+  a `BufferTarget` and `sync_buffer_range`s each alloc so copies and draws
+  see GPU data immediately. The GUI painter uses separate data and index
+  belts; mixing those in one WebGL buffer made `texSubImage` see 0 bytes
+  and `drawElements` bind an element-array target to a generic buffer.
 - gles: skip 0×0 `texStorage` / renderbuffer allocations (WebGL rejects
   them) and reset `UNPACK_ROW_LENGTH` after buffer-to-texture copies.
 - render/engine: skeletal animation from glTF skins and TRS clips with step,
