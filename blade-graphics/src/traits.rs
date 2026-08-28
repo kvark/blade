@@ -9,8 +9,6 @@ pub trait ResourceDevice {
 
     fn create_buffer(&self, desc: super::BufferDesc) -> Self::Buffer;
     fn sync_buffer(&self, buffer: Self::Buffer, target: super::BufferTarget);
-    /// Upload `size` bytes at `piece.offset`. Backends with persistent maps ignore this.
-    fn sync_buffer_range(&self, piece: super::BufferPiece, size: u64, target: super::BufferTarget);
     fn destroy_buffer(&self, buffer: Self::Buffer);
     fn create_texture(&self, desc: super::TextureDesc) -> Self::Texture;
     fn destroy_texture(&self, texture: Self::Texture);

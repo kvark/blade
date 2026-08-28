@@ -44,31 +44,24 @@ impl BufferBelt {
         }
     }
 
-    /// Allocate a region of `size` bytes.
+    /// Allocate a region of `size` bytes at offset 0 of a dedicated buffer.
     #[profiling::function]
     pub fn alloc(&mut self, size: u64, gpu: &gpu::Context) -> gpu::BufferPiece {
-        for &mut (ref rb, ref mut offset) in self.active.iter_mut() {
-            let aligned = offset.next_multiple_of(self.desc.alignment);
-            if aligned + size <= rb.size {
-                let piece = rb.raw.at(aligned);
-                *offset = aligned + size;
-                return piece;
-            }
-        }
+        let aligned_size = size.next_multiple_of(self.desc.alignment);
 
         let index_maybe = self
             .buffers
             .iter()
-            .position(|(rb, sp)| size <= rb.size && gpu.wait_for(sp, 0).unwrap_or(false));
+            .position(|(rb, sp)| aligned_size <= rb.size && gpu.wait_for(sp, 0).unwrap_or(false));
         if let Some(index) = index_maybe {
             let (rb, _) = self.buffers.remove(index);
             let piece = rb.raw.into();
-            self.active.push((rb, size));
+            self.active.push((rb, aligned_size));
             return piece;
         }
 
         let chunk_index = self.buffers.len() + self.active.len();
-        let chunk_size = size.max(self.desc.min_chunk_size);
+        let chunk_size = aligned_size.max(self.desc.min_chunk_size);
         let chunk = gpu.create_buffer(gpu::BufferDesc {
             name: &format!("chunk-{}", chunk_index),
             size: chunk_size,
@@ -78,7 +71,7 @@ impl BufferBelt {
             raw: chunk,
             size: chunk_size,
         };
-        self.active.push((rb, size));
+        self.active.push((rb, aligned_size));
         chunk.into()
     }
 
@@ -89,7 +82,7 @@ impl BufferBelt {
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), bp.data(), data.len());
         }
-        gpu.sync_buffer_range(bp, data.len() as u64, self.desc.target);
+        gpu.sync_buffer(bp.buffer, self.desc.target);
         bp
     }
 
@@ -110,7 +103,7 @@ impl BufferBelt {
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr() as *const u8, bp.data(), total_bytes);
         }
-        gpu.sync_buffer_range(bp, total_bytes as u64, self.desc.target);
+        gpu.sync_buffer(bp.buffer, self.desc.target);
         bp
     }
 

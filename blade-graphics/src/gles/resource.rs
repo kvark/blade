@@ -121,10 +121,6 @@ impl crate::traits::ResourceDevice for super::Context {
     }
 
     fn sync_buffer(&self, buffer: super::Buffer, target: crate::BufferTarget) {
-        self.sync_buffer_range(buffer.into(), buffer.size, target);
-    }
-
-    fn sync_buffer_range(&self, piece: crate::BufferPiece, size: u64, target: crate::BufferTarget) {
         if self
             .capabilities
             .contains(super::Capabilities::BUFFER_STORAGE)
@@ -137,15 +133,12 @@ impl crate::traits::ResourceDevice for super::Context {
             crate::BufferTarget::Index => glow::ELEMENT_ARRAY_BUFFER,
         };
         unsafe {
-            let data = slice::from_raw_parts(piece.data(), size as usize);
-            gl.bind_buffer(raw_target, piece.buffer.raw);
-            // WebGL starts with no storage. Allocate the full chunk on first
-            // bind so later ranges can `bufferSubData` without orphaning.
-            #[cfg(target_arch = "wasm32")]
-            if gl.get_buffer_parameter_i32(raw_target, glow::BUFFER_SIZE) == 0 {
-                gl.buffer_data_size(raw_target, piece.buffer.size as i32, glow::DYNAMIC_DRAW);
-            }
-            gl.buffer_sub_data_u8_slice(raw_target, piece.offset as i32, data);
+            let data = slice::from_raw_parts(buffer.data, buffer.size as usize);
+            gl.bind_buffer(raw_target, buffer.raw);
+            // Stream from offset 0. `bufferData` allocates on first WebGL bind
+            // (locking the bind class) and orphans on later calls, matching
+            // Mesa's documented `glBufferData` streaming path.
+            gl.buffer_data_u8_slice(raw_target, data, glow::DYNAMIC_DRAW);
             gl.bind_buffer(raw_target, None);
         }
     }
