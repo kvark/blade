@@ -571,7 +571,9 @@ impl BufferUpload {
 
     fn finish(self, baker: &Baker) {
         if cfg!(target_arch = "wasm32") {
-            baker.gpu_context.sync_buffer(self.dst, self.target);
+            baker
+                .gpu_context
+                .sync_buffer(self.dst.into(), self.size, self.target);
         } else {
             baker
                 .pending_operations
@@ -912,14 +914,26 @@ impl Baker {
             transform_offset += mem::size_of::<blade_graphics::Transform>() as u64;
         }
 
-        self.gpu_context
-            .sync_buffer(vertex_buffer, blade_graphics::BufferTarget::Data);
-        self.gpu_context
-            .sync_buffer(skin_vertex_buffer, blade_graphics::BufferTarget::Data);
-        self.gpu_context
-            .sync_buffer(index_buffer, blade_graphics::BufferTarget::Index);
-        self.gpu_context
-            .sync_buffer(transform_buffer, blade_graphics::BufferTarget::Data);
+        self.gpu_context.sync_buffer(
+            vertex_buffer.into(),
+            vertex_buffer.size(),
+            blade_graphics::BufferTarget::Data,
+        );
+        self.gpu_context.sync_buffer(
+            skin_vertex_buffer.into(),
+            skin_vertex_buffer.size(),
+            blade_graphics::BufferTarget::Data,
+        );
+        self.gpu_context.sync_buffer(
+            index_buffer.into(),
+            index_buffer.size(),
+            blade_graphics::BufferTarget::Index,
+        );
+        self.gpu_context.sync_buffer(
+            transform_buffer.into(),
+            transform_buffer.size(),
+            blade_graphics::BufferTarget::Data,
+        );
 
         Model {
             name: name.to_string(),

@@ -152,7 +152,8 @@ impl Baker {
         unsafe {
             ptr::copy_nonoverlapping(byte_data.as_ptr(), stage.data(), byte_data.len());
         }
-        self.gpu_context.sync_buffer(stage, gpu::BufferTarget::Data);
+        self.gpu_context
+            .sync_buffer(stage.into(), stage.size(), gpu::BufferTarget::Data);
 
         let bytes_per_row = width * 4;
         let mut pending_ops = self.pending_operations.lock().unwrap();
@@ -516,8 +517,11 @@ impl blade_asset::Baker for Baker {
             unsafe {
                 ptr::copy_nonoverlapping(mip.data.as_ptr(), stage.data(), mip.data.len());
             }
-            self.gpu_context
-                .sync_buffer(stage, blade_graphics::BufferTarget::Data);
+            self.gpu_context.sync_buffer(
+                stage.into(),
+                stage.size(),
+                blade_graphics::BufferTarget::Data,
+            );
 
             let block_info = image.format.0.block_info();
             let extent = base_extent.at_mip_level(i as u32);

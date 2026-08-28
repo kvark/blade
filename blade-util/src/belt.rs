@@ -12,6 +12,7 @@ pub struct BufferBeltDescriptor {
     pub memory: gpu::Memory,
     pub min_chunk_size: u64,
     pub alignment: u64,
+    pub target: gpu::BufferTarget,
 }
 
 /// A belt of reusable buffer space.
@@ -43,7 +44,7 @@ impl BufferBelt {
         }
     }
 
-    /// Allocate a region of `size` bytes.
+    /// Allocate a region of `size` bytes, packed at `alignment` (4 for GLES).
     #[profiling::function]
     pub fn alloc(&mut self, size: u64, gpu: &gpu::Context) -> gpu::BufferPiece {
         for &mut (ref rb, ref mut offset) in self.active.iter_mut() {
@@ -88,6 +89,7 @@ impl BufferBelt {
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), bp.data(), data.len());
         }
+        gpu.sync_buffer(bp, data.len() as u64, self.desc.target);
         bp
     }
 
@@ -108,6 +110,7 @@ impl BufferBelt {
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr() as *const u8, bp.data(), total_bytes);
         }
+        gpu.sync_buffer(bp, total_bytes as u64, self.desc.target);
         bp
     }
 

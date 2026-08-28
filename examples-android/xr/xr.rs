@@ -197,7 +197,11 @@ impl Example {
                 *(self.params_buf.data().offset(params_offset) as *mut Uniforms) = uniforms;
             }
         }
-        context.sync_buffer(self.params_buf, gpu::BufferTarget::Data);
+        context.sync_buffer(
+            self.params_buf.into(),
+            self.params_buf.size(),
+            gpu::BufferTarget::Data,
+        );
 
         for eye in 0..view_count {
             let eye_view = frame.xr_texture_view(eye);

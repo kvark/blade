@@ -120,26 +120,32 @@ impl crate::traits::ResourceDevice for super::Context {
         }
     }
 
-    fn sync_buffer(&self, buffer: super::Buffer, target: crate::BufferTarget) {
-        if !self
+    fn sync_buffer(&self, piece: crate::BufferPiece, size: u64, target: crate::BufferTarget) {
+        if self
             .capabilities
             .contains(super::Capabilities::BUFFER_STORAGE)
         {
-            let gl = self.lock();
-            let raw_target = match target {
-                crate::BufferTarget::Data => glow::ARRAY_BUFFER,
-                crate::BufferTarget::Index => glow::ELEMENT_ARRAY_BUFFER,
-            };
-            unsafe {
-                let data = slice::from_raw_parts(buffer.data, buffer.size as usize);
-                gl.bind_buffer(raw_target, buffer.raw);
-                // On WebGL the storage is allocated here on first sync:
-                // `bufferData` both allocates and uploads (buffer orphaning).
-                #[cfg(target_arch = "wasm32")]
-                gl.buffer_data_u8_slice(raw_target, data, glow::DYNAMIC_DRAW);
-                #[cfg(not(target_arch = "wasm32"))]
-                gl.buffer_sub_data_u8_slice(raw_target, 0, data);
+            return;
+        }
+        debug_assert_eq!(piece.offset & 3, 0);
+        let gl = self.lock();
+        let raw_target = match target {
+            crate::BufferTarget::Data => glow::ARRAY_BUFFER,
+            crate::BufferTarget::Index => glow::ELEMENT_ARRAY_BUFFER,
+        };
+        unsafe {
+            let data = slice::from_raw_parts(piece.data(), size as usize);
+            gl.bind_buffer(raw_target, piece.buffer.raw);
+            // WebGL starts with no storage. Allocate the full chunk on first
+            // bind (`offset == 0`) so later 4-byte-aligned `bufferSubData`
+            // calls grow Mesa's valid prefix without renaming the backing.
+            #[cfg(target_arch = "wasm32")]
+            if piece.offset == 0 && gl.get_buffer_parameter_i32(raw_target, glow::BUFFER_SIZE) == 0
+            {
+                gl.buffer_data_size(raw_target, piece.buffer.size as i32, glow::DYNAMIC_DRAW);
             }
+            gl.buffer_sub_data_u8_slice(raw_target, piece.offset as i32, data);
+            gl.bind_buffer(raw_target, None);
         }
     }
 
@@ -168,21 +174,23 @@ impl crate::traits::ResourceDevice for super::Context {
             let raw = unsafe { gl.create_renderbuffer().unwrap() };
             unsafe {
                 gl.bind_renderbuffer(glow::RENDERBUFFER, Some(raw));
+                let width = desc.size.width.max(1) as i32;
+                let height = desc.size.height.max(1) as i32;
 
                 if desc.sample_count <= 1 {
                     gl.renderbuffer_storage(
                         glow::RENDERBUFFER,
                         format_desc.internal,
-                        desc.size.width as i32,
-                        desc.size.height as i32,
+                        width,
+                        height,
                     );
                 } else {
                     gl.renderbuffer_storage_multisample(
                         glow::RENDERBUFFER,
                         desc.sample_count as i32,
                         format_desc.internal,
-                        desc.size.width as i32,
-                        desc.size.height as i32,
+                        width,
+                        height,
                     );
                 }
 
@@ -240,15 +248,18 @@ impl crate::traits::ResourceDevice for super::Context {
                 gl.tex_parameter_i32(target, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
                 gl.tex_parameter_i32(target, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
 
+                let width = desc.size.width.max(1) as i32;
+                let height = desc.size.height.max(1) as i32;
+                let depth = desc.size.depth.max(1) as i32;
                 match desc.dimension {
                     crate::TextureDimension::D3 => {
                         gl.tex_storage_3d(
                             target,
                             desc.mip_level_count as i32,
                             format_desc.internal,
-                            desc.size.width as i32,
-                            desc.size.height as i32,
-                            desc.size.depth as i32,
+                            width,
+                            height,
+                            depth,
                         );
                     }
                     crate::TextureDimension::D2 => {
@@ -257,8 +268,8 @@ impl crate::traits::ResourceDevice for super::Context {
                                 target,
                                 desc.mip_level_count as i32,
                                 format_desc.internal,
-                                desc.size.width as i32,
-                                desc.size.height as i32,
+                                width,
+                                height,
                             );
                         } else {
                             assert_eq!(desc.mip_level_count, 1);
@@ -266,8 +277,8 @@ impl crate::traits::ResourceDevice for super::Context {
                                 target,
                                 desc.sample_count as i32,
                                 format_desc.internal,
-                                desc.size.width as i32,
-                                desc.size.height as i32,
+                                width,
+                                height,
                                 true,
                             );
                         }
@@ -277,7 +288,7 @@ impl crate::traits::ResourceDevice for super::Context {
                             target,
                             desc.mip_level_count as i32,
                             format_desc.internal,
-                            desc.size.width as i32,
+                            width,
                         );
                     }
                 }
