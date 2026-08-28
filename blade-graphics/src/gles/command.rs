@@ -899,6 +899,8 @@ impl super::Command {
                         _ => unreachable!(),
                     }
                     gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
+                    gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, 0);
+                    gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
                 }
                 Self::CopyTextureToBuffer {
                     ref src,

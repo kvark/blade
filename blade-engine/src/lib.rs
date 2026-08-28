@@ -531,8 +531,8 @@ impl Engine {
     fn make_surface_config(physical_size: winit::dpi::PhysicalSize<u32>) -> gpu::SurfaceConfig {
         gpu::SurfaceConfig {
             size: gpu::Extent {
-                width: physical_size.width,
-                height: physical_size.height,
+                width: physical_size.width.max(1),
+                height: physical_size.height.max(1),
                 depth: 1,
             },
             usage: gpu::TextureUsage::TARGET,

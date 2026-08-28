@@ -12,6 +12,7 @@ pub struct BufferBeltDescriptor {
     pub memory: gpu::Memory,
     pub min_chunk_size: u64,
     pub alignment: u64,
+    pub target: gpu::BufferTarget,
 }
 
 /// A belt of reusable buffer space.
@@ -118,6 +119,16 @@ impl BufferBelt {
         gpu: &gpu::Context,
     ) -> gpu::BufferPiece {
         unsafe { self.alloc_typed(data, gpu) }
+    }
+
+    /// Upload active CPU writes so the GPU can see them.
+    ///
+    /// Call this once after allocating, before submitting the command encoder
+    /// that uses the pieces. WebGL has no persistent mapping.
+    pub fn sync(&self, gpu: &gpu::Context) {
+        for (rb, _) in self.active.iter() {
+            gpu.sync_buffer(rb.raw, self.desc.target);
+        }
     }
 
     /// Mark the actively used buffers as used by GPU with a given sync point.
