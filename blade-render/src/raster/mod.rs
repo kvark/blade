@@ -694,6 +694,7 @@ impl Rasterizer {
                         name: "skinned vertices",
                         size: vertex_size.max(1),
                         memory: gpu::Memory::Device,
+                        transient: false,
                     }),
                     vertex_count,
                 });

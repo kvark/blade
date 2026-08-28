@@ -73,16 +73,19 @@ fn download_memory_reads_faster_than_shared() {
         name: "download-source",
         size: SIZE as u64,
         memory: gpu::Memory::Device,
+        transient: false,
     });
     let shared = context.create_buffer(gpu::BufferDesc {
         name: "download-shared",
         size: SIZE as u64,
         memory: gpu::Memory::Shared,
+        transient: false,
     });
     let download = context.create_buffer(gpu::BufferDesc {
         name: "download-cached",
         size: SIZE as u64,
         memory: gpu::Memory::Download,
+        transient: false,
     });
 
     // Fill the device buffer through an upload staging buffer, so both
@@ -91,6 +94,7 @@ fn download_memory_reads_faster_than_shared() {
         name: "download-staging",
         size: SIZE as u64,
         memory: gpu::Memory::Upload,
+        transient: false,
     });
     unsafe {
         std::ptr::write_bytes(staging.data(), 0x5a, SIZE);

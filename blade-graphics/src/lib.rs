@@ -357,6 +357,13 @@ pub struct BufferDesc<'a> {
     pub name: &'a str,
     pub size: u64,
     pub memory: Memory,
+    /// Prefer allocation optimized for short-lived or batch-lifetime buffers.
+    ///
+    /// This hint is independent of [`Memory`]: transient device, shared,
+    /// upload, and download buffers retain their normal visibility and access
+    /// properties. Backends without a distinct transient allocator may ignore
+    /// it.
+    pub transient: bool,
 }
 
 /// Binding target hint for [`sync_buffer`](traits::ResourceDevice::sync_buffer).

@@ -152,11 +152,13 @@ impl ParticlePipeline {
             name,
             size: capacity as u64 * self.particle_size as u64,
             memory: gpu::Memory::Device,
+            transient: false,
         });
         let free_list_buf = context.create_buffer(gpu::BufferDesc {
             name: &format!("{} - free list", name),
             size: 4 + capacity as u64 * 4,
             memory: gpu::Memory::Device,
+            transient: false,
         });
 
         ParticleSystem {

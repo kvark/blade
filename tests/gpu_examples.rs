@@ -219,11 +219,13 @@ fn run_dispatch_gpu_test(manual_barriers: bool) {
         name: "dispatch-input",
         size: 16,
         memory: gpu::Memory::Shared,
+        transient: false,
     });
     let output = context.create_buffer(gpu::BufferDesc {
         name: "dispatch-output",
         size: 16,
         memory: gpu::Memory::Shared,
+        transient: false,
     });
 
     unsafe {
@@ -358,6 +360,7 @@ fn make_environment(
         name: "env-test/stage",
         size: (texel_count * 4) as u64,
         memory: gpu::Memory::Upload,
+        transient: false,
     });
     unsafe {
         std::ptr::copy_nonoverlapping(texels.as_ptr() as *const u8, stage.data(), texel_count * 4);
@@ -421,6 +424,7 @@ fn env_map_gpu_test() {
         name: "env-map-readback",
         size: 8,
         memory: gpu::Memory::Shared,
+        transient: false,
     });
     if let mut transfer = command_encoder.transfer("readback-env-map") {
         transfer.copy_texture_to_buffer(
@@ -2356,6 +2360,7 @@ fn make_solid_texture(
         name,
         size: 4,
         memory: gpu::Memory::Upload,
+        transient: false,
     });
     unsafe {
         std::ptr::copy_nonoverlapping(color.as_ptr(), stage.data(), 4);

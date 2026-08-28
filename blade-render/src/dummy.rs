@@ -90,6 +90,7 @@ impl DummyResources {
             name: "dummy/staging",
             size: 4 * 3,
             memory: blade_graphics::Memory::Upload,
+            transient: false,
         });
         unsafe {
             ptr::write(

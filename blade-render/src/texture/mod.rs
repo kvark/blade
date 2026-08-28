@@ -148,6 +148,7 @@ impl Baker {
             name: &format!("{name}/stage"),
             size: byte_data.len() as u64,
             memory: gpu::Memory::Upload,
+            transient: false,
         });
         unsafe {
             ptr::copy_nonoverlapping(byte_data.as_ptr(), stage.data(), byte_data.len());
@@ -513,6 +514,7 @@ impl blade_asset::Baker for Baker {
                 name: &format!("{name}[{i}]/stage"),
                 size: mip.data.len() as u64,
                 memory: blade_graphics::Memory::Upload,
+                transient: false,
             });
             unsafe {
                 ptr::copy_nonoverlapping(mip.data.as_ptr(), stage.data(), mip.data.len());

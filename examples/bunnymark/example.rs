@@ -123,6 +123,7 @@ impl Example {
             name: "staging",
             size: (extent.width * extent.height) as u64 * 4,
             memory: gpu::Memory::Upload,
+            transient: false,
         });
         let texture_data = [0xFFu8; 4];
         unsafe {
@@ -153,6 +154,7 @@ impl Example {
             name: "vertex",
             size: (vertex_data.len() * mem::size_of::<SpriteVertex>()) as u64,
             memory: gpu::Memory::Shared,
+            transient: false,
         });
         unsafe {
             ptr::copy_nonoverlapping(

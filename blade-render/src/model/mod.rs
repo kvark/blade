@@ -550,6 +550,7 @@ impl BufferUpload {
             name,
             size,
             memory: blade_graphics::Memory::Device,
+            transient: false,
         });
         let stage = if cfg!(target_arch = "wasm32") {
             dst
@@ -558,6 +559,7 @@ impl BufferUpload {
                 name: "model staging",
                 size,
                 memory: blade_graphics::Memory::Upload,
+                transient: false,
             })
         };
 
@@ -795,6 +797,7 @@ impl Baker {
             name: "proc vertex",
             size: total_vertex_size,
             memory: blade_graphics::Memory::Shared,
+            transient: false,
         });
 
         // Filled with the identity skin data. It's only read for posed
@@ -804,6 +807,7 @@ impl Baker {
             name: "proc skin vertex",
             size: total_skin_vertex_size,
             memory: blade_graphics::Memory::Shared,
+            transient: false,
         });
         unsafe {
             let skin_ptr = skin_vertex_buffer.data() as *mut crate::SkinVertex;
@@ -819,6 +823,7 @@ impl Baker {
             name: "proc index",
             size: total_index_size,
             memory: blade_graphics::Memory::Shared,
+            transient: false,
         });
 
         let total_transform_size =
@@ -827,6 +832,7 @@ impl Baker {
             name: "proc transform",
             size: total_transform_size,
             memory: blade_graphics::Memory::Shared,
+            transient: false,
         });
 
         let mut start_vertex = 0u32;
@@ -983,6 +989,7 @@ impl Baker {
             name: "BLAS scratch",
             size: sizes.scratch,
             memory: blade_graphics::Memory::Device,
+            transient: false,
         });
 
         self.pending_operations

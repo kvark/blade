@@ -109,21 +109,25 @@ fn main() {
         name: "matrix_a",
         size: a_bytes.len() as u64,
         memory: gpu::Memory::Shared,
+        transient: false,
     });
     let buf_b = context.create_buffer(gpu::BufferDesc {
         name: "matrix_b",
         size: b_bytes.len() as u64,
         memory: gpu::Memory::Shared,
+        transient: false,
     });
     let buf_c = context.create_buffer(gpu::BufferDesc {
         name: "matrix_c",
         size: (c_data.len() * mem::size_of::<f32>()) as u64,
         memory: gpu::Memory::Shared,
+        transient: false,
     });
     let buf_params = context.create_buffer(gpu::BufferDesc {
         name: "params",
         size: mem::size_of::<Params>() as u64,
         memory: gpu::Memory::Shared,
+        transient: false,
     });
 
     // Upload data

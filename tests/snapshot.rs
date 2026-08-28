@@ -82,6 +82,7 @@ impl OffscreenTarget {
             name: "snapshot-readback",
             size: (size.width * size.height * texel_size) as u64,
             memory: gpu::Memory::Shared,
+            transient: false,
         });
         Self {
             texture,

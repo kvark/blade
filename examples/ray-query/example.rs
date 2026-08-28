@@ -99,6 +99,7 @@ impl Example {
             name: "vertices",
             size: (vertex_values.len() * mem::size_of::<f32>()) as u64,
             memory: gpu::Memory::Shared,
+            transient: false,
         });
         unsafe {
             ptr::copy_nonoverlapping(
@@ -112,6 +113,7 @@ impl Example {
             name: "indices",
             size: (indices.len() * mem::size_of::<u16>()) as u64,
             memory: gpu::Memory::Shared,
+            transient: false,
         });
         unsafe {
             ptr::copy_nonoverlapping(
@@ -180,6 +182,7 @@ impl Example {
             name: "scratch",
             size: tlas_scratch_offset + tlas_sizes.scratch,
             memory: gpu::Memory::Device,
+            transient: false,
         });
 
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
