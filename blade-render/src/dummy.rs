@@ -97,7 +97,11 @@ impl DummyResources {
                 [!0u8, !0, !0, !0, 0, 0, 0, 0, !0, 0, 0, 0],
             );
         }
-        gpu.sync_buffer(staging_buf, blade_graphics::BufferTarget::Data);
+        gpu.sync_buffer(
+            staging_buf.into(),
+            staging_buf.size(),
+            blade_graphics::BufferTarget::Data,
+        );
         transfers.copy_buffer_to_texture(staging_buf.at(0), 4, white_texture.into(), size);
         transfers.copy_buffer_to_texture(staging_buf.at(4), 4, black_texture.into(), size);
         transfers.copy_buffer_to_texture(staging_buf.at(8), 4, red_texture.into(), size);

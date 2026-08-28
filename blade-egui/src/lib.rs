@@ -329,8 +329,8 @@ impl GuiPainter {
         }
 
         self.triage_deletions(context);
-        self.data_belt.trim(32, context);
-        self.index_belt.trim(32, context);
+        self.data_belt.trim(4, context);
+        self.index_belt.trim(4, context);
     }
 
     /// Render the set of clipped primitives into a render pass.

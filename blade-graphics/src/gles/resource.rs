@@ -120,25 +120,31 @@ impl crate::traits::ResourceDevice for super::Context {
         }
     }
 
-    fn sync_buffer(&self, buffer: super::Buffer, target: crate::BufferTarget) {
+    fn sync_buffer(&self, piece: crate::BufferPiece, size: u64, target: crate::BufferTarget) {
         if self
             .capabilities
             .contains(super::Capabilities::BUFFER_STORAGE)
         {
             return;
         }
+        debug_assert_eq!(piece.offset & 3, 0);
         let gl = self.lock();
         let raw_target = match target {
             crate::BufferTarget::Data => glow::ARRAY_BUFFER,
             crate::BufferTarget::Index => glow::ELEMENT_ARRAY_BUFFER,
         };
         unsafe {
-            let data = slice::from_raw_parts(buffer.data, buffer.size as usize);
-            gl.bind_buffer(raw_target, buffer.raw);
-            // Stream from offset 0. `bufferData` allocates on first WebGL bind
-            // (locking the bind class) and orphans on later calls, matching
-            // Mesa's documented `glBufferData` streaming path.
-            gl.buffer_data_u8_slice(raw_target, data, glow::DYNAMIC_DRAW);
+            let data = slice::from_raw_parts(piece.data(), size as usize);
+            gl.bind_buffer(raw_target, piece.buffer.raw);
+            // WebGL starts with no storage. Allocate the full chunk on first
+            // bind (`offset == 0`) so later 4-byte-aligned `bufferSubData`
+            // calls grow Mesa's valid prefix without renaming the backing.
+            #[cfg(target_arch = "wasm32")]
+            if piece.offset == 0 && gl.get_buffer_parameter_i32(raw_target, glow::BUFFER_SIZE) == 0
+            {
+                gl.buffer_data_size(raw_target, piece.buffer.size as i32, glow::DYNAMIC_DRAW);
+            }
+            gl.buffer_sub_data_u8_slice(raw_target, piece.offset as i32, data);
             gl.bind_buffer(raw_target, None);
         }
     }

@@ -230,7 +230,7 @@ fn run_dispatch_gpu_test(manual_barriers: bool) {
         let input_data = slice::from_raw_parts_mut(input.data() as *mut u32, 4);
         input_data.copy_from_slice(&[1, 2, 3, 4]);
     }
-    context.sync_buffer(input, gpu::BufferTarget::Data);
+    context.sync_buffer(input.into(), input.size(), gpu::BufferTarget::Data);
 
     let shader = context.create_shader(gpu::ShaderDesc {
         source: include_str!("shaders/dispatch.wgsl"),
