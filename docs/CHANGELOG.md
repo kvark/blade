@@ -2,6 +2,11 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- engine/gles: if the swapchain format is 8-bit unorm without sRGB
+  (`Rgba8Unorm` / `Bgra8Unorm`), treat it as `ColorSpace::Srgb` so shaders
+  encode. WebGL's canvas drawing buffer is not an sRGB framebuffer, so a
+  `Linear` request otherwise wrote linear values that the browser displayed
+  as sRGB — the image went dark and local lights disappeared into the crush.
 - gles/egui: keep WebGL2 buffer bind classes honest. The upload belt records
   a `BufferTarget` and packs 4-byte-aligned subranges, then `sync_buffer`s
   each alloc so copies and draws see GPU data immediately. The GUI painter

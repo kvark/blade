@@ -103,6 +103,8 @@ impl super::Context {
         &self,
         _window: &I,
     ) -> Result<super::Surface, crate::NotSupportedError> {
+        // Canvas drawing buffers are not sRGB framebuffers. Linear values
+        // written here are composited as sRGB, so the renderer must encode.
         let platform = PlatformSurface {
             info: crate::SurfaceInfo {
                 format: crate::TextureFormat::Rgba8Unorm,
