@@ -98,18 +98,17 @@ impl super::TextureFormat {
     }
 
     /// True when storing this format converts linear values with the sRGB
-    /// transfer function. A non-sRGB 8-bit swapchain (WebGL's canvas) does
-    /// not, so the renderer has to encode.
+    /// transfer function.
     pub const fn is_srgb(self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::Rgba8UnormSrgb
-                | Self::Bgra8UnormSrgb
-                | Self::Bc1UnormSrgb
-                | Self::Bc2UnormSrgb
-                | Self::Bc3UnormSrgb
-                | Self::Bc7UnormSrgb
-        )
+            | Self::Bgra8UnormSrgb
+            | Self::Bc1UnormSrgb
+            | Self::Bc2UnormSrgb
+            | Self::Bc3UnormSrgb
+            | Self::Bc7UnormSrgb => true,
+            _ => false,
+        }
     }
 
     pub fn aspects(&self) -> super::TexelAspects {

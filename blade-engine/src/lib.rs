@@ -544,22 +544,6 @@ impl Engine {
         }
     }
 
-    fn color_space_for_surface(
-        requested: gpu::ColorSpace,
-        format: gpu::TextureFormat,
-    ) -> gpu::ColorSpace {
-        if format.is_srgb() {
-            requested
-        } else if matches!(
-            format,
-            gpu::TextureFormat::Rgba8Unorm | gpu::TextureFormat::Bgra8Unorm
-        ) {
-            gpu::ColorSpace::Srgb
-        } else {
-            requested
-        }
-    }
-
     fn hot_reload_if_needed(&mut self) {
         if !self.track_hot_reloads {
             return;
@@ -713,9 +697,7 @@ impl Engine {
         };
 
         // Note: the color space we ask the surface for is also the one
-        // the renderers have to produce, see `RenderConfig`. If the
-        // backend cannot give us an sRGB framebuffer (WebGL's canvas is
-        // `Rgba8Unorm`), switch to `ColorSpace::Srgb` so shaders encode.
+        // the renderers have to produce, see `RenderConfig`.
         let (surface_size, surface_info, color_space, target_surface) = match presentation {
             #[cfg(not(target_os = "android"))]
             Presentation::Window(window) => {
@@ -728,7 +710,7 @@ impl Engine {
                 (
                     surface_size,
                     surface_info,
-                    Self::color_space_for_surface(surface_config.color_space, surface_info.format),
+                    surface_config.color_space,
                     TargetSurface::Window(gpu_surface),
                 )
             }
@@ -751,10 +733,7 @@ impl Engine {
                     (
                         surface_size,
                         surface_info,
-                        Self::color_space_for_surface(
-                            surface_config.color_space,
-                            surface_info.format,
-                        ),
+                        surface_config.color_space,
                         TargetSurface::Xr(xr_surface),
                     )
                 }
