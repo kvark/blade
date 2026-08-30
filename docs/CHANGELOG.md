@@ -2,6 +2,9 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- gles/web: present with a `texelFetch` copy. The canvas drawing buffer is
+  RGBA8; `blitFramebuffer` from an `SRGB8_ALPHA8` offscreen decodes.
+  `texelFetch` copies stored sRGB bytes with no filter and no gamma math.
 - render: treat wasm32 as the GLES raster profile. WebGL2 cannot link a
   vertex-only program, so directional-shadow pipelines always attach the
   empty `raster_shadow_fs` stage. Compute skinning stays native-only
