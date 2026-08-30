@@ -367,11 +367,9 @@ impl RasterPipelines {
                     clamp: 0.0,
                 },
             }),
-            fragment: if cfg!(gles) {
-                Some(shader.at("raster_shadow_fs"))
-            } else {
-                None
-            },
+            // WebGL2/GLES cannot link a vertex-only program. An empty
+            // fragment stage is valid on Vulkan/Metal too.
+            fragment: Some(shader.at("raster_shadow_fs")),
             color_targets: &[],
             multisample_state: gpu::MultisampleState::default(),
         })
@@ -470,7 +468,7 @@ impl Rasterizer {
         config: &RenderConfig,
     ) -> Self {
         let pipelines = RasterPipelines::init(&shaders, config, gpu, shader_man).unwrap();
-        let skin = if cfg!(gles) {
+        let skin = if cfg!(any(gles, target_arch = "wasm32")) {
             None
         } else {
             shader_man[shaders.skin]
