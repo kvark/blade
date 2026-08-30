@@ -51,8 +51,10 @@ impl Shaders {
             a_trous: noop.unwrap_or_else(|| ctx.load_shader("a-trous.wgsl")),
             post_proc: noop.unwrap_or_else(|| ctx.load_shader("post-proc.wgsl")),
             raster: ctx.load_shader("raster.wgsl"),
-            // GLES keeps vertex-stage skinning; the compute shader is native-only.
-            skin: if cfg!(gles) {
+            // GLES/WebGL keep vertex-stage skinning; compute skin is native-only.
+            // `cfg!(gles)` is not set for wasm32 git dependents unless they
+            // pass RUSTFLAGS, so match blade-graphics: wasm32 == GLES profile.
+            skin: if cfg!(any(gles, target_arch = "wasm32")) {
                 ctx.load_shader("noop.wgsl")
             } else {
                 ctx.load_shader("skin.wgsl")
