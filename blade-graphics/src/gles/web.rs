@@ -1,55 +1,20 @@
 use glow::HasContext as _;
 use wasm_bindgen::JsCast;
 
-const PRESENT_VS: &str = r#"#version 300 es
-void main() {
-    vec2 pos[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-    gl_Position = vec4(pos[gl_VertexID], 0.0, 1.0);
-}
-"#;
-
-const PRESENT_FS: &str = r#"#version 300 es
-precision highp float;
-uniform sampler2D src;
-out vec4 frag;
-vec3 encode_srgb(vec3 linear) {
-    vec3 low = 12.92 * linear;
-    vec3 high = 1.055 * pow(max(linear, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
-    return mix(high, low, lessThanEqual(linear, vec3(0.0031308)));
-}
-void main() {
-    vec2 uv = vec2(gl_FragCoord.x, float(textureSize(src, 0).y) - gl_FragCoord.y)
-        / vec2(textureSize(src, 0));
-    vec4 c = texture(src, uv);
-    frag = vec4(encode_srgb(c.rgb), c.a);
-}
-"#;
-
-struct PresentEncode {
-    program: glow::Program,
-    vao: glow::VertexArray,
-    loc_src: glow::UniformLocation,
-}
-
 pub struct PlatformContext {
     #[allow(unused)]
     webgl2: web_sys::WebGl2RenderingContext,
     glow: glow::Context,
-    present_encode: PresentEncode,
 }
 
 pub struct PlatformSurface {
     info: crate::SurfaceInfo,
     extent: crate::Extent,
-    color_space: crate::ColorSpace,
 }
 #[derive(Debug)]
 pub struct PlatformFrame {
     framebuf: glow::Framebuffer,
-    texture: glow::Texture,
     extent: crate::Extent,
-    color_space: crate::ColorSpace,
-    format: crate::TextureFormat,
 }
 
 impl super::Surface {
@@ -61,10 +26,7 @@ impl super::Surface {
         super::Frame {
             platform: PlatformFrame {
                 framebuf: self.framebuf,
-                texture: self.offscreen_texture,
                 extent: self.platform.extent,
-                color_space: self.platform.color_space,
-                format: self.platform.info.format,
             },
             texture: super::Texture {
                 inner: super::TextureInner::Texture {
@@ -81,33 +43,7 @@ impl super::Surface {
 impl PlatformContext {
     pub(super) fn present(&self, frame: PlatformFrame) {
         unsafe {
-            if frame.color_space == crate::ColorSpace::Linear && !frame.format.is_srgb() {
-                self.present_linear_encoded(frame);
-            } else {
-                super::present_blit(&self.glow, frame.framebuf, frame.extent);
-            }
-        }
-    }
-
-    unsafe fn present_linear_encoded(&self, frame: PlatformFrame) {
-        let gl = &self.glow;
-        unsafe {
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            gl.viewport(0, 0, frame.extent.width as i32, frame.extent.height as i32);
-            gl.disable(glow::SCISSOR_TEST);
-            gl.disable(glow::DEPTH_TEST);
-            gl.disable(glow::CULL_FACE);
-            gl.disable(glow::BLEND);
-            gl.color_mask(true, true, true, true);
-            gl.use_program(Some(self.present_encode.program));
-            gl.bind_vertex_array(Some(self.present_encode.vao));
-            gl.active_texture(glow::TEXTURE0);
-            gl.bind_texture(glow::TEXTURE_2D, Some(frame.texture));
-            gl.uniform_1_i32(Some(&self.present_encode.loc_src), 0);
-            gl.draw_arrays(glow::TRIANGLES, 0, 3);
-            gl.bind_texture(glow::TEXTURE_2D, None);
-            gl.bind_vertex_array(None);
-            gl.use_program(None);
+            super::present_blit(&self.glow, frame.framebuf, frame.extent);
         }
     }
 }
@@ -138,7 +74,6 @@ impl super::Context {
             .expect("Cannot convert into WebGL2 context");
 
         let glow = glow::Context::from_webgl2_context(webgl2.clone());
-        let present_encode = Self::compile_present_encode(&glow);
 
         let capabilities = super::Capabilities::empty();
         let limits = super::Limits {
@@ -156,11 +91,7 @@ impl super::Context {
         };
 
         Ok(super::Context {
-            platform: PlatformContext {
-                webgl2,
-                glow,
-                present_encode,
-            },
+            platform: PlatformContext { webgl2, glow },
             capabilities,
             toggles: super::Toggles::default(),
             limits,
@@ -178,7 +109,6 @@ impl super::Context {
                 alpha: crate::AlphaMode::PreMultiplied,
             },
             extent: crate::Extent::default(),
-            color_space: crate::ColorSpace::Linear,
         };
         Ok(unsafe {
             super::Surface {
@@ -192,8 +122,13 @@ impl super::Context {
     pub fn destroy_surface(&self, _surface: &mut super::Surface) {}
 
     pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
-        //TODO: create WebGL context here
-        let format_desc = super::describe_texture_format(surface.platform.info.format);
+        // Offscreen target the app renders into. Linear shaders get an sRGB
+        // texture so the GPU encodes; present blits those bytes to the canvas.
+        let format = match config.color_space {
+            crate::ColorSpace::Linear => crate::TextureFormat::Rgba8UnormSrgb,
+            crate::ColorSpace::Srgb => crate::TextureFormat::Rgba8Unorm,
+        };
+        let format_desc = super::describe_texture_format(format);
         let gl = &self.platform.glow;
         //Note: this code can be shared with EGL
         unsafe {
@@ -217,71 +152,10 @@ impl super::Context {
                 Some(surface.offscreen_texture),
                 0,
             );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MIN_FILTER,
-                glow::NEAREST as i32,
-            );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MAG_FILTER,
-                glow::NEAREST as i32,
-            );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_S,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_T,
-                glow::CLAMP_TO_EDGE as i32,
-            );
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
         surface.platform.extent = config.size;
-        surface.platform.color_space = config.color_space;
-    }
-
-    fn compile_present_encode(gl: &glow::Context) -> PresentEncode {
-        unsafe {
-            let vs = gl.create_shader(glow::VERTEX_SHADER).unwrap();
-            gl.shader_source(vs, PRESENT_VS);
-            gl.compile_shader(vs);
-            assert!(
-                gl.get_shader_compile_status(vs),
-                "present vs: {}",
-                gl.get_shader_info_log(vs)
-            );
-            let fs = gl.create_shader(glow::FRAGMENT_SHADER).unwrap();
-            gl.shader_source(fs, PRESENT_FS);
-            gl.compile_shader(fs);
-            assert!(
-                gl.get_shader_compile_status(fs),
-                "present fs: {}",
-                gl.get_shader_info_log(fs)
-            );
-            let program = gl.create_program().unwrap();
-            gl.attach_shader(program, vs);
-            gl.attach_shader(program, fs);
-            gl.link_program(program);
-            assert!(
-                gl.get_program_link_status(program),
-                "present link: {}",
-                gl.get_program_info_log(program)
-            );
-            gl.delete_shader(vs);
-            gl.delete_shader(fs);
-            let loc_src = gl
-                .get_uniform_location(program, "src")
-                .expect("present src uniform");
-            let vao = gl.create_vertex_array().unwrap();
-            PresentEncode {
-                program,
-                vao,
-                loc_src,
-            }
-        }
+        surface.platform.info.format = format;
     }
 
     /// Obtain a lock to the EGL context and get handle to the [`glow::Context`] that can be used to

@@ -2,10 +2,10 @@ Changelog for *Blade* project
 
 ## (TBD)
 
-- gles/web: honor `ColorSpace::Linear` at present time. WebGL's canvas is
-  not an sRGB framebuffer, so a linear offscreen blit looked dark. The
-  backend now encodes on the present copy; render shaders still output
-  linear.
+- gles/web: pick the offscreen surface format from `ColorSpace` the same
+  way native GLES does (`Linear` → `Rgba8UnormSrgb`). Shaders still write
+  linear; the GPU encodes into the texture that present blits to the
+  canvas.
 - gles/egui: keep WebGL2 buffer bind classes honest. The upload belt records
   a `BufferTarget` and packs 4-byte-aligned subranges, then `sync_buffer`s
   each alloc so copies and draws see GPU data immediately. The GUI painter

@@ -97,20 +97,6 @@ impl super::TextureFormat {
         }
     }
 
-    /// True when storing this format converts linear values with the sRGB
-    /// transfer function.
-    pub const fn is_srgb(self) -> bool {
-        match self {
-            Self::Rgba8UnormSrgb
-            | Self::Bgra8UnormSrgb
-            | Self::Bc1UnormSrgb
-            | Self::Bc2UnormSrgb
-            | Self::Bc3UnormSrgb
-            | Self::Bc7UnormSrgb => true,
-            _ => false,
-        }
-    }
-
     pub fn aspects(&self) -> super::TexelAspects {
         match *self {
             Self::Depth32Float => super::TexelAspects::DEPTH,
