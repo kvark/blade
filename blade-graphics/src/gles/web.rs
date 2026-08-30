@@ -122,8 +122,13 @@ impl super::Context {
     pub fn destroy_surface(&self, _surface: &mut super::Surface) {}
 
     pub fn reconfigure_surface(&self, surface: &mut super::Surface, config: crate::SurfaceConfig) {
-        //TODO: create WebGL context here
-        let format_desc = super::describe_texture_format(surface.platform.info.format);
+        // Offscreen target the app renders into. Linear shaders get an sRGB
+        // texture so the GPU encodes; present blits those bytes to the canvas.
+        let format = match config.color_space {
+            crate::ColorSpace::Linear => crate::TextureFormat::Rgba8UnormSrgb,
+            crate::ColorSpace::Srgb => crate::TextureFormat::Rgba8Unorm,
+        };
+        let format_desc = super::describe_texture_format(format);
         let gl = &self.platform.glow;
         //Note: this code can be shared with EGL
         unsafe {
@@ -150,6 +155,7 @@ impl super::Context {
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
         surface.platform.extent = config.size;
+        surface.platform.info.format = format;
     }
 
     /// Obtain a lock to the EGL context and get handle to the [`glow::Context`] that can be used to
