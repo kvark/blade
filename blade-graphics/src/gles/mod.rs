@@ -726,6 +726,7 @@ fn map_compare_func(fun: crate::CompareFunction) -> u32 {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 unsafe fn present_blit(gl: &glow::Context, source: glow::Framebuffer, size: crate::Extent) {
     unsafe {
         use glow::HasContext as _;
