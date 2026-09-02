@@ -826,77 +826,135 @@ impl super::Command {
                 } => {
                     let format_desc = super::describe_texture_format(dst.format);
                     let block_info = dst.format.block_info();
+                    let compressed = block_info.dimensions != (1, 1);
                     let row_texels =
                         bytes_per_row / block_info.size as u32 * block_info.dimensions.0 as u32;
                     gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-                    gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, row_texels as i32);
+                    if !compressed {
+                        gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, row_texels as i32);
+                    }
                     gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(src.raw));
                     gl.bind_texture(dst.target, Some(dst.raw));
-                    let unpack_data = glow::PixelUnpackData::BufferOffset(src.offset as u32);
-                    match dst.target {
-                        glow::TEXTURE_3D => gl.tex_sub_image_3d(
-                            dst.target,
-                            dst.mip_level as i32,
-                            dst.origin[0] as i32,
-                            dst.origin[1] as i32,
-                            dst.origin[2] as i32,
-                            size.width as i32,
-                            size.height as i32,
-                            size.depth as i32,
-                            format_desc.external,
-                            format_desc.data_type,
-                            unpack_data,
-                        ),
-                        glow::TEXTURE_2D_ARRAY => gl.tex_sub_image_3d(
-                            dst.target,
-                            dst.mip_level as i32,
-                            dst.origin[0] as i32,
-                            dst.origin[1] as i32,
-                            dst.origin[2] as i32,
-                            size.width as i32,
-                            size.height as i32,
-                            size.depth as i32,
-                            format_desc.external,
-                            format_desc.data_type,
-                            unpack_data,
-                        ),
-                        glow::TEXTURE_2D => gl.tex_sub_image_2d(
-                            dst.target,
-                            dst.mip_level as i32,
-                            dst.origin[0] as i32,
-                            dst.origin[1] as i32,
-                            size.width as i32,
-                            size.height as i32,
-                            format_desc.external,
-                            format_desc.data_type,
-                            unpack_data,
-                        ),
-                        glow::TEXTURE_CUBE_MAP => gl.tex_sub_image_2d(
-                            CUBEMAP_FACES[dst.array_layer as usize],
-                            dst.mip_level as i32,
-                            dst.origin[0] as i32,
-                            dst.origin[1] as i32,
-                            size.width as i32,
-                            size.height as i32,
-                            format_desc.external,
-                            format_desc.data_type,
-                            unpack_data,
-                        ),
-                        //Note: not sure if this is correct!
-                        glow::TEXTURE_CUBE_MAP_ARRAY => gl.tex_sub_image_3d(
-                            dst.target,
-                            dst.mip_level as i32,
-                            dst.origin[0] as i32,
-                            dst.origin[1] as i32,
-                            dst.origin[2] as i32,
-                            size.width as i32,
-                            size.height as i32,
-                            size.depth as i32,
-                            format_desc.external,
-                            format_desc.data_type,
-                            unpack_data,
-                        ),
-                        _ => unreachable!(),
+                    if compressed {
+                        let block_h = block_info.dimensions.1 as u32;
+                        let image_bytes = bytes_per_row * size.height.div_ceil(block_h);
+                        let range = src.offset as u32..src.offset as u32 + image_bytes;
+                        let unpack = glow::CompressedPixelUnpackData::BufferRange(range);
+                        match dst.target {
+                            glow::TEXTURE_2D => gl.compressed_tex_sub_image_2d(
+                                dst.target,
+                                dst.mip_level as i32,
+                                dst.origin[0] as i32,
+                                dst.origin[1] as i32,
+                                size.width as i32,
+                                size.height as i32,
+                                format_desc.internal,
+                                unpack,
+                            ),
+                            glow::TEXTURE_CUBE_MAP => gl.compressed_tex_sub_image_2d(
+                                CUBEMAP_FACES[dst.array_layer as usize],
+                                dst.mip_level as i32,
+                                dst.origin[0] as i32,
+                                dst.origin[1] as i32,
+                                size.width as i32,
+                                size.height as i32,
+                                format_desc.internal,
+                                unpack,
+                            ),
+                            glow::TEXTURE_3D | glow::TEXTURE_2D_ARRAY => gl
+                                .compressed_tex_sub_image_3d(
+                                    dst.target,
+                                    dst.mip_level as i32,
+                                    dst.origin[0] as i32,
+                                    dst.origin[1] as i32,
+                                    dst.origin[2] as i32,
+                                    size.width as i32,
+                                    size.height as i32,
+                                    size.depth as i32,
+                                    format_desc.internal,
+                                    unpack,
+                                ),
+                            glow::TEXTURE_CUBE_MAP_ARRAY => gl.compressed_tex_sub_image_3d(
+                                dst.target,
+                                dst.mip_level as i32,
+                                dst.origin[0] as i32,
+                                dst.origin[1] as i32,
+                                dst.origin[2] as i32,
+                                size.width as i32,
+                                size.height as i32,
+                                size.depth as i32,
+                                format_desc.internal,
+                                unpack,
+                            ),
+                            _ => unreachable!(),
+                        }
+                    } else {
+                        let unpack_data = glow::PixelUnpackData::BufferOffset(src.offset as u32);
+                        match dst.target {
+                            glow::TEXTURE_3D => gl.tex_sub_image_3d(
+                                dst.target,
+                                dst.mip_level as i32,
+                                dst.origin[0] as i32,
+                                dst.origin[1] as i32,
+                                dst.origin[2] as i32,
+                                size.width as i32,
+                                size.height as i32,
+                                size.depth as i32,
+                                format_desc.external,
+                                format_desc.data_type,
+                                unpack_data,
+                            ),
+                            glow::TEXTURE_2D_ARRAY => gl.tex_sub_image_3d(
+                                dst.target,
+                                dst.mip_level as i32,
+                                dst.origin[0] as i32,
+                                dst.origin[1] as i32,
+                                dst.origin[2] as i32,
+                                size.width as i32,
+                                size.height as i32,
+                                size.depth as i32,
+                                format_desc.external,
+                                format_desc.data_type,
+                                unpack_data,
+                            ),
+                            glow::TEXTURE_2D => gl.tex_sub_image_2d(
+                                dst.target,
+                                dst.mip_level as i32,
+                                dst.origin[0] as i32,
+                                dst.origin[1] as i32,
+                                size.width as i32,
+                                size.height as i32,
+                                format_desc.external,
+                                format_desc.data_type,
+                                unpack_data,
+                            ),
+                            glow::TEXTURE_CUBE_MAP => gl.tex_sub_image_2d(
+                                CUBEMAP_FACES[dst.array_layer as usize],
+                                dst.mip_level as i32,
+                                dst.origin[0] as i32,
+                                dst.origin[1] as i32,
+                                size.width as i32,
+                                size.height as i32,
+                                format_desc.external,
+                                format_desc.data_type,
+                                unpack_data,
+                            ),
+                            //Note: not sure if this is correct!
+                            glow::TEXTURE_CUBE_MAP_ARRAY => gl.tex_sub_image_3d(
+                                dst.target,
+                                dst.mip_level as i32,
+                                dst.origin[0] as i32,
+                                dst.origin[1] as i32,
+                                dst.origin[2] as i32,
+                                size.width as i32,
+                                size.height as i32,
+                                size.depth as i32,
+                                format_desc.external,
+                                format_desc.data_type,
+                                unpack_data,
+                            ),
+                            _ => unreachable!(),
+                        }
                     }
                     gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
                     gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, 0);

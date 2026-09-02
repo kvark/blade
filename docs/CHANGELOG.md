@@ -2,6 +2,9 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- gles: upload BC compressed textures with `compressedTexSubImage`.
+  `texSubImage2D` with `type = GL_NONE` is invalid and left Kenney
+  colormaps (the start flag, car kit) black on WebGL/GLES.
 - gles/web: present with a `texelFetch` copy. The canvas drawing buffer is
   RGBA8; `blitFramebuffer` from an `SRGB8_ALPHA8` offscreen decodes.
   `texelFetch` copies stored sRGB bytes with no filter and no gamma math.
