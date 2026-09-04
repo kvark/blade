@@ -765,6 +765,9 @@ impl super::RenderCommandEncoder<'_> {
         self.raw.setFrontFacingWinding(pipeline.front_winding);
         self.raw.setCullMode(pipeline.cull_mode);
         self.raw.setTriangleFillMode(pipeline.triangle_fill_mode);
+        // Metal Simulator aborts instead of ignoring this unsupported state.
+        // Real iOS devices and macOS still receive the requested clip mode.
+        #[cfg(not(all(target_os = "ios", target_abi = "sim")))]
         self.raw.setDepthClipMode(pipeline.depth_clip_mode);
         if let Some((ref state, bias)) = pipeline.depth_stencil {
             self.raw.setDepthStencilState(Some(state));

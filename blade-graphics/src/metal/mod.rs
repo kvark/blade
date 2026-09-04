@@ -90,8 +90,8 @@ impl Buffer {
     }
 
     pub fn size(&self) -> u64 {
-        use metal::MTLResource as _;
-        self.as_ref().allocatedSize() as u64
+        use metal::MTLBuffer as _;
+        self.as_ref().length() as u64
     }
 }
 
@@ -274,6 +274,7 @@ pub struct RenderPipeline {
     triangle_fill_mode: metal::MTLTriangleFillMode,
     front_winding: metal::MTLWinding,
     cull_mode: metal::MTLCullMode,
+    #[cfg_attr(all(target_os = "ios", target_abi = "sim"), allow(dead_code))]
     depth_clip_mode: metal::MTLDepthClipMode,
     depth_stencil: Option<(
         Retained<ProtocolObject<dyn metal::MTLDepthStencilState>>,
