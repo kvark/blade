@@ -63,6 +63,10 @@ impl DescriptorCounts {
     }
 }
 
+fn grow_pool_size(current: u32) -> u32 {
+    current.saturating_mul(2)
+}
+
 #[derive(Debug)]
 pub struct DescriptorPool {
     sub_pools: Vec<DescriptorSubPool>,
@@ -72,6 +76,7 @@ pub struct DescriptorPool {
 struct DescriptorSubPool {
     raw: vk::DescriptorPool,
     per_set: DescriptorCounts,
+    max_sets: u32,
 }
 
 impl super::Device {
@@ -96,11 +101,7 @@ impl super::Device {
             acceleration_structures: u32::from(self.ray_tracing.is_some()),
         };
         let per_set = baseline.max(required_per_set);
-        let pool_count = |count: u32| {
-            count
-                .checked_mul(max_sets)
-                .expect("descriptor pool count overflow")
-        };
+        let pool_count = |count: u32| count.saturating_mul(max_sets);
         let mut descriptor_sizes = vec![
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_BUFFER,
@@ -166,6 +167,7 @@ impl super::Device {
             sub_pools: vec![DescriptorSubPool {
                 raw: sub_pool,
                 per_set,
+                max_sets: COUNT_BASE,
             }],
         }
     }
@@ -182,6 +184,7 @@ impl super::Device {
         layout: &super::DescriptorSetLayout,
     ) -> vk::DescriptorSet {
         let descriptor_set_layouts = [layout.raw];
+        let mut next_max_sets = COUNT_BASE;
         for sub_pool in &pool.sub_pools {
             if !sub_pool.per_set.supports(layout.descriptor_counts) {
                 continue;
@@ -195,14 +198,23 @@ impl super::Device {
                 | Err(vk::Result::ERROR_FRAGMENTED_POOL) => {}
                 Err(other) => panic!("Unexpected descriptor allocation error: {:?}", other),
             };
+            next_max_sets = next_max_sets.max(grow_pool_size(sub_pool.max_sets));
         }
 
-        let (raw, per_set) = self.create_descriptor_sub_pool(COUNT_BASE, layout.descriptor_counts);
+        let (raw, per_set) =
+            self.create_descriptor_sub_pool(next_max_sets, layout.descriptor_counts);
         let descriptor_set_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(raw)
             .set_layouts(&descriptor_set_layouts);
         let set = unsafe { self.core.allocate_descriptor_sets(&descriptor_set_info) }.unwrap()[0];
-        pool.sub_pools.push(DescriptorSubPool { raw, per_set });
+        pool.sub_pools.insert(
+            0,
+            DescriptorSubPool {
+                raw,
+                per_set,
+                max_sets: next_max_sets,
+            },
+        );
         set
     }
 
@@ -253,5 +265,13 @@ mod tests {
             budget.acceleration_structures.checked_mul(COUNT_BASE),
             Some(1024)
         );
+    }
+
+    #[test]
+    fn geometric_growth_saturates_at_u32_max() {
+        assert_eq!(grow_pool_size(COUNT_BASE), COUNT_BASE * 2);
+        assert_eq!(grow_pool_size(1 << 30), 1 << 31);
+        assert_eq!(grow_pool_size(1 << 31), u32::MAX);
+        assert_eq!(grow_pool_size(u32::MAX), u32::MAX);
     }
 }

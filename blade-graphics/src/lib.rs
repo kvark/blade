@@ -310,6 +310,11 @@ impl Context {
 pub enum Memory {
     /// Device-local memory. Fast for GPU operations.
     Device,
+    /// Device-local memory for short-lived allocations.
+    ///
+    /// Backends with a transient allocator may optimize these allocations;
+    /// other backends treat them like [`Self::Device`].
+    DeviceTransient,
     /// Shared CPU-GPU memory. Not so fast for GPU.
     Shared,
     /// Download memory. Optimized for CPU reads after GPU transfers.
@@ -347,7 +352,7 @@ impl Memory {
             | Self::Download
             | Self::Upload
             | Self::External(ExternalMemorySource::HostAllocation(_)) => true,
-            Self::Device | Self::External(_) => false,
+            Self::Device | Self::DeviceTransient | Self::External(_) => false,
         }
     }
 }

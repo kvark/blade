@@ -10,6 +10,37 @@ fn memory_allocate_flags(needs_device_address: bool) -> vk::MemoryAllocateFlags 
     }
 }
 
+fn memory_usage_flags(memory: crate::Memory, needs_device_address: bool) -> gpu_alloc::UsageFlags {
+    let device_address = if needs_device_address {
+        gpu_alloc::UsageFlags::DEVICE_ADDRESS
+    } else {
+        gpu_alloc::UsageFlags::empty()
+    };
+    match memory {
+        crate::Memory::Device | crate::Memory::External(_) => {
+            gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS | device_address
+        }
+        crate::Memory::DeviceTransient => {
+            gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS
+                | gpu_alloc::UsageFlags::TRANSIENT
+                | device_address
+        }
+        crate::Memory::Shared => {
+            gpu_alloc::UsageFlags::HOST_ACCESS
+                | gpu_alloc::UsageFlags::DOWNLOAD
+                | gpu_alloc::UsageFlags::UPLOAD
+                | gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS
+                | device_address
+        }
+        crate::Memory::Download => {
+            gpu_alloc::UsageFlags::HOST_ACCESS | gpu_alloc::UsageFlags::DOWNLOAD | device_address
+        }
+        crate::Memory::Upload => {
+            gpu_alloc::UsageFlags::HOST_ACCESS | gpu_alloc::UsageFlags::UPLOAD | device_address
+        }
+    }
+}
+
 struct Allocation {
     memory: vk::DeviceMemory,
     offset: u64,
@@ -27,33 +58,7 @@ impl super::Context {
         needs_device_address: bool,
     ) -> Allocation {
         let mut manager = self.memory.lock().unwrap();
-        let device_address_usage = if needs_device_address {
-            gpu_alloc::UsageFlags::DEVICE_ADDRESS
-        } else {
-            gpu_alloc::UsageFlags::empty()
-        };
-        let alloc_usage = match memory {
-            crate::Memory::Device | crate::Memory::External(_) => {
-                gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS | device_address_usage
-            }
-            crate::Memory::Shared => {
-                gpu_alloc::UsageFlags::HOST_ACCESS
-                    | gpu_alloc::UsageFlags::DOWNLOAD
-                    | gpu_alloc::UsageFlags::UPLOAD
-                    | gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS
-                    | device_address_usage
-            }
-            crate::Memory::Download => {
-                gpu_alloc::UsageFlags::HOST_ACCESS
-                    | gpu_alloc::UsageFlags::DOWNLOAD
-                    | device_address_usage
-            }
-            crate::Memory::Upload => {
-                gpu_alloc::UsageFlags::HOST_ACCESS
-                    | gpu_alloc::UsageFlags::UPLOAD
-                    | device_address_usage
-            }
-        };
+        let alloc_usage = memory_usage_flags(memory, needs_device_address);
         let memory_types = requirements.memory_type_bits & manager.valid_ash_memory_types;
         let mut block = match memory {
             crate::Memory::External(e) => {
@@ -225,7 +230,9 @@ impl super::Context {
             crate::Memory::External(crate::ExternalMemorySource::HostAllocation(ptr)) => {
                 ptr as *mut u8
             }
-            crate::Memory::Device | crate::Memory::External(_) => ptr::null_mut(),
+            crate::Memory::Device | crate::Memory::DeviceTransient | crate::Memory::External(_) => {
+                ptr::null_mut()
+            }
             crate::Memory::Shared | crate::Memory::Download | crate::Memory::Upload => unsafe {
                 block
                     .map(

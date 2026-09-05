@@ -58,7 +58,7 @@ impl crate::traits::ResourceDevice for super::Context {
             let mut storage_flags = 0;
             let mut map_flags = 0;
             let usage = match desc.memory {
-                crate::Memory::Device => glow::STATIC_DRAW,
+                crate::Memory::Device | crate::Memory::DeviceTransient => glow::STATIC_DRAW,
                 crate::Memory::Shared => {
                     map_flags = glow::MAP_READ_BIT | glow::MAP_WRITE_BIT | glow::MAP_PERSISTENT_BIT;
                     storage_flags = glow::MAP_PERSISTENT_BIT

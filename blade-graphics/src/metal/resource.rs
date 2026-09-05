@@ -183,7 +183,9 @@ impl crate::traits::ResourceDevice for super::Context {
 
     fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         let options = match desc.memory {
-            crate::Memory::Device => metal::MTLResourceOptions::StorageModePrivate,
+            crate::Memory::Device | crate::Memory::DeviceTransient => {
+                metal::MTLResourceOptions::StorageModePrivate
+            }
             crate::Memory::Shared => metal::MTLResourceOptions::StorageModeShared,
             crate::Memory::Download => metal::MTLResourceOptions::StorageModeShared,
             crate::Memory::Upload => {

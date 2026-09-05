@@ -1566,6 +1566,9 @@ impl Drop for super::Context {
                         block,
                     );
                 }
+                manager
+                    .allocator
+                    .cleanup(gpu_alloc_ash::AshMemoryDevice::wrap(&self.device.core));
             }
             self.device.core.destroy_device(None);
             // inner.drop() destroys the Vulkan instance
