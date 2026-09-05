@@ -61,30 +61,10 @@ impl DescriptorCounts {
     fn supports(self, required: Self) -> bool {
         self.max(required) == self
     }
-
-    fn max_sets_before_overflow(self) -> u32 {
-        [
-            self.storage_buffers,
-            self.sampled_images,
-            self.samplers,
-            self.storage_images,
-            self.inline_uniform_bytes,
-            self.inline_uniform_bindings,
-            self.uniform_buffers,
-            self.acceleration_structures,
-        ]
-        .into_iter()
-        .filter(|&count| count != 0)
-        .map(|count| u32::MAX / count)
-        .min()
-        .unwrap_or(u32::MAX)
-    }
 }
 
-fn grow_pool_size(current: u32, per_set: DescriptorCounts) -> u32 {
-    current
-        .saturating_mul(2)
-        .min(per_set.max_sets_before_overflow())
+fn grow_pool_size(current: u32) -> u32 {
+    current.saturating_mul(2)
 }
 
 #[derive(Debug)]
@@ -121,11 +101,7 @@ impl super::Device {
             acceleration_structures: u32::from(self.ray_tracing.is_some()),
         };
         let per_set = baseline.max(required_per_set);
-        let pool_count = |count: u32| {
-            count
-                .checked_mul(max_sets)
-                .expect("descriptor pool count overflow")
-        };
+        let pool_count = |count: u32| count.saturating_mul(max_sets);
         let mut descriptor_sizes = vec![
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_BUFFER,
@@ -222,7 +198,7 @@ impl super::Device {
                 | Err(vk::Result::ERROR_FRAGMENTED_POOL) => {}
                 Err(other) => panic!("Unexpected descriptor allocation error: {:?}", other),
             };
-            next_max_sets = next_max_sets.max(grow_pool_size(sub_pool.max_sets, sub_pool.per_set));
+            next_max_sets = next_max_sets.max(grow_pool_size(sub_pool.max_sets));
         }
 
         let (raw, per_set) =
@@ -292,16 +268,10 @@ mod tests {
     }
 
     #[test]
-    fn geometric_growth_stops_before_descriptor_counts_overflow() {
-        let per_set = DescriptorCounts {
-            inline_uniform_bytes: IUB_BYTES_PER_SET,
-            ..DescriptorCounts::default()
-        };
-        let limit = u32::MAX / IUB_BYTES_PER_SET;
-
-        assert_eq!(grow_pool_size(COUNT_BASE, per_set), COUNT_BASE * 2);
-        assert_eq!(grow_pool_size(1 << 19, per_set), limit);
-        assert_eq!(grow_pool_size(limit, per_set), limit);
-        assert!(per_set.inline_uniform_bytes.checked_mul(limit).is_some());
+    fn geometric_growth_saturates_at_u32_max() {
+        assert_eq!(grow_pool_size(COUNT_BASE), COUNT_BASE * 2);
+        assert_eq!(grow_pool_size(1 << 30), 1 << 31);
+        assert_eq!(grow_pool_size(1 << 31), u32::MAX);
+        assert_eq!(grow_pool_size(u32::MAX), u32::MAX);
     }
 }

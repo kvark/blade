@@ -10,19 +10,20 @@ fn memory_allocate_flags(needs_device_address: bool) -> vk::MemoryAllocateFlags 
     }
 }
 
-fn memory_usage_flags(
-    memory: crate::Memory,
-    transient: bool,
-    needs_device_address: bool,
-) -> gpu_alloc::UsageFlags {
+fn memory_usage_flags(memory: crate::Memory, needs_device_address: bool) -> gpu_alloc::UsageFlags {
     let device_address = if needs_device_address {
         gpu_alloc::UsageFlags::DEVICE_ADDRESS
     } else {
         gpu_alloc::UsageFlags::empty()
     };
-    let mut usage = match memory {
+    match memory {
         crate::Memory::Device | crate::Memory::External(_) => {
             gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS | device_address
+        }
+        crate::Memory::DeviceTransient => {
+            gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS
+                | gpu_alloc::UsageFlags::TRANSIENT
+                | device_address
         }
         crate::Memory::Shared => {
             gpu_alloc::UsageFlags::HOST_ACCESS
@@ -37,11 +38,7 @@ fn memory_usage_flags(
         crate::Memory::Upload => {
             gpu_alloc::UsageFlags::HOST_ACCESS | gpu_alloc::UsageFlags::UPLOAD | device_address
         }
-    };
-    if transient {
-        usage |= gpu_alloc::UsageFlags::TRANSIENT;
     }
-    usage
 }
 
 struct Allocation {
@@ -57,12 +54,11 @@ impl super::Context {
         &self,
         requirements: vk::MemoryRequirements,
         memory: crate::Memory,
-        transient: bool,
         name: &str,
         needs_device_address: bool,
     ) -> Allocation {
         let mut manager = self.memory.lock().unwrap();
-        let alloc_usage = memory_usage_flags(memory, transient, needs_device_address);
+        let alloc_usage = memory_usage_flags(memory, needs_device_address);
         let memory_types = requirements.memory_type_bits & manager.valid_ash_memory_types;
         let mut block = match memory {
             crate::Memory::External(e) => {
@@ -234,7 +230,9 @@ impl super::Context {
             crate::Memory::External(crate::ExternalMemorySource::HostAllocation(ptr)) => {
                 ptr as *mut u8
             }
-            crate::Memory::Device | crate::Memory::External(_) => ptr::null_mut(),
+            crate::Memory::Device | crate::Memory::DeviceTransient | crate::Memory::External(_) => {
+                ptr::null_mut()
+            }
             crate::Memory::Shared | crate::Memory::Download | crate::Memory::Upload => unsafe {
                 block
                     .map(
@@ -338,7 +336,6 @@ impl super::Context {
             size: (instances.len().max(1) * mem::size_of::<vk::AccelerationStructureInstanceKHR>())
                 as u64,
             memory: crate::Memory::Shared,
-            transient: false,
         });
         let rt = self.device.ray_tracing.as_ref().unwrap();
         for (i, instance) in instances.iter().enumerate() {
@@ -439,7 +436,6 @@ impl crate::traits::ResourceDevice for super::Context {
         let allocation = self.allocate_memory(
             requirements,
             desc.memory,
-            desc.transient,
             desc.name,
             self.device.buffer_device_address,
         );
@@ -532,7 +528,6 @@ impl crate::traits::ResourceDevice for super::Context {
             requirements,
             desc.external
                 .map_or(crate::Memory::Device, crate::Memory::External),
-            false,
             desc.name,
             false,
         );
@@ -662,7 +657,6 @@ impl crate::traits::ResourceDevice for super::Context {
         let allocation = self.allocate_memory(
             requirements,
             crate::Memory::Device,
-            false,
             desc.name,
             self.device.buffer_device_address,
         );
@@ -896,20 +890,5 @@ mod tests {
             vk::MemoryAllocateFlags::DEVICE_ADDRESS
         );
         assert!(memory_allocate_flags(false).is_empty());
-    }
-
-    #[test]
-    fn transient_is_independent_of_memory_location() {
-        let device = memory_usage_flags(crate::Memory::Device, true, true);
-        assert!(device.contains(gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS));
-        assert!(device.contains(gpu_alloc::UsageFlags::TRANSIENT));
-        assert!(device.contains(gpu_alloc::UsageFlags::DEVICE_ADDRESS));
-        assert!(!device.contains(gpu_alloc::UsageFlags::HOST_ACCESS));
-
-        let upload = memory_usage_flags(crate::Memory::Upload, true, false);
-        assert!(upload.contains(gpu_alloc::UsageFlags::HOST_ACCESS));
-        assert!(upload.contains(gpu_alloc::UsageFlags::UPLOAD));
-        assert!(upload.contains(gpu_alloc::UsageFlags::TRANSIENT));
-        assert!(!upload.contains(gpu_alloc::UsageFlags::DOWNLOAD));
     }
 }

@@ -310,6 +310,11 @@ impl Context {
 pub enum Memory {
     /// Device-local memory. Fast for GPU operations.
     Device,
+    /// Device-local memory for short-lived allocations.
+    ///
+    /// Backends with a transient allocator may optimize these allocations;
+    /// other backends treat them like [`Self::Device`].
+    DeviceTransient,
     /// Shared CPU-GPU memory. Not so fast for GPU.
     Shared,
     /// Download memory. Optimized for CPU reads after GPU transfers.
@@ -347,7 +352,7 @@ impl Memory {
             | Self::Download
             | Self::Upload
             | Self::External(ExternalMemorySource::HostAllocation(_)) => true,
-            Self::Device | Self::External(_) => false,
+            Self::Device | Self::DeviceTransient | Self::External(_) => false,
         }
     }
 }
@@ -357,13 +362,6 @@ pub struct BufferDesc<'a> {
     pub name: &'a str,
     pub size: u64,
     pub memory: Memory,
-    /// Prefer allocation optimized for short-lived or batch-lifetime buffers.
-    ///
-    /// This hint is independent of [`Memory`]: transient device, shared,
-    /// upload, and download buffers retain their normal visibility and access
-    /// properties. Backends without a distinct transient allocator may ignore
-    /// it.
-    pub transient: bool,
 }
 
 /// Binding target hint for [`sync_buffer`](traits::ResourceDevice::sync_buffer).

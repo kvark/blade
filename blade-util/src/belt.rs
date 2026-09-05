@@ -73,7 +73,6 @@ impl BufferBelt {
             name: &format!("chunk-{}", chunk_index),
             size: chunk_size,
             memory: self.desc.memory,
-            transient: false,
         });
         let rb = ReusableBuffer {
             raw: chunk,

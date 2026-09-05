@@ -363,7 +363,6 @@ impl RestirTargets {
                 name: &format!("reservoirs{i}"),
                 size: reservoir_size as u64 * total_reservoirs as u64,
                 memory: blade_graphics::Memory::Device,
-                transient: false,
             });
         }
 
@@ -1306,13 +1305,11 @@ impl RayTracer {
             name: "hit entries",
             size: hit_size,
             memory: blade_graphics::Memory::Device,
-            transient: false,
         });
         let hit_staging = gpu.create_buffer(blade_graphics::BufferDesc {
             name: "hit staging",
             size: hit_size,
             memory: blade_graphics::Memory::Upload,
-            transient: false,
         });
         temp.buffers.push(hit_staging);
         {
@@ -1398,7 +1395,6 @@ impl RayTracer {
                         name: "animated vertices",
                         size: vertex_size.max(1),
                         memory: blade_graphics::Memory::Device,
-                        transient: false,
                     });
                     let vertex_stride = mem::size_of::<crate::Vertex>() as u32;
                     let size_meshes: Vec<_> = model
@@ -1430,7 +1426,6 @@ impl RayTracer {
                         name: "animated BLAS scratch",
                         size: sizes.scratch,
                         memory: blade_graphics::Memory::Device,
-                        transient: false,
                     });
                     *slot = Some(AnimatedBlasSlot {
                         vertex_buffer,
@@ -1645,7 +1640,6 @@ impl RayTracer {
             name: "TLAS scratch",
             size: sizes.scratch,
             memory: blade_graphics::Memory::Device,
-            transient: false,
         });
 
         let mut tlas_encoder = command_encoder.acceleration_structure("TLAS");

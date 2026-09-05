@@ -590,7 +590,6 @@ impl crate::traits::CommandDevice for Context {
                     name: "_scratch",
                     size: SCRATCH_SIZE,
                     memory: crate::Memory::Shared,
-                    transient: false,
                 });
                 let scratch = Some(ScratchBuffer {
                     raw: scratch_buf.raw,
@@ -617,7 +616,6 @@ impl crate::traits::CommandDevice for Context {
                     name: "_marker",
                     size: 4,
                     memory: crate::Memory::Shared,
-                    transient: false,
                 }),
                 raw_string: vec![0; 0x1000].into_boxed_slice(),
                 next_offset: 0,

@@ -122,7 +122,6 @@ impl Example {
             name: "xr-params",
             size: (std::mem::size_of::<Uniforms>() * MAX_XR_EYES) as u64,
             memory: gpu::Memory::Shared,
-            transient: false,
         });
         let extent = xr_surface.extent();
         let view_count = xr_surface.view_count() as usize;
