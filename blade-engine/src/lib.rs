@@ -3,6 +3,9 @@
     clippy::new_without_default,
     // Conflicts with `pattern_type_mismatch`
     clippy::needless_borrowed_reference,
+    // The GLES context is thread-affine, while the native contexts sharing the
+    // same engine storage are Send + Sync.
+    clippy::arc_with_non_send_sync,
 )]
 #![warn(
     trivial_casts,
@@ -134,9 +137,12 @@ impl JointAxis {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum JointHandle {
-    Soft(#[doc(hidden)] rapier3d::dynamics::ImpulseJointHandle),
-    Hard(#[doc(hidden)] rapier3d::dynamics::MultibodyJointHandle),
+pub struct JointHandle(JointHandleInner);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum JointHandleInner {
+    Soft(rapier3d::dynamics::ImpulseJointHandle),
+    Hard(rapier3d::dynamics::MultibodyJointHandle),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -342,9 +348,9 @@ impl Physics {
 impl ops::Index<JointHandle> for Physics {
     type Output = rapier3d::dynamics::GenericJoint;
     fn index(&self, handle: JointHandle) -> &Self::Output {
-        match handle {
-            JointHandle::Soft(h) => &self.impulse_joints.get(h).unwrap().data,
-            JointHandle::Hard(h) => {
+        match handle.0 {
+            JointHandleInner::Soft(h) => &self.impulse_joints.get(h).unwrap().data,
+            JointHandleInner::Hard(h) => {
                 let (multibody, link_index) = self.multibody_joints.get(h).unwrap();
                 &multibody.link(link_index).unwrap().joint.data
             }
@@ -353,9 +359,9 @@ impl ops::Index<JointHandle> for Physics {
 }
 impl ops::IndexMut<JointHandle> for Physics {
     fn index_mut(&mut self, handle: JointHandle) -> &mut Self::Output {
-        match handle {
-            JointHandle::Soft(h) => &mut self.impulse_joints.get_mut(h, true).unwrap().data,
-            JointHandle::Hard(h) => {
+        match handle.0 {
+            JointHandleInner::Soft(h) => &mut self.impulse_joints.get_mut(h, true).unwrap().data,
+            JointHandleInner::Hard(h) => {
                 let (multibody, link_index) = self.multibody_joints.get_mut(h).unwrap();
                 &mut multibody.link_mut(link_index).unwrap().joint.data
             }
@@ -1252,21 +1258,22 @@ impl Engine {
                     );
                 }
                 command_encoder.init_texture(inner.depth_texture());
-                if let mut pass = command_encoder.render(
-                    "raster",
-                    gpu::RenderTargetSet {
-                        colors: &[gpu::RenderTarget {
-                            view: frame.texture_view(),
-                            init_op: gpu::InitOp::Clear(raster_config.clear_color),
-                            finish_op: gpu::FinishOp::Store,
-                        }],
-                        depth_stencil: Some(gpu::RenderTarget {
-                            view: inner.depth_view(),
-                            init_op: gpu::InitOp::Clear(gpu::TextureColor::White),
-                            finish_op: gpu::FinishOp::Store,
-                        }),
-                    },
-                ) {
+                {
+                    let mut pass = command_encoder.render(
+                        "raster",
+                        gpu::RenderTargetSet {
+                            colors: &[gpu::RenderTarget {
+                                view: frame.texture_view(),
+                                init_op: gpu::InitOp::Clear(raster_config.clear_color),
+                                finish_op: gpu::FinishOp::Store,
+                            }],
+                            depth_stencil: Some(gpu::RenderTarget {
+                                view: inner.depth_view(),
+                                init_op: gpu::InitOp::Clear(gpu::TextureColor::White),
+                                finish_op: gpu::FinishOp::Store,
+                            }),
+                        },
+                    );
                     if can_render {
                         inner.render(
                             &mut pass,
@@ -2284,14 +2291,16 @@ impl Engine {
         let body1 = self.objects[parent.0].rigid_body;
         let body2 = self.objects[child.0].rigid_body;
         if desc.is_hard {
-            JointHandle::Hard(
+            JointHandle(JointHandleInner::Hard(
                 self.physics
                     .multibody_joints
                     .insert(body1, body2, data, true)
                     .unwrap(),
-            )
+            ))
         } else {
-            JointHandle::Soft(self.physics.impulse_joints.insert(body1, body2, data, true))
+            JointHandle(JointHandleInner::Soft(
+                self.physics.impulse_joints.insert(body1, body2, data, true),
+            ))
         }
     }
 

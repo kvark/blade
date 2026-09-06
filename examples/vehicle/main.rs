@@ -630,9 +630,9 @@ impl Game {
                         cc.altitude.sin(),
                         -cc.azimuth.cos() * cc.altitude.cos(),
                     );
-            let local_affine = glam::Affine3A::look_at_rh(source, cc.target.into(), glam::Vec3::Y);
+            let local_affine = glam::Affine3::look_at_rh(source, cc.target.into(), glam::Vec3::Y);
             let local = Isometry {
-                position: local_affine.translation.into(),
+                position: local_affine.translation,
                 orientation: glam::Quat::from_affine3(&local_affine),
             };
             blade_engine::FrameCamera {

@@ -1,7 +1,8 @@
 [package]
 name = "blade-helpers"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
+rust-version = "1.92"
 description = "Helper classes for Blade apps"
 keywords = ["graphics", "engine"]
 license = "MIT"

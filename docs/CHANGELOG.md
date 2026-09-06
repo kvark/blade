@@ -1,6 +1,38 @@
 Changelog for *Blade* project
 
-## (TBD)
+## blade-graphics-0.9, blade-util-0.5, blade-egui-0.9, blade-particle-0.2, blade-asset-0.2.2, blade-render-0.6, blade-helpers-0.3, blade-engine-0.2 (TBD)
+
+- raise the published workspace crates' MSRV to Rust 1.92.
+- dependencies: replace the development Naga revision with the published Naga
+  30 release, and update `base64`, `glam`, `glow`, `openxr`, `ron`, and `strum`
+  to their current major versions.
+  - breaking: XR applications must update from `openxr` 0.19 to 0.21 because
+    `XrDesc` and the XR session accessors expose `openxr` types.
+- gfx: add `Memory::DeviceTransient` for short-lived device-local buffers. The
+  Vulkan allocator can use a faster allocation strategy with less bookkeeping;
+  other backends currently treat it like `Memory::Device`.
+  - breaking: exhaustive matches on `Memory` need to handle the new variant.
+- gfx: expose compute-pipeline compiler statistics on Vulkan and Metal through
+  `ShaderDevice::get_pipeline_statistics`. Collection is opt-in through
+  `ContextDesc::pipeline_statistics` because Vulkan may disable pipeline caching
+  or increase pipeline creation time while capturing statistics.
+  - breaking: `ContextDesc` gained `pipeline_statistics`.
+- gfx: add `CommandEncoderDesc::manual_barriers` and `CommandEncoder::barrier`,
+  allowing applications to omit automatic inter-pass barriers and place global
+  barriers explicitly.
+  - breaking: `CommandEncoderDesc` gained `manual_barriers`.
+- gfx/vk: grow exhausted descriptor pools geometrically and account for binding
+  arrays when sizing them; enable the device-scope Vulkan memory model required
+  by cooperative matrices and correctly request device-addressable external
+  memory.
+- asset: add an in-memory VFS for generated and WebAssembly assets, tolerate an
+  unavailable on-disk cache, and add non-blocking `AssetManager::get` access.
+- render/engine: add raster point lights and directional shadow maps.
+- engine: make `JointHandle` opaque so the public API no longer exposes
+  Rapier's version-specific handle types.
+  - breaking: applications can no longer construct or destructure joint handles.
+- render: support explicit subpixel projection jitter and optionally disable
+  primary-ray jitter; expose accumulated canonical diffuse/specular radiance.
 
 - gles: upload BC compressed textures with `compressedTexSubImage`.
   `texSubImage2D` with `type = GL_NONE` is invalid and left Kenney
@@ -129,7 +161,7 @@ Changelog for *Blade* project
 - gles: assign texture units to sampler uniforms where GLSL ES 3.00 can't carry explicit bindings, so multi-texture pipelines don't collide on unit 0 in WebGL2
 - gles: apply `RenderPipelineDesc::depth_stencil`, which the backend previously ignored, leaving draw order to decide visibility
 
-## blade-egui-0.8.2, blade-util-0.4.1 (25 Apr 2026)
+## blade-egui-0.8.1, blade-util-0.4.1 (25 Apr 2026)
 
 - fix leaking textures and non-reusable buffers in egui workflow
 

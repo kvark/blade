@@ -48,6 +48,7 @@ struct PrivateInfo {
     language_version: metal::MTLLanguageVersion,
     enable_debug_groups: bool,
     enable_dispatch_type: bool,
+    pipeline_statistics: bool,
 }
 
 pub struct Context {
@@ -522,6 +523,7 @@ impl Context {
                 language_version: metal::MTLLanguageVersion::Version2_4,
                 enable_debug_groups: desc.capture,
                 enable_dispatch_type: true,
+                pipeline_statistics: desc.pipeline_statistics,
             },
             device_information,
         })

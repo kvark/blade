@@ -213,7 +213,7 @@ impl super::Context {
                     "Naga generated shader for entry point '{}' and stage {:?}\n{}",
                     sf.entry_point,
                     ep.stage,
-                    &source
+                    source
                 );
 
                 let target = match ep.stage {

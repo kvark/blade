@@ -17,31 +17,31 @@ members = [
 exclude = []
 
 [workspace.dependencies]
-blade-graphics = { path = "blade-graphics", version = "0.8" }
-blade-util = { path = "blade-util", version = "0.4.1" }
-blade-egui = { path = "blade-egui", version = "0.8.1" }
-blade-particle = { path = "blade-particle", version = "0.1" }
+blade-graphics = { path = "blade-graphics", version = "0.9" }
+blade-util = { path = "blade-util", version = "0.5" }
+blade-egui = { path = "blade-egui", version = "0.9" }
+blade-particle = { path = "blade-particle", version = "0.2" }
 blade-macros = { path = "blade-macros", version = "0.3" }
-blade-helpers = { path = "blade-helpers", version = "0.2" }
-blade-asset = { path = "blade-asset", version = "0.2.1" }
-blade-render = { path = "blade-render", version = "0.5" }
-blade-engine = { path = "blade-engine", version = "0.1" }
-base64 = "0.21"
+blade-helpers = { path = "blade-helpers", version = "0.3" }
+blade-asset = { path = "blade-asset", version = "0.2.2" }
+blade-render = { path = "blade-render", version = "0.6" }
+blade-engine = { path = "blade-engine", version = "0.2" }
+base64 = "0.22"
 bitflags = "2"
 bytemuck = { version = "1", features = ["derive"] }
 choir = "0.7"
 egui = "0.34"
-glam = { version = "0.30", features = ["mint"] }
+glam = { version = "0.32", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
-naga = { git = "https://github.com/gfx-rs/wgpu", rev = "cefd48f6cff61d64abe1cdb4002c4e39bfc2c728", features = ["wgsl-in", "termcolor"] }
+naga = { version = "30", features = ["wgsl-in", "termcolor"] }
 profiling = "1"
 slab = "0.4"
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 web-sys = "0.3.60"
 winit = { version = "0.30" }
-openxr = "0.19"
+openxr = "0.21"
 num_cpus = "1"
 
 [lib]
@@ -87,7 +87,7 @@ naga = { workspace = true, features = ["glsl-out"] }
 nanorand = { version = "0.7", default-features = false, features = ["wyrand"] }
 png = "0.18"
 profiling = { workspace = true }
-ron = "0.8"
+ron = "0.12"
 serde = { version = "1", features = ["serde_derive"] }
 strum = { workspace = true }
 # not following semver :(

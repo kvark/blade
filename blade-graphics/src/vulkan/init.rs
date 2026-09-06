@@ -974,7 +974,7 @@ impl super::Context {
             if capabilities.shader_info {
                 device_extensions.push(vk::AMD_SHADER_INFO_NAME);
             }
-            if capabilities.pipeline_executable_properties {
+            if desc.pipeline_statistics && capabilities.pipeline_executable_properties {
                 device_extensions.push(vk::KHR_PIPELINE_EXECUTABLE_PROPERTIES_NAME);
             }
             if capabilities.full_screen_exclusive {
@@ -1103,7 +1103,7 @@ impl super::Context {
             }
 
             let mut khr_pipeline_executable_properties;
-            if capabilities.pipeline_executable_properties {
+            if desc.pipeline_statistics && capabilities.pipeline_executable_properties {
                 khr_pipeline_executable_properties =
                     vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR {
                         pipeline_executable_info: vk::TRUE,
@@ -1173,17 +1173,16 @@ impl super::Context {
             debug_utils: ext::debug_utils::Device::new(&instance.core, &device_core),
             timeline_semaphore: khr::timeline_semaphore::Device::new(&instance.core, &device_core),
             dynamic_rendering: khr::dynamic_rendering::Device::new(&instance.core, &device_core),
-            ray_tracing: if let Some(ref caps) = capabilities.ray_tracing {
-                Some(super::RayTracingDevice {
+            ray_tracing: capabilities
+                .ray_tracing
+                .as_ref()
+                .map(|caps| super::RayTracingDevice {
                     acceleration_structure: khr::acceleration_structure::Device::new(
                         &instance.core,
                         &device_core,
                     ),
                     scratch_buffer_alignment: caps.min_scratch_buffer_alignment,
-                })
-            } else {
-                None
-            },
+                }),
             buffer_device_address: capabilities.buffer_device_address,
             max_inline_uniform_block_size: capabilities.max_inline_uniform_block_size,
             buffer_marker: if capabilities.buffer_marker && desc.validation {
@@ -1199,7 +1198,9 @@ impl super::Context {
             } else {
                 None
             },
-            pipeline_executable_properties: if capabilities.pipeline_executable_properties {
+            pipeline_executable_properties: if desc.pipeline_statistics
+                && capabilities.pipeline_executable_properties
+            {
                 Some(khr::pipeline_executable_properties::Device::new(
                     &instance.core,
                     &device_core,
