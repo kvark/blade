@@ -156,12 +156,11 @@ pub struct ContextDesc {
     pub validation: bool,
     /// Enable GPU timing of all passes.
     pub timing: bool,
-    /// Enable collection of compute-pipeline compiler statistics.
+    /// Enable capture support with GAPI tools and collection of available
+    /// compute-pipeline compiler statistics.
     ///
     /// On Vulkan this may disable pipeline caching or increase pipeline creation
     /// time, so applications should normally enable it only for profiling.
-    pub pipeline_statistics: bool,
-    /// Enable capture support with GAPI tools.
     pub capture: bool,
     /// Enable GAPI overlay.
     pub overlay: bool,
