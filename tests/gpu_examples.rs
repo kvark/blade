@@ -976,6 +976,7 @@ fn snapshot_pbr_raster() {
             &objects,
             &harness.asset_hub,
             None,
+            &[],
             &raster_config,
         );
     }
@@ -1159,6 +1160,7 @@ fn snapshot_animated_skin() {
             &objects,
             &harness.asset_hub,
             None,
+            &[],
             &raster_config,
         );
     }

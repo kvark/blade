@@ -132,10 +132,10 @@ impl XrInput {
         let right_hand = instance.string_to_path("/user/hand/right").unwrap();
 
         let left_aim_space = aim_action
-            .create_space(session.clone(), left_hand, xr::Posef::IDENTITY)
+            .create_space(&session, left_hand, xr::Posef::IDENTITY)
             .unwrap();
         let right_aim_space = aim_action
-            .create_space(session.clone(), right_hand, xr::Posef::IDENTITY)
+            .create_space(&session, right_hand, xr::Posef::IDENTITY)
             .unwrap();
 
         let (laser_verts, laser_idxs) = mesh::generate_laser_mesh(LASER_LENGTH, LASER_BEAM_RADIUS);

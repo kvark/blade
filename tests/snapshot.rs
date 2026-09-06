@@ -32,8 +32,8 @@ pub fn shader_source(name: &str) -> String {
     let cooker = blade_asset::Cooker::new(&dir, Default::default());
     let mut expansions = HashMap::new();
     expansions.insert(
-        "MAX_POINT_LIGHTS".to_string(),
-        Expansion::Size(blade_render::MAX_POINT_LIGHTS as u32),
+        "MAX_LOCAL_LIGHTS".to_string(),
+        Expansion::Size(blade_render::MAX_LOCAL_LIGHTS as u32),
     );
     expansions.insert(
         "MAX_JOINTS_PER_DRAW".to_string(),

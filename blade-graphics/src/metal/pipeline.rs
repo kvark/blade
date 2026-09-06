@@ -293,6 +293,7 @@ impl super::Context {
             task_dispatch_limits: None,
             mesh_shader_primitive_indices_clamp: true,
             emit_int_div_checks: false,
+            ray_query_initialization_tracking: true,
         };
 
         let pipeline_options = msl::PipelineOptions {
@@ -300,6 +301,7 @@ impl super::Context {
             allow_and_force_point_size: flags.contains(ShaderFlags::ALLOW_POINT_SIZE),
             vertex_pulling_transform: false,
             vertex_buffer_mappings: Vec::new(),
+            binding_array_length_map: Default::default(),
         };
         let (source, info) =
             msl::write_string(&module, &module_info, &naga_options, &pipeline_options).unwrap();

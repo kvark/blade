@@ -32,7 +32,8 @@ mod render;
 pub use asset_hub::*;
 pub use model::{MAX_JOINTS_PER_DRAW, Model, Pose, ProceduralGeometry};
 pub use raster::{
-    DirectionalShadowConfig, MAX_POINT_LIGHTS, ObjectSkin, PointLight, RasterConfig, Rasterizer,
+    DirectionalShadowConfig, LightAngularProfile, LocalLight, MAX_LOCAL_LIGHTS, ObjectSkin,
+    RasterConfig, Rasterizer,
 };
 pub use shader::Shader;
 pub use shaders::{RenderConfig, Shaders};

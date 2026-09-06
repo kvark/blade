@@ -2,17 +2,20 @@
 #include "color.inc.wgsl"
 #include "skin.inc.wgsl"
 
-#use MAX_POINT_LIGHTS
+#use MAX_LOCAL_LIGHTS
 
-struct PointLight {
-    pos_radius: vec4<f32>,
-    color: vec4<f32>,
+struct LocalLight {
+    position_range: vec4<f32>,
+    intensity: vec4<f32>,
+    direction: vec4<f32>,
+    // x: inner cosine, y: outer cosine, z: falloff exponent, w: spot flag
+    spot: vec4<f32>,
 }
 
-struct PointLightParams {
+struct LocalLightParams {
     // x: submitted light count, y: stochastic seed
     count_seed: vec4<f32>,
-    lights: array<PointLight, MAX_POINT_LIGHTS>,
+    lights: array<LocalLight, MAX_LOCAL_LIGHTS>,
 }
 
 struct RasterFrameParams {
@@ -60,7 +63,7 @@ struct VertexOutput {
 }
 
 var<uniform> frame_params: RasterFrameParams;
-var<uniform> light_params: PointLightParams;
+var<uniform> light_params: LocalLightParams;
 var<uniform> draw_params: RasterDrawParams;
 var samp: sampler;
 var base_color_tex: texture_2d<f32>;
@@ -177,20 +180,33 @@ fn hash31(p: vec3<f32>) -> f32 {
     return fract(sin(dot(p, vec3<f32>(127.1, 311.7, 74.7))) * 43758.5453);
 }
 
-fn point_light_score(light: PointLight, world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
-    let delta = light.pos_radius.xyz - world_pos;
+fn angular_attenuation(light: LocalLight, direction_to_light: vec3<f32>) -> f32 {
+    if (light.spot.w < 0.5) {
+        return 1.0;
+    }
+    let cosine = dot(light.direction.xyz, -direction_to_light);
+    let width = light.spot.x - light.spot.y;
+    if (width <= 0.00001) {
+        return select(0.0, 1.0, cosine >= light.spot.y);
+    }
+    let blend = clamp((cosine - light.spot.y) / width, 0.0, 1.0);
+    return pow(blend, light.spot.z);
+}
+
+fn local_light_score(light: LocalLight, world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
+    let delta = light.position_range.xyz - world_pos;
     let dist2 = max(dot(delta, delta), 0.04);
     let dist = sqrt(dist2);
-    let range = max(light.pos_radius.w, 0.01);
+    let range = max(light.position_range.w, 0.01);
     let falloff = max(1.0 - dist / range, 0.0);
     let ldir = delta / dist;
     let ndotl = max(dot(n, ldir), 0.0);
-    let intensity = max(light.color.x, max(light.color.y, light.color.z));
-    return intensity * falloff * falloff * (0.2 + 0.8 * ndotl);
+    let intensity = max(light.intensity.x, max(light.intensity.y, light.intensity.z));
+    return intensity * angular_attenuation(light, ldir) * falloff * falloff * (0.2 + 0.8 * ndotl);
 }
 
-fn shade_point_light(mat: Material, n: vec3<f32>, v: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
-    let count = min(u32(light_params.count_seed.x), MAX_POINT_LIGHTS);
+fn shade_local_light(mat: Material, n: vec3<f32>, v: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+    let count = min(u32(light_params.count_seed.x), MAX_LOCAL_LIGHTS);
     if (count == 0u) {
         return vec3<f32>(0.0);
     }
@@ -199,12 +215,13 @@ fn shade_point_light(mat: Material, n: vec3<f32>, v: vec3<f32>, world_pos: vec3<
     // samples one light with probability proportional to its local score.
     // TODO: spatial acceleration once scenes carry more local lights than this cap.
     var chosen = 0u;
+    var chosen_score = 0.0;
     var weight_sum = 0.0;
-    for (var i = 0u; i < MAX_POINT_LIGHTS; i++) {
+    for (var i = 0u; i < MAX_LOCAL_LIGHTS; i++) {
         if (i >= count) {
             break;
         }
-        let score = point_light_score(light_params.lights[i], world_pos, n);
+        let score = local_light_score(light_params.lights[i], world_pos, n);
         if (score <= 0.0) {
             continue;
         }
@@ -212,6 +229,7 @@ fn shade_point_light(mat: Material, n: vec3<f32>, v: vec3<f32>, world_pos: vec3<
         let u = hash31(world_pos + vec3<f32>(f32(i), light_params.count_seed.y, score));
         if (u * weight_sum < score) {
             chosen = i;
+            chosen_score = score;
         }
     }
     if (weight_sum <= 0.0) {
@@ -219,15 +237,19 @@ fn shade_point_light(mat: Material, n: vec3<f32>, v: vec3<f32>, world_pos: vec3<
     }
 
     let light = light_params.lights[chosen];
-    let delta = light.pos_radius.xyz - world_pos;
+    let delta = light.position_range.xyz - world_pos;
     let dist2 = max(dot(delta, delta), 0.04);
     let dist = sqrt(dist2);
-    let range = max(light.pos_radius.w, 0.01);
+    let range = max(light.position_range.w, 0.01);
     let falloff = max(1.0 - dist / range, 0.0);
     let ldir = delta / dist;
     let brdf = evaluate_brdf(mat, n, v, ldir);
-    let atten = falloff * falloff / dist2;
-    return (mat.diffuse_albedo * brdf.diffuse + brdf.specular) * light.color.xyz * atten;
+    let atten = angular_attenuation(light, ldir) * falloff * falloff / dist2;
+    // Divide by the reservoir selection probability so the result estimates
+    // the sum of all local lights rather than their weighted average.
+    let inverse_probability = weight_sum / max(chosen_score, 0.000001);
+    return (mat.diffuse_albedo * brdf.diffuse + brdf.specular)
+        * light.intensity.xyz * atten * inverse_probability;
 }
 
 @fragment
@@ -259,7 +281,7 @@ fn raster_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let light = (mat.diffuse_albedo * brdf.diffuse + brdf.specular) * frame_params.light_color.xyz * visibility;
     let ambient = evaluate_ambient(mat) * frame_params.ambient_color.xyz;
     let emissive = draw_params.emissive_factor.rgb * textureSample(emissive_tex, samp, input.uv).rgb;
-    let local = shade_point_light(mat, n, v, input.world_pos);
+    let local = shade_local_light(mat, n, v, input.world_pos);
     let color = ambient + light + local + emissive;
 
     let mapped = color / (color + vec3<f32>(1.0));
