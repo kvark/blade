@@ -389,6 +389,9 @@ impl crate::traits::ShaderDevice for super::Context {
         &self,
         pipeline: &super::ComputePipeline,
     ) -> Vec<crate::PipelineExecutableInfo> {
+        if !self.info.pipeline_statistics {
+            return Vec::new();
+        }
         vec![crate::PipelineExecutableInfo {
             name: pipeline.name.clone(),
             statistics: vec![

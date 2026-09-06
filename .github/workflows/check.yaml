@@ -3,7 +3,7 @@ name: check
 on:
   push:
     branches: ["main"]
-    tags: [v0.*]
+    tags: [v0.*, "*-0.*"]
   pull_request:
 
 jobs:

@@ -1,7 +1,8 @@
 [package]
 name = "blade-graphics"
-version = "0.8.4"
+version = "0.9.0"
 edition = "2024"
+rust-version = "1.92"
 description = "Graphics abstraction for Blade"
 keywords = ["graphics"]
 license = "MIT"
@@ -109,13 +110,13 @@ slab = { workspace = true }
 openxr = { workspace = true }
 
 [target.'cfg(any(gles, target_arch = "wasm32"))'.dependencies]
-glow = "0.16"
+glow = "0.17"
 naga = { workspace = true, features = ["glsl-out"] }
 
 [target.'cfg(all(gles, not(target_arch = "wasm32")))'.dependencies]
 egl = { package = "khronos-egl", version = "6.0", features = ["dynamic"] }
 libc = "0.2"
-libloading = { version = "0.8" }
+libloading = { version = "0.9" }
 
 [target.'cfg(all(target_arch = "wasm32"))'.dependencies]
 wasm-bindgen = "0.2.83"
@@ -130,6 +131,7 @@ allowed_external_types = [
     "bitflags::*",
     "mint::*",
     "naga::*",
+    "openxr::*",
     "raw_window_handle::*",
 ]
 

@@ -779,15 +779,15 @@ fn select_xr_swapchain_format(
     for raw in formats {
         if let Some(format) = texture_format_from_xr_raw(raw) {
             match format {
-                crate::TextureFormat::Rgba8Unorm | crate::TextureFormat::Bgra8Unorm => {
-                    if linear_candidate.is_none() {
-                        linear_candidate = Some((raw, format));
-                    }
+                crate::TextureFormat::Rgba8Unorm | crate::TextureFormat::Bgra8Unorm
+                    if linear_candidate.is_none() =>
+                {
+                    linear_candidate = Some((raw, format));
                 }
-                crate::TextureFormat::Rgba8UnormSrgb | crate::TextureFormat::Bgra8UnormSrgb => {
-                    if srgb_candidate.is_none() {
-                        srgb_candidate = Some((raw, format));
-                    }
+                crate::TextureFormat::Rgba8UnormSrgb | crate::TextureFormat::Bgra8UnormSrgb
+                    if srgb_candidate.is_none() =>
+                {
+                    srgb_candidate = Some((raw, format));
                 }
                 _ => {}
             }

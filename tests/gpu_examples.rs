@@ -1,4 +1,4 @@
-#![allow(irrefutable_let_patterns)]
+#![allow(irrefutable_let_patterns, clippy::chunks_exact_to_as_chunks)]
 
 // nanorand uses RtlGenRandom but doesn't link advapi32 itself.
 // On Vulkan builds, other deps pull it in transitively; on GLES builds we must link it explicitly.

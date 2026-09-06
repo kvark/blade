@@ -313,7 +313,7 @@ impl ParticleSystem {
         }
 
         // Process burst emissions
-        let bursts: Vec<_> = self.pending_bursts.drain(..).collect();
+        let bursts = std::mem::take(&mut self.pending_bursts);
         for burst in bursts {
             let params = self.make_emit_params(burst.count, burst.position);
             let wg_size = pipeline.emit_pipeline.get_workgroup_size()[0];

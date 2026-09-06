@@ -180,7 +180,7 @@ impl<T> Drop for FreeManager<T> {
 // Ensure the `Option<Handle>` doesn't have any overhead
 #[cfg(test)]
 unsafe fn _test_option_handle<A>(handle: Handle<A>) -> Option<Handle<A>> {
-    std::mem::transmute(handle)
+    unsafe { std::mem::transmute(handle) }
 }
 
 #[test]

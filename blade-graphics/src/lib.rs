@@ -156,6 +156,11 @@ pub struct ContextDesc {
     pub validation: bool,
     /// Enable GPU timing of all passes.
     pub timing: bool,
+    /// Enable collection of compute-pipeline compiler statistics.
+    ///
+    /// On Vulkan this may disable pipeline caching or increase pipeline creation
+    /// time, so applications should normally enable it only for profiling.
+    pub pipeline_statistics: bool,
     /// Enable capture support with GAPI tools.
     pub capture: bool,
     /// Enable GAPI overlay.
@@ -733,7 +738,7 @@ pub struct AccelerationStructureDesc<'a> {
     pub ty: AccelerationStructureType,
     pub size: u64,
     /// When set, the BLAS can later be refit with
-    /// [`AccelerationStructureEncoder::update_bottom_level`].
+    /// [`traits::AccelerationStructureEncoder::update_bottom_level`].
     pub updatable: bool,
 }
 
@@ -933,7 +938,8 @@ pub struct PipelineStatistic {
     pub name: String,
     /// Human-readable description.
     pub description: String,
-    /// Numeric value (integer statistics are converted to f64).
+    /// Numeric value. Integer statistics are converted to `f64` for a uniform,
+    /// cross-platform representation.
     pub value: f64,
 }
 

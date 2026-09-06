@@ -1,13 +1,15 @@
 [package]
 name = "blade-particle"
-version = "0.1.0"
+version = "0.2.0"
 description = "Particle system for blade"
 edition = "2024"
+rust-version = "1.92"
 license = "MIT"
+repository = "https://github.com/kvark/blade"
 
 [dependencies]
 blade-graphics = { workspace = true }
 blade-macros = { workspace = true }
 bytemuck = { workspace = true }
 serde = { version = "1", features = ["derive"] }
-ron = "0.8"
+ron = "0.12"

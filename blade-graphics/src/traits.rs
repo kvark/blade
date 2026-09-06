@@ -39,6 +39,11 @@ pub trait ShaderDevice {
     fn destroy_compute_pipeline(&self, pipeline: &mut Self::ComputePipeline);
     fn create_render_pipeline(&self, desc: super::RenderPipelineDesc) -> Self::RenderPipeline;
     fn destroy_render_pipeline(&self, pipeline: &mut Self::RenderPipeline);
+    /// Return compiler-provided statistics for a compute pipeline.
+    ///
+    /// Returns an empty list when collection was not requested through
+    /// [`crate::ContextDesc::pipeline_statistics`] or the backend does not
+    /// provide statistics.
     fn get_pipeline_statistics(
         &self,
         pipeline: &Self::ComputePipeline,
