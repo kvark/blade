@@ -523,7 +523,7 @@ impl Context {
                 language_version: metal::MTLLanguageVersion::Version2_4,
                 enable_debug_groups: desc.capture,
                 enable_dispatch_type: true,
-                pipeline_statistics: desc.pipeline_statistics,
+                pipeline_statistics: desc.capture,
             },
             device_information,
         })

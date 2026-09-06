@@ -13,10 +13,9 @@ Changelog for *Blade* project
   other backends currently treat it like `Memory::Device`.
   - breaking: exhaustive matches on `Memory` need to handle the new variant.
 - gfx: expose compute-pipeline compiler statistics on Vulkan and Metal through
-  `ShaderDevice::get_pipeline_statistics`. Collection is opt-in through
-  `ContextDesc::pipeline_statistics` because Vulkan may disable pipeline caching
-  or increase pipeline creation time while capturing statistics.
-  - breaking: `ContextDesc` gained `pipeline_statistics`.
+  `ShaderDevice::get_pipeline_statistics`. Collection is enabled by
+  `ContextDesc::capture` because Vulkan may disable pipeline caching or increase
+  pipeline creation time while capturing statistics.
 - gfx: add `CommandEncoderDesc::manual_barriers` and `CommandEncoder::barrier`,
   allowing applications to omit automatic inter-pass barriers and place global
   barriers explicitly.

@@ -974,7 +974,7 @@ impl super::Context {
             if capabilities.shader_info {
                 device_extensions.push(vk::AMD_SHADER_INFO_NAME);
             }
-            if desc.pipeline_statistics && capabilities.pipeline_executable_properties {
+            if desc.capture && capabilities.pipeline_executable_properties {
                 device_extensions.push(vk::KHR_PIPELINE_EXECUTABLE_PROPERTIES_NAME);
             }
             if capabilities.full_screen_exclusive {
@@ -1103,7 +1103,7 @@ impl super::Context {
             }
 
             let mut khr_pipeline_executable_properties;
-            if desc.pipeline_statistics && capabilities.pipeline_executable_properties {
+            if desc.capture && capabilities.pipeline_executable_properties {
                 khr_pipeline_executable_properties =
                     vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR {
                         pipeline_executable_info: vk::TRUE,
@@ -1198,7 +1198,7 @@ impl super::Context {
             } else {
                 None
             },
-            pipeline_executable_properties: if desc.pipeline_statistics
+            pipeline_executable_properties: if desc.capture
                 && capabilities.pipeline_executable_properties
             {
                 Some(khr::pipeline_executable_properties::Device::new(
