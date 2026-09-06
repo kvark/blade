@@ -14,18 +14,46 @@ fn geometry_matrix(
 }
 
 /// Maximum local lights the forward pass considers per fragment.
-/// Extra lights in `RasterConfig::point_lights` are ignored.
-pub const MAX_POINT_LIGHTS: usize = 8;
+/// Registered lights beyond this limit are currently ignored.
+pub const MAX_LOCAL_LIGHTS: usize = 8;
 
-/// A local omni light. Radius is a hard cutoff in world units.
-#[derive(Clone, Copy, Debug)]
-pub struct PointLight {
-    pub position: mint::Vector3<f32>,
-    pub color: mint::Vector3<f32>,
-    pub radius: f32,
+/// Axisymmetric angular distribution of a local light's emitted energy.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum LightAngularProfile {
+    /// Emit equally in every direction.
+    #[default]
+    Omnidirectional,
+    /// Emit along `direction`, with a controllable transition at the cone edge.
+    Spot {
+        /// Unit direction from the light towards the center of the cone.
+        /// Non-unit values are normalized by the renderer.
+        direction: mint::Vector3<f32>,
+        /// Half-angle, in radians, over which the light has full intensity.
+        inner_angle: f32,
+        /// Half-angle, in radians, outside of which the light has no intensity.
+        outer_angle: f32,
+        /// Exponent applied across the inner-to-outer transition. Values above
+        /// one concentrate energy towards the inner cone; values below one
+        /// soften the edge.
+        falloff: f32,
+    },
 }
 
-impl Default for PointLight {
+/// A finite-range local light used by the raster forward pass.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalLight {
+    pub position: mint::Vector3<f32>,
+    /// Linear RGB color. Components should normally be in the 0-to-1 range.
+    pub color: mint::Vector3<f32>,
+    /// Peak scalar radiant intensity. The renderer applies inverse-square
+    /// distance attenuation and the selected angular profile.
+    pub intensity: f32,
+    /// Hard distance cutoff in world units, with a smooth fade near the edge.
+    pub range: f32,
+    pub angular: LightAngularProfile,
+}
+
+impl Default for LocalLight {
     fn default() -> Self {
         Self {
             position: mint::Vector3 {
@@ -34,11 +62,13 @@ impl Default for PointLight {
                 z: 0.0,
             },
             color: mint::Vector3 {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
             },
-            radius: 1.0,
+            intensity: 1.0,
+            range: 10.0,
+            angular: LightAngularProfile::Omnidirectional,
         }
     }
 }
@@ -58,8 +88,6 @@ pub struct RasterConfig {
     pub space_sky: bool,
     /// Optional real-time directional shadow-map effect.
     pub directional_shadows: Option<DirectionalShadowConfig>,
-    /// Local omni lights. The rasterizer uploads at most `MAX_POINT_LIGHTS`.
-    pub point_lights: Vec<PointLight>,
 }
 
 /// Controls the rasterizer's camera-relative directional shadow map.
@@ -110,7 +138,6 @@ impl Default for RasterConfig {
             },
             space_sky: false,
             directional_shadows: None,
-            point_lights: Vec::new(),
         }
     }
 }
@@ -131,16 +158,19 @@ struct RasterFrameParams {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct PointLightGpu {
-    pos_radius: [f32; 4],
-    color: [f32; 4],
+struct LocalLightGpu {
+    position_range: [f32; 4],
+    intensity: [f32; 4],
+    direction: [f32; 4],
+    // x: inner cosine, y: outer cosine, z: falloff exponent, w: spot flag
+    spot: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct PointLightParams {
+struct LocalLightParams {
     count_seed: [f32; 4],
-    lights: [PointLightGpu; MAX_POINT_LIGHTS],
+    lights: [LocalLightGpu; MAX_LOCAL_LIGHTS],
 }
 
 #[repr(C)]
@@ -172,7 +202,7 @@ struct ShadowDrawParams {
 #[derive(blade_macros::ShaderData)]
 struct RasterMainData {
     frame_params: RasterFrameParams,
-    light_params: PointLightParams,
+    light_params: LocalLightParams,
     draw_params: RasterDrawParams,
     samp: gpu::Sampler,
     base_color_tex: gpu::TextureView,
@@ -225,7 +255,7 @@ impl RasterPipelines {
         variant: Variant,
     ) -> gpu::RenderPipeline {
         shader.check_struct_size::<RasterFrameParams>();
-        shader.check_struct_size::<PointLightParams>();
+        shader.check_struct_size::<LocalLightParams>();
         shader.check_struct_size::<RasterDrawParams>();
         shader.check_struct_size::<SkinningParams>();
         let main_layout = <RasterMainData as gpu::ShaderData>::layout();
@@ -813,6 +843,7 @@ impl Rasterizer {
     }
 
     #[profiling::function]
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         pass: &mut gpu::RenderCommandEncoder,
@@ -820,11 +851,12 @@ impl Rasterizer {
         objects: &[Object],
         asset_hub: &AssetHub,
         environment_map: Option<blade_asset::Handle<crate::Texture>>,
+        local_lights: &[LocalLight],
         config: &RasterConfig,
     ) {
         let env_map_enabled = environment_map.is_some();
         let frame_params = self.make_frame_params(camera, config, env_map_enabled);
-        let light_params = pack_point_lights(config, camera);
+        let light_params = pack_local_lights(local_lights, camera);
         {
             for object in objects {
                 let model = &asset_hub.models[object.model];
@@ -1133,28 +1165,51 @@ fn stochastic_light_seed(camera_pos: glam::Vec3) -> f32 {
     camera_pos.dot(glam::Vec3::new(1.0, 1.37, 9.17))
 }
 
-fn pack_point_lights(config: &RasterConfig, camera: &crate::Camera) -> PointLightParams {
-    let mut lights = [PointLightGpu {
-        pos_radius: [0.0; 4],
-        color: [0.0; 4],
-    }; MAX_POINT_LIGHTS];
-    let count = config.point_lights.len().min(MAX_POINT_LIGHTS);
-    for (slot, src) in lights
-        .iter_mut()
-        .zip(config.point_lights.iter())
-        .take(count)
-    {
-        *slot = PointLightGpu {
-            pos_radius: [
+fn pack_local_lights(lights_in: &[LocalLight], camera: &crate::Camera) -> LocalLightParams {
+    let mut lights = [LocalLightGpu {
+        position_range: [0.0; 4],
+        intensity: [0.0; 4],
+        direction: [0.0; 4],
+        spot: [0.0; 4],
+    }; MAX_LOCAL_LIGHTS];
+    let count = lights_in.len().min(MAX_LOCAL_LIGHTS);
+    for (slot, src) in lights.iter_mut().zip(lights_in.iter()).take(count) {
+        let (direction, spot) = match src.angular {
+            LightAngularProfile::Omnidirectional => ([0.0; 4], [0.0; 4]),
+            LightAngularProfile::Spot {
+                direction,
+                inner_angle,
+                outer_angle,
+                falloff,
+            } => {
+                let direction = glam::Vec3::from(direction).normalize_or(glam::Vec3::NEG_Z);
+                let inner_angle = inner_angle.clamp(0.0, std::f32::consts::PI);
+                let outer_angle = outer_angle.clamp(inner_angle, std::f32::consts::PI);
+                (
+                    [direction.x, direction.y, direction.z, 0.0],
+                    [inner_angle.cos(), outer_angle.cos(), falloff.max(0.01), 1.0],
+                )
+            }
+        };
+        let intensity = src.intensity.max(0.0);
+        *slot = LocalLightGpu {
+            position_range: [
                 src.position.x,
                 src.position.y,
                 src.position.z,
-                src.radius.max(0.01),
+                src.range.max(0.01),
             ],
-            color: [src.color.x, src.color.y, src.color.z, 0.0],
+            intensity: [
+                src.color.x.max(0.0) * intensity,
+                src.color.y.max(0.0) * intensity,
+                src.color.z.max(0.0) * intensity,
+                0.0,
+            ],
+            direction,
+            spot,
         };
     }
-    PointLightParams {
+    LocalLightParams {
         count_seed: [
             count as f32,
             stochastic_light_seed(glam::Vec3::from(camera.pos)),

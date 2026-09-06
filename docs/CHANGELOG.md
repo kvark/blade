@@ -27,7 +27,8 @@ Changelog for *Blade* project
   memory.
 - asset: add an in-memory VFS for generated and WebAssembly assets, tolerate an
   unavailable on-disk cache, and add non-blocking `AssetManager::get` access.
-- render/engine: add raster point lights and directional shadow maps.
+- render/engine: add handle-based local point and spot lights with configurable
+  angular energy falloff, plus directional shadow maps.
 - engine: make `JointHandle` opaque so the public API no longer exposes
   Rapier's version-specific handle types.
   - breaking: applications can no longer construct or destructure joint handles.

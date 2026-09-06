@@ -88,8 +88,8 @@ fn parse_wgsl() {
     );
     expansions.insert("DEBUG_MODE".to_string(), Expansion::Bool(true));
     expansions.insert(
-        "MAX_POINT_LIGHTS".to_string(),
-        Expansion::Size(blade_render::MAX_POINT_LIGHTS as u32),
+        "MAX_LOCAL_LIGHTS".to_string(),
+        Expansion::Size(blade_render::MAX_LOCAL_LIGHTS as u32),
     );
     expansions.insert(
         "MAX_JOINTS_PER_DRAW".to_string(),
@@ -124,8 +124,8 @@ fn raster_exports_to_webgl2() {
     let cooker = blade_asset::Cooker::new(&shader_dir, Default::default());
     let mut expansions = HashMap::new();
     expansions.insert(
-        "MAX_POINT_LIGHTS".to_string(),
-        blade_render::shader::Expansion::Size(blade_render::MAX_POINT_LIGHTS as u32),
+        "MAX_LOCAL_LIGHTS".to_string(),
+        blade_render::shader::Expansion::Size(blade_render::MAX_LOCAL_LIGHTS as u32),
     );
     expansions.insert(
         "MAX_JOINTS_PER_DRAW".to_string(),

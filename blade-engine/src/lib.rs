@@ -210,6 +210,10 @@ const MAX_DEPTH: f32 = 1e9;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
 pub struct ObjectHandle(usize);
 
+/// Opaque handle used to inspect, update, or remove a registered local light.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub struct LightHandle(usize);
+
 fn make_quaternion(degrees: mint::Vector3<f32>) -> nalgebra::geometry::UnitQuaternion<f32> {
     nalgebra::geometry::UnitQuaternion::from_euler_angles(
         degrees.x.to_radians(),
@@ -513,6 +517,8 @@ pub struct Engine {
     gpu_context: Arc<gpu::Context>,
     environment_map: Option<blade_asset::Handle<blade_render::Texture>>,
     objects: slab::Slab<Object>,
+    local_lights: slab::Slab<blade_render::LocalLight>,
+    render_local_lights: Vec<blade_render::LocalLight>,
     selected_object_handle: Option<ObjectHandle>,
     selected_collider: Option<rapier3d::geometry::ColliderHandle>,
     render_objects: Vec<blade_render::Object>,
@@ -853,6 +859,8 @@ impl Engine {
             gpu_context,
             environment_map: None,
             objects: slab::Slab::new(),
+            local_lights: slab::Slab::new(),
+            render_local_lights: Vec::new(),
             selected_object_handle: None,
             selected_collider: None,
             render_objects: Vec::new(),
@@ -1006,19 +1014,49 @@ impl Engine {
         }
     }
 
-    /// Replace the local lights used by the raster forward pass.
+    fn rebuild_render_local_lights(&mut self) {
+        self.render_local_lights.clear();
+        self.render_local_lights.extend(
+            self.local_lights
+                .iter()
+                .take(blade_render::MAX_LOCAL_LIGHTS)
+                .map(|(_, light)| *light),
+        );
+    }
+
+    /// Register a local point or spot light and return its handle.
     ///
-    /// The fragment shader samples one of up to `MAX_POINT_LIGHTS` of these
-    /// with probability proportional to a local score.
-    pub fn set_point_lights(&mut self, lights: &[blade_render::PointLight]) {
-        if let Renderer::Rasterizer {
-            ref mut raster_config,
-            ..
-        } = self.renderer
-        {
-            raster_config.point_lights.clear();
-            raster_config.point_lights.extend_from_slice(lights);
+    /// Local lights currently affect the raster renderer only. The renderer
+    /// considers at most [`blade_render::MAX_LOCAL_LIGHTS`] registered lights.
+    pub fn add_light(&mut self, light: blade_render::LocalLight) -> LightHandle {
+        let handle = LightHandle(self.local_lights.insert(light));
+        self.rebuild_render_local_lights();
+        handle
+    }
+
+    /// Get a registered local light.
+    pub fn light(&self, handle: LightHandle) -> Option<&blade_render::LocalLight> {
+        self.local_lights.get(handle.0)
+    }
+
+    /// Replace a registered local light, returning whether the handle was valid.
+    pub fn set_light(&mut self, handle: LightHandle, light: blade_render::LocalLight) -> bool {
+        let Some(slot) = self.local_lights.get_mut(handle.0) else {
+            return false;
+        };
+        *slot = light;
+        self.rebuild_render_local_lights();
+        true
+    }
+
+    /// Remove a registered local light, returning whether the handle was valid.
+    pub fn remove_light(&mut self, handle: LightHandle) -> bool {
+        if !self.local_lights.contains(handle.0) {
+            return false;
         }
+        self.local_lights.remove(handle.0);
+        self.rebuild_render_local_lights();
+        true
     }
 
     #[profiling::function]
@@ -1281,6 +1319,7 @@ impl Engine {
                             &self.render_objects,
                             &self.asset_hub,
                             self.environment_map,
+                            &self.render_local_lights,
                             raster_config,
                         );
                         if let Some(ref pipeline) = self.particle_pipeline {
@@ -1545,6 +1584,7 @@ impl Engine {
                                 &self.render_objects,
                                 &self.asset_hub,
                                 self.environment_map,
+                                &self.render_local_lights,
                                 raster_config,
                             );
                         }

@@ -35,7 +35,7 @@ impl AssetHub {
 
         let mut sh_baker = crate::shader::Baker::new(gpu_context);
         sh_baker.register_bool("DEBUG_MODE", cfg!(debug_assertions));
-        sh_baker.register_size("MAX_POINT_LIGHTS", crate::raster::MAX_POINT_LIGHTS as u32);
+        sh_baker.register_size("MAX_LOCAL_LIGHTS", crate::raster::MAX_LOCAL_LIGHTS as u32);
         sh_baker.register_size("MAX_JOINTS_PER_DRAW", crate::MAX_JOINTS_PER_DRAW as u32);
         sh_baker.register_enum::<crate::render::DebugMode>();
         sh_baker.register_bitflags::<crate::render::DebugDrawFlags>();
