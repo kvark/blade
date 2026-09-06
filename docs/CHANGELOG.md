@@ -1,165 +1,47 @@
 Changelog for *Blade* project
 
-## blade-graphics-0.9, blade-util-0.5, blade-egui-0.9, blade-particle-0.2, blade-asset-0.2.2, blade-render-0.6, blade-helpers-0.3, blade-engine-0.2 (TBD)
+## (TBD)
 
-- raise the published workspace crates' MSRV to Rust 1.92.
-- dependencies: replace the development Naga revision with the published Naga
-  30 release, and update `base64`, `glam`, `glow`, `openxr`, `ron`, and `strum`
-  to their current major versions.
-  - breaking: XR applications must update from `openxr` 0.19 to 0.21 because
-    `XrDesc` and the XR session accessors expose `openxr` types.
-- gfx: add `Memory::DeviceTransient` for short-lived device-local buffers. The
-  Vulkan allocator can use a faster allocation strategy with less bookkeeping;
-  other backends currently treat it like `Memory::Device`.
-  - breaking: exhaustive matches on `Memory` need to handle the new variant.
-- gfx: expose compute-pipeline compiler statistics on Vulkan and Metal through
-  `ShaderDevice::get_pipeline_statistics`. Collection is enabled by
-  `ContextDesc::capture` because Vulkan may disable pipeline caching or increase
-  pipeline creation time while capturing statistics.
-- gfx: add `CommandEncoderDesc::manual_barriers` and `CommandEncoder::barrier`,
-  allowing applications to omit automatic inter-pass barriers and place global
-  barriers explicitly.
-  - breaking: `CommandEncoderDesc` gained `manual_barriers`.
-- gfx/vk: grow exhausted descriptor pools geometrically and account for binding
-  arrays when sizing them; enable the device-scope Vulkan memory model required
-  by cooperative matrices and correctly request device-addressable external
-  memory.
-- asset: add an in-memory VFS for generated and WebAssembly assets, tolerate an
-  unavailable on-disk cache, and add non-blocking `AssetManager::get` access.
-- render/engine: add handle-based local point and spot lights with configurable
-  angular energy falloff, plus directional shadow maps.
-- engine: make `JointHandle` opaque so the public API no longer exposes
-  Rapier's version-specific handle types.
-  - breaking: applications can no longer construct or destructure joint handles.
-- render: support explicit subpixel projection jitter and optionally disable
-  primary-ray jitter; expose accumulated canonical diffuse/specular radiance.
+## blade-graphics-0.9, blade-util-0.5, blade-egui-0.9, blade-particle-0.2, blade-asset-0.2.2, blade-render-0.6, blade-helpers-0.3, blade-engine-0.2 (5 Sep 2026)
 
-- gles: upload BC compressed textures with `compressedTexSubImage`.
-  `texSubImage2D` with `type = GL_NONE` is invalid and left Kenney
-  colormaps (the start flag, car kit) black on WebGL/GLES.
-- gles/web: present with a `texelFetch` copy. The canvas drawing buffer is
-  RGBA8; `blitFramebuffer` from an `SRGB8_ALPHA8` offscreen decodes.
-  `texelFetch` copies stored sRGB bytes with no filter and no gamma math.
-- render: treat wasm32 as the GLES raster profile. WebGL2 cannot link a
-  vertex-only program, so directional-shadow pipelines always attach the
-  empty `raster_shadow_fs` stage. Compute skinning stays native-only
-  (`noop.wgsl` on wasm32/GLES) without requiring `RUSTFLAGS=--cfg gles`.
-- gles/web: pick the offscreen surface format from `ColorSpace` the same
-  way native GLES does (`Linear` → `Rgba8UnormSrgb`). Shaders still write
-  linear; the GPU encodes into the texture that present blits to the
-  canvas.
-- gles/egui: keep WebGL2 buffer bind classes honest. The upload belt records
-  a `BufferTarget` and packs 4-byte-aligned subranges, then `sync_buffer`s
-  each alloc so copies and draws see GPU data immediately. The GUI painter
-  uses separate data and index belts; mixing those in one WebGL buffer made
-  `texSubImage` see 0 bytes and `drawElements` bind an element-array target
-  to a generic buffer.
-  - breaking: `sync_buffer` takes a `BufferPiece` range and size, plus the
-    `BufferTarget` bind class.
-- gles: skip 0×0 `texStorage` / renderbuffer allocations (WebGL rejects
-  them) and reset `UNPACK_ROW_LENGTH` after buffer-to-texture copies.
-- render/engine: skeletal animation from glTF skins and TRS clips with step,
-  linear, and cubic-spline interpolation. `Engine::set_animation` drives
-  `AnimationPlayer` playback, which evaluates `AnimationModel` into a `Pose`;
-  `Object` carries the pose and `Object::flip` advances motion-vector history.
-  Skinning runs in a compute pass on native backends (feeding per-instance BLAS
-  build/refit for the ray tracer), and in the vertex stage on GLES. Covered by
-  a minimal animated GLB fixture with raster snapshots.
-  - breaking: skinning data (packed 8-bit joints and unorm8 weights) moved to
-    a separate `SkinVertex` buffer, keeping the base `Vertex` at 32 bytes.
-    Render `Object` gained `pose`/`prev_pose` and `flip`. Raster skinning
-    parameters are bound to a second slot for skinned pipelines only.
-    `AccelerationStructureDesc` gained `updatable`, and the encoder gained
-    `update_bottom_level` for refitting animated BLASes.
-  - skinning assumes uniform scale: assets with non-uniform rest or animated
-    scale log a warning at load, and their normals may be slightly skewed.
-- engine/render: support the raster rendering path on WebGL2. Raster vertex
-  data now uses ordinary vertex attributes, model and texture uploads observe
-  WebGL's buffer binding classes, and the renderer validates its shaders by
-  exporting them as WebGL2 GLSL ES 3.00.
-- gfx/engine/render: expose compute and indirect-draw support as runtime device
-  capabilities and use them for optional engine features. WebGL-only context
-  affinity and upload mechanics remain private target-specific implementation
-  details.
-  - breaking: `Capabilities` gained `compute` and `indirect_draw` fields.
-- render/gles: keep WebGL contexts thread-affine. The engine runs GPU asset
-  tasks inline on the context's owning thread.
-- gles: `sync_buffer` takes a `BufferTarget` argument naming the buffer's
-  binding class (`Data` or `Index`). WebGL2 permanently assigns a buffer to
-  the element-array class or the general data class on its first bind, so the
-  backend now defers all binding to the first sync, where the caller-provided
-  target makes the choice. This makes index buffers work on WebGL2.
-  - breaking: existing callers pass `BufferTarget::Data`.
-- gfx/vk: derive each global pass barrier's pipeline stages and access masks
-  from a lightweight encoder-wide summary of the pass kinds recorded since the
-  previous barrier. This adds no per-resource state and does not change the
-  public API or automatic barrier placement. Repeated explicit barriers are
-  skipped when no intervening pass has produced writes.
-- docs: add the cross-vendor study of Blade's global pass barriers and an
-  engine-facing synchronization guide.
-- gfx: `Memory::Download` asks the allocator for a host-cached mapping, for
-  buffers the CPU reads after a transfer. `Shared` can land on write-combined
-  or even device-local host-visible memory, where a scan of the range runs
-  three orders of magnitude slower and copying it out first does not help.
-- render: `RayTracer::view_gbuffer` hands out the geometry and material buffer
-  of the frame that was last prepared, as `GBufferViews`. A post process that
-  knows what the renderer knows can take silhouettes from the depth and the
-  normals, separate texture detail from lighting through the albedo, and read
-  the width of a specular highlight from the roughness, none of which is
-  recoverable from the color alone. The views belong to the renderer and stay
-  valid until the next `resize_screen`.
-- render: `RayTracer::view_radiance` hands an external denoiser the current
-  demodulated diffuse and specular lighting views. `post_proc_external` accepts
-  the denoiser's composed linear-radiance result and runs it through Blade's
-  normal tone mapping and surface encoding, completing the round trip without
-  a readback or a second graphics context.
-- render: `PostProcConfig::tone_map` can be cleared to leave the composed
-  radiance alone, so a frame can be captured as high dynamic range data rather
-  than only as a picture. The exposure controls are unused when it is off, and
-  the display transfer function is skipped along with the curve, since it is
-  only defined over the display range. Rendering into a floating point target
-  is what makes this observable — a fixed point one still clamps.
-  - breaking: `PostProcConfig` gained a field, so it can no longer be built
-    without `..Default::default()`
-- render: physically based materials, authored as glTF metallic-roughness, shaded in the specular workflow
-  - `Material` carries metallic-roughness and emissive, both as factors and textures, cooked from glTF (including `KHR_materials_emissive_strength`)
-  - internally, a material is a diffuse albedo, a specular reflectance at normal incidence, and a roughness; the conversion happens in `material_from_metallic_roughness` when the textures are sampled, and is the only place aware of the metalness
-  - shared BRDF in `brdf.inc.wgsl`: GGX distribution, height-correlated Smith visibility, Schlick Fresnel, used by the ray tracer as well as the rasterizer
-  - shared lobe sampling in `sampling.inc.wgsl` and environment sampling in `env-light.inc.wgsl`
-  - ray tracing: material G-buffer, separate diffuse and specular lighting, light samples drawn from the BRDF as well as the environment with MIS between them
-  - `ProceduralGeometry` gained the PBR factors, and now builds an acceleration structure, so it can be ray traced
-  - breaking: `RasterConfig` no longer overrides the roughness and metalness of all the materials
-  - breaking: the cooked model format has changed, the asset caches need to be cleared
-  - new debug views for roughness, specular reflectance, and emissive
-- render: `RenderMode` selects what the ray tracer does with the scene
-  - `RenderMode::Canonical` traces full paths with BSDF sampling and next event estimation on the environment, combined by MIS, accumulating the result over the frames with no reuse and no denoising, so it converges to the ground truth
-  - accumulation is reset by `FrameConfig::reset_accumulation` or by moving the camera, and can be capped by `RayConfig::max_accumulated_samples`
-  - breaking: `RayTracer::ray_trace` and `denoise` are replaced by `RayTracer::render`, which takes the mode
-  - breaking: `RayConfig` describes the sampling of both of the modes: `num_environment_samples` and `num_brdf_samples` are the light and material samples taken at a shading point, combined by multi-sample MIS, while `max_bounces` limits the path length
-  - the light found at the last vertex of a path is no longer partly thrown
-    away: next event estimation there was weighted against a BSDF sample that
-    the path never goes on to take, so the balance heuristic held back a share
-    of the contribution and nothing ever supplied it. The weight is the whole
-    of it whenever the path ends. Longer paths hide the loss in the throughput
-    they have left, so the material grid at three bounces moves by SSIM 0.9998,
-    while `max_bounces` of zero — direct lighting and nothing else — was
-    missing enough that a white furnace sphere rendered visibly darker than
-    the environment it has to disappear into, and now matches it exactly.
-- both of the render paths now produce the color space that the surface was
-  configured with, taken as `RenderConfig::color_space`, instead of the
-  rasterizer always encoding gamma and the ray tracer never doing so
-- vk: an XR swapchain honors the requested color space through its format,
-  since it has no way to declare one: `Linear` picks an sRGB format for the
-  runtime to convert, `Srgb` picks a plain one that is passed through. The
-  recommended configuration asks for `Srgb`, which is what the plain format
-  the runtimes prefer actually needs.
-- vk: `xr_recommended_surface_config` and `create_xr_surface_configured` are
-  public, so that an application knows the configuration of its XR surface
-- fix `fill-gbuf.wgsl` missing the `wgpu_binding_array` enable directive
-- tests: validate the renderer shaders, snapshot the PBR material grid in both of the render paths
-- vk: support `VK_EXT_external_memory_host` — enable the extension, query memory-type compatibility via `vkGetMemoryHostPointerPropertiesEXT`, and round allocation size to `minImportedHostPointerAlignment` so `Memory::External(HostAllocation)` imports succeed on drivers that expose the extension
-- gles: assign texture units to sampler uniforms where GLSL ES 3.00 can't carry explicit bindings, so multi-texture pipelines don't collide on unit 0 in WebGL2
-- gles: apply `RenderPipelineDesc::depth_stencil`, which the backend previously ignored, leaving draw order to decide visibility
+- MSRV raised to 1.92
+- update to naga-30 and openxr-0.21
+- graphics:
+  - `Memory::DeviceTransient` for short-lived device-local buffers
+  - `Memory::Download` uses host-cached mapping
+  - pipeline statistics on Vulkan and Metal via `get_pipeline_statistics`
+  - `CommandEncoderDesc::manual_barriers` and `CommandEncoder::barrier`
+  - `Capabilities` now includes `compute` and `indirect_draw`
+  - vk: grow descriptor pools, size them for binding arrays
+  - vk: device-scope memory model and device-addressable external memory
+  - vk: `VK_EXT_external_memory_host`
+  - vk: derive global pass barriers from recorded pass kinds
+  - vk: XR swapchain color space, public recommended surface config
+  - gles: compressed BC texture uploads
+  - gles: WebGL present via `texelFetch`, honor `ColorSpace`
+  - gles: `sync_buffer` takes `BufferTarget` for WebGL2 index buffers
+  - gles: assign sampler texture units, honor depth-stencil state
+  - gles: skip 0×0 allocations, keep WebGL contexts thread-affine
+- asset:
+  - in-memory VFS, tolerate missing on-disk cache, non-blocking `get`
+- render:
+  - physically based materials from glTF metallic-roughness
+    - cooked model format changed, clear asset caches
+  - `RenderMode` including a canonical path tracer
+    - `RayTracer::render` replaces `ray_trace` and `denoise`
+  - G-buffer and radiance views for external post-process
+  - optional tone mapping for HDR capture
+  - subpixel projection jitter
+  - local point/spot lights and directional shadow maps
+  - skeletal animation from glTF skins
+  - color space taken from `RenderConfig`
+  - raster path on WebGL2
+- engine:
+  - animation playback via `Engine::set_animation`
+  - opaque `JointHandle`
+  - raster rendering on WebGL2
+- egui:
+  - WebGL2-compatible buffer uploads
 
 ## blade-egui-0.8.1, blade-util-0.4.1 (25 Apr 2026)
 
