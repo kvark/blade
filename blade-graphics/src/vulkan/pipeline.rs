@@ -70,10 +70,14 @@ impl super::Context {
         group_infos: &mut [crate::ShaderDataInfo],
         vertex_fetch_states: &[crate::VertexFetchState],
     ) -> CompiledShader<'_> {
+        #[cfg(feature = "profile-compilation")]
+        let _span = tracing::info_span!("blade_load_shader", entry = sf.entry_point).entered();
         let ep_index = sf.entry_point_index();
         let ep = &sf.shader.module.entry_points[ep_index];
         let ep_info = sf.shader.info.get_entry_point(ep_index);
 
+        #[cfg(feature = "profile-compilation")]
+        let specialize_span = tracing::info_span!("naga_specialize").entered();
         let (mut module, module_info) = sf.shader.resolve_constants(sf.constants);
         crate::Shader::fill_resource_bindings(
             &mut module,
@@ -84,6 +88,8 @@ impl super::Context {
         );
         let attribute_mappings =
             crate::Shader::fill_vertex_locations(&mut module, ep_index, vertex_fetch_states);
+        #[cfg(feature = "profile-compilation")]
+        drop(specialize_span);
 
         let pipeline_options = spv::PipelineOptions {
             shader_stage: ep.stage,
@@ -115,8 +121,11 @@ impl super::Context {
             naga_options_base
         };
 
-        let spv =
-            spv::write_vec(&module, &module_info, naga_options, Some(&pipeline_options)).unwrap();
+        let spv = {
+            #[cfg(feature = "profile-compilation")]
+            let _span = tracing::info_span!("naga_spirv").entered();
+            spv::write_vec(&module, &module_info, naga_options, Some(&pipeline_options)).unwrap()
+        };
 
         if let Some(dump_prefix) = DUMP_PREFIX {
             let mut file_name = String::new();
@@ -135,6 +144,8 @@ impl super::Context {
         let vk_info = vk::ShaderModuleCreateInfo::default().code(&spv);
 
         let vk_module = unsafe {
+            #[cfg(feature = "profile-compilation")]
+            let _span = tracing::info_span!("vk_create_shader_module").entered();
             self.device
                 .core
                 .create_shader_module(&vk_info, None)
@@ -387,6 +398,8 @@ impl crate::traits::ShaderDevice for super::Context {
     type RenderPipeline = super::RenderPipeline;
 
     fn create_compute_pipeline(&self, desc: crate::ComputePipelineDesc) -> super::ComputePipeline {
+        #[cfg(feature = "profile-compilation")]
+        let _span = tracing::info_span!("blade_compute_pipeline", pipeline = desc.name).entered();
         let mut group_infos = desc
             .data_layouts
             .iter()
@@ -413,6 +426,8 @@ impl crate::traits::ShaderDevice for super::Context {
         }
 
         let mut raw_vec = unsafe {
+            #[cfg(feature = "profile-compilation")]
+            let _span = tracing::info_span!("vk_create_compute_pipelines").entered();
             self.device
                 .core
                 .create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None)

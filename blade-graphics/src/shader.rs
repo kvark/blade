@@ -18,6 +18,8 @@ impl super::Context {
         module: &naga::Module,
         source: &str,
     ) -> Result<naga::valid::ModuleInfo, &'static str> {
+        #[cfg(feature = "profile-compilation")]
+        let _span = tracing::info_span!("naga_validate", source_bytes = source.len()).entered();
         let device_caps = self.capabilities();
 
         // Bindings are set up at pipeline creation, ignore here
@@ -68,10 +70,15 @@ impl super::Context {
     ) -> Result<super::Shader, &'static str> {
         let module = match desc.naga_module {
             Some(module) => module,
-            None => naga::front::wgsl::parse_str(desc.source).map_err(|e| {
-                eprintln!("{}", e.emit_to_string_with_path(desc.source, ""));
-                "compilation failed"
-            })?,
+            None => {
+                #[cfg(feature = "profile-compilation")]
+                let _span =
+                    tracing::info_span!("naga_parse", source_bytes = desc.source.len()).entered();
+                naga::front::wgsl::parse_str(desc.source).map_err(|e| {
+                    eprintln!("{}", e.emit_to_string_with_path(desc.source, ""));
+                    "compilation failed"
+                })?
+            }
         };
         let info = self.validate_module(&module, desc.source)?;
         Ok(super::Shader {
