@@ -59,6 +59,14 @@ impl super::Context {
     ) -> Allocation {
         let mut manager = self.memory.lock().unwrap();
         let alloc_usage = memory_usage_flags(memory, needs_device_address);
+        #[cfg(feature = "profile-compilation")]
+        let alloc_usage = if matches!(memory, crate::Memory::Shared)
+            && std::env::var("BLADE_SHARED_TRANSIENT").as_deref() == Ok("1")
+        {
+            alloc_usage | gpu_alloc::UsageFlags::TRANSIENT
+        } else {
+            alloc_usage
+        };
         let memory_types = requirements.memory_type_bits & manager.valid_ash_memory_types;
         let mut block = match memory {
             crate::Memory::External(e) => {
@@ -226,6 +234,14 @@ impl super::Context {
             },
         };
 
+        #[cfg(feature = "profile-compilation")]
+        let _binding = tracing::info_span!("blade_allocation_binding",
+            name, requested_memory = ?memory, requested_usage = ?alloc_usage,
+            requested_bytes = requirements.size,
+            block_bytes = block.size(), memory_type = block.memory_type(),
+            properties = ?block.props(), memory = ?block.memory(), offset = block.offset()
+        )
+        .entered();
         let data = match memory {
             crate::Memory::External(crate::ExternalMemorySource::HostAllocation(ptr)) => {
                 ptr as *mut u8
