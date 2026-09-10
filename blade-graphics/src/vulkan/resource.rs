@@ -68,6 +68,12 @@ impl super::Context {
             alloc_usage
         };
         let memory_types = requirements.memory_type_bits & manager.valid_ash_memory_types;
+        #[cfg(feature = "profile-compilation")]
+        let _allocation = tracing::info_span!("blade_allocation_request", name,
+            requested_memory = ?memory, requested_bytes = requirements.size,
+            compatible_memory_types = memory_types
+        )
+        .entered();
         let mut block = match memory {
             crate::Memory::External(e) => {
                 let memory_properties = unsafe {

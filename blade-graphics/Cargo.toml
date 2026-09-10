@@ -11,7 +11,7 @@ repository = "https://github.com/kvark/blade"
 [lib]
 
 [features]
-profile-compilation = ["dep:tracing"]
+profile-compilation = ["dep:tracing", "gpu-alloc-ash/tracing"]
 
 [dependencies]
 bitflags = { workspace = true }
