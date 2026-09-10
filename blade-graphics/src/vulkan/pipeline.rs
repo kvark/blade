@@ -13,6 +13,79 @@ struct CompiledShader<'a> {
 }
 
 impl super::Context {
+    #[cfg(feature = "profile-compilation")]
+    fn dump_pipeline_ir(&self, pipeline: vk::Pipeline, name: &str, directory: &std::path::Path) {
+        use std::io::Write;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
+        let ext = self.device.pipeline_executable_properties.as_ref().unwrap();
+        let info = vk::PipelineInfoKHR::default().pipeline(pipeline);
+        let executables = unsafe { ext.get_pipeline_executable_properties(&info) }.unwrap();
+        let path = directory.join(format!(
+            "{:05}.txt",
+            NEXT_FILE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut output = std::fs::File::create_new(path).expect("new pipeline IR file");
+        writeln!(output, "Pipeline: {name}").unwrap();
+        for (index, executable) in executables.iter().enumerate() {
+            writeln!(
+                output,
+                "Executable: {:?}",
+                executable.name_as_c_str().unwrap()
+            )
+            .unwrap();
+            let info = vk::PipelineExecutableInfoKHR::default()
+                .pipeline(pipeline)
+                .executable_index(index as u32);
+            let mut representations =
+                unsafe { ext.get_pipeline_executable_internal_representations(&info) }.unwrap();
+            let total = representations.iter().map(|ir| ir.data_size).sum::<usize>();
+            assert!(
+                total <= 64 * 1024 * 1024,
+                "pipeline IR exceeds diagnostic memory cap"
+            );
+            let mut data = representations
+                .iter()
+                .map(|ir| vec![0u8; ir.data_size])
+                .collect::<Vec<_>>();
+            for (ir, bytes) in representations.iter_mut().zip(&mut data) {
+                ir.p_data = bytes.as_mut_ptr().cast();
+            }
+            if !representations.is_empty() {
+                let mut count = representations.len() as u32;
+                unsafe {
+                    (ext.fp()
+                        .get_pipeline_executable_internal_representations_khr)(
+                        ext.device(),
+                        &info,
+                        &mut count,
+                        representations.as_mut_ptr(),
+                    )
+                }
+                .result()
+                .expect("complete pipeline IR query");
+                assert_eq!(count as usize, representations.len());
+            }
+            for (ir, bytes) in representations.iter().zip(&data) {
+                assert!(ir.data_size <= bytes.len());
+                writeln!(
+                    output,
+                    "Representation: {:?}\nDescription: {:?}\nBytes: {}\nText: {}",
+                    ir.name_as_c_str().unwrap(),
+                    ir.description_as_c_str().unwrap(),
+                    ir.data_size,
+                    ir.is_text != 0
+                )
+                .unwrap();
+                if ir.is_text != 0 {
+                    output.write_all(&bytes[..ir.data_size]).unwrap();
+                    writeln!(output).unwrap();
+                }
+            }
+        }
+    }
+
     fn make_spv_options(&self, data_layouts: &[&crate::ShaderDataLayout]) -> spv::Options<'_> {
         // collect all the array bindings into overrides
         let mut binding_map = spv::BindingMap::default();
@@ -424,6 +497,17 @@ impl crate::traits::ShaderDevice for super::Context {
         if self.device.pipeline_executable_properties.is_some() {
             create_info.flags |= vk::PipelineCreateFlags::CAPTURE_STATISTICS_KHR;
         }
+        #[cfg(feature = "profile-compilation")]
+        let ir_directory = std::env::var_os("BLADE_DUMP_PIPELINE_IR").map(std::path::PathBuf::from);
+        #[cfg(feature = "profile-compilation")]
+        if let Some(ref directory) = ir_directory {
+            assert!(
+                self.device.pipeline_executable_properties.is_some(),
+                "IR capture needs capture mode and VK_KHR_pipeline_executable_properties"
+            );
+            assert!(directory.is_dir(), "IR output directory must already exist");
+            create_info.flags |= vk::PipelineCreateFlags::CAPTURE_INTERNAL_REPRESENTATIONS_KHR;
+        }
 
         let mut raw_vec = unsafe {
             #[cfg(feature = "profile-compilation")]
@@ -436,6 +520,10 @@ impl crate::traits::ShaderDevice for super::Context {
                 })
         };
         let raw = raw_vec.pop().unwrap();
+        #[cfg(feature = "profile-compilation")]
+        if let Some(ref directory) = ir_directory {
+            self.dump_pipeline_ir(raw, desc.name, directory);
+        }
 
         unsafe { self.device.core.destroy_shader_module(cs.vk_module, None) };
 
