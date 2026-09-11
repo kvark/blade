@@ -2424,20 +2424,25 @@ impl Engine {
     /// Animation data for the object's models is loaded on demand, so calling
     /// this for the first time may delay rendering until the load completes.
     /// Models without a source file (e.g. procedural ones) can't be animated.
+    /// Load animation clips for an object's visuals once their models have cooked.
+    /// Safe to call every frame; no-ops when already bound or still cooking.
+    pub fn ensure_animation_models(&mut self, handle: ObjectHandle) {
+        for visual in self.objects[handle.0].visuals.iter_mut() {
+            if visual.animation_model.is_some() {
+                continue;
+            }
+            let Some(path) = self.asset_hub.models.get_full_source_path(visual.model) else {
+                continue;
+            };
+            let (animation_model, task) = self.animation_models.load(&path, animation::Meta);
+            visual.animation_model = Some(animation_model);
+            self.load_tasks.push(task.clone());
+        }
+    }
+
     pub fn set_animation(&mut self, handle: ObjectHandle, animation: Option<AnimationPlayer>) {
         if animation.is_some() {
-            for visual in self.objects[handle.0].visuals.iter_mut() {
-                if visual.animation_model.is_some() {
-                    continue;
-                }
-                let Some(path) = self.asset_hub.models.get_main_source_path(visual.model) else {
-                    log::warn!("Unable to animate a model without a source path");
-                    continue;
-                };
-                let (animation_model, task) = self.animation_models.load(path, animation::Meta);
-                visual.animation_model = Some(animation_model);
-                self.load_tasks.push(task.clone());
-            }
+            self.ensure_animation_models(handle);
         }
         self.objects[handle.0].animation = animation;
     }

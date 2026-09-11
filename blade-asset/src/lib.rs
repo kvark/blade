@@ -363,6 +363,16 @@ impl<B: Baker> AssetManager<B> {
         self.slots[handle.inner].sources.first()
     }
 
+    /// Absolute (or hub-relative) path to the primary source file for `handle`.
+    ///
+    /// Cooking stores dependency paths relative to the slot `base_path`. Animation
+    /// loading needs the joined path; bare filenames resolve against CWD and miss.
+    pub fn get_full_source_path(&self, handle: Handle<B::Output>) -> Option<PathBuf> {
+        let slot = &self.slots[handle.inner];
+        let rel = slot.sources.first()?;
+        Some(slot.base_path.join(rel))
+    }
+
     fn make_target_path(&self, base_path: &Path, file_name: &Path, meta: &B::Meta) -> PathBuf {
         use base64::engine::{Engine as _, general_purpose::URL_SAFE as ENCODING_ENGINE};
         // The name hash includes the parent path and the metadata.
