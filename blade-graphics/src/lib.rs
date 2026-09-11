@@ -143,6 +143,18 @@ impl fmt::Debug for XrDesc {
     }
 }
 
+/// System-wide scheduling priority requested for the graphics queue.
+///
+/// `Low` currently maps to `VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR` on Vulkan when
+/// the selected queue family advertises it. Other backends and Vulkan drivers
+/// without `VK_KHR_global_priority` retain their normal priority.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QueuePriority {
+    #[default]
+    Normal,
+    Low,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ContextDesc {
     /// Ability to present contents to a window.
@@ -164,6 +176,8 @@ pub struct ContextDesc {
     pub capture: bool,
     /// Enable GAPI overlay.
     pub overlay: bool,
+    /// Request a system-wide queue scheduling priority where supported.
+    pub queue_priority: QueuePriority,
     /// Force selection of a specific Device ID.
     pub device_id: Option<u32>,
 }

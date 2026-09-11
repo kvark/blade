@@ -261,6 +261,9 @@ impl<'a> Drop for ContextLock<'a> {
 
 impl super::Context {
     pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
+        if desc.queue_priority != crate::QueuePriority::Normal {
+            log::warn!("System-wide queue priority is not supported by the GLES backend");
+        }
         unsafe {
             let egl = {
                 let egl_result = if cfg!(windows) {

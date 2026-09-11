@@ -462,6 +462,9 @@ impl Context {
         if desc.device_id.is_some() {
             log::warn!("Unable to filter devices by ID");
         }
+        if desc.queue_priority != crate::QueuePriority::Normal {
+            log::warn!("System-wide queue priority is not supported by the Metal backend");
+        }
 
         let device = metal::MTLCreateSystemDefaultDevice()
             .ok_or(super::NotSupportedError::NoSupportedDeviceFound)?;
