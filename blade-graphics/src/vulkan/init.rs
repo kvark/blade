@@ -324,7 +324,8 @@ fn inspect_adapter(
     let mut storage_16bit_features = vk::PhysicalDevice16BitStorageFeatures::default();
     let mut unified_image_layouts_features =
         unified_image_layouts::PhysicalDeviceFeatures::default();
-    let global_priority_extension = supported_extensions.contains(&vk::KHR_GLOBAL_PRIORITY_NAME);
+    let global_priority_extension =
+        desc.low_priority && supported_extensions.contains(&vk::KHR_GLOBAL_PRIORITY_NAME);
     let mut global_priority_query_features =
         vk::PhysicalDeviceGlobalPriorityQueryFeaturesKHR::default();
     let mut features2_khr = vk::PhysicalDeviceFeatures2::default()
@@ -973,9 +974,8 @@ impl super::Context {
         let mut global_priority = vk::DeviceQueueGlobalPriorityCreateInfoKHR::default()
             .global_priority(vk::QueueGlobalPriorityKHR::LOW);
         let device_core = {
-            let use_low_priority = desc.queue_priority == crate::QueuePriority::Low
-                && capabilities.global_low_priority;
-            if desc.queue_priority == crate::QueuePriority::Low && !use_low_priority {
+            let use_low_priority = desc.low_priority && capabilities.global_low_priority;
+            if desc.low_priority && !use_low_priority {
                 log::warn!(
                     "Low global queue priority requested but not supported; using normal priority"
                 );
