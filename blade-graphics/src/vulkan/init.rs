@@ -113,6 +113,7 @@ struct AdapterCapabilities {
     dual_source_blending: bool,
     shader_float16: bool,
     cooperative_matrix: crate::CooperativeMatrix,
+    global_low_priority: bool,
     unified_image_layouts: bool,
     memory_budget: bool,
     bugs: SystemBugs,
@@ -323,6 +324,9 @@ fn inspect_adapter(
     let mut storage_16bit_features = vk::PhysicalDevice16BitStorageFeatures::default();
     let mut unified_image_layouts_features =
         unified_image_layouts::PhysicalDeviceFeatures::default();
+    let global_priority_extension = supported_extensions.contains(&vk::KHR_GLOBAL_PRIORITY_NAME);
+    let mut global_priority_query_features =
+        vk::PhysicalDeviceGlobalPriorityQueryFeaturesKHR::default();
     let mut features2_khr = vk::PhysicalDeviceFeatures2::default()
         .push_next(&mut inline_uniform_block_features)
         .push_next(&mut timeline_semaphore_features)
@@ -336,6 +340,9 @@ fn inspect_adapter(
         .push_next(&mut float16_int8_features)
         .push_next(&mut storage_16bit_features)
         .push_next(&mut unified_image_layouts_features);
+    if global_priority_extension {
+        features2_khr = features2_khr.push_next(&mut global_priority_query_features);
+    }
     unsafe {
         instance
             .get_physical_device_properties2
@@ -344,6 +351,35 @@ fn inspect_adapter(
 
     let dual_source_blending = features2_khr.features.dual_src_blend != 0;
     let shader_float16 = float16_int8_features.shader_float16 != 0;
+    let global_low_priority = if global_priority_extension
+        && global_priority_query_features.global_priority_query == vk::TRUE
+    {
+        let count = unsafe {
+            instance
+                .core
+                .get_physical_device_queue_family_properties2_len(phd)
+        };
+        let mut global_properties =
+            vec![vk::QueueFamilyGlobalPriorityPropertiesKHR::default(); count];
+        let mut queue_properties: Vec<_> = global_properties
+            .iter_mut()
+            .map(|global| vk::QueueFamilyProperties2::default().push_next(global))
+            .collect();
+        unsafe {
+            instance
+                .core
+                .get_physical_device_queue_family_properties2(phd, &mut queue_properties);
+        }
+        global_properties
+            .get(queue_family_index as usize)
+            .is_some_and(|properties| {
+                properties
+                    .priorities_as_slice()
+                    .contains(&vk::QueueGlobalPriorityKHR::LOW)
+            })
+    } else {
+        false
+    };
 
     let has_inline_ub = supported_extensions.contains(&vk::EXT_INLINE_UNIFORM_BLOCK_NAME)
         && inline_uniform_block_properties.max_descriptor_set_inline_uniform_blocks > 0
@@ -588,6 +624,7 @@ fn inspect_adapter(
         dual_source_blending,
         shader_float16,
         cooperative_matrix,
+        global_low_priority,
         unified_image_layouts: supported_extensions.contains(&unified_image_layouts::NAME)
             && unified_image_layouts_features.unified_image_layouts == vk::TRUE,
         memory_budget,
@@ -932,10 +969,24 @@ impl super::Context {
             min_buffer_alignment = min_buffer_alignment.max(rt.min_scratch_buffer_alignment);
         }
 
+        let queue_priorities = [1.0];
+        let mut global_priority = vk::DeviceQueueGlobalPriorityCreateInfoKHR::default()
+            .global_priority(vk::QueueGlobalPriorityKHR::LOW);
         let device_core = {
-            let family_info = vk::DeviceQueueCreateInfo::default()
+            let use_low_priority = desc.queue_priority == crate::QueuePriority::Low
+                && capabilities.global_low_priority;
+            if desc.queue_priority == crate::QueuePriority::Low && !use_low_priority {
+                log::warn!(
+                    "Low global queue priority requested but not supported; using normal priority"
+                );
+            }
+            let mut family_info = vk::DeviceQueueCreateInfo::default()
                 .queue_family_index(capabilities.queue_family_index)
-                .queue_priorities(&[1.0]);
+                .queue_priorities(&queue_priorities);
+            if use_low_priority {
+                log::info!("Requesting VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR");
+                family_info = family_info.push_next(&mut global_priority);
+            }
             let family_infos = [family_info];
 
             let mut device_extensions = REQUIRED_DEVICE_EXTENSIONS.to_vec();
@@ -1004,6 +1055,9 @@ impl super::Context {
                 // TODO: Replace with ash constant once available.
                 device_extensions.push(unified_image_layouts::NAME);
             }
+            if use_low_priority {
+                device_extensions.push(vk::KHR_GLOBAL_PRIORITY_NAME);
+            }
 
             let str_pointers = device_extensions
                 .iter()
@@ -1029,6 +1083,15 @@ impl super::Context {
                 .push_next(&mut khr_dynamic_rendering);
             if capabilities.max_inline_uniform_block_size > 0 {
                 device_create_info = device_create_info.push_next(&mut ext_inline_uniform_block);
+            }
+
+            let mut khr_global_priority_query;
+            if use_low_priority {
+                khr_global_priority_query = vk::PhysicalDeviceGlobalPriorityQueryFeaturesKHR {
+                    global_priority_query: vk::TRUE,
+                    ..Default::default()
+                };
+                device_create_info = device_create_info.push_next(&mut khr_global_priority_query);
             }
 
             let mut ext_descriptor_indexing;
