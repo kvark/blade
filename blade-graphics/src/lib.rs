@@ -1466,4 +1466,34 @@ pub struct Viewport {
     pub depth: std::ops::Range<f32>,
 }
 
-pub type Timings = Vec<(String, std::time::Duration)>;
+/// GPU timestamps mapped onto the process monotonic clock.
+///
+/// `passes[i]` is when pass `i` started. `done` is when the GPU finished the
+/// last timestamped work of that submission. Backends sample the CPU–GPU clock
+/// offset at submit; durations are the gaps between consecutive stamps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Timings {
+    pub passes: Vec<(String, std::time::Instant)>,
+    pub done: std::time::Instant,
+}
+
+impl Timings {
+    pub(crate) fn pending() -> Self {
+        Self {
+            passes: Vec::new(),
+            done: std::time::Instant::now(),
+        }
+    }
+
+    /// Duration of each pass: this pass's start to the next start, or to
+    /// [`Self::done`] for the last pass.
+    pub fn pass_durations(&self) -> impl Iterator<Item = (&str, std::time::Duration)> + '_ {
+        self.passes
+            .iter()
+            .enumerate()
+            .filter_map(move |(i, (name, start))| {
+                let end = self.passes.get(i + 1).map(|(_, t)| *t).unwrap_or(self.done);
+                Some((name.as_str(), end.checked_duration_since(*start)?))
+            })
+    }
+}

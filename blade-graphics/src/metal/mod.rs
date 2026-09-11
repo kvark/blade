@@ -218,6 +218,8 @@ unsafe impl Sync for SyncPoint {}
 struct TimingData {
     pass_names: Vec<String>,
     sample_buffer: Retained<ProtocolObject<dyn metal::MTLCounterSampleBuffer>>,
+    /// CPU Instant and GPU timestamp sampled at submit.
+    calibration: Option<(time::Instant, u64)>,
 }
 
 type RawCommandBuffer = Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>;
@@ -706,6 +708,7 @@ impl crate::traits::CommandDevice for Context {
                 array.push(TimingData {
                     sample_buffer,
                     pass_names: Vec::new(),
+                    calibration: None,
                 });
             }
             Some(array.into_boxed_slice())
@@ -721,7 +724,7 @@ impl crate::traits::CommandDevice for Context {
             enable_dispatch_type: self.info.enable_dispatch_type,
             has_open_debug_group: false,
             timing_datas,
-            timings: Default::default(),
+            timings: crate::Timings::pending(),
         }
     }
 
@@ -729,6 +732,19 @@ impl crate::traits::CommandDevice for Context {
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         use metal::MTLCommandBuffer as _;
+        if let Some(ref mut td_array) = encoder.timing_datas {
+            let td = td_array.first_mut().unwrap();
+            let device = self.device.lock().unwrap();
+            let mut cpu_ts = 0u64;
+            let mut gpu_ts = 0u64;
+            unsafe {
+                device.sampleTimestamps_gpuTimestamp(
+                    ptr::NonNull::from(&mut cpu_ts),
+                    ptr::NonNull::from(&mut gpu_ts),
+                );
+            }
+            td.calibration = Some((time::Instant::now(), gpu_ts));
+        }
         let cmd_buf = encoder.finish();
         cmd_buf.commit();
         SyncPoint { cmd_buf }

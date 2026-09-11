@@ -110,6 +110,8 @@ struct AdapterCapabilities {
     /// multiple of this value (0 when the extension is unsupported).
     min_imported_host_pointer_alignment: u64,
     timing: bool,
+    timestamp_valid_bits: u32,
+    calibrated_timestamps: Option<super::CalibratedTimestampsExtension>,
     dual_source_blending: bool,
     shader_float16: bool,
     cooperative_matrix: crate::CooperativeMatrix,
@@ -298,6 +300,14 @@ fn inspect_adapter(
     };
 
     let queue_family_index = 0; //TODO
+    let queue_family_properties = unsafe {
+        instance
+            .core
+            .get_physical_device_queue_family_properties(phd)
+    };
+    let queue_family = queue_family_properties
+        .get(queue_family_index as usize)
+        .ok_or_else(|| "physical device exposes no queue family 0".to_string())?;
     if desc.presentation
         && is_presentation_broken(properties.vendor_id, gpu_vendors, display_server)
     {
@@ -443,9 +453,20 @@ fn inspect_adapter(
     let timing = if properties.limits.timestamp_compute_and_graphics == vk::FALSE {
         log::info!("No timing because of queue support");
         false
+    } else if queue_family.timestamp_valid_bits == 0 {
+        log::info!("No timing because the selected queue has no timestamp bits");
+        false
     } else {
         true
     };
+    let calibrated_timestamps =
+        if supported_extensions.contains(&vk::KHR_CALIBRATED_TIMESTAMPS_NAME) {
+            Some(super::CalibratedTimestampsExtension::Khr)
+        } else if supported_extensions.contains(&vk::EXT_CALIBRATED_TIMESTAMPS_NAME) {
+            Some(super::CalibratedTimestampsExtension::Ext)
+        } else {
+            None
+        };
 
     let buffer_device_address = buffer_device_address_features.buffer_device_address == vk::TRUE
         && (properties.api_version >= vk::API_VERSION_1_2
@@ -622,6 +643,8 @@ fn inspect_adapter(
         external_memory_host,
         min_imported_host_pointer_alignment,
         timing,
+        timestamp_valid_bits: queue_family.timestamp_valid_bits,
+        calibrated_timestamps,
         dual_source_blending,
         shader_float16,
         cooperative_matrix,
@@ -1058,6 +1081,17 @@ impl super::Context {
             if use_low_priority {
                 device_extensions.push(vk::KHR_GLOBAL_PRIORITY_NAME);
             }
+            if desc.timing {
+                match capabilities.calibrated_timestamps {
+                    Some(super::CalibratedTimestampsExtension::Khr) => {
+                        device_extensions.push(vk::KHR_CALIBRATED_TIMESTAMPS_NAME);
+                    }
+                    Some(super::CalibratedTimestampsExtension::Ext) => {
+                        device_extensions.push(vk::EXT_CALIBRATED_TIMESTAMPS_NAME);
+                    }
+                    None => {}
+                }
+            }
 
             let str_pointers = device_extensions
                 .iter()
@@ -1308,6 +1342,8 @@ impl super::Context {
             timing: if desc.timing && capabilities.timing {
                 Some(super::TimingDevice {
                     period: capabilities.properties.limits.timestamp_period,
+                    valid_bits: capabilities.timestamp_valid_bits,
+                    calibrated_timestamps: capabilities.calibrated_timestamps,
                 })
             } else {
                 None

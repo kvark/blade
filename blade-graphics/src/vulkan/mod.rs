@@ -1,9 +1,9 @@
 use ash::{
-    khr,
+    ext, khr,
     vk::{self},
 };
 use openxr as xr;
-use std::{mem, num::NonZeroU32, path::PathBuf, ptr, sync::Mutex};
+use std::{mem, num::NonZeroU32, path::PathBuf, ptr, sync::Mutex, time::Instant};
 
 mod command;
 mod descriptor;
@@ -39,9 +39,100 @@ struct RayTracingDevice {
 
 #[derive(Clone, Default)]
 struct CommandScopeDevice {}
-#[derive(Clone, Default)]
+#[derive(Clone, Copy, Debug)]
+enum CalibratedTimestampsExtension {
+    Khr,
+    Ext,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TimestampCalibration {
+    cpu: Instant,
+    gpu_ticks: u64,
+}
+
+#[derive(Clone)]
 struct TimingDevice {
     period: f32,
+    valid_bits: u32,
+    calibrated_timestamps: Option<CalibratedTimestampsExtension>,
+}
+
+impl TimingDevice {
+    fn map_timestamp(&self, calibration: TimestampCalibration, timestamp: u64) -> Option<Instant> {
+        let bits = self.valid_bits;
+        if bits == 0 || bits > 64 {
+            return None;
+        }
+
+        // Vulkan only guarantees `timestampValidBits` low bits. Interpret the
+        // modular difference from the calibration point as a signed value, so
+        // a query immediately before calibration maps backwards correctly and
+        // timer wrap does not disturb short captures.
+        let mask = if bits == 64 {
+            u64::MAX
+        } else {
+            (1u64 << bits) - 1
+        };
+        let raw_delta = timestamp.wrapping_sub(calibration.gpu_ticks) & mask;
+        let sign_bit = 1u64 << (bits - 1);
+        let delta_ticks = if raw_delta & sign_bit == 0 {
+            i128::from(raw_delta)
+        } else {
+            i128::from(raw_delta) - (1i128 << bits)
+        };
+        let delta_ns = (delta_ticks.unsigned_abs() as f64 * f64::from(self.period)).round();
+        if !delta_ns.is_finite() || delta_ns > u64::MAX as f64 {
+            return None;
+        }
+        let delta = std::time::Duration::from_nanos(delta_ns as u64);
+        if delta_ticks < 0 {
+            calibration.cpu.checked_sub(delta)
+        } else {
+            calibration.cpu.checked_add(delta)
+        }
+    }
+}
+
+fn calibrate_timestamps(
+    extension: CalibratedTimestampsExtension,
+    instance: &ash::Instance,
+    device: &ash::Device,
+) -> Option<TimestampCalibration> {
+    let info = [vk::CalibratedTimestampInfoKHR::default().time_domain(vk::TimeDomainKHR::DEVICE)];
+    let before = Instant::now();
+    let result = unsafe {
+        match extension {
+            CalibratedTimestampsExtension::Khr => {
+                khr::calibrated_timestamps::Device::new(instance, device)
+                    .get_calibrated_timestamps(&info)
+            }
+            CalibratedTimestampsExtension::Ext => {
+                ext::calibrated_timestamps::Device::new(instance, device)
+                    .get_calibrated_timestamps(&info)
+            }
+        }
+    };
+    let after = Instant::now();
+    match result {
+        Ok((timestamps, max_deviation)) => {
+            let gpu_ticks = *timestamps.first()?;
+            let call_duration = after.duration_since(before);
+            log::debug!(
+                "Calibrated GPU timestamps (API max deviation={}ns, call={}ns)",
+                max_deviation,
+                call_duration.as_nanos(),
+            );
+            Some(TimestampCalibration {
+                cpu: before + call_duration.div_f64(2.0),
+                gpu_ticks,
+            })
+        }
+        Err(error) => {
+            log::warn!("Unable to calibrate GPU timestamps: {error}");
+            None
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -433,6 +524,7 @@ struct CommandBuffer {
     descriptor_pool: descriptor::DescriptorPool,
     query_pool: vk::QueryPool,
     timed_pass_names: Vec<String>,
+    timing_calibration: Option<TimestampCalibration>,
     scratch: Option<ScratchBuffer>,
 }
 
@@ -604,6 +696,7 @@ impl crate::traits::CommandDevice for Context {
                     descriptor_pool,
                     query_pool,
                     timed_pass_names: Vec::new(),
+                    timing_calibration: None,
                     scratch,
                 }
             })
@@ -632,7 +725,7 @@ impl crate::traits::CommandDevice for Context {
             present: None,
             crash_handler,
             temp_label: Vec::new(),
-            timings: Default::default(),
+            timings: crate::Timings::pending(),
             manual_barriers: desc.manual_barriers,
             producer_kinds: PassKinds::default(),
         }
@@ -677,6 +770,12 @@ impl crate::traits::CommandDevice for Context {
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         let raw_cmd_buf = encoder.finish();
+        if let Some(ref timing) = encoder.device.timing {
+            let cmd_buf = encoder.buffers.first_mut().unwrap();
+            cmd_buf.timing_calibration = timing.calibrated_timestamps.and_then(|extension| {
+                calibrate_timestamps(extension, &self.inner.instance.core, &self.device.core)
+            });
+        }
         let mut queue = self.queue.lock().unwrap();
         queue.last_progress += 1;
         let progress = queue.last_progress;

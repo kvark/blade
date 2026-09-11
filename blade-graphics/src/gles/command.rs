@@ -1,4 +1,16 @@
-use std::{str, time::Duration};
+use std::{
+    str,
+    time::{Duration, Instant},
+};
+
+fn map_gpu_ns(cal_cpu: Instant, cal_gpu_ns: u64, ts_ns: u64) -> Option<Instant> {
+    let delta = ts_ns as i128 - cal_gpu_ns as i128;
+    if delta >= 0 {
+        cal_cpu.checked_add(Duration::from_nanos(delta as u64))
+    } else {
+        cal_cpu.checked_sub(Duration::from_nanos((-delta) as u64))
+    }
+}
 
 const COLOR_ATTACHMENTS: &[u32] = &[
     glow::COLOR_ATTACHMENT0,
@@ -127,6 +139,8 @@ impl super::CommandEncoder {
         if let Some(ref mut timing_datas) = self.timing_datas {
             {
                 let td = timing_datas.first_mut().unwrap();
+                let gpu_ns = unsafe { gl.get_parameter_i64(glow::TIMESTAMP) } as u64;
+                td.calibration = Some((Instant::now(), gpu_ns));
                 let id = td.pass_names.len();
                 self.commands.push(super::Command::QueryCounter {
                     query: td.queries[id],
@@ -134,29 +148,32 @@ impl super::CommandEncoder {
             }
 
             timing_datas.rotate_left(1);
-            self.timings.clear();
+            self.timings.passes.clear();
             let td = timing_datas.first_mut().unwrap();
             if !td.pass_names.is_empty() {
-                let mut prev = 0;
-                unsafe {
-                    gl.get_query_parameter_u64_with_offset(
-                        td.queries[0],
-                        glow::QUERY_RESULT,
-                        &mut prev as *mut _ as usize,
-                    );
-                }
-                for (pass_name, &query) in td.pass_names.drain(..).zip(td.queries[1..].iter()) {
-                    let mut result: u64 = 0;
+                let n = td.pass_names.len();
+                let mut stamps = vec![0u64; n + 1];
+                for (i, stamp) in stamps.iter_mut().enumerate() {
                     unsafe {
                         gl.get_query_parameter_u64_with_offset(
-                            query,
+                            td.queries[i],
                             glow::QUERY_RESULT,
-                            &mut result as *mut _ as usize,
+                            stamp as *mut _ as usize,
                         );
                     }
-                    let time = Duration::from_nanos(result - prev);
-                    self.timings.push((pass_name, time));
-                    prev = result
+                }
+                let last = stamps[n];
+                let (cal_cpu, cal_gpu) = td
+                    .calibration
+                    .take()
+                    .unwrap_or_else(|| (std::time::Instant::now(), last));
+                for (name, &ts) in td.pass_names.drain(..).zip(stamps[..n].iter()) {
+                    if let Some(start) = map_gpu_ns(cal_cpu, cal_gpu, ts) {
+                        self.timings.passes.push((name, start));
+                    }
+                }
+                if let Some(done) = map_gpu_ns(cal_cpu, cal_gpu, last) {
+                    self.timings.done = done;
                 }
             }
         }

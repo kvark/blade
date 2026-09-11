@@ -1,5 +1,5 @@
 use ash::vk;
-use std::{ptr, str, time::Duration};
+use std::{ptr, str, time::Instant};
 
 impl super::CrashHandler {
     fn add_marker(&mut self, marker: &str) -> u32 {
@@ -24,6 +24,54 @@ impl super::CrashHandler {
         let history = str::from_utf8(&self.raw_string[..start]).unwrap_or_default();
         let marker = str::from_utf8(&self.raw_string[start..end]).unwrap();
         (history, marker)
+    }
+}
+
+fn resolve_timing_buffer(
+    device: &super::Device,
+    cmd_buf: &mut super::CommandBuffer,
+    timings: &mut crate::Timings,
+) {
+    let Some(ref timing) = device.timing else {
+        return;
+    };
+    let n = cmd_buf.timed_pass_names.len();
+    if n == 0 {
+        return;
+    }
+
+    let mut timestamps = [0u64; super::QUERY_POOL_SIZE];
+    unsafe {
+        device
+            .core
+            .get_query_pool_results(
+                cmd_buf.query_pool,
+                0,
+                &mut timestamps[..n + 1],
+                vk::QueryResultFlags::TYPE_64,
+            )
+            .unwrap();
+    }
+
+    let calibration =
+        cmd_buf
+            .timing_calibration
+            .take()
+            .unwrap_or_else(|| super::TimestampCalibration {
+                cpu: Instant::now(),
+                gpu_ticks: timestamps[n],
+            });
+    for (name, &ts) in cmd_buf
+        .timed_pass_names
+        .drain(..)
+        .zip(timestamps[..n].iter())
+    {
+        if let Some(start) = timing.map_timestamp(calibration, ts) {
+            timings.passes.push((name, start));
+        }
+    }
+    if let Some(done) = timing.map_timestamp(calibration, timestamps[n]) {
+        timings.done = done;
     }
 }
 
@@ -683,32 +731,9 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
                 .unwrap();
         }
 
-        if let Some(ref timing) = self.device.timing {
-            self.timings.clear();
-            if !cmd_buf.timed_pass_names.is_empty() {
-                let mut timestamps = [0u64; super::QUERY_POOL_SIZE];
-                unsafe {
-                    self.device
-                        .core
-                        .get_query_pool_results(
-                            cmd_buf.query_pool,
-                            0,
-                            &mut timestamps[..cmd_buf.timed_pass_names.len() + 1],
-                            vk::QueryResultFlags::TYPE_64,
-                        )
-                        .unwrap();
-                }
-                let mut prev = timestamps[0];
-                for (name, &ts) in cmd_buf
-                    .timed_pass_names
-                    .drain(..)
-                    .zip(timestamps[1..].iter())
-                {
-                    let diff = (ts - prev) as f32 * timing.period;
-                    prev = ts;
-                    self.timings.push((name, Duration::from_nanos(diff as _)));
-                }
-            }
+        if self.device.timing.is_some() {
+            self.timings.passes.clear();
+            resolve_timing_buffer(&self.device, cmd_buf, &mut self.timings);
             unsafe {
                 self.device.core.cmd_reset_query_pool(
                     cmd_buf.raw,
@@ -1370,8 +1395,32 @@ impl crate::traits::RenderPipelineEncoder for super::PipelineEncoder<'_, '_> {
 #[cfg(test)]
 mod tests {
     use ash::vk;
+    use std::time::{Duration, Instant};
 
-    use super::super::{CommandEncoder, PassKind, PassKinds};
+    use super::super::{CommandEncoder, PassKind, PassKinds, TimestampCalibration, TimingDevice};
+
+    #[test]
+    fn calibrated_timestamp_mapping_handles_wrap() {
+        let cpu = Instant::now();
+        let timing = TimingDevice {
+            period: 2.0,
+            valid_bits: 8,
+            calibrated_timestamps: None,
+        };
+        let calibration = TimestampCalibration {
+            cpu,
+            gpu_ticks: 250,
+        };
+
+        assert_eq!(
+            timing.map_timestamp(calibration, 5),
+            Some(cpu + Duration::from_nanos(22))
+        );
+        assert_eq!(
+            timing.map_timestamp(calibration, 245),
+            Some(cpu - Duration::from_nanos(10))
+        );
+    }
 
     #[test]
     fn producer_scope_unions_known_pass_kinds() {

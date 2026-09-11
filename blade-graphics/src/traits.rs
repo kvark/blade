@@ -66,6 +66,8 @@ pub trait CommandEncoder {
     fn start(&mut self);
     fn init_texture(&mut self, texture: Self::Texture);
     fn present(&mut self, frame: Self::Frame);
+    /// Pass start times and GPU-done time on the CPU clock, from the last
+    /// resolved submission.
     fn timings(&self) -> &super::Timings;
 }
 

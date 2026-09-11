@@ -4,7 +4,22 @@ use objc2_metal::{
     MTLCommandBuffer as _, MTLCommandEncoder, MTLComputeCommandEncoder as _,
     MTLCounterSampleBuffer, MTLRenderCommandEncoder,
 };
-use std::{marker::PhantomData, mem, ptr::NonNull, slice, time::Duration};
+use std::{
+    marker::PhantomData,
+    mem,
+    ptr::NonNull,
+    slice,
+    time::{Duration, Instant},
+};
+
+fn map_gpu_ns(cal_cpu: Instant, cal_gpu_ns: u64, ts_ns: u64) -> Option<Instant> {
+    let delta = ts_ns as i128 - cal_gpu_ns as i128;
+    if delta >= 0 {
+        cal_cpu.checked_add(Duration::from_nanos(delta as u64))
+    } else {
+        cal_cpu.checked_sub(Duration::from_nanos((-delta) as u64))
+    }
+}
 
 /// Key for the ObjC associated object that stores BLAS references on a TLAS.
 static ASSOCIATED_BLAS_KEY: u8 = 0;
@@ -409,7 +424,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
 
     fn start(&mut self) {
         if let Some(ref mut td_array) = self.timing_datas {
-            self.timings.clear();
+            self.timings.passes.clear();
             td_array.rotate_left(1);
             let td = td_array.first_mut().unwrap();
             if !td.pass_names.is_empty() {
@@ -424,9 +439,18 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
                         ns_data.len() / mem::size_of::<u64>(),
                     )
                 };
+                let last = *counters.last().unwrap_or(&0);
+                let (cal_cpu, cal_gpu) = td
+                    .calibration
+                    .take()
+                    .unwrap_or_else(|| (std::time::Instant::now(), last));
                 for (name, chunk) in td.pass_names.drain(..).zip(counters.chunks(2)) {
-                    let duration = Duration::from_nanos(chunk[1] - chunk[0]);
-                    self.timings.push((name, duration));
+                    if let Some(start) = map_gpu_ns(cal_cpu, cal_gpu, chunk[0]) {
+                        self.timings.passes.push((name, start));
+                    }
+                    if let Some(done) = map_gpu_ns(cal_cpu, cal_gpu, chunk[1]) {
+                        self.timings.done = done;
+                    }
                 }
             }
         }

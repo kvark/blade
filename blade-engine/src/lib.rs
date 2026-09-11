@@ -1845,8 +1845,7 @@ impl Engine {
             });
 
         egui::CollapsingHeader::new("Performance").show(ui, |ui| {
-            for entry in self.pacer.timings().iter() {
-                let &(ref name, time) = entry;
+            for (name, time) in self.pacer.timings().pass_durations() {
                 let millis = time.as_secs_f32() * 1000.0;
                 ui.horizontal(|ui| {
                     ui.label(name);
