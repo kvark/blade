@@ -1,4 +1,7 @@
-use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2::{
+    rc::Retained,
+    runtime::{NSObjectProtocol, ProtocolObject},
+};
 use objc2_metal::{self as metal, MTLDevice};
 use std::{
     marker::PhantomData,
@@ -449,6 +452,52 @@ fn map_vertex_format(
     }
 }
 
+/// Metal has no public GPU-queue priority. Request utility QoS and background
+/// processing via driver SPI when those selectors exist.
+fn new_command_queue(
+    device: &ProtocolObject<dyn metal::MTLDevice>,
+    low_priority: bool,
+) -> Retained<ProtocolObject<dyn metal::MTLCommandQueue>> {
+    if !low_priority {
+        return device
+            .newCommandQueue()
+            .expect("failed to create Metal command queue");
+    }
+
+    // QOS_CLASS_UTILITY sits below interactive/default work, analogous to
+    // Vulkan's VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR.
+    const QOS_CLASS_UTILITY: u64 = 0x11;
+
+    let mut applied = false;
+    let queue = if device.respondsToSelector(objc2::sel!(newCommandQueueWithDescriptor:)) {
+        let descriptor = metal::MTLCommandQueueDescriptor::new();
+        let qos = descriptor.respondsToSelector(objc2::sel!(setQosClass:));
+        if qos {
+            let _: () = unsafe { objc2::msg_send![&*descriptor, setQosClass: QOS_CLASS_UTILITY] };
+        }
+        let queue = unsafe { device.newCommandQueueWithDescriptor(&descriptor) };
+        applied |= qos && queue.is_some();
+        queue
+    } else {
+        None
+    };
+    let queue = queue
+        .or_else(|| device.newCommandQueue())
+        .expect("failed to create Metal command queue");
+
+    if queue.respondsToSelector(objc2::sel!(setBackgroundProcessingEnabled:)) {
+        let enabled: bool =
+            unsafe { objc2::msg_send![&*queue, setBackgroundProcessingEnabled: true] };
+        applied |= enabled;
+    }
+    if applied {
+        log::info!("Requesting low-priority Metal command queue");
+    } else {
+        log::warn!("Low queue priority is not supported by this Metal driver");
+    }
+    queue
+}
+
 impl Context {
     pub unsafe fn init(desc: super::ContextDesc) -> Result<Self, super::NotSupportedError> {
         if desc.validation {
@@ -462,13 +511,10 @@ impl Context {
         if desc.device_id.is_some() {
             log::warn!("Unable to filter devices by ID");
         }
-        if desc.low_priority {
-            log::warn!("Low queue priority is not supported by the Metal backend");
-        }
 
         let device = metal::MTLCreateSystemDefaultDevice()
             .ok_or(super::NotSupportedError::NoSupportedDeviceFound)?;
-        let queue = device.newCommandQueue().unwrap();
+        let queue = new_command_queue(&device, desc.low_priority);
 
         let auto_capture_everything = false;
         let capture = if desc.capture && auto_capture_everything {

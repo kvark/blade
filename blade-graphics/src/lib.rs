@@ -167,8 +167,9 @@ pub struct ContextDesc {
     /// Request a low system-wide queue priority where supported.
     ///
     /// Currently maps to `VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR` on Vulkan when the
-    /// selected queue family advertises it. Other backends and Vulkan drivers
-    /// without `VK_KHR_global_priority` retain their normal priority.
+    /// selected queue family advertises it, and to a utility-QoS Metal command
+    /// queue when the driver exposes that. Other backends and drivers without
+    /// support retain their normal priority.
     pub low_priority: bool,
     /// Force selection of a specific Device ID.
     pub device_id: Option<u32>,
