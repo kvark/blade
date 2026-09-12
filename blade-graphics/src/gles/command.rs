@@ -303,8 +303,14 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.present_frames.push(frame.platform);
     }
 
+    fn resolve_timings(&mut self) {}
+
     fn timings(&self) -> &crate::Timings {
         &self.timings
+    }
+
+    fn timing_spans(&self) -> &[crate::GpuTimingSpan] {
+        &[]
     }
 }
 

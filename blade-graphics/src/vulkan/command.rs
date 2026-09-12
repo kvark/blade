@@ -31,13 +31,14 @@ fn resolve_timing_buffer(
     device: &super::Device,
     cmd_buf: &mut super::CommandBuffer,
     timings: &mut crate::Timings,
-) {
+    timing_spans: &mut Vec<crate::GpuTimingSpan>,
+) -> Option<Instant> {
     let Some(ref timing) = device.timing else {
-        return;
+        return None;
     };
     let n = cmd_buf.timed_pass_names.len();
     if n == 0 {
-        return;
+        return None;
     }
 
     let mut timestamps = [0u64; super::QUERY_POOL_SIZE];
@@ -53,26 +54,27 @@ fn resolve_timing_buffer(
             .unwrap();
     }
 
-    let calibration =
-        cmd_buf
-            .timing_calibration
-            .take()
-            .unwrap_or_else(|| super::TimestampCalibration {
-                cpu: Instant::now(),
-                gpu_ticks: timestamps[n],
-            });
-    for (name, &ts) in cmd_buf
+    let calibrated = cmd_buf.timing_calibration.take();
+    let calibration = calibrated.unwrap_or_else(|| super::TimestampCalibration {
+        cpu: Instant::now(),
+        gpu_ticks: timestamps[n],
+    });
+    for (name, pair) in cmd_buf
         .timed_pass_names
         .drain(..)
-        .zip(timestamps[..n].iter())
+        .zip(timestamps.windows(2))
     {
-        if let Some(start) = timing.map_timestamp(calibration, ts) {
-            timings.passes.push((name, start));
+        if let (Some(start), Some(end)) = (
+            timing.map_timestamp(calibration, pair[0]),
+            timing.map_timestamp(calibration, pair[1]),
+        ) {
+            timings.passes.push((name.clone(), start));
+            if calibrated.is_some() {
+                timing_spans.push(crate::GpuTimingSpan { name, start, end });
+            }
         }
     }
-    if let Some(done) = timing.map_timestamp(calibration, timestamps[n]) {
-        timings.done = done;
-    }
+    timing.map_timestamp(calibration, timestamps[n])
 }
 
 impl super::PipelineContext<'_> {
@@ -733,7 +735,15 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
 
         if self.device.timing.is_some() {
             self.timings.passes.clear();
-            resolve_timing_buffer(&self.device, cmd_buf, &mut self.timings);
+            self.timing_spans.clear();
+            if let Some(done) = resolve_timing_buffer(
+                &self.device,
+                cmd_buf,
+                &mut self.timings,
+                &mut self.timing_spans,
+            ) {
+                self.timings.done = done;
+            }
             unsafe {
                 self.device.core.cmd_reset_query_pool(
                     cmd_buf.raw,
@@ -825,8 +835,33 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         });
     }
 
+    fn resolve_timings(&mut self) {
+        self.timings.passes.clear();
+        self.timing_spans.clear();
+        let mut done = None;
+        for cmd_buf in self.buffers.iter_mut() {
+            if let Some(candidate) = resolve_timing_buffer(
+                &self.device,
+                cmd_buf,
+                &mut self.timings,
+                &mut self.timing_spans,
+            ) {
+                done = Some(done.map_or(candidate, |previous: Instant| previous.max(candidate)));
+            }
+        }
+        self.timings.passes.sort_unstable_by_key(|entry| entry.1);
+        self.timing_spans.sort_unstable_by_key(|span| span.start);
+        if let Some(done) = done {
+            self.timings.done = done;
+        }
+    }
+
     fn timings(&self) -> &crate::Timings {
         &self.timings
+    }
+
+    fn timing_spans(&self) -> &[crate::GpuTimingSpan] {
+        &self.timing_spans
     }
 }
 

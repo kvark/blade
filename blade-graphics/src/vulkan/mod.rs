@@ -588,6 +588,7 @@ pub struct CommandEncoder {
     crash_handler: Option<CrashHandler>,
     temp_label: Vec<u8>,
     timings: crate::Timings,
+    timing_spans: Vec<crate::GpuTimingSpan>,
     manual_barriers: bool,
     producer_kinds: PassKinds,
 }
@@ -726,6 +727,7 @@ impl crate::traits::CommandDevice for Context {
             crash_handler,
             temp_label: Vec::new(),
             timings: crate::Timings::pending(),
+            timing_spans: Vec::new(),
             manual_barriers: desc.manual_barriers,
             producer_kinds: PassKinds::default(),
         }

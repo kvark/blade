@@ -1466,6 +1466,24 @@ pub struct Viewport {
     pub depth: std::ops::Range<f32>,
 }
 
+/// A timestamped GPU pass mapped onto the process monotonic clock.
+///
+/// Unlike [`Timings`], these ranges preserve gaps and overlap between command
+/// buffers. Backends only report ranges when they can calibrate their GPU
+/// timestamp clock against [`std::time::Instant`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GpuTimingSpan {
+    pub name: String,
+    pub start: std::time::Instant,
+    pub end: std::time::Instant,
+}
+
+impl GpuTimingSpan {
+    pub fn duration(&self) -> std::time::Duration {
+        self.end.saturating_duration_since(self.start)
+    }
+}
+
 /// GPU timestamps mapped onto the process monotonic clock.
 ///
 /// `passes[i]` is when pass `i` started. `done` is when the GPU finished the

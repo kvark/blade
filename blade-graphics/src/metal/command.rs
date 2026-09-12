@@ -473,8 +473,14 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.raw.as_mut().unwrap().presentDrawable(&frame.drawable);
     }
 
+    fn resolve_timings(&mut self) {}
+
     fn timings(&self) -> &crate::Timings {
         &self.timings
+    }
+
+    fn timing_spans(&self) -> &[crate::GpuTimingSpan] {
+        &[]
     }
 }
 
