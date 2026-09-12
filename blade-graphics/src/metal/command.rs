@@ -4,7 +4,35 @@ use objc2_metal::{
     MTLCommandBuffer as _, MTLCommandEncoder, MTLComputeCommandEncoder as _,
     MTLCounterSampleBuffer, MTLRenderCommandEncoder,
 };
-use std::{marker::PhantomData, mem, ptr::NonNull, slice, time::Duration};
+use std::{
+    marker::PhantomData,
+    mem,
+    ptr::NonNull,
+    slice,
+    time::{Duration, Instant},
+};
+
+fn map_gpu_ns(
+    begin: super::TimestampSample,
+    end: super::TimestampSample,
+    timestamp: u64,
+) -> Instant {
+    // Metal requires two clock samples so GPU ticks can be scaled over the
+    // corresponding CPU interval rather than assumed to advance 1:1.
+    assert!(end.gpu_ns > begin.gpu_ns, "GPU clock did not advance");
+    assert!(
+        timestamp >= begin.gpu_ns,
+        "GPU timestamp predates calibration"
+    );
+    assert!(timestamp <= end.gpu_ns, "GPU timestamp follows calibration");
+    assert!(end.cpu_ns >= begin.cpu_ns, "CPU clock moved backwards");
+
+    let gpu_span = end.gpu_ns - begin.gpu_ns;
+    let gpu_offset = timestamp - begin.gpu_ns;
+    let cpu_span = end.cpu_ns - begin.cpu_ns;
+    let cpu_offset = (gpu_offset as f64 * cpu_span as f64 / gpu_span as f64).round() as u64;
+    begin.cpu_instant + Duration::from_nanos(cpu_offset)
+}
 
 /// Key for the ObjC associated object that stores BLAS references on a TLAS.
 static ASSOCIATED_BLAS_KEY: u8 = 0;
@@ -409,7 +437,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
 
     fn start(&mut self) {
         if let Some(ref mut td_array) = self.timing_datas {
-            self.timings.clear();
+            self.timings.passes.clear();
             td_array.rotate_left(1);
             let td = td_array.first_mut().unwrap();
             if !td.pass_names.is_empty() {
@@ -424,10 +452,19 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
                         ns_data.len() / mem::size_of::<u64>(),
                     )
                 };
+                let begin = td.calibration.take().unwrap();
+                let end = {
+                    use metal::MTLCommandQueue as _;
+                    let queue = self.queue.lock().unwrap();
+                    super::sample_timestamps(&queue.device())
+                };
+                let done_ns = *counters.last().unwrap();
                 for (name, chunk) in td.pass_names.drain(..).zip(counters.chunks(2)) {
-                    let duration = Duration::from_nanos(chunk[1] - chunk[0]);
-                    self.timings.push((name, duration));
+                    self.timings
+                        .passes
+                        .push((name, map_gpu_ns(begin, end, chunk[0])));
                 }
+                self.timings.done = map_gpu_ns(begin, end, done_ns);
             }
         }
 
@@ -449,7 +486,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.raw.as_mut().unwrap().presentDrawable(&frame.drawable);
     }
 
-    fn timings(&self) -> &crate::Timings {
+    fn get_timings(&mut self) -> &crate::Timings {
         &self.timings
     }
 }

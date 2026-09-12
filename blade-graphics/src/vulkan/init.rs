@@ -110,6 +110,7 @@ struct AdapterCapabilities {
     /// multiple of this value (0 when the extension is unsupported).
     min_imported_host_pointer_alignment: u64,
     timing: bool,
+    timestamp_valid_bits: u32,
     dual_source_blending: bool,
     shader_float16: bool,
     cooperative_matrix: crate::CooperativeMatrix,
@@ -298,6 +299,14 @@ fn inspect_adapter(
     };
 
     let queue_family_index = 0; //TODO
+    let queue_family_properties = unsafe {
+        instance
+            .core
+            .get_physical_device_queue_family_properties(phd)
+    };
+    let queue_family = queue_family_properties
+        .get(queue_family_index as usize)
+        .ok_or_else(|| "physical device exposes no queue family 0".to_string())?;
     if desc.presentation
         && is_presentation_broken(properties.vendor_id, gpu_vendors, display_server)
     {
@@ -442,6 +451,12 @@ fn inspect_adapter(
 
     let timing = if properties.limits.timestamp_compute_and_graphics == vk::FALSE {
         log::info!("No timing because of queue support");
+        false
+    } else if queue_family.timestamp_valid_bits == 0 {
+        log::info!("No timing because the selected queue has no timestamp bits");
+        false
+    } else if !supported_extensions.contains(&vk::EXT_CALIBRATED_TIMESTAMPS_NAME) {
+        log::info!("No timing because calibrated timestamps are not supported");
         false
     } else {
         true
@@ -622,6 +637,7 @@ fn inspect_adapter(
         external_memory_host,
         min_imported_host_pointer_alignment,
         timing,
+        timestamp_valid_bits: queue_family.timestamp_valid_bits,
         dual_source_blending,
         shader_float16,
         cooperative_matrix,
@@ -1058,6 +1074,9 @@ impl super::Context {
             if use_low_priority {
                 device_extensions.push(vk::KHR_GLOBAL_PRIORITY_NAME);
             }
+            if desc.timing && capabilities.timing {
+                device_extensions.push(vk::EXT_CALIBRATED_TIMESTAMPS_NAME);
+            }
 
             let str_pointers = device_extensions
                 .iter()
@@ -1227,6 +1246,18 @@ impl super::Context {
         };
 
         let instance = &inner.instance;
+        let timing = if desc.timing && capabilities.timing {
+            Some(super::TimingDevice {
+                period: capabilities.properties.limits.timestamp_period,
+                valid_bits: capabilities.timestamp_valid_bits,
+                calibrated_timestamps: ext::calibrated_timestamps::Device::new(
+                    &instance.core,
+                    &device_core,
+                ),
+            })
+        } else {
+            None
+        };
         let device = super::Device {
             swapchain: if desc.presentation {
                 Some(khr::swapchain::Device::new(&instance.core, &device_core))
@@ -1305,13 +1336,7 @@ impl super::Context {
             } else {
                 None
             },
-            timing: if desc.timing && capabilities.timing {
-                Some(super::TimingDevice {
-                    period: capabilities.properties.limits.timestamp_period,
-                })
-            } else {
-                None
-            },
+            timing,
             //TODO: detect GPU family
             workarounds: super::Workarounds {
                 extra_sync_src_access: vk::AccessFlags::TRANSFER_WRITE,

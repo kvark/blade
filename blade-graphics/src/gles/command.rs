@@ -1,4 +1,12 @@
-use std::{str, time::Duration};
+use std::{
+    str,
+    time::{Duration, Instant},
+};
+
+fn map_gpu_ns(cal_cpu: Instant, cal_gpu_ns: u64, ts_ns: u64) -> Instant {
+    assert!(ts_ns >= cal_gpu_ns, "GPU timestamp predates calibration");
+    cal_cpu + Duration::from_nanos(ts_ns - cal_gpu_ns)
+}
 
 const COLOR_ATTACHMENTS: &[u32] = &[
     glow::COLOR_ATTACHMENT0,
@@ -127,6 +135,9 @@ impl super::CommandEncoder {
         if let Some(ref mut timing_datas) = self.timing_datas {
             {
                 let td = timing_datas.first_mut().unwrap();
+                let before = Instant::now();
+                let gpu_ns = unsafe { gl.get_parameter_i64(glow::TIMESTAMP) } as u64;
+                td.calibration = Some((before + before.elapsed().div_f64(2.0), gpu_ns));
                 let id = td.pass_names.len();
                 self.commands.push(super::Command::QueryCounter {
                     query: td.queries[id],
@@ -134,30 +145,33 @@ impl super::CommandEncoder {
             }
 
             timing_datas.rotate_left(1);
-            self.timings.clear();
+            self.timings.passes.clear();
             let td = timing_datas.first_mut().unwrap();
             if !td.pass_names.is_empty() {
-                let mut prev = 0;
+                let (cal_cpu, cal_gpu) = td.calibration.take().unwrap();
+                let mut start_ns = 0;
                 unsafe {
                     gl.get_query_parameter_u64_with_offset(
                         td.queries[0],
                         glow::QUERY_RESULT,
-                        &mut prev as *mut _ as usize,
+                        &mut start_ns as *mut _ as usize,
                     );
                 }
-                for (pass_name, &query) in td.pass_names.drain(..).zip(td.queries[1..].iter()) {
-                    let mut result: u64 = 0;
+                for (i, name) in td.pass_names.drain(..).enumerate() {
+                    let mut end_ns = 0;
                     unsafe {
                         gl.get_query_parameter_u64_with_offset(
-                            query,
+                            td.queries[i + 1],
                             glow::QUERY_RESULT,
-                            &mut result as *mut _ as usize,
+                            &mut end_ns as *mut _ as usize,
                         );
                     }
-                    let time = Duration::from_nanos(result - prev);
-                    self.timings.push((pass_name, time));
-                    prev = result
+                    self.timings
+                        .passes
+                        .push((name, map_gpu_ns(cal_cpu, cal_gpu, start_ns)));
+                    start_ns = end_ns;
                 }
+                self.timings.done = map_gpu_ns(cal_cpu, cal_gpu, start_ns);
             }
         }
     }
@@ -286,7 +300,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.present_frames.push(frame.platform);
     }
 
-    fn timings(&self) -> &crate::Timings {
+    fn get_timings(&mut self) -> &crate::Timings {
         &self.timings
     }
 }

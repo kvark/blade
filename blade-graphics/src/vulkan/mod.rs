@@ -1,9 +1,13 @@
-use ash::{
-    khr,
-    vk::{self},
-};
+use ash::{ext, khr, vk};
 use openxr as xr;
-use std::{mem, num::NonZeroU32, path::PathBuf, ptr, sync::Mutex};
+use std::{
+    mem,
+    num::NonZeroU32,
+    path::PathBuf,
+    ptr,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 mod command;
 mod descriptor;
@@ -39,9 +43,71 @@ struct RayTracingDevice {
 
 #[derive(Clone, Default)]
 struct CommandScopeDevice {}
-#[derive(Clone, Default)]
+#[derive(Clone, Copy, Debug)]
+struct TimestampCalibration {
+    cpu: Instant,
+    gpu_ticks: u64,
+    period: f32,
+    valid_bits: u32,
+}
+
+impl TimestampCalibration {
+    fn delta_ticks(self, timestamp: u64) -> u64 {
+        timestamp.wrapping_sub(self.gpu_ticks) & timestamp_mask(self.valid_bits)
+    }
+
+    fn map(self, timestamp: u64) -> Instant {
+        // Vulkan only guarantees `timestampValidBits` low bits. Masking the
+        // wrapping subtraction preserves a short forward interval across wrap.
+        let delta_ticks = self.delta_ticks(timestamp);
+        assert!(
+            delta_ticks <= timestamp_mask(self.valid_bits) >> 1,
+            "GPU timestamp {timestamp} predates calibration {}",
+            self.gpu_ticks,
+        );
+        let delta_ns = (delta_ticks as f64 * f64::from(self.period)).round() as u64;
+        self.cpu + Duration::from_nanos(delta_ns)
+    }
+}
+
+fn timestamp_mask(valid_bits: u32) -> u64 {
+    if valid_bits == 64 {
+        u64::MAX
+    } else {
+        (1u64 << valid_bits) - 1
+    }
+}
+
+#[derive(Clone)]
 struct TimingDevice {
     period: f32,
+    valid_bits: u32,
+    calibrated_timestamps: ext::calibrated_timestamps::Device,
+}
+
+impl TimingDevice {
+    fn calibrate(&self) -> TimestampCalibration {
+        let info =
+            [vk::CalibratedTimestampInfoEXT::default().time_domain(vk::TimeDomainEXT::DEVICE)];
+        let before = Instant::now();
+        let (timestamps, max_deviation) = unsafe {
+            self.calibrated_timestamps
+                .get_calibrated_timestamps(&info)
+                .unwrap()
+        };
+        let call_duration = before.elapsed();
+        log::trace!(
+            "Calibrated GPU timestamps (API max deviation={}ns, call={}ns)",
+            max_deviation,
+            call_duration.as_nanos(),
+        );
+        TimestampCalibration {
+            cpu: before + call_duration.div_f64(2.0),
+            gpu_ticks: timestamps[0],
+            period: self.period,
+            valid_bits: self.valid_bits,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -433,6 +499,7 @@ struct CommandBuffer {
     descriptor_pool: descriptor::DescriptorPool,
     query_pool: vk::QueryPool,
     timed_pass_names: Vec<String>,
+    timing_calibration: Option<TimestampCalibration>,
     scratch: Option<ScratchBuffer>,
 }
 
@@ -604,6 +671,7 @@ impl crate::traits::CommandDevice for Context {
                     descriptor_pool,
                     query_pool,
                     timed_pass_names: Vec::new(),
+                    timing_calibration: None,
                     scratch,
                 }
             })
@@ -632,7 +700,7 @@ impl crate::traits::CommandDevice for Context {
             present: None,
             crash_handler,
             temp_label: Vec::new(),
-            timings: Default::default(),
+            timings: crate::Timings::pending(),
             manual_barriers: desc.manual_barriers,
             producer_kinds: PassKinds::default(),
         }
@@ -678,6 +746,12 @@ impl crate::traits::CommandDevice for Context {
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         let raw_cmd_buf = encoder.finish();
         let mut queue = self.queue.lock().unwrap();
+        if let Some(ref timing) = encoder.device.timing {
+            let cmd_buf = encoder.buffers.first_mut().unwrap();
+            if !cmd_buf.timed_pass_names.is_empty() {
+                cmd_buf.timing_calibration = Some(timing.calibrate());
+            }
+        }
         queue.last_progress += 1;
         let progress = queue.last_progress;
         let command_buffers = [raw_cmd_buf];

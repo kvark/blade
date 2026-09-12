@@ -218,6 +218,31 @@ unsafe impl Sync for SyncPoint {}
 struct TimingData {
     pass_names: Vec<String>,
     sample_buffer: Retained<ProtocolObject<dyn metal::MTLCounterSampleBuffer>>,
+    calibration: Option<TimestampSample>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TimestampSample {
+    cpu_instant: time::Instant,
+    cpu_ns: u64,
+    gpu_ns: u64,
+}
+
+fn sample_timestamps(device: &ProtocolObject<dyn metal::MTLDevice>) -> TimestampSample {
+    let before = time::Instant::now();
+    let mut cpu_ns = 0;
+    let mut gpu_ns = 0;
+    unsafe {
+        device.sampleTimestamps_gpuTimestamp(
+            ptr::NonNull::from(&mut cpu_ns),
+            ptr::NonNull::from(&mut gpu_ns),
+        );
+    }
+    TimestampSample {
+        cpu_instant: before + before.elapsed().div_f64(2.0),
+        cpu_ns,
+        gpu_ns,
+    }
 }
 
 type RawCommandBuffer = Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>;
@@ -706,6 +731,7 @@ impl crate::traits::CommandDevice for Context {
                 array.push(TimingData {
                     sample_buffer,
                     pass_names: Vec::new(),
+                    calibration: None,
                 });
             }
             Some(array.into_boxed_slice())
@@ -721,7 +747,7 @@ impl crate::traits::CommandDevice for Context {
             enable_dispatch_type: self.info.enable_dispatch_type,
             has_open_debug_group: false,
             timing_datas,
-            timings: Default::default(),
+            timings: crate::Timings::pending(),
         }
     }
 
@@ -729,6 +755,10 @@ impl crate::traits::CommandDevice for Context {
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         use metal::MTLCommandBuffer as _;
+        if let Some(ref mut td_array) = encoder.timing_datas {
+            let td = td_array.first_mut().unwrap();
+            td.calibration = Some(sample_timestamps(&self.device.lock().unwrap()));
+        }
         let cmd_buf = encoder.finish();
         cmd_buf.commit();
         SyncPoint { cmd_buf }

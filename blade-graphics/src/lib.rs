@@ -1466,4 +1466,29 @@ pub struct Viewport {
     pub depth: std::ops::Range<f32>,
 }
 
-pub type Timings = Vec<(String, std::time::Duration)>;
+/// GPU pass timestamps mapped onto the process monotonic clock.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Timings {
+    /// Pass starts in execution order.
+    pub passes: Vec<(String, std::time::Instant)>,
+    /// Completion time of the final pass.
+    pub done: std::time::Instant,
+}
+
+impl Timings {
+    pub(crate) fn pending() -> Self {
+        Self {
+            passes: Vec::new(),
+            done: std::time::Instant::now(),
+        }
+    }
+
+    /// Return each pass's start-to-next-start duration, with the final pass
+    /// ending at [`Self::done`].
+    pub fn pass_durations(&self) -> impl Iterator<Item = (&str, std::time::Duration)> + '_ {
+        self.passes.iter().enumerate().map(move |(i, pass)| {
+            let end = self.passes.get(i + 1).map_or(self.done, |next| next.1);
+            (pass.0.as_str(), end.duration_since(pass.1))
+        })
+    }
+}

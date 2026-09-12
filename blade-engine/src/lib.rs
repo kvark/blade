@@ -1845,9 +1845,8 @@ impl Engine {
             });
 
         egui::CollapsingHeader::new("Performance").show(ui, |ui| {
-            for entry in self.pacer.timings().iter() {
-                let &(ref name, time) = entry;
-                let millis = time.as_secs_f32() * 1000.0;
+            for (name, duration) in self.pacer.get_timings().pass_durations() {
+                let millis = duration.as_secs_f32() * 1000.0;
                 ui.horizontal(|ui| {
                     ui.label(name);
                     ui.colored_label(egui::Color32::WHITE, format!("{:.2} ms", millis));

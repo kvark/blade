@@ -399,6 +399,7 @@ enum Command {
 struct TimingData {
     pass_names: Vec<String>,
     queries: Box<[glow::Query]>,
+    calibration: Option<(std::time::Instant, u64)>,
 }
 
 pub struct CommandEncoder {
@@ -529,6 +530,7 @@ impl crate::traits::CommandDevice for Context {
                     queries: (0..MAX_QUERIES)
                         .map(|_| unsafe { gl.create_query().unwrap() })
                         .collect(),
+                    calibration: None,
                 });
             }
             Some(array.into_boxed_slice())
@@ -544,7 +546,7 @@ impl crate::traits::CommandDevice for Context {
             present_frames: Vec::new(),
             limits: self.limits.clone(),
             timing_datas,
-            timings: Default::default(),
+            timings: crate::Timings::pending(),
         }
     }
 
