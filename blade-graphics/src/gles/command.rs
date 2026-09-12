@@ -145,7 +145,7 @@ impl super::CommandEncoder {
             }
 
             timing_datas.rotate_left(1);
-            self.timings.clear();
+            self.timings.passes.clear();
             let td = timing_datas.first_mut().unwrap();
             if !td.pass_names.is_empty() {
                 let (cal_cpu, cal_gpu) = td.calibration.take().unwrap();
@@ -166,13 +166,12 @@ impl super::CommandEncoder {
                             &mut end_ns as *mut _ as usize,
                         );
                     }
-                    self.timings.push(crate::GpuTimingSpan {
-                        name,
-                        start: map_gpu_ns(cal_cpu, cal_gpu, start_ns),
-                        end: map_gpu_ns(cal_cpu, cal_gpu, end_ns),
-                    });
+                    self.timings
+                        .passes
+                        .push((name, map_gpu_ns(cal_cpu, cal_gpu, start_ns)));
                     start_ns = end_ns;
                 }
+                self.timings.done = map_gpu_ns(cal_cpu, cal_gpu, start_ns);
             }
         }
     }
@@ -301,7 +300,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.present_frames.push(frame.platform);
     }
 
-    fn timings(&mut self) -> &[crate::GpuTimingSpan] {
+    fn get_timings(&mut self) -> &crate::Timings {
         &self.timings
     }
 }

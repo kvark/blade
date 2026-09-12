@@ -72,7 +72,7 @@ impl FramePacer {
         self.prev_sync_point.as_ref().unwrap()
     }
 
-    pub fn timings(&mut self) -> &[blade_graphics::GpuTimingSpan] {
-        self.command_encoder.timings()
+    pub fn get_timings(&mut self) -> &blade_graphics::Timings {
+        self.command_encoder.get_timings()
     }
 }

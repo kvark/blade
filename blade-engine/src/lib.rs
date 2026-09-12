@@ -1845,10 +1845,10 @@ impl Engine {
             });
 
         egui::CollapsingHeader::new("Performance").show(ui, |ui| {
-            for timing in self.pacer.timings() {
-                let millis = timing.duration().as_secs_f32() * 1000.0;
+            for (name, duration) in self.pacer.get_timings().pass_durations() {
+                let millis = duration.as_secs_f32() * 1000.0;
                 ui.horizontal(|ui| {
-                    ui.label(&timing.name);
+                    ui.label(name);
                     ui.colored_label(egui::Color32::WHITE, format!("{:.2} ms", millis));
                 });
             }

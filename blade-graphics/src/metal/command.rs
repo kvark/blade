@@ -437,7 +437,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
 
     fn start(&mut self) {
         if let Some(ref mut td_array) = self.timing_datas {
-            self.timings.clear();
+            self.timings.passes.clear();
             td_array.rotate_left(1);
             let td = td_array.first_mut().unwrap();
             if !td.pass_names.is_empty() {
@@ -454,13 +454,13 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
                 };
                 let begin = td.calibration.take().unwrap();
                 let end = super::sample_timestamps(&self.device);
+                let done_ns = *counters.last().unwrap();
                 for (name, chunk) in td.pass_names.drain(..).zip(counters.chunks(2)) {
-                    self.timings.push(crate::GpuTimingSpan {
-                        name,
-                        start: map_gpu_ns(begin, end, chunk[0]),
-                        end: map_gpu_ns(begin, end, chunk[1]),
-                    });
+                    self.timings
+                        .passes
+                        .push((name, map_gpu_ns(begin, end, chunk[0])));
                 }
+                self.timings.done = map_gpu_ns(begin, end, done_ns);
             }
         }
 
@@ -482,7 +482,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.raw.as_mut().unwrap().presentDrawable(&frame.drawable);
     }
 
-    fn timings(&mut self) -> &[crate::GpuTimingSpan] {
+    fn get_timings(&mut self) -> &crate::Timings {
         &self.timings
     }
 }

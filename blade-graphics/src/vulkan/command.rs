@@ -1,5 +1,5 @@
 use ash::vk;
-use std::{ptr, str};
+use std::{ptr, str, time::Instant};
 
 impl super::CrashHandler {
     fn add_marker(&mut self, marker: &str) -> u32 {
@@ -30,11 +30,11 @@ impl super::CrashHandler {
 fn resolve_timing_buffer(
     device: &ash::Device,
     cmd_buf: &mut super::CommandBuffer,
-    timings: &mut Vec<crate::GpuTimingSpan>,
-) {
+    timings: &mut crate::Timings,
+) -> Option<Instant> {
     let n = cmd_buf.timed_pass_names.len();
     if n == 0 || cmd_buf.timing_calibration.is_none() {
-        return;
+        return None;
     }
 
     let mut timestamps = [0u64; super::QUERY_POOL_SIZE];
@@ -48,22 +48,15 @@ fn resolve_timing_buffer(
     };
     match result {
         Ok(()) => {}
-        Err(vk::Result::NOT_READY) => return,
+        Err(vk::Result::NOT_READY) => return None,
         Err(error) => panic!("Unable to resolve GPU timestamps: {error}"),
     }
 
     let calibration = cmd_buf.timing_calibration.take().unwrap();
-    for (name, pair) in cmd_buf
-        .timed_pass_names
-        .drain(..)
-        .zip(timestamps.windows(2))
-    {
-        timings.push(crate::GpuTimingSpan {
-            name,
-            start: calibration.map(pair[0]),
-            end: calibration.map(pair[1]),
-        });
+    for (name, &timestamp) in cmd_buf.timed_pass_names.drain(..).zip(timestamps.iter()) {
+        timings.passes.push((name, calibration.map(timestamp)));
     }
+    Some(calibration.map(timestamps[n]))
 }
 
 impl super::PipelineContext<'_> {
@@ -816,14 +809,19 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         });
     }
 
-    fn timings(&mut self) -> &[crate::GpuTimingSpan] {
-        let mut resolved = Vec::new();
+    fn get_timings(&mut self) -> &crate::Timings {
+        self.timings.passes.clear();
+        let mut done = None;
         for cmd_buf in self.buffers.iter_mut() {
-            resolve_timing_buffer(&self.device.core, cmd_buf, &mut resolved);
+            if let Some(candidate) =
+                resolve_timing_buffer(&self.device.core, cmd_buf, &mut self.timings)
+            {
+                done = Some(done.map_or(candidate, |previous: Instant| previous.max(candidate)));
+            }
         }
-        if !resolved.is_empty() {
-            resolved.sort_unstable_by_key(|span| span.start);
-            self.timings = resolved;
+        self.timings.passes.sort_unstable_by_key(|entry| entry.1);
+        if let Some(done) = done {
+            self.timings.done = done;
         }
         &self.timings
     }

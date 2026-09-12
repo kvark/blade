@@ -411,7 +411,7 @@ pub struct CommandEncoder {
     present_frames: Vec<platform::PlatformFrame>,
     limits: Limits,
     timing_datas: Option<Box<[TimingData]>>,
-    timings: Vec<crate::GpuTimingSpan>,
+    timings: crate::Timings,
 }
 
 enum PassKind {
@@ -546,7 +546,7 @@ impl crate::traits::CommandDevice for Context {
             present_frames: Vec::new(),
             limits: self.limits.clone(),
             timing_datas,
-            timings: Vec::new(),
+            timings: crate::Timings::pending(),
         }
     }
 

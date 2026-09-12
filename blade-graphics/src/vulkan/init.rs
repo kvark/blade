@@ -1258,7 +1258,7 @@ impl super::Context {
         } else {
             None
         };
-        let mut device = super::Device {
+        let device = super::Device {
             swapchain: if desc.presentation {
                 Some(khr::swapchain::Device::new(&instance.core, &device_core))
             } else {
@@ -1432,13 +1432,6 @@ impl super::Context {
                 .core
                 .get_device_queue(capabilities.queue_family_index, 0)
         };
-        let timing_is_valid = device.timing.as_ref().is_none_or(|timing| {
-            timing.validate(&device.core, queue, capabilities.queue_family_index)
-        });
-        if !timing_is_valid {
-            log::warn!("Disabling GPU timing because Vulkan device timestamps are inconsistent");
-            device.timing = None;
-        }
         let last_progress = 0;
         let mut timeline_info = vk::SemaphoreTypeCreateInfo {
             semaphore_type: vk::SemaphoreType::TIMELINE,

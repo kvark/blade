@@ -108,93 +108,6 @@ impl TimingDevice {
             valid_bits: self.valid_bits,
         }
     }
-
-    fn validate(&self, device: &ash::Device, queue: vk::Queue, queue_family_index: u32) -> bool {
-        let command_pool = unsafe {
-            device
-                .create_command_pool(
-                    &vk::CommandPoolCreateInfo::default()
-                        .flags(vk::CommandPoolCreateFlags::TRANSIENT)
-                        .queue_family_index(queue_family_index),
-                    None,
-                )
-                .unwrap()
-        };
-        let command_buffer = unsafe {
-            device
-                .allocate_command_buffers(
-                    &vk::CommandBufferAllocateInfo::default()
-                        .command_pool(command_pool)
-                        .command_buffer_count(1),
-                )
-                .unwrap()[0]
-        };
-        let query_pool = unsafe {
-            device
-                .create_query_pool(
-                    &vk::QueryPoolCreateInfo::default()
-                        .query_type(vk::QueryType::TIMESTAMP)
-                        .query_count(1),
-                    None,
-                )
-                .unwrap()
-        };
-
-        unsafe {
-            device
-                .begin_command_buffer(
-                    command_buffer,
-                    &vk::CommandBufferBeginInfo::default()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-                )
-                .unwrap();
-            device.cmd_reset_query_pool(command_buffer, query_pool, 0, 1);
-            device.cmd_write_timestamp(
-                command_buffer,
-                vk::PipelineStageFlags::TOP_OF_PIPE,
-                query_pool,
-                0,
-            );
-            device.end_command_buffer(command_buffer).unwrap();
-        }
-
-        let before = self.calibrate();
-        let command_buffers = [command_buffer];
-        let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
-        unsafe {
-            device
-                .queue_submit(queue, &[submit_info], vk::Fence::null())
-                .unwrap();
-            device.queue_wait_idle(queue).unwrap();
-        }
-        let after = self.calibrate();
-        let mut timestamp = 0;
-        unsafe {
-            device
-                .get_query_pool_results(
-                    query_pool,
-                    0,
-                    std::slice::from_mut(&mut timestamp),
-                    vk::QueryResultFlags::TYPE_64,
-                )
-                .unwrap();
-            device.destroy_query_pool(query_pool, None);
-            device.destroy_command_pool(command_pool, None);
-        }
-
-        let query_delta = before.delta_ticks(timestamp);
-        let calibration_delta = before.delta_ticks(after.gpu_ticks);
-        let valid = query_delta <= calibration_delta;
-        if !valid {
-            log::warn!(
-                "Inconsistent Vulkan device clocks: calibration before={}, query={}, after={}",
-                before.gpu_ticks,
-                timestamp,
-                after.gpu_ticks,
-            );
-        }
-        valid
-    }
 }
 
 #[derive(Clone)]
@@ -649,7 +562,7 @@ pub struct CommandEncoder {
     present: Option<Presentation>,
     crash_handler: Option<CrashHandler>,
     temp_label: Vec<u8>,
-    timings: Vec<crate::GpuTimingSpan>,
+    timings: crate::Timings,
     manual_barriers: bool,
     producer_kinds: PassKinds,
 }
@@ -787,7 +700,7 @@ impl crate::traits::CommandDevice for Context {
             present: None,
             crash_handler,
             temp_label: Vec::new(),
-            timings: Vec::new(),
+            timings: crate::Timings::pending(),
             manual_barriers: desc.manual_barriers,
             producer_kinds: PassKinds::default(),
         }

@@ -66,9 +66,8 @@ pub trait CommandEncoder {
     fn start(&mut self);
     fn init_texture(&mut self, texture: Self::Texture);
     fn present(&mut self, frame: Self::Frame);
-    /// Resolve available timestamp queries and return their pass ranges on the
-    /// process monotonic clock.
-    fn timings(&mut self) -> &[super::GpuTimingSpan];
+    /// Resolve available timestamp queries and return the result.
+    fn get_timings(&mut self) -> &super::Timings;
 }
 
 pub trait TransferEncoder {

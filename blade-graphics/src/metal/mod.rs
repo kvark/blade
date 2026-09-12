@@ -255,7 +255,7 @@ pub struct CommandEncoder {
     enable_dispatch_type: bool,
     has_open_debug_group: bool,
     timing_datas: Option<Box<[TimingData]>>,
-    timings: Vec<crate::GpuTimingSpan>,
+    timings: crate::Timings,
 }
 
 #[derive(Debug)]
@@ -749,7 +749,7 @@ impl crate::traits::CommandDevice for Context {
             enable_dispatch_type: self.info.enable_dispatch_type,
             has_open_debug_group: false,
             timing_datas,
-            timings: Vec::new(),
+            timings: crate::Timings::pending(),
         }
     }
 
