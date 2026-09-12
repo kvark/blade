@@ -388,10 +388,10 @@ impl Example {
 
         ui.add_space(5.0);
         ui.heading("Timings");
-        for (name, time) in self.command_encoder.timings().pass_durations() {
-            let millis = time.as_secs_f32() * 1000.0;
+        for timing in self.command_encoder.timings() {
+            let millis = timing.duration().as_secs_f32() * 1000.0;
             ui.horizontal(|ui| {
-                ui.label(name);
+                ui.label(&timing.name);
                 ui.colored_label(egui::Color32::WHITE, format!("{:.2} ms", millis));
             });
         }

@@ -66,15 +66,9 @@ pub trait CommandEncoder {
     fn start(&mut self);
     fn init_texture(&mut self, texture: Self::Texture);
     fn present(&mut self, frame: Self::Frame);
-    /// Resolve timestamp queries for all command buffers in this encoder.
-    ///
-    /// The caller must first wait for its latest submission to complete.
-    fn resolve_timings(&mut self);
-    /// Pass start times and GPU-done time on the CPU clock, from the last
-    /// resolved submission.
-    fn timings(&self) -> &super::Timings;
-    /// Timestamped pass ranges on the process's monotonic CPU clock.
-    fn timing_spans(&self) -> &[super::GpuTimingSpan];
+    /// Resolve available timestamp queries and return their pass ranges on the
+    /// process monotonic clock.
+    fn timings(&mut self) -> &[super::GpuTimingSpan];
 }
 
 pub trait TransferEncoder {

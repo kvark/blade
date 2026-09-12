@@ -3,13 +3,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn map_gpu_ns(cal_cpu: Instant, cal_gpu_ns: u64, ts_ns: u64) -> Option<Instant> {
-    let delta = ts_ns as i128 - cal_gpu_ns as i128;
-    if delta >= 0 {
-        cal_cpu.checked_add(Duration::from_nanos(delta as u64))
-    } else {
-        cal_cpu.checked_sub(Duration::from_nanos((-delta) as u64))
-    }
+fn map_gpu_ns(cal_cpu: Instant, cal_gpu_ns: u64, ts_ns: u64) -> Instant {
+    assert!(ts_ns >= cal_gpu_ns, "GPU timestamp predates calibration");
+    cal_cpu + Duration::from_nanos(ts_ns - cal_gpu_ns)
 }
 
 const COLOR_ATTACHMENTS: &[u32] = &[
@@ -139,8 +135,9 @@ impl super::CommandEncoder {
         if let Some(ref mut timing_datas) = self.timing_datas {
             {
                 let td = timing_datas.first_mut().unwrap();
+                let before = Instant::now();
                 let gpu_ns = unsafe { gl.get_parameter_i64(glow::TIMESTAMP) } as u64;
-                td.calibration = Some((Instant::now(), gpu_ns));
+                td.calibration = Some((before + before.elapsed().div_f64(2.0), gpu_ns));
                 let id = td.pass_names.len();
                 self.commands.push(super::Command::QueryCounter {
                     query: td.queries[id],
@@ -148,32 +145,33 @@ impl super::CommandEncoder {
             }
 
             timing_datas.rotate_left(1);
-            self.timings.passes.clear();
+            self.timings.clear();
             let td = timing_datas.first_mut().unwrap();
             if !td.pass_names.is_empty() {
-                let n = td.pass_names.len();
-                let mut stamps = vec![0u64; n + 1];
-                for (i, stamp) in stamps.iter_mut().enumerate() {
+                let (cal_cpu, cal_gpu) = td.calibration.take().unwrap();
+                let mut start_ns = 0;
+                unsafe {
+                    gl.get_query_parameter_u64_with_offset(
+                        td.queries[0],
+                        glow::QUERY_RESULT,
+                        &mut start_ns as *mut _ as usize,
+                    );
+                }
+                for (i, name) in td.pass_names.drain(..).enumerate() {
+                    let mut end_ns = 0;
                     unsafe {
                         gl.get_query_parameter_u64_with_offset(
-                            td.queries[i],
+                            td.queries[i + 1],
                             glow::QUERY_RESULT,
-                            stamp as *mut _ as usize,
+                            &mut end_ns as *mut _ as usize,
                         );
                     }
-                }
-                let last = stamps[n];
-                let (cal_cpu, cal_gpu) = td
-                    .calibration
-                    .take()
-                    .unwrap_or_else(|| (std::time::Instant::now(), last));
-                for (name, &ts) in td.pass_names.drain(..).zip(stamps[..n].iter()) {
-                    if let Some(start) = map_gpu_ns(cal_cpu, cal_gpu, ts) {
-                        self.timings.passes.push((name, start));
-                    }
-                }
-                if let Some(done) = map_gpu_ns(cal_cpu, cal_gpu, last) {
-                    self.timings.done = done;
+                    self.timings.push(crate::GpuTimingSpan {
+                        name,
+                        start: map_gpu_ns(cal_cpu, cal_gpu, start_ns),
+                        end: map_gpu_ns(cal_cpu, cal_gpu, end_ns),
+                    });
+                    start_ns = end_ns;
                 }
             }
         }
@@ -303,14 +301,8 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.present_frames.push(frame.platform);
     }
 
-    fn resolve_timings(&mut self) {}
-
-    fn timings(&self) -> &crate::Timings {
+    fn timings(&mut self) -> &[crate::GpuTimingSpan] {
         &self.timings
-    }
-
-    fn timing_spans(&self) -> &[crate::GpuTimingSpan] {
-        &[]
     }
 }
 

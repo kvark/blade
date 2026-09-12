@@ -1,5 +1,5 @@
 use ash::vk;
-use std::{ptr, str, time::Instant};
+use std::{ptr, str};
 
 impl super::CrashHandler {
     fn add_marker(&mut self, marker: &str) -> u32 {
@@ -28,53 +28,42 @@ impl super::CrashHandler {
 }
 
 fn resolve_timing_buffer(
-    device: &super::Device,
+    device: &ash::Device,
     cmd_buf: &mut super::CommandBuffer,
-    timings: &mut crate::Timings,
-    timing_spans: &mut Vec<crate::GpuTimingSpan>,
-) -> Option<Instant> {
-    let Some(ref timing) = device.timing else {
-        return None;
-    };
+    timings: &mut Vec<crate::GpuTimingSpan>,
+) {
     let n = cmd_buf.timed_pass_names.len();
-    if n == 0 {
-        return None;
+    if n == 0 || cmd_buf.timing_calibration.is_none() {
+        return;
     }
 
     let mut timestamps = [0u64; super::QUERY_POOL_SIZE];
-    unsafe {
-        device
-            .core
-            .get_query_pool_results(
-                cmd_buf.query_pool,
-                0,
-                &mut timestamps[..n + 1],
-                vk::QueryResultFlags::TYPE_64,
-            )
-            .unwrap();
+    let result = unsafe {
+        device.get_query_pool_results(
+            cmd_buf.query_pool,
+            0,
+            &mut timestamps[..n + 1],
+            vk::QueryResultFlags::TYPE_64,
+        )
+    };
+    match result {
+        Ok(()) => {}
+        Err(vk::Result::NOT_READY) => return,
+        Err(error) => panic!("Unable to resolve GPU timestamps: {error}"),
     }
 
-    let calibrated = cmd_buf.timing_calibration.take();
-    let calibration = calibrated.unwrap_or_else(|| super::TimestampCalibration {
-        cpu: Instant::now(),
-        gpu_ticks: timestamps[n],
-    });
+    let calibration = cmd_buf.timing_calibration.take().unwrap();
     for (name, pair) in cmd_buf
         .timed_pass_names
         .drain(..)
         .zip(timestamps.windows(2))
     {
-        if let (Some(start), Some(end)) = (
-            timing.map_timestamp(calibration, pair[0]),
-            timing.map_timestamp(calibration, pair[1]),
-        ) {
-            timings.passes.push((name.clone(), start));
-            if calibrated.is_some() {
-                timing_spans.push(crate::GpuTimingSpan { name, start, end });
-            }
-        }
+        timings.push(crate::GpuTimingSpan {
+            name,
+            start: calibration.map(pair[0]),
+            end: calibration.map(pair[1]),
+        });
     }
-    timing.map_timestamp(calibration, timestamps[n])
 }
 
 impl super::PipelineContext<'_> {
@@ -734,16 +723,8 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         }
 
         if self.device.timing.is_some() {
-            self.timings.passes.clear();
-            self.timing_spans.clear();
-            if let Some(done) = resolve_timing_buffer(
-                &self.device,
-                cmd_buf,
-                &mut self.timings,
-                &mut self.timing_spans,
-            ) {
-                self.timings.done = done;
-            }
+            cmd_buf.timed_pass_names.clear();
+            cmd_buf.timing_calibration = None;
             unsafe {
                 self.device.core.cmd_reset_query_pool(
                     cmd_buf.raw,
@@ -835,33 +816,16 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         });
     }
 
-    fn resolve_timings(&mut self) {
-        self.timings.passes.clear();
-        self.timing_spans.clear();
-        let mut done = None;
+    fn timings(&mut self) -> &[crate::GpuTimingSpan] {
+        let mut resolved = Vec::new();
         for cmd_buf in self.buffers.iter_mut() {
-            if let Some(candidate) = resolve_timing_buffer(
-                &self.device,
-                cmd_buf,
-                &mut self.timings,
-                &mut self.timing_spans,
-            ) {
-                done = Some(done.map_or(candidate, |previous: Instant| previous.max(candidate)));
-            }
+            resolve_timing_buffer(&self.device.core, cmd_buf, &mut resolved);
         }
-        self.timings.passes.sort_unstable_by_key(|entry| entry.1);
-        self.timing_spans.sort_unstable_by_key(|span| span.start);
-        if let Some(done) = done {
-            self.timings.done = done;
+        if !resolved.is_empty() {
+            resolved.sort_unstable_by_key(|span| span.start);
+            self.timings = resolved;
         }
-    }
-
-    fn timings(&self) -> &crate::Timings {
         &self.timings
-    }
-
-    fn timing_spans(&self) -> &[crate::GpuTimingSpan] {
-        &self.timing_spans
     }
 }
 
@@ -1432,29 +1396,31 @@ mod tests {
     use ash::vk;
     use std::time::{Duration, Instant};
 
-    use super::super::{CommandEncoder, PassKind, PassKinds, TimestampCalibration, TimingDevice};
+    use super::super::{CommandEncoder, PassKind, PassKinds, TimestampCalibration};
 
     #[test]
     fn calibrated_timestamp_mapping_handles_wrap() {
         let cpu = Instant::now();
-        let timing = TimingDevice {
-            period: 2.0,
-            valid_bits: 8,
-            calibrated_timestamps: None,
-        };
         let calibration = TimestampCalibration {
             cpu,
             gpu_ticks: 250,
+            period: 2.0,
+            valid_bits: 8,
         };
 
-        assert_eq!(
-            timing.map_timestamp(calibration, 5),
-            Some(cpu + Duration::from_nanos(22))
-        );
-        assert_eq!(
-            timing.map_timestamp(calibration, 245),
-            Some(cpu - Duration::from_nanos(10))
-        );
+        assert_eq!(calibration.map(5), cpu + Duration::from_nanos(22));
+    }
+
+    #[test]
+    #[should_panic(expected = "predates calibration")]
+    fn calibrated_timestamp_mapping_rejects_backward_time() {
+        TimestampCalibration {
+            cpu: Instant::now(),
+            gpu_ticks: 250,
+            period: 2.0,
+            valid_bits: 8,
+        }
+        .map(245);
     }
 
     #[test]

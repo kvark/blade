@@ -111,7 +111,6 @@ struct AdapterCapabilities {
     min_imported_host_pointer_alignment: u64,
     timing: bool,
     timestamp_valid_bits: u32,
-    calibrated_timestamps: Option<super::CalibratedTimestampsExtension>,
     dual_source_blending: bool,
     shader_float16: bool,
     cooperative_matrix: crate::CooperativeMatrix,
@@ -456,17 +455,12 @@ fn inspect_adapter(
     } else if queue_family.timestamp_valid_bits == 0 {
         log::info!("No timing because the selected queue has no timestamp bits");
         false
+    } else if !supported_extensions.contains(&vk::EXT_CALIBRATED_TIMESTAMPS_NAME) {
+        log::info!("No timing because calibrated timestamps are not supported");
+        false
     } else {
         true
     };
-    let calibrated_timestamps =
-        if supported_extensions.contains(&vk::KHR_CALIBRATED_TIMESTAMPS_NAME) {
-            Some(super::CalibratedTimestampsExtension::Khr)
-        } else if supported_extensions.contains(&vk::EXT_CALIBRATED_TIMESTAMPS_NAME) {
-            Some(super::CalibratedTimestampsExtension::Ext)
-        } else {
-            None
-        };
 
     let buffer_device_address = buffer_device_address_features.buffer_device_address == vk::TRUE
         && (properties.api_version >= vk::API_VERSION_1_2
@@ -644,7 +638,6 @@ fn inspect_adapter(
         min_imported_host_pointer_alignment,
         timing,
         timestamp_valid_bits: queue_family.timestamp_valid_bits,
-        calibrated_timestamps,
         dual_source_blending,
         shader_float16,
         cooperative_matrix,
@@ -1081,16 +1074,8 @@ impl super::Context {
             if use_low_priority {
                 device_extensions.push(vk::KHR_GLOBAL_PRIORITY_NAME);
             }
-            if desc.timing {
-                match capabilities.calibrated_timestamps {
-                    Some(super::CalibratedTimestampsExtension::Khr) => {
-                        device_extensions.push(vk::KHR_CALIBRATED_TIMESTAMPS_NAME);
-                    }
-                    Some(super::CalibratedTimestampsExtension::Ext) => {
-                        device_extensions.push(vk::EXT_CALIBRATED_TIMESTAMPS_NAME);
-                    }
-                    None => {}
-                }
+            if desc.timing && capabilities.timing {
+                device_extensions.push(vk::EXT_CALIBRATED_TIMESTAMPS_NAME);
             }
 
             let str_pointers = device_extensions
@@ -1261,7 +1246,19 @@ impl super::Context {
         };
 
         let instance = &inner.instance;
-        let device = super::Device {
+        let timing = if desc.timing && capabilities.timing {
+            Some(super::TimingDevice {
+                period: capabilities.properties.limits.timestamp_period,
+                valid_bits: capabilities.timestamp_valid_bits,
+                calibrated_timestamps: ext::calibrated_timestamps::Device::new(
+                    &instance.core,
+                    &device_core,
+                ),
+            })
+        } else {
+            None
+        };
+        let mut device = super::Device {
             swapchain: if desc.presentation {
                 Some(khr::swapchain::Device::new(&instance.core, &device_core))
             } else {
@@ -1339,15 +1336,7 @@ impl super::Context {
             } else {
                 None
             },
-            timing: if desc.timing && capabilities.timing {
-                Some(super::TimingDevice {
-                    period: capabilities.properties.limits.timestamp_period,
-                    valid_bits: capabilities.timestamp_valid_bits,
-                    calibrated_timestamps: capabilities.calibrated_timestamps,
-                })
-            } else {
-                None
-            },
+            timing,
             //TODO: detect GPU family
             workarounds: super::Workarounds {
                 extra_sync_src_access: vk::AccessFlags::TRANSFER_WRITE,
@@ -1443,6 +1432,13 @@ impl super::Context {
                 .core
                 .get_device_queue(capabilities.queue_family_index, 0)
         };
+        let timing_is_valid = device.timing.as_ref().is_none_or(|timing| {
+            timing.validate(&device.core, queue, capabilities.queue_family_index)
+        });
+        if !timing_is_valid {
+            log::warn!("Disabling GPU timing because Vulkan device timestamps are inconsistent");
+            device.timing = None;
+        }
         let last_progress = 0;
         let mut timeline_info = vk::SemaphoreTypeCreateInfo {
             semaphore_type: vk::SemaphoreType::TIMELINE,

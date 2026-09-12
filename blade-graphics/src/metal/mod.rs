@@ -218,20 +218,44 @@ unsafe impl Sync for SyncPoint {}
 struct TimingData {
     pass_names: Vec<String>,
     sample_buffer: Retained<ProtocolObject<dyn metal::MTLCounterSampleBuffer>>,
-    /// CPU Instant and GPU timestamp sampled at submit.
-    calibration: Option<(time::Instant, u64)>,
+    calibration: Option<TimestampSample>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TimestampSample {
+    cpu_instant: time::Instant,
+    cpu_ns: u64,
+    gpu_ns: u64,
+}
+
+fn sample_timestamps(device: &ProtocolObject<dyn metal::MTLDevice>) -> TimestampSample {
+    let before = time::Instant::now();
+    let mut cpu_ns = 0;
+    let mut gpu_ns = 0;
+    unsafe {
+        device.sampleTimestamps_gpuTimestamp(
+            ptr::NonNull::from(&mut cpu_ns),
+            ptr::NonNull::from(&mut gpu_ns),
+        );
+    }
+    TimestampSample {
+        cpu_instant: before + before.elapsed().div_f64(2.0),
+        cpu_ns,
+        gpu_ns,
+    }
 }
 
 type RawCommandBuffer = Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>;
 pub struct CommandEncoder {
     raw: Option<RawCommandBuffer>,
     name: String,
+    device: Retained<ProtocolObject<dyn metal::MTLDevice>>,
     queue: Arc<Mutex<Retained<ProtocolObject<dyn metal::MTLCommandQueue>>>>,
     enable_debug_groups: bool,
     enable_dispatch_type: bool,
     has_open_debug_group: bool,
     timing_datas: Option<Box<[TimingData]>>,
-    timings: crate::Timings,
+    timings: Vec<crate::GpuTimingSpan>,
 }
 
 #[derive(Debug)]
@@ -719,12 +743,13 @@ impl crate::traits::CommandDevice for Context {
         CommandEncoder {
             raw: None,
             name: desc.name.to_string(),
+            device: self.device.lock().unwrap().clone(),
             queue: Arc::clone(&self.queue),
             enable_debug_groups: self.info.enable_debug_groups,
             enable_dispatch_type: self.info.enable_dispatch_type,
             has_open_debug_group: false,
             timing_datas,
-            timings: crate::Timings::pending(),
+            timings: Vec::new(),
         }
     }
 
@@ -734,16 +759,7 @@ impl crate::traits::CommandDevice for Context {
         use metal::MTLCommandBuffer as _;
         if let Some(ref mut td_array) = encoder.timing_datas {
             let td = td_array.first_mut().unwrap();
-            let device = self.device.lock().unwrap();
-            let mut cpu_ts = 0u64;
-            let mut gpu_ts = 0u64;
-            unsafe {
-                device.sampleTimestamps_gpuTimestamp(
-                    ptr::NonNull::from(&mut cpu_ts),
-                    ptr::NonNull::from(&mut gpu_ts),
-                );
-            }
-            td.calibration = Some((time::Instant::now(), gpu_ts));
+            td.calibration = Some(sample_timestamps(&encoder.device));
         }
         let cmd_buf = encoder.finish();
         cmd_buf.commit();

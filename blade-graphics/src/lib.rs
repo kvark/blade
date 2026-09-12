@@ -1467,10 +1467,6 @@ pub struct Viewport {
 }
 
 /// A timestamped GPU pass mapped onto the process monotonic clock.
-///
-/// Unlike [`Timings`], these ranges preserve gaps and overlap between command
-/// buffers. Backends only report ranges when they can calibrate their GPU
-/// timestamp clock against [`std::time::Instant`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GpuTimingSpan {
     pub name: String,
@@ -1480,38 +1476,6 @@ pub struct GpuTimingSpan {
 
 impl GpuTimingSpan {
     pub fn duration(&self) -> std::time::Duration {
-        self.end.saturating_duration_since(self.start)
-    }
-}
-
-/// GPU timestamps mapped onto the process monotonic clock.
-///
-/// `passes[i]` is when pass `i` started. `done` is when the GPU finished the
-/// last timestamped work of that submission. Backends sample the CPU–GPU clock
-/// offset at submit; durations are the gaps between consecutive stamps.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Timings {
-    pub passes: Vec<(String, std::time::Instant)>,
-    pub done: std::time::Instant,
-}
-
-impl Timings {
-    pub(crate) fn pending() -> Self {
-        Self {
-            passes: Vec::new(),
-            done: std::time::Instant::now(),
-        }
-    }
-
-    /// Duration of each pass: this pass's start to the next start, or to
-    /// [`Self::done`] for the last pass.
-    pub fn pass_durations(&self) -> impl Iterator<Item = (&str, std::time::Duration)> + '_ {
-        self.passes
-            .iter()
-            .enumerate()
-            .filter_map(move |(i, (name, start))| {
-                let end = self.passes.get(i + 1).map(|(_, t)| *t).unwrap_or(self.done);
-                Some((name.as_str(), end.checked_duration_since(*start)?))
-            })
+        self.end.duration_since(self.start)
     }
 }
