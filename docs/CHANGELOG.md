@@ -2,6 +2,9 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- render: harden directional shadow receivers for skinned meshes (normal + light-dir bias, stronger depth bias, defaults that keep characters lit under lavapipe)
+
+
 ## blade-graphics-0.9, blade-util-0.5, blade-egui-0.9, blade-particle-0.2, blade-asset-0.2.2, blade-render-0.6, blade-helpers-0.3, blade-engine-0.2 (5 Sep 2026)
 
 - MSRV raised to 1.92

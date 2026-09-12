@@ -30,7 +30,7 @@ struct RasterFrameParams {
     ambient_color: vec4<f32>,
     // x: environment map enabled, y: the surface needs sRGB encoding
     settings: vec4<f32>,
-    // x: enabled, y: strength, z: receiver normal bias, w: texel size
+    // x: enabled, y: strength, z: receiver normal bias, w: light-dir bias
     shadow_params: vec4<f32>,
 }
 
@@ -156,7 +156,13 @@ fn directional_shadow(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
     if (frame_params.shadow_params.x < 0.5) {
         return 1.0;
     }
-    let receiver = world_pos + n * frame_params.shadow_params.z;
+    let light_dir = normalize(frame_params.light_dir.xyz);
+    let ndotl = max(dot(n, light_dir), 0.0);
+    // Slope-scale the normal offset so grazing receivers (common on skinned
+    // armor panels) do not fall behind their own shadow-map texels.
+    let normal_bias = frame_params.shadow_params.z / max(ndotl, 0.35);
+    let depth_bias = frame_params.shadow_params.w;
+    let receiver = world_pos + n * normal_bias + light_dir * depth_bias;
     let clip = frame_params.light_view_proj * vec4<f32>(receiver, 1.0);
     let ndc = clip.xyz / clip.w;
     let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
@@ -165,7 +171,7 @@ fn directional_shadow(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
     }
 
     // Four bilinear comparison samples give a compact 4x4 percentage-closer filter.
-    let texel = frame_params.shadow_params.w;
+    let texel = 1.0 / f32(textureDimensions(shadow_tex).x);
     let reference = ndc.z;
     var visibility = 0.0;
     visibility += textureSampleCompare(shadow_tex, shadow_samp, uv + vec2<f32>(-0.75, -0.75) * texel, reference);
