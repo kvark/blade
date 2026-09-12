@@ -249,7 +249,6 @@ type RawCommandBuffer = Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>;
 pub struct CommandEncoder {
     raw: Option<RawCommandBuffer>,
     name: String,
-    device: Retained<ProtocolObject<dyn metal::MTLDevice>>,
     queue: Arc<Mutex<Retained<ProtocolObject<dyn metal::MTLCommandQueue>>>>,
     enable_debug_groups: bool,
     enable_dispatch_type: bool,
@@ -743,7 +742,6 @@ impl crate::traits::CommandDevice for Context {
         CommandEncoder {
             raw: None,
             name: desc.name.to_string(),
-            device: self.device.lock().unwrap().clone(),
             queue: Arc::clone(&self.queue),
             enable_debug_groups: self.info.enable_debug_groups,
             enable_dispatch_type: self.info.enable_dispatch_type,
@@ -759,7 +757,7 @@ impl crate::traits::CommandDevice for Context {
         use metal::MTLCommandBuffer as _;
         if let Some(ref mut td_array) = encoder.timing_datas {
             let td = td_array.first_mut().unwrap();
-            td.calibration = Some(sample_timestamps(&encoder.device));
+            td.calibration = Some(sample_timestamps(&self.device.lock().unwrap()));
         }
         let cmd_buf = encoder.finish();
         cmd_buf.commit();

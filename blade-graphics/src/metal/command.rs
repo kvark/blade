@@ -453,7 +453,11 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
                     )
                 };
                 let begin = td.calibration.take().unwrap();
-                let end = super::sample_timestamps(&self.device);
+                let end = {
+                    use metal::MTLCommandQueue as _;
+                    let queue = self.queue.lock().unwrap();
+                    super::sample_timestamps(&queue.device())
+                };
                 let done_ns = *counters.last().unwrap();
                 for (name, chunk) in td.pass_names.drain(..).zip(counters.chunks(2)) {
                     self.timings
