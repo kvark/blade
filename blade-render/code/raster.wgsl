@@ -158,9 +158,10 @@ fn directional_shadow(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
     }
     let light_dir = normalize(frame_params.light_dir.xyz);
     let ndotl = max(dot(n, light_dir), 0.0);
-    // Slope-scale the normal offset so grazing receivers (common on skinned
-    // armor panels) do not fall behind their own shadow-map texels.
-    let normal_bias = frame_params.shadow_params.z / max(ndotl, 0.35);
+    // Mild slope scale: dense skinned panels need extra bias at grazing angles,
+    // but a hard floor near 0.35 lifts ground receivers out of contact shadows
+    // under a low dusk key.
+    let normal_bias = frame_params.shadow_params.z * (1.0 + 0.75 * (1.0 - ndotl));
     let depth_bias = frame_params.shadow_params.w;
     let receiver = world_pos + n * normal_bias + light_dir * depth_bias;
     let clip = frame_params.light_view_proj * vec4<f32>(receiver, 1.0);

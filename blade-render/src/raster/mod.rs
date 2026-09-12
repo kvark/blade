@@ -123,7 +123,7 @@ impl Default for DirectionalShadowConfig {
             depth: 240.0,
             strength: 0.72,
             normal_bias: 0.15,
-            depth_bias: 0.12,
+            depth_bias: 0.08,
         }
     }
 }
@@ -1243,7 +1243,13 @@ fn make_light_view_proj(
     light_dir: mint::Vector3<f32>,
     config: DirectionalShadowConfig,
 ) -> glam::Mat4 {
-    let center = glam::Vec3::from(camera.pos);
+    // Center the ortho on a point in front of the camera so a hero/OTS shot
+    // still covers the staged geometry the player is looking at, not empty
+    // space behind the lens.
+    let eye_pos = glam::Vec3::from(camera.pos);
+    let forward = glam::Quat::from(camera.rot) * -glam::Vec3::Z;
+    let focus_distance = (config.distance * 0.35).clamp(4.0, 40.0);
+    let center = eye_pos + forward * focus_distance;
     let light_dir = glam::Vec3::from(light_dir).normalize_or_zero();
     let light_dir = if light_dir.length_squared() > 1e-5 {
         light_dir
