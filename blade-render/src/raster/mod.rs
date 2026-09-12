@@ -102,17 +102,28 @@ pub struct DirectionalShadowConfig {
     /// Fraction of direct lighting removed in full shadow.
     pub strength: f32,
     /// World-space receiver offset along its shading normal.
+    ///
+    /// Dense skinned meshes (characters, mechs) need this on the order of a
+    /// shadow-map texel in world space, otherwise self-shadow acne turns them
+    /// into silhouettes under a strong directional key.
     pub normal_bias: f32,
+    /// World-space receiver offset toward the light.
+    ///
+    /// Combined with [`Self::normal_bias`] this fights acne on animated
+    /// receivers without relying solely on rasterization depth bias (which is
+    /// weak on `Depth32Float` and uneven across software rasterizers).
+    pub depth_bias: f32,
 }
 
 impl Default for DirectionalShadowConfig {
     fn default() -> Self {
         Self {
-            resolution: 512,
+            resolution: 1024,
             distance: 70.0,
             depth: 240.0,
-            strength: 0.88,
-            normal_bias: 0.06,
+            strength: 0.72,
+            normal_bias: 0.15,
+            depth_bias: 0.12,
         }
     }
 }
@@ -391,9 +402,14 @@ impl RasterPipelines {
                 depth_write_enabled: true,
                 depth_compare: gpu::CompareFunction::Less,
                 stencil: gpu::StencilState::default(),
+                // Stronger than the old 2/2 pair: Depth32Float makes the
+                // constant factor nearly a no-op on some drivers (lavapipe),
+                // so slope-scale carries most of the acne defense in the
+                // depth prepass. Receiver-side normal/depth bias in the
+                // main pass covers the rest for skinned meshes.
                 bias: gpu::DepthBiasState {
-                    constant: 2,
-                    slope_scale: 2.0,
+                    constant: 4,
+                    slope_scale: 4.0,
                     clamp: 0.0,
                 },
             }),
@@ -1151,11 +1167,13 @@ impl Rasterizer {
                 0.0,
                 0.0,
             ],
+            // x: enabled, y: strength, z: normal bias, w: light-direction bias.
+            // Texel size for PCF is read from textureDimensions(shadow_tex).
             shadow_params: [
                 config.directional_shadows.is_some() as u32 as f32,
                 shadow.strength.clamp(0.0, 1.0),
                 shadow.normal_bias.max(0.0),
-                1.0 / self.shadow_size as f32,
+                shadow.depth_bias.max(0.0),
             ],
         }
     }
