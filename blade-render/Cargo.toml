@@ -7,6 +7,12 @@ description = "Renderer built on Blade"
 keywords = ["graphics", "engine"]
 license = "MIT"
 repository = "https://github.com/kvark/blade"
+include = [
+    "src/**/*",
+    "code/**/*",
+    "etc/**/*",
+    "README.md",
+]
 
 [lib]
 

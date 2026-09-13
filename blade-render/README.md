@@ -12,6 +12,13 @@ Rasterized and ray-traced rendering based on [blade-graphics](https://crates.io/
 The rasterizer supports the portable graphics profile, including WebGL2. The
 ray tracer requires a backend and device with ray-query support.
 
+## Shader sources
+
+WGSL under `code/` is packaged with the crate. Set your game
+`config.shader_path` from [`shader_dir()`](https://docs.rs/blade-render/latest/blade_render/fn.shader_dir.html)
+(or `blade_render::shader_dir()`) so you do not copy those files into the game
+tree. Keep game-only shader overrides in the game repository.
+
 ## Skeletal animation
 
 The renderer's glTF model contains only the geometry-side skin bindings. Clip

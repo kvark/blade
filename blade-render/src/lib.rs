@@ -42,6 +42,14 @@ pub use util::FrameResources;
 
 pub use render::*;
 
+/// Absolute path to the WGSL sources shipped with this crate (`code/`).
+///
+/// Point game `config.shader_path` at this directory so dependents do not need
+/// to copy shaders. Keep game-only overrides in the game repository.
+pub fn shader_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("code")
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DebugPoint {
