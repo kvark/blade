@@ -12,12 +12,55 @@ Rasterized and ray-traced rendering based on [blade-graphics](https://crates.io/
 The rasterizer supports the portable graphics profile, including WebGL2. The
 ray tracer requires a backend and device with ray-query support.
 
-## Shader sources
+## Shader sources / shipping
 
-WGSL under `code/` is packaged with the crate. Set your game
-`config.shader_path` from [`shader_dir()`](https://docs.rs/blade-render/latest/blade_render/fn.shader_dir.html)
-(or `blade_render::shader_dir()`) so you do not copy those files into the game
-tree. Keep game-only shader overrides in the game repository.
+Canonical WGSL lives in this crate’s `code/` directory. It is listed in
+`Cargo.toml` `include` so **crates.io** packages contain it; **git** and **path**
+dependencies already see the full tree. Do **not** copy these files into every
+game repo.
+
+### Dev and CI (native)
+
+Set Engine `config.shader_path` from [`shader_dir()`](https://docs.rs/blade-render/latest/blade_render/fn.shader_dir.html):
+
+```rust
+config.shader_path = blade_render::shader_dir()
+    .to_string_lossy()
+    .into_owned();
+```
+
+`shader_dir()` is `env!("CARGO_MANIFEST_DIR")/code` for **blade-render** (not the
+game). That path works with git (`~/.cargo/git/checkouts/.../blade-render/code`),
+path, and crates.io registry unpacks during `cargo run` / CI on the build machine.
+The Blade pin (git rev or crates.io version) **is** the shader version.
+
+### Game-only overrides
+
+Keep thin overlays in the game (for example a custom `raster.wgsl`). A common
+native pattern: copy stock `shader_dir()` into a local cache, then copy overlay
+files on top, and point `shader_path` at the cache. Do not vendor the full
+stock tree.
+
+### WASM (and other no-filesystem targets)
+
+Runtime cannot read `shader_dir()` from disk. In the game’s `build.rs`, resolve
+blade-render’s `code/` via `cargo metadata` (find the `blade-render` package’s
+`manifest_path`, take the sibling `code/`), optionally merge overlays into
+`OUT_DIR`, then `include_dir!` that tree into Blade’s VFS. Mount under the same
+absolute paths `shader_dir()` returns so `config.shader_path` stays one string
+for native and WASM. Reference: redline / geofront after their `shader_dir`
+migrations.
+
+### Shipped native binaries
+
+`shader_dir()` embeds a **build-machine** absolute path. A release binary on
+another machine will not find `~/.cargo/...`. For packaging either:
+
+1. **Embed** WGSL the same way as WASM and load from the VFS, or
+2. **Install** `code/` (plus overlays) next to the executable and set
+   `shader_path` to that install directory.
+
+Treat “`cargo run` works” as necessary but not sufficient for release.
 
 ## Skeletal animation
 

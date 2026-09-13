@@ -46,6 +46,13 @@ pub use render::*;
 ///
 /// Point game `config.shader_path` at this directory so dependents do not need
 /// to copy shaders. Keep game-only overrides in the game repository.
+///
+/// This is `CARGO_MANIFEST_DIR/code`, resolved when **this crate** is compiled.
+/// It works for git, path, and crates.io dependencies during `cargo run` / CI
+/// because Cargo materializes `code/` next to the crate manifest. It is **not**
+/// a portable install path for a shipped native binary — embed the WGSL (as for
+/// WASM) or install `code/` next to the executable. See `blade-render/README.md`
+/// (“Shader sources / shipping”).
 pub fn shader_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("code")
 }
