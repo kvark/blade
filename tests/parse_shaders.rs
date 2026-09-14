@@ -26,7 +26,10 @@ fn validate_shader(
     //TODO: re-use the validator
     Validator::new(
         naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS,
-        naga::valid::Capabilities::RAY_QUERY
+        naga::valid::Capabilities::default()
+            | naga::valid::Capabilities::SUBGROUP
+            | naga::valid::Capabilities::SUBGROUP_BARRIER
+            | naga::valid::Capabilities::RAY_QUERY
             | naga::valid::Capabilities::ACCELERATION_STRUCTURE_BINDING_ARRAY
             | naga::valid::Capabilities::COOPERATIVE_MATRIX
             | naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY

@@ -22,7 +22,11 @@ impl super::Context {
 
         // Bindings are set up at pipeline creation, ignore here
         let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
-        let mut caps = naga::valid::Capabilities::empty();
+        // Naga's default is the set it considers universally available:
+        // `MULTISAMPLED_SHADING` and `CUBE_ARRAY_TEXTURES`. We support both
+        // (`MultisampleState`, `ViewDimension::CubeArray`), so start there
+        // rather than from nothing, and pick up future additions to it.
+        let mut caps = naga::valid::Capabilities::default();
         caps.set(
             naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY
                 | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY
@@ -51,7 +55,12 @@ impl super::Context {
         // broadly supported on modern GPUs via VK_EXT_subgroup_size_control.
         // Enable unconditionally so naga validates subgroup ops and emits
         // the correct SPIR-V capabilities (GroupNonUniform, etc.).
-        caps.set(naga::valid::Capabilities::SUBGROUP, true);
+        // `SUBGROUP_BARRIER` is separate, and every backend we target has it.
+        // (It is split out for HLSL, which we don't generate.)
+        caps.set(
+            naga::valid::Capabilities::SUBGROUP | naga::valid::Capabilities::SUBGROUP_BARRIER,
+            true,
+        );
         // `quantizeToF16`, `pack2x16float` and `unpack2x16float` only store
         // f16-precision values inside f32, so they don't need the `f16`
         // extension. Every backend we target supports them.

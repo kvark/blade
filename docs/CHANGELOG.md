@@ -3,6 +3,7 @@ Changelog for *Blade* project
 ## (TBD)
 
 - graphics: allow `quantizeToF16`, `pack2x16float` and `unpack2x16float` in shaders
+- graphics: allow multisampled shading, cube array textures, and subgroup barriers in shaders
 - render: harden directional shadow receivers for skinned meshes (normal + light-dir bias, stronger depth bias, defaults that keep characters lit under lavapipe)
 
 
