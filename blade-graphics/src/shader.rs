@@ -52,6 +52,10 @@ impl super::Context {
         // Enable unconditionally so naga validates subgroup ops and emits
         // the correct SPIR-V capabilities (GroupNonUniform, etc.).
         caps.set(naga::valid::Capabilities::SUBGROUP, true);
+        // `quantizeToF16`, `pack2x16float` and `unpack2x16float` only store
+        // f16-precision values inside f32, so they don't need the `f16`
+        // extension. Every backend we target supports them.
+        caps.set(naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32, true);
 
         naga::valid::Validator::new(flags, caps)
             .validate(module)
