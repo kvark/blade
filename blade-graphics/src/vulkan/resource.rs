@@ -1,6 +1,8 @@
-use ash::vk;
+use ash::vk::{self, Handle};
 use gpu_alloc_ash::AshMemoryDevice;
 use std::{mem, ptr};
+
+use super::memory_trace::{Hex, Trace};
 
 fn memory_allocate_flags(needs_device_address: bool) -> vk::MemoryAllocateFlags {
     if needs_device_address {
@@ -47,6 +49,7 @@ struct Allocation {
     data: *mut u8,
     handle: usize,
     memory_type: crate::Memory,
+    trace_request: u64,
 }
 
 impl super::Context {
@@ -57,6 +60,19 @@ impl super::Context {
         name: &str,
         needs_device_address: bool,
     ) -> Allocation {
+        let trace = Trace::new();
+        trace.mark(
+            "allocate.before",
+            format_args!(
+                "device={} name_hex={} bytes={} alignment={} type_bits={} usage={}",
+                self.device.core.handle().as_raw(),
+                Hex(name),
+                requirements.size,
+                requirements.alignment,
+                requirements.memory_type_bits,
+                memory_usage_flags(memory, needs_device_address).bits(),
+            ),
+        );
         let mut manager = self.memory.lock().unwrap();
         let alloc_usage = memory_usage_flags(memory, needs_device_address);
         let memory_types = requirements.memory_type_bits & manager.valid_ash_memory_types;
@@ -226,6 +242,17 @@ impl super::Context {
             },
         };
 
+        let memory_type = manager.memory_types[block.memory_type() as usize];
+        let heap = manager.memory_heaps[memory_type.heap_index as usize];
+        trace.mark("allocate.after", format_args!(
+            "memory={} offset={} block_bytes={} type={} type_flags={} heap={} heap_bytes={} heap_flags={}",
+            (*block.memory()).as_raw(), block.offset(), block.size(), block.memory_type(),
+            memory_type.property_flags.as_raw(), memory_type.heap_index, heap.size, heap.flags.as_raw(),
+        ));
+        trace.mark(
+            "host_access.before",
+            format_args!("memory={}", (*block.memory()).as_raw()),
+        );
         let data = match memory {
             crate::Memory::External(crate::ExternalMemorySource::HostAllocation(ptr)) => {
                 ptr as *mut u8
@@ -244,12 +271,17 @@ impl super::Context {
                     .as_ptr()
             },
         };
+        trace.mark(
+            "host_access.after",
+            format_args!("mapped={}", u8::from(!data.is_null())),
+        );
         Allocation {
             memory: *block.memory(),
             offset: block.offset(),
             data,
             handle: manager.slab.insert((block, name.to_string())),
             memory_type: memory,
+            trace_request: trace.id(),
         }
     }
 
@@ -398,6 +430,16 @@ impl crate::traits::ResourceDevice for super::Context {
 
     fn create_buffer(&self, desc: crate::BufferDesc) -> super::Buffer {
         use vk::BufferUsageFlags as Buf;
+        let trace = Trace::new();
+        trace.mark(
+            "buffer.before",
+            format_args!(
+                "device={} name_hex={} bytes={}",
+                self.device.core.handle().as_raw(),
+                Hex(desc.name),
+                desc.size,
+            ),
+        );
         let external_source = match desc.memory {
             crate::Memory::External(e) => Some(e),
             _ => None,
@@ -431,6 +473,7 @@ impl crate::traits::ResourceDevice for super::Context {
         }
 
         let raw = unsafe { self.device.core.create_buffer(&vk_info, None).unwrap() };
+        trace.mark("buffer.created", format_args!("buffer={}", raw.as_raw()));
         let mut requirements = unsafe { self.device.core.get_buffer_memory_requirements(raw) };
         requirements.alignment = requirements.alignment.max(self.min_buffer_alignment);
         let allocation = self.allocate_memory(
@@ -447,15 +490,27 @@ impl crate::traits::ResourceDevice for super::Context {
             desc.name,
             allocation.handle
         );
+        trace.mark(
+            "bind.before",
+            format_args!(
+                "buffer={} allocation_request={} memory={} offset={}",
+                raw.as_raw(),
+                allocation.trace_request,
+                allocation.memory.as_raw(),
+                allocation.offset,
+            ),
+        );
         unsafe {
             self.device
                 .core
                 .bind_buffer_memory(raw, allocation.memory, allocation.offset)
                 .unwrap()
         };
+        trace.mark("bind.after", format_args!("buffer={}", raw.as_raw()));
         if !desc.name.is_empty() {
             self.set_object_name(raw, desc.name);
         }
+        trace.mark("buffer.after", format_args!("buffer={}", raw.as_raw()));
 
         super::Buffer {
             raw,
