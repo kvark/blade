@@ -1424,6 +1424,10 @@ impl super::Context {
                 allocator: gpu_alloc::GpuAllocator::new(config, properties),
                 slab: slab::Slab::new(),
                 valid_ash_memory_types,
+                memory_types: memory_types.to_vec(),
+                memory_heaps: mem_properties.memory_heaps
+                    [..mem_properties.memory_heap_count as usize]
+                    .to_vec(),
             }
         };
 
