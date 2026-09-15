@@ -8,6 +8,7 @@ use std::{mem, num::NonZeroU32, path::PathBuf, ptr, sync::Mutex};
 mod command;
 mod descriptor;
 mod init;
+mod memory_trace;
 mod pipeline;
 mod resource;
 mod surface;
@@ -87,6 +88,8 @@ struct MemoryManager {
     allocator: gpu_alloc::GpuAllocator<vk::DeviceMemory>,
     slab: slab::Slab<(gpu_alloc::MemoryBlock<vk::DeviceMemory>, String)>,
     valid_ash_memory_types: u32,
+    memory_types: Vec<vk::MemoryType>,
+    memory_heaps: Vec<vk::MemoryHeap>,
 }
 
 struct Queue {
