@@ -62,7 +62,11 @@ impl crate::ShaderBindable for crate::BufferPiece {
                 target: glow::SHADER_STORAGE_BUFFER,
                 slot,
                 buffer: (*self).into(),
-                size: (self.buffer.size - self.offset) as u32,
+                size: if self.size == 0 {
+                    (self.buffer.size - self.offset) as u32
+                } else {
+                    self.size as u32
+                },
             });
         }
     }
@@ -1071,33 +1075,21 @@ impl super::Command {
                         gl.clear_buffer_f32_slice(
                             glow::COLOR,
                             draw_buffer,
-                            &match color {
-                                crate::TextureColor::TransparentBlack => [0.0; 4],
-                                crate::TextureColor::OpaqueBlack => [0.0, 0.0, 0.0, 1.0],
-                                crate::TextureColor::White => [1.0; 4],
-                            },
+                            &color.float4(),
                         );
                     }
                     super::ColorType::Uint => {
                         gl.clear_buffer_u32_slice(
                             glow::COLOR,
                             draw_buffer,
-                            &match color {
-                                crate::TextureColor::TransparentBlack => [0; 4],
-                                crate::TextureColor::OpaqueBlack => [0, 0, 0, !0],
-                                crate::TextureColor::White => [!0; 4],
-                            },
+                            &color.float4().map(|c| if c >= 0.5 { !0 } else { 0 }),
                         );
                     }
                     super::ColorType::Sint => {
                         gl.clear_buffer_i32_slice(
                             glow::COLOR,
                             draw_buffer,
-                            &match color {
-                                crate::TextureColor::TransparentBlack => [0; 4],
-                                crate::TextureColor::OpaqueBlack => [0, 0, 0, !0],
-                                crate::TextureColor::White => [!0; 4],
-                            },
+                            &color.float4().map(|c| if c >= 0.5 { !0 } else { 0 }),
                         );
                     }
                 },

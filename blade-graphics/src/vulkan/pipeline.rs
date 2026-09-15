@@ -196,6 +196,11 @@ impl super::Context {
             .zip(info.binding_access.iter())
             .enumerate()
         {
+            if matches!(binding, crate::ShaderBinding::Unused) {
+                // Keep template_offsets indexed by wgpu binding number.
+                template_offsets.push(0);
+                continue;
+            }
             let (descriptor_type, descriptor_size, descriptor_count, flag) = match binding {
                 crate::ShaderBinding::Texture => (
                     if access.is_empty() {
@@ -229,6 +234,12 @@ impl super::Context {
                     1u32,
                     vk::DescriptorBindingFlags::empty(),
                 ),
+                crate::ShaderBinding::UniformBuffer => (
+                    vk::DescriptorType::UNIFORM_BUFFER,
+                    mem::size_of::<vk::DescriptorBufferInfo>(),
+                    1u32,
+                    vk::DescriptorBindingFlags::empty(),
+                ),
                 crate::ShaderBinding::BufferArray { count } => (
                     vk::DescriptorType::STORAGE_BUFFER,
                     mem::size_of::<vk::DescriptorBufferInfo>(),
@@ -247,6 +258,7 @@ impl super::Context {
                     count,
                     vk::DescriptorBindingFlags::PARTIALLY_BOUND,
                 ),
+                crate::ShaderBinding::Unused => unreachable!("skipped unused binding"),
                 crate::ShaderBinding::Plain { size } => {
                     if size <= self.device.max_inline_uniform_block_size {
                         (
@@ -570,12 +582,11 @@ impl crate::traits::ShaderDevice for super::Context {
         let vertex_attributes = vs
             .attribute_mappings
             .into_iter()
-            .enumerate()
-            .map(|(index, mapping)| {
+            .map(|mapping| {
                 let (_, ref at) = desc.vertex_fetches[mapping.buffer_index].layout.attributes
                     [mapping.attribute_index];
                 vk::VertexInputAttributeDescription {
-                    location: index as u32,
+                    location: mapping.location,
                     binding: mapping.buffer_index as u32,
                     format: super::map_vertex_format(at.format),
                     offset: at.offset,

@@ -32,6 +32,10 @@ BLADE_ONLY_WORKLOADS = (
     "mixed-chain",
 )
 BLADE_WORKLOADS = SHARED_WORKLOADS + BLADE_ONLY_WORKLOADS
+# Application cell. Same scene on Blade wgpu and wgpu-core; excluded from the
+# synthetic shader-hash agreement because the frame is a Bevy graph, not the
+# matched sync-bench programs.
+BEVY_WORKLOAD = "bevy-headless"
 
 # Placement crossed with scope. Neither axis is a default for the other, so
 # every combination is collected and the comparison is symmetric.
@@ -75,6 +79,12 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--blade", type=Path, default=blade_root)
     parser.add_argument("--wgpu", type=Path, default=blade_root.parent / "wgpu")
+    parser.add_argument("--bevy", type=Path, default=blade_root.parent / "bevy")
+    parser.add_argument(
+        "--skip-bevy",
+        action="store_true",
+        help="do not collect the Bevy headless family (synthetic matrix only)",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--backend",
@@ -403,6 +413,11 @@ def discover_devices(
     return selected
 
 
+def participates_in_hash_agreement(workload: str) -> bool:
+    """Synthetic cells share a shader; the Bevy family does not."""
+    return workload != BEVY_WORKLOAD
+
+
 def ensure_positive(arguments: argparse.Namespace) -> None:
     values = {
         "repetitions": arguments.repetitions,
@@ -428,6 +443,8 @@ def collect_device(
     wgpu: Path,
     blade_binary: Path,
     wgpu_binary: Path,
+    blade_bevy_binary: Path | None,
+    wgpu_bevy_binary: Path | None,
     collection_id: str,
     repository_metadata: dict[str, dict[str, str]],
     seed: int,
@@ -561,6 +578,11 @@ def collect_device(
         for passes in pass_counts
         for workload in SHARED_WORKLOADS
     )
+    if not arguments.skip_bevy and not arguments.validation:
+        # One Bevy cell per implementation per repetition, independent of the
+        # synthetic pass-count sweep.
+        configurations.append(("blade", BEVY_WORKLOAD, "automatic", 1))
+        configurations.append(("wgpu", BEVY_WORKLOAD, "tracked", 1))
     rng = random.Random(seed)
     common_arguments = [
         "--elements",
@@ -607,16 +629,39 @@ def collect_device(
                 if len(pass_counts) > 1:
                     run_id = f"{run_id}__p{passes:04d}"
                 csv_name = f"{run_id}.csv"
-                command = [
-                    str(blade_binary if implementation == "blade" else wgpu_binary),
-                    "--workload",
-                    workload,
-                    "--policy",
-                    policy,
-                    "--passes",
-                    str(passes),
-                    *common_arguments,
-                ]
+                if workload == BEVY_WORKLOAD:
+                    bevy_binary = (
+                        blade_bevy_binary
+                        if implementation == "blade"
+                        else wgpu_bevy_binary
+                    )
+                    if bevy_binary is None:
+                        raise RuntimeError(
+                            "Bevy cell requested but Bevy binaries were not built"
+                        )
+                    command = [
+                        str(bevy_binary),
+                        "--workload",
+                        workload,
+                        "--policy",
+                        policy,
+                        "--passes",
+                        str(passes),
+                        *common_arguments,
+                        "--output-image",
+                        str(output / f"{run_id}.png"),
+                    ]
+                else:
+                    command = [
+                        str(blade_binary if implementation == "blade" else wgpu_binary),
+                        "--workload",
+                        workload,
+                        "--policy",
+                        policy,
+                        "--passes",
+                        str(passes),
+                        *common_arguments,
+                    ]
                 environment = os.environ.copy()
                 relevant_environment: dict[str, str] = {}
                 if arguments.validation and arguments.backend == "vulkan":
@@ -654,7 +699,11 @@ def collect_device(
                         )
 
                 print(f"{output.name}/{run_id}", file=sys.stderr, flush=True)
-                result = run(command, blade, env=environment, timeout=900, check=False)
+                timeout = 1800 if workload == BEVY_WORKLOAD else 900
+                cwd = arguments.bevy.resolve() if workload == BEVY_WORKLOAD else blade
+                result = run(
+                    command, cwd, env=environment, timeout=timeout, check=False
+                )
                 if result.stderr:
                     (output / f"{run_id}.stderr.txt").write_text(
                         result.stderr, encoding="utf-8"
@@ -703,9 +752,10 @@ def collect_device(
                 validation_hash = metadata.get("validation_hash")
                 if validation_hash is None:
                     raise ValueError(f"{run_id}: missing validation hash")
-                validation_hashes.setdefault(
-                    (repetition, workload, passes), set()
-                ).add(validation_hash)
+                if participates_in_hash_agreement(workload):
+                    validation_hashes.setdefault(
+                        (repetition, workload, passes), set()
+                    ).add(validation_hash)
                 device_names.setdefault(implementation, set()).add(
                     metadata.get("device_name", "")
                 )
@@ -768,13 +818,18 @@ def main() -> None:
     ensure_positive(arguments)
     blade = arguments.blade.resolve()
     wgpu = arguments.wgpu.resolve()
+    bevy = arguments.bevy.resolve()
     collection_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     if not (blade / "Cargo.toml").is_file():
         raise ValueError(f"not a Blade checkout: {blade}")
     if not (wgpu / "examples/standalone/sync_bench/Cargo.toml").is_file():
         raise ValueError(f"wgpu sync benchmark is missing from: {wgpu}")
+    if not arguments.skip_bevy and not (bevy / "Cargo.toml").is_file():
+        raise ValueError(f"not a Bevy checkout: {bevy}")
 
     repositories = {"blade": blade, "wgpu": wgpu}
+    if not arguments.skip_bevy:
+        repositories["bevy"] = bevy
     repository_metadata: dict[str, dict[str, str]] = {}
     for name, root in repositories.items():
         # Accumulated collections do not change what the binaries do, so they
@@ -797,14 +852,52 @@ def main() -> None:
     if not arguments.skip_build:
         run(["cargo", "build", "--release", "--example", "sync-bench"], blade)
         run(["cargo", "build", "--release", "-p", "wgpu-sync-bench"], wgpu)
+        if not arguments.skip_bevy:
+            run(
+                [
+                    "cargo",
+                    "build",
+                    "--release",
+                    "--example",
+                    "sync_bench",
+                    "--features",
+                    "blade",
+                    "--target-dir",
+                    str(bevy / "target/blade-bench"),
+                ],
+                bevy,
+            )
+            run(
+                [
+                    "cargo",
+                    "build",
+                    "--release",
+                    "--example",
+                    "sync_bench",
+                    "--target-dir",
+                    str(bevy / "target/wgpu-bench"),
+                ],
+                bevy,
+            )
 
     blade_binary = blade / "target/release/examples/sync-bench"
     wgpu_binary = wgpu / "target/release/wgpu-sync-bench"
+    blade_bevy_binary = bevy / "target/blade-bench/release/examples/sync_bench"
+    wgpu_bevy_binary = bevy / "target/wgpu-bench/release/examples/sync_bench"
     if sys.platform == "win32":
         blade_binary = blade_binary.with_suffix(".exe")
         wgpu_binary = wgpu_binary.with_suffix(".exe")
+        blade_bevy_binary = blade_bevy_binary.with_suffix(".exe")
+        wgpu_bevy_binary = wgpu_bevy_binary.with_suffix(".exe")
     if not blade_binary.is_file() or not wgpu_binary.is_file():
         raise ValueError("release benchmark binaries are missing")
+    if not arguments.skip_bevy and (
+        not blade_bevy_binary.is_file() or not wgpu_bevy_binary.is_file()
+    ):
+        raise ValueError("release Bevy sync_bench binaries are missing")
+    if arguments.skip_bevy:
+        blade_bevy_binary = None
+        wgpu_bevy_binary = None
 
     seed = arguments.seed
     if seed is None:
@@ -831,6 +924,8 @@ def main() -> None:
             wgpu=wgpu,
             blade_binary=blade_binary,
             wgpu_binary=wgpu_binary,
+            blade_bevy_binary=blade_bevy_binary,
+            wgpu_bevy_binary=wgpu_bevy_binary,
             collection_id=collection_id,
             repository_metadata=repository_metadata,
             seed=seed,

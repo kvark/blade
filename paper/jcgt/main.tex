@@ -1,0 +1,344 @@
+\documentclass[10pt,twocolumn]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\hypersetup{
+  pdftitle={A Tracking-Free wgpu Backend: Global Pass Barriers
+    Exercised in Bevy},
+  pdfauthor={Dzmitry Malyshau}
+}
+
+\newcommand{\blade}{\textsc{Blade}}
+\newcommand{\wgpu}{\textsc{wgpu}}
+
+\title{A Tracking-Free wgpu Backend:\\
+Global Pass Barriers Exercised in Bevy}
+\author{Dzmitry Malyshau}
+\date{September 2026 \\[0.4em]
+\small Companion to arXiv:2607.26506. Implementation notes for JCGT;
+not a rewrite of the archival study.}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\blade{} is an RHI that keeps Vulkan images in \texttt{GENERAL}, tracks no
+per-resource state, and issues one global barrier at pass boundaries. A
+cross-vendor study of that contract on matched synthetic graphs is already
+archived~\cite{malyshau-sync-study}. This companion is the piece a
+practitioner needs next: how to put that RHI underneath the public wgpu
+API as a \emph{custom backend}, skip wgpu-core's tracker, and run a real
+engine frame.
+
+The backend translates wgpu bind groups onto \blade{} named
+\texttt{ShaderData} at bind-group creation, not during
+\texttt{CommandEncoder::finish} / \texttt{Queue::submit}. Bevy 0.20 then
+runs unmodified except for instance construction. A headless cube+ground
+cell with shadows, GPU mesh preprocessing, a depth/normal prepass, and
+SSAO produces a filled 31-pass (Blade) / 46-pass (wgpu-core) frame whose
+image hash agrees on a RADV Phoenix 780M. Combined record-and-submit on
+that cell is \emph{not} a Blade win in the unlocked-clock pilot; the
+archival claim that wgpu-core was more expensive in every synthetic cell
+does not automatically transfer. Finish versus submit is backend-asymmetric:
+Blade records during pass drop and submits in \texttt{Queue::submit};
+wgpu-core bakes the command buffer in \texttt{finish}. Compare the sum.
+MSAA resolve and swapchains remain unimplemented. The collection command
+and the comparison rule are in \texttt{paper/COLLECTING.md}.
+\end{abstract}
+
+\section{Why this paper}
+
+JCGT wants a technique one can implement, including the ugly edges
+\cite{jcgt}. The archival study~\cite{malyshau-sync-study} already
+answered a different question: on six GPUs, what do \emph{placement} and
+\emph{pass-kind scope} of Blade's global barriers cost, relative to a
+matched wgpu program, when the graph is synthetic and both sides emit the
+same shaders. It did not ship a drop-in wgpu backend, did not run an
+engine, and explicitly refused to attribute the host gap to tracking
+alone.
+
+This manuscript is the implementation case study. The technique is:
+expose Blade as \texttt{wgpu::Instance::from\_custom}, keep the public
+wgpu API, and let Bevy~\cite{bevy} drive both backends. The evaluation is
+one application cell plus the same synthetic collector, on the same 780M
+that the archival paper already flagged as the device where \emph{removing}
+redundant barriers \emph{increased} independent-render GPU span. That is
+the honest first application host: not the discrete parts that saved
+$\sim$30\% on independent compute.
+
+\section{The RHI contract, in the amount a backend needs}
+
+Vulkan requires the application (or an RHI) to declare stage/access
+dependencies and image layouts~\cite{vulkan-spec}. wgpu-core reconstructs
+that state from bind groups and pass attachments~\cite{wgpu-trackers}.
+NVRHI keeps per-command-list resource state even in ``manual''
+mode~\cite{nvrhi-state-tracking}. Blade does none of that:
+
+\begin{itemize}
+  \item images stay in \texttt{GENERAL} for their lifetime;
+  \item the encoder stores only the \emph{kinds} of passes opened since
+        the last barrier (compute, render, transfer);
+  \item opening a pass, or an explicit \texttt{barrier}, emits one global
+        \texttt{VkMemoryBarrier} (or a pass-kind-scoped variant);
+  \item the application is responsible for aliasing, exclusive
+        cross-queue use, exceptional layouts, and any dependency that is
+        not ``this pass kind follows that pass kind''.
+\end{itemize}
+
+The archival paper isolates two axes inside that contract
+(\texttt{automatic} vs \texttt{hazard-only} placement; \texttt{Global} vs
+\texttt{PassKind} scope) and compares the whole design to wgpu end to
+end. Readers who need factor tables, RADV expansion of global barriers,
+DCC versus FMASK under persistent \texttt{GENERAL}, or the 780M
+independent-render penalty should read that study. This paper does not
+repeat them.
+
+\section{wgpu custom backend}
+
+wgpu 30 dispatches \texttt{Instance} / \texttt{Device} / encoder traits
+to wgpu-core, WebGPU, or a \emph{custom} implementation. Blade is the
+custom one (\texttt{blade-wgpu}). Bevy therefore keeps a single render
+path. The scientifically useful A/B is the same Bevy frame on
+\texttt{--features blade} versus default wgpu-core, timed at the same
+wgpu functions.
+
+\subsection{Bind groups are not barriers}
+
+wgpu shaders name \texttt{@group} / \texttt{@binding}. Blade shaders
+export a \texttt{ShaderData} layout of named bindings; the compiler
+asserts numeric bindings are absent in the native Blade path. The
+backend keeps wgpu's numeric bindings, leaks stable names
+\texttt{b\{binding\}} / \texttt{l\{location\}}, and maps:
+
+\begin{itemize}
+  \item \texttt{UNIFORM} $\to$ \texttt{ShaderBinding::UniformBuffer}
+        (Vulkan \texttt{UNIFORM\_BUFFER}, not storage);
+  \item storage buffers/textures $\to$ Blade storage;
+  \item unused slots $\to$ \texttt{ShaderBinding::Unused} so wgpu's
+        sparse bind groups do not shift later entries;
+  \item dynamic offsets $\to$ added into \texttt{BufferPiece.offset} at
+        \texttt{set\_bind\_group}.
+\end{itemize}
+
+That translation is a \texttt{profiling::scope!("blade-wgpu::create\_bind\_group")}
+and a matching cost on wgpu-core's tracker side. It is \emph{not} part of
+\texttt{CommandEncoder::finish} or \texttt{Queue::submit}. Host claims in
+this companion always use those two entry points, via
+\texttt{wgpu::util::dispatch\_stats}, so both backends are measured at the
+same API. Charging bind-group construction to ``we do not track
+resources'' would be a category error the archival paper already warned
+against.
+
+\subsection{Where work actually happens}
+
+A wgpu \texttt{ComputePass} / \texttt{RenderPass} on Blade is a deferred
+op list. Drop flushes into a Blade pass, which is also where the global
+barrier is placed. \texttt{CommandEncoder::finish} only takes the
+encoder. \texttt{Queue::submit} calls \texttt{Context::submit}, including
+Blade's end-of-encoder barrier. wgpu-core does the opposite split: pass
+recording fills a command buffer, \texttt{finish} bakes it,
+\texttt{submit} queues it. Table~\ref{tab:split} is the comparison rule
+for every host number in this paper.
+
+\begin{table}[t]
+\centering
+\caption{Host split at the wgpu API. Compare the sum, not a column.}
+\label{tab:split}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+API & Blade custom backend & wgpu-core \\
+\midrule
+pass Drop / end & record + global barrier & record \\
+\texttt{finish} & take encoder (cheap) & bake command buffer \\
+\texttt{submit} & \texttt{Context::submit} & \texttt{vkQueueSubmit} \\
+bind-group create & translation, not timed here & tracker, not timed here \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Limits of the scaffolding}
+
+\texttt{blade-wgpu} is study scaffolding. It is enough to run the Bevy
+cell below and the in-repo GPU tests. It is not a CTS. Deliberately
+omitted, because the maximized Bevy cell does not call them, or because
+they are known holes:
+
+\begin{itemize}
+  \item \texttt{create\_surface} / present --- windowed \texttt{3d\_scene}
+        is not the protocol; headless offscreen is.
+  \item MSAA resolve --- Blade readback of Bevy's default 4$\times$ target
+        was transparent zeros. The protocol forces \texttt{Msaa::Off}.
+        That is a product bug, not an environment skip.
+  \item timestamp queries --- GPU elapsed is wait-to-idle
+        (\texttt{Device::poll(Wait)}), recorded as
+        \texttt{gpu\_timing\_method}. Do not treat it as an encoder
+        timestamp.
+  \item \texttt{set\_immediates}, mesh shaders, bindless, acceleration
+        structures --- unimplemented; Bevy is steered off them by
+        advertised features (no \texttt{INDIRECT\_FIRST\_INSTANCE} /
+        \texttt{IMMEDIATES}, so mesh preprocess is
+        \texttt{PreprocessingOnly} plus \texttt{NoIndirectDrawing},
+        which is still compute).
+\end{itemize}
+
+Uniforms use \texttt{Queue::write\_buffer} / staging copies into
+host-visible \texttt{Memory::Shared}, not push constants.
+
+\section{Bevy cell}
+
+Bevy constructs the wgpu instance in \texttt{initialize\_renderer}. With
+\texttt{--features blade} that call is
+\texttt{blade\_wgpu::BladeInstance::create\_with(\ldots).into\_wgpu()};
+otherwise it is stock wgpu-core. The rest of the engine is unchanged.
+
+The protocol example is \texttt{examples/app/sync\_bench.rs}: the same
+cube and circular ground as Bevy's headless renderer, with the pass
+multipliers turned \emph{on} rather than stripped for a first screenshot.
+
+\begin{itemize}
+  \item \texttt{PointLight.shadow\_maps\_enabled = true}
+  \item GPU mesh preprocessing (engine default under the advertised
+        limits)
+  \item \texttt{DepthPrepass} + \texttt{NormalPrepass}
+  \item \texttt{ScreenSpaceAmbientOcclusion} (High)
+  \item \texttt{Msaa::Off}, \texttt{Tonemapping::Linear}
+  \item bounded pre-roll / warmup / sample frames, CSV on stdout in the
+        synthetic schema \texttt{blade-sync-bench-v1}
+\end{itemize}
+
+\texttt{paper/collect.py} launches that binary twice per repetition
+(Blade feature, then wgpu-core) alongside the synthetic
+\texttt{sync-bench} / \texttt{wgpu-sync-bench} matrix. The Bevy image
+hash is recorded but excluded from the synthetic shader-hash agreement,
+because the frame is not the matched graph. On the host below the hashes
+matched anyway.
+
+\section{Pilot on RADV Phoenix 780M}
+
+This is machine \texttt{k6} from the archival round: AMD Radeon 780M,
+RADV, Mesa 25.2.8. Clocks were \emph{not} locked
+(\texttt{power\_dpm\_force\_performance\_level = auto}). The JCGT
+collection used one process repetition, 8 warm-ups, 5 samples, 4
+synthetic passes, $256\times256$ Bevy. That is a protocol proof and a
+directional host reading, not a replacement for the ten-repetition /
+1000-warmup archival matrix.
+
+\paragraph{Correctness.}
+Synthetic hashes agreed across Blade policies and wgpu-core (Khronos
+synchronization validation on). The Bevy cell produced a filled
+cube+ground+shadow image, 802 unique colours, hash
+\texttt{fnv1a64-standard:ceae91dd19c2e122} on \emph{both} backends. A
+$640\times360$ smoke (90 pre-roll frames) was the same scene, 878 unique
+colours, and two consecutive Blade launches agreed. This is GPU-correct
+for this scene, not a CTS.
+
+\paragraph{Pass tally.}
+\texttt{gpu\_pass\_count} is the number of wgpu
+\texttt{begin\_render\_pass} + \texttt{begin\_compute\_pass} calls in a
+steady sample. Blade reported 31; wgpu-core reported 46. The frontend
+counter is honest on each backend; Bevy simply issues a different number
+of begins once features/limits differ (timestamps, extra blits,
+preprocess flavour). Do not treat $31$ versus $46$ as a barrier-count
+result. Both are $\gg 1$: the cell is not a clear-only frame and not a
+single blit.
+
+\paragraph{Host cost.}
+Median of the five $256\times256$ samples, nanoseconds:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+ & record & submit & sum \\
+\midrule
+Blade & $2.7\times 10^{4}$ & $4.92\times 10^{6}$ & $4.95$\,ms \\
+wgpu-core & $7.53\times 10^{5}$ & $6.67\times 10^{5}$ & $1.42$\,ms \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Blade's \texttt{finish} is almost empty, as Table~\ref{tab:split}
+predicts; the submit column carries the encoder. wgpu-core's cost sits
+in \texttt{finish}. The \emph{sum} on this cell is higher for Blade in
+the pilot. That contradicts a naive transfer of the archival sentence
+``wgpu's record-and-submit cost is higher in every measured cell'',
+which was about the matched synthetic programs, not about a custom
+backend that still translates bind groups and still does Blade's
+end-of-encoder barrier, running a 30-pass engine graph. Possible
+contributors, none isolated here: extra begins on wgpu-core, Blade
+submit including the final encoder barrier, unlocked clocks, bind-group
+translation paid earlier but perturbing what gets submitted, the
+\texttt{Send} wrapper around a non-thread-safe Blade encoder while Bevy
+finishes encoders on a task pool.
+
+\paragraph{GPU elapsed.}
+Wait-to-idle medians were $1.26$\,ms (Blade) and $1.75$\,ms (wgpu-core).
+That is the same order of magnitude and is \emph{not} a timestamp-query
+result. The archival 780M finding still stands as the GPU prior:
+dropping fifteen automatic barriers on independent \emph{render} passes
+\emph{increased} span at 32 passes, past that count's stability floor.
+A Bevy frame mixes shadow, prepass, compute preprocess, SSAO, and the
+main view. Nobody should expect the discrete-GPU independent-compute
+saving to appear on this part until a locked-clock, timestamped
+collection says so.
+
+\section{What we will claim, and what we will not}
+
+\textbf{Claim (implementation).}
+A tracking-free RHI with global pass-boundary barriers can sit under the
+wgpu API far enough for Bevy to render a multi-pass PBR frame with
+shadows, a prepass, SSAO, and GPU mesh preprocessing, with an image hash
+that matches wgpu-core on RADV Phoenix.
+
+\textbf{Claim (measurement rule).}
+Host A/B for that backend belongs at wgpu \texttt{finish}+\texttt{submit},
+with bind-group translation reported separately, and with the finish/submit
+split interpreted through Table~\ref{tab:split}.
+
+\textbf{Claim (protocol).}
+The same collector that produced the archival synthetic matrix now emits
+Bevy rows in the same CSV schema. Another machine can run it; the
+runbook is \texttt{paper/COLLECTING.md}.
+
+\textbf{Not claimed.}
+A GPU-time win for \texttt{GENERAL} or for dropping barriers on Bevy.
+A causal ``tracking is the host cost'' decomposition. MSAA correctness.
+Swapchain present. Production-quality \texttt{blade-wgpu}. Any number
+from the unlocked-clock five-sample Bevy pilot as a device-span result.
+
+\section{Limitations the next collector will hit}
+
+Bevy on Blade still panics on several wgpu entry points. Fall back one
+feature at a time (MSAA first, then contact shadows, then TAA, then
+deferred lighting). Advertised limits currently omit timestamp queries
+and immediates so Bevy does not call them. \texttt{max\_bind\_groups}
+is 8; storage textures per stage 16, which is enough for SSAO's
+plugin-load check. Cube-array textures required naga
+\texttt{CUBE\_ARRAY\_TEXTURES}. Uniform uploads needed
+\texttt{create\_staging\_buffer}; without it Bevy's
+\texttt{ViewUniformOffset} never appeared and the 3D pass was skipped ---
+a silent clear-only frame, which the protocol now rejects.
+
+\section{Code}
+
+\blade{} is MIT. The archival tags are \texttt{sync-study-measured-v1}
+(\texttt{87ed067}) and \texttt{sync-study-v1} (\texttt{16b201e}) on
+\texttt{kvark/blade}, and \texttt{blade-sync-study-v1} on
+\texttt{kvark/wgpu}. This companion's sources are the \texttt{jcgt-extension} branch on
+\texttt{kvark/blade} (with \texttt{blade-wgpu/}), \texttt{kvark/wgpu}, and
+the \texttt{kvark/bevy} fork. Clone those three as siblings. In-repo tests
+\texttt{cargo test -p blade-wgpu --test gpu} drive the shipped backend,
+including a three-pass compute+prepass+color scene that asserts magenta
+rather than the clear.
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

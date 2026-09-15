@@ -22,7 +22,14 @@ impl super::Context {
 
         // Bindings are set up at pipeline creation, ignore here
         let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
-        let mut caps = naga::valid::Capabilities::empty();
+        // Default includes cube arrays and multisampled shading, which Bevy PBR uses.
+        let mut caps = naga::valid::Capabilities::default();
+        caps.insert(
+            naga::valid::Capabilities::LINEAR_INTERPOLATION
+                | naga::valid::Capabilities::EARLY_DEPTH_TEST
+                | naga::valid::Capabilities::PRIMITIVE_INDEX
+                | naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32,
+        );
         caps.set(
             naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY
                 | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY
@@ -170,6 +177,28 @@ impl super::Shader {
                 _ => continue,
             };
 
+            // wgpu-style shaders already carry numeric @group/@binding.
+            // Keep them and only update per-group visibility/access so a
+            // tracking-free backend can reuse the same WGSL as wgpu-core.
+            if let Some(existing) = var.binding {
+                let group_index = existing.group as usize;
+                let binding_index = existing.binding as usize;
+                let access = match module.types[var.ty].inner {
+                    naga::TypeInner::Image {
+                        class: naga::ImageClass::Storage { access, format: _ },
+                        ..
+                    } => access,
+                    _ => var_access,
+                };
+                if let Some(info) = sd_infos.get_mut(group_index)
+                    && binding_index < info.binding_access.len()
+                {
+                    info.visibility |= naga_stage.into();
+                    info.binding_access[binding_index] |= access;
+                }
+                continue;
+            }
+
             assert_eq!(var.binding, None);
             let var_name = var.name.as_ref().unwrap();
             for (group_index, (&layout, info)) in
@@ -257,6 +286,26 @@ impl super::Shader {
         }
     }
 
+    fn map_vertex_location(
+        location: u32,
+        fetch_states: &[crate::VertexFetchState],
+    ) -> Option<crate::VertexAttributeMapping> {
+        let want = format!("l{location}");
+        for (buffer_index, vertex_fetch) in fetch_states.iter().enumerate() {
+            for (attribute_index, &(at_name, _)) in vertex_fetch.layout.attributes.iter().enumerate()
+            {
+                if at_name == want {
+                    return Some(crate::VertexAttributeMapping {
+                        buffer_index,
+                        attribute_index,
+                        location,
+                    });
+                }
+            }
+        }
+        None
+    }
+
     pub(crate) fn fill_vertex_locations(
         module: &mut naga::Module,
         selected_ep_index: usize,
@@ -272,6 +321,18 @@ impl super::Shader {
             }
 
             for argument in ep.function.arguments.iter() {
+                if let Some(naga::Binding::Location { location, .. }) = argument.binding {
+                    if let Some(mapping) = Self::map_vertex_location(location, fetch_states) {
+                        attribute_mappings.push(mapping);
+                    } else if fetch_states.is_empty() {
+                        // Vertex-pulling / no vertex buffers.
+                    } else {
+                        panic!(
+                            "Vertex @location({location}) is not covered by the vertex fetch layouts"
+                        );
+                    }
+                    continue;
+                }
                 if argument.binding.is_some() {
                     continue;
                 }
@@ -292,21 +353,29 @@ impl super::Shader {
                 };
 
                 log::debug!("Processing vertex argument: {}", arg_name);
+                let mut assigned = false;
                 'member: for member in members.iter_mut() {
                     let member_name = match member.name {
                         Some(ref name) => name.as_str(),
                         None => "?",
                     };
-                    if let Some(ref binding) = member.binding {
+                    if let Some(naga::Binding::Location { location, .. }) = member.binding {
+                        if let Some(mapping) = Self::map_vertex_location(location, fetch_states) {
+                            attribute_mappings.push(mapping);
+                        }
+                        continue;
+                    }
+                    if member.binding.is_some() {
                         log::warn!(
                             "Member '{}' already has binding: {:?}",
                             member_name,
-                            binding
+                            member.binding
                         );
                         continue;
                     }
+                    let location = attribute_mappings.len() as u32;
                     let binding = naga::Binding::Location {
-                        location: attribute_mappings.len() as u32,
+                        location,
                         interpolation: None,
                         sampling: None,
                         blend_src: None,
@@ -319,15 +388,17 @@ impl super::Shader {
                             if at_name == member_name {
                                 log::debug!(
                                     "Assigning location({}) for member '{}' to be using input {}:{}",
-                                    attribute_mappings.len(),
+                                    location,
                                     member_name,
                                     buffer_index,
                                     attribute_index
                                 );
                                 member.binding = Some(binding);
+                                assigned = true;
                                 attribute_mappings.push(crate::VertexAttributeMapping {
                                     buffer_index,
                                     attribute_index,
+                                    location,
                                 });
                                 continue 'member;
                             }
@@ -339,7 +410,11 @@ impl super::Shader {
                         member_name
                     );
                 }
-                module.types.replace(argument.ty, ty);
+                // wgpu shaders already have @location / BuiltIn on every member.
+                // Replacing an unchanged type panics UniqueArena::replace.
+                if assigned {
+                    module.types.replace(argument.ty, ty);
+                }
             }
         }
         attribute_mappings

@@ -1,0 +1,28 @@
+[package]
+name = "blade-wgpu"
+version = "0.1.0"
+edition = "2024"
+description = "Throwaway wgpu custom backend over blade-graphics"
+license = "MIT"
+publish = false
+
+[dependencies]
+blade-graphics = { path = "../blade-graphics" }
+bytemuck = { workspace = true, features = ["extern_crate_alloc"] }
+log = { workspace = true }
+profiling = { workspace = true }
+wgpu = { path = "../../wgpu/wgpu", default-features = false, features = [
+    "std",
+    "wgsl",
+    "vulkan",
+    "metal",
+    "custom",
+] }
+
+[dev-dependencies]
+env_logger = "0.11"
+pollster = "1.0"
+
+[[example]]
+name = "hello_compute"
+path = "examples/hello_compute.rs"

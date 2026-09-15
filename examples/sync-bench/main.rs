@@ -550,6 +550,7 @@ impl ComputeBench {
                     gpu::BufferPiece {
                         buffer: readback,
                         offset: index as u64 * output_size,
+                        size: 0,
                     },
                     output_size,
                 );
@@ -756,6 +757,7 @@ impl GraphicsBench {
                     gpu::BufferPiece {
                         buffer: readback,
                         offset: index as u64 * u64::from(bytes_per_row),
+                        size: 0,
                     },
                     bytes_per_row,
                     gpu::Extent {

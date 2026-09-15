@@ -359,11 +359,18 @@ pub struct BufferDesc<'a> {
 pub struct BufferPiece {
     pub buffer: Buffer,
     pub offset: u64,
+    /// Descriptor range in bytes. `0` means the whole remaining buffer
+    /// (`VK_WHOLE_SIZE` / unbounded).
+    pub size: u64,
 }
 
 impl From<Buffer> for BufferPiece {
     fn from(buffer: Buffer) -> Self {
-        Self { buffer, offset: 0 }
+        Self {
+            buffer,
+            offset: 0,
+            size: 0,
+        }
     }
 }
 
@@ -379,6 +386,11 @@ impl BufferPiece {
         );
         unsafe { base.offset(self.offset as isize) }
     }
+
+    /// Restrict the bound range. `0` keeps the whole remaining buffer.
+    pub fn with_size(self, size: u64) -> Self {
+        Self { size, ..self }
+    }
 }
 
 impl Buffer {
@@ -386,6 +398,7 @@ impl Buffer {
         BufferPiece {
             buffer: self,
             offset,
+            size: 0,
         }
     }
 }
@@ -463,6 +476,8 @@ impl From<Texture> for TexturePiece {
 pub enum TextureFormat {
     // color
     R8Unorm,
+    R8Snorm,
+    R8Uint,
     Rg8Unorm,
     Rg8Snorm,
     Rgba8Unorm,
@@ -470,6 +485,9 @@ pub enum TextureFormat {
     Bgra8Unorm,
     Bgra8UnormSrgb,
     Rgba8Snorm,
+    R16Uint,
+    Rg16Uint,
+    Rgba16Uint,
     R16Float,
     Rg16Float,
     Rgba16Float,
@@ -683,6 +701,9 @@ pub enum TextureColor {
     TransparentBlack,
     OpaqueBlack,
     White,
+    /// Arbitrary RGBA clear. Depth/stencil clears use the red channel as depth
+    /// and the alpha channel bits as stencil.
+    Rgba([f32; 4]),
 }
 
 #[derive(Debug, Default)]
@@ -789,7 +810,72 @@ impl ShaderFunction<'_> {
             .entry_points
             .iter()
             .position(|ep| ep.name == self.entry_point)
-            .expect("Entry point not found in the shader")
+            .unwrap_or_else(|| {
+                let available: Vec<_> = self
+                    .shader
+                    .module
+                    .entry_points
+                    .iter()
+                    .map(|ep| format!("{:?}:{}", ep.stage, ep.name))
+                    .collect();
+                panic!(
+                    "Entry point '{}' not found in the shader. Available: {available:?}",
+                    self.entry_point
+                );
+            })
+    }
+}
+
+impl Shader {
+    pub fn resolve_vertex_entry_point(&self, requested: Option<&str>) -> &str {
+        self.resolve_entry_point(requested, naga::ShaderStage::Vertex)
+    }
+    pub fn resolve_fragment_entry_point(&self, requested: Option<&str>) -> &str {
+        self.resolve_entry_point(requested, naga::ShaderStage::Fragment)
+    }
+    pub fn resolve_compute_entry_point(&self, requested: Option<&str>) -> &str {
+        self.resolve_entry_point(requested, naga::ShaderStage::Compute)
+    }
+
+    /// Resolve a wgpu-style optional entry point name for a stage.
+    /// If `requested` is missing or unknown, use the unique entry point of that stage.
+    fn resolve_entry_point(
+        &self,
+        requested: Option<&str>,
+        stage: naga::ShaderStage,
+    ) -> &str {
+        if let Some(name) = requested
+            && self.module.entry_points.iter().any(|ep| ep.name == name)
+        {
+            return self
+                .module
+                .entry_points
+                .iter()
+                .find(|ep| ep.name == name)
+                .map(|ep| ep.name.as_str())
+                .unwrap();
+        }
+        let mut found = None;
+        for ep in &self.module.entry_points {
+            if ep.stage == stage {
+                if let Some(prev) = found {
+                    panic!(
+                        "ambiguous {:?} entry point (requested {requested:?}, also {prev} and {})",
+                        stage, ep.name
+                    );
+                }
+                found = Some(ep.name.as_str());
+            }
+        }
+        found.unwrap_or_else(|| {
+            let available: Vec<_> = self
+                .module
+                .entry_points
+                .iter()
+                .map(|ep| format!("{:?}:{}", ep.stage, ep.name))
+                .collect();
+            panic!("no {stage:?} entry point (requested {requested:?}). Available: {available:?}")
+        })
     }
 }
 
@@ -800,9 +886,13 @@ pub enum ShaderBinding {
     Sampler,
     Buffer,
     BufferArray { count: u32 },
+    /// Uniform buffer object (not shader storage). Used by the wgpu backend.
+    UniformBuffer,
     AccelerationStructure,
     AccelerationStructureArray { count: u32 },
     Plain { size: u32 },
+    /// Hole in a wgpu-style numeric binding space. Not a real descriptor.
+    Unused,
 }
 
 pub trait ShaderBindable: Clone + Copy + derive::HasShaderBinding {
@@ -846,6 +936,7 @@ pub struct VertexAttribute {
 struct VertexAttributeMapping {
     buffer_index: usize,
     attribute_index: usize,
+    location: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

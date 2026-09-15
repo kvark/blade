@@ -1,7 +1,9 @@
 # Blade synchronization paper
 
 This directory contains the technical report, experiment protocol, collectors,
-and analysis code. The build is designed so every quantity drawn from a
+and analysis code. The archival arXiv manuscript is `main.tex`. The JCGT
+companion (implementation notes and the Bevy application cell) lives in
+[`jcgt/`](jcgt/). Do not rewrite `main.tex` for the journal; quote it. The build is designed so every quantity drawn from a
 retained matrix, sweep, profile, capture, or Metal hazard-tracking session is
 generated from the raw collections and the prose cannot drift from the data.
 The complete archival round and a standalone arXiv upload bundle are under the
@@ -67,6 +69,12 @@ one command collects everything this machine can contribute:
 ```bash
 python3 paper/collect.py --wgpu ../wgpu
 ```
+
+The JCGT protocol adds a Bevy family on the same command. See
+[COLLECTING.md](COLLECTING.md#running-the-combined-protocol-on-another-machine)
+for the three-tree checkout, the Bevy smoke, clock locking, and the
+`record_ns+submit_ns` comparison rule. That collection is **not** the
+archival `87ed067` round.
 
 On Vulkan that first runs a small correctness matrix with the Khronos
 synchronization-validation feature forced on, retains its output, and aborts on

@@ -71,7 +71,7 @@ impl super::Context {
                                 num_samplers += 1;
                                 num_samplers - 1
                             }
-                            crate::ShaderBinding::Buffer => {
+                            crate::ShaderBinding::Buffer | crate::ShaderBinding::UniformBuffer => {
                                 num_buffers += 1;
                                 num_buffers - 1
                             }
@@ -85,6 +85,7 @@ impl super::Context {
                                 num_buffers += 1;
                                 num_buffers - 1
                             }
+                            crate::ShaderBinding::Unused => continue,
                         };
 
                         let rb = naga::ResourceBinding {
@@ -248,7 +249,7 @@ impl super::Context {
                                     targets.push(slots[0] as u32);
                                 }
                             }
-                            crate::ShaderBinding::Buffer => {
+                            crate::ShaderBinding::Buffer | crate::ShaderBinding::UniformBuffer => {
                                 if let Some(index) =
                                     gl.get_shader_storage_block_index(program, glsl_name)
                                 {
@@ -267,6 +268,7 @@ impl super::Context {
                             | crate::ShaderBinding::AccelerationStructureArray { .. } => {
                                 unimplemented!()
                             }
+                            crate::ShaderBinding::Unused => {}
                             crate::ShaderBinding::Plain { size } => {
                                 if let Some(index) = gl.get_uniform_block_index(program, glsl_name)
                                 {

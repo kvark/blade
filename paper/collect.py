@@ -45,6 +45,12 @@ def parse_arguments() -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument("--blade", type=Path, default=blade_root)
     parser.add_argument("--wgpu", type=Path, default=blade_root.parent / "wgpu")
+    parser.add_argument("--bevy", type=Path, default=blade_root.parent / "bevy")
+    parser.add_argument(
+        "--skip-bevy",
+        action="store_true",
+        help="do not collect the Bevy headless family",
+    )
     parser.add_argument("--repetitions", type=int, default=10)
     parser.add_argument("--blade-device-id", type=lambda value: int(value, 0))
     parser.add_argument("--wgpu-adapter-name")
@@ -79,11 +85,18 @@ def parse_arguments() -> tuple[argparse.Namespace, list[str]]:
 
 
 def shared_selectors(arguments: argparse.Namespace) -> list[str]:
-    selectors = ["--backend", arguments.backend]
+    selectors = [
+        "--backend",
+        arguments.backend,
+        "--bevy",
+        str(arguments.bevy),
+    ]
     if arguments.blade_device_id is not None:
         selectors += ["--blade-device-id", hex(arguments.blade_device_id)]
     if arguments.wgpu_adapter_name:
         selectors += ["--wgpu-adapter-name", arguments.wgpu_adapter_name]
+    if arguments.skip_bevy:
+        selectors.append("--skip-bevy")
     return selectors
 
 

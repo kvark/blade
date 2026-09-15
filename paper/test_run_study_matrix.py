@@ -57,5 +57,41 @@ class SystemInfoRedactionTests(unittest.TestCase):
         self.assertEqual(redacted.count("[redacted from public artifact]"), 4)
 
 
+class BevyFamilyTests(unittest.TestCase):
+    def test_bevy_workload_name(self) -> None:
+        self.assertEqual(run_study_matrix.BEVY_WORKLOAD, "bevy-headless")
+
+    def test_synthetic_workloads_still_agree_on_hash(self) -> None:
+        for workload in run_study_matrix.SHARED_WORKLOADS:
+            self.assertTrue(
+                run_study_matrix.participates_in_hash_agreement(workload)
+            )
+        for workload in run_study_matrix.BLADE_ONLY_WORKLOADS:
+            self.assertTrue(
+                run_study_matrix.participates_in_hash_agreement(workload)
+            )
+
+    def test_bevy_family_is_excluded_from_shader_hash_agreement(self) -> None:
+        self.assertFalse(
+            run_study_matrix.participates_in_hash_agreement(
+                run_study_matrix.BEVY_WORKLOAD
+            )
+        )
+
+    def test_bevy_csv_rows_are_retained(self) -> None:
+        source = """\
+# schema,blade-sync-bench-v1
+# implementation,blade
+# gpu_timing_method,wait-to-idle
+sample,workload,policy,passes,elements,rounds,width,height,start_ns,record_ns,submit_ns,wait_ns,gpu_ns,gpu_pass_count
+0,bevy-headless,automatic,6,1,1,1280,720,0,100,50,200,200,6
+# validation_hash,fnv1a64-standard:0123456789abcdef
+"""
+        csv = run_study_matrix.extract_benchmark_csv(source)
+        self.assertIn("bevy-headless", csv)
+        self.assertIn("gpu_pass_count", csv)
+        self.assertIn("wait-to-idle", csv)
+
+
 if __name__ == "__main__":
     unittest.main()

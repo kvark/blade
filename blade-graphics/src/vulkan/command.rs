@@ -137,7 +137,11 @@ impl crate::ShaderBindable for crate::BufferPiece {
             vk::DescriptorBufferInfo {
                 buffer: self.buffer.raw,
                 offset: self.offset,
-                range: vk::WHOLE_SIZE,
+                range: if self.size == 0 {
+                    vk::WHOLE_SIZE
+                } else {
+                    self.size
+                },
             },
         );
     }
@@ -229,14 +233,8 @@ fn map_render_target(rt: &crate::RenderTarget) -> vk::RenderingAttachmentInfo<'s
         crate::InitOp::Clear(color) => {
             let cv = if rt.view.aspects.contains(crate::TexelAspects::COLOR) {
                 vk::ClearValue {
-                    color: match color {
-                        crate::TextureColor::TransparentBlack => {
-                            vk::ClearColorValue { float32: [0.0; 4] }
-                        }
-                        crate::TextureColor::OpaqueBlack => vk::ClearColorValue {
-                            float32: [0.0, 0.0, 0.0, 1.0],
-                        },
-                        crate::TextureColor::White => vk::ClearColorValue { float32: [1.0; 4] },
+                    color: vk::ClearColorValue {
+                        float32: color.float4(),
                     },
                 }
             } else {

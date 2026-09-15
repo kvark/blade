@@ -77,7 +77,7 @@ fn map_border_color(color: crate::TextureColor) -> metal::MTLSamplerBorderColor 
     use crate::TextureColor as Tc;
     use metal::MTLSamplerBorderColor as Msbc;
     match color {
-        Tc::TransparentBlack => Msbc::TransparentBlack,
+        Tc::TransparentBlack | Tc::Rgba(_) => Msbc::TransparentBlack,
         Tc::OpaqueBlack => Msbc::OpaqueBlack,
         Tc::White => Msbc::OpaqueWhite,
     }

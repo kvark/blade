@@ -311,9 +311,8 @@ impl crate::traits::ResourceDevice for super::Context {
         ];
         let (min, mag) = map_filter_modes(desc.min_filter, desc.mag_filter, desc.mipmap_filter);
         let border = match desc.border_color {
-            None | Some(crate::TextureColor::TransparentBlack) => [0.0; 4],
-            Some(crate::TextureColor::OpaqueBlack) => [0.0, 0.0, 0.0, 1.0],
-            Some(crate::TextureColor::White) => [1.0; 4],
+            None => [0.0; 4],
+            Some(color) => color.float4(),
         };
 
         let raw = unsafe { gl.create_sampler().unwrap() };

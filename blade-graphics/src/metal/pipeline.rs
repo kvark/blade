@@ -151,7 +151,7 @@ fn make_pipeline_layout(
                     num_samplers += 1;
                     num_samplers - 1
                 }
-                crate::ShaderBinding::Buffer => {
+                crate::ShaderBinding::Buffer | crate::ShaderBinding::UniformBuffer => {
                     unsized_buffer_count += 1;
                     num_buffers += 1;
                     num_buffers - 1
@@ -167,6 +167,7 @@ fn make_pipeline_layout(
                     num_buffers += 1;
                     num_buffers - 1
                 }
+                crate::ShaderBinding::Unused => 0,
             });
         }
 
@@ -263,6 +264,7 @@ impl super::Context {
                         ..Default::default()
                     },
                     crate::ShaderBinding::Buffer
+                    | crate::ShaderBinding::UniformBuffer
                     | crate::ShaderBinding::Plain { .. }
                     | crate::ShaderBinding::AccelerationStructure => msl::BindTarget {
                         buffer: Some(slot as _),
@@ -271,6 +273,9 @@ impl super::Context {
                     crate::ShaderBinding::TextureArray { .. }
                     | crate::ShaderBinding::BufferArray { .. }
                     | crate::ShaderBinding::AccelerationStructureArray { .. } => todo!(),
+                    crate::ShaderBinding::Unused => msl::BindTarget {
+                        ..Default::default()
+                    },
                 };
                 naga_resources.resources.insert(res_binding, bind_target);
             }
@@ -490,12 +495,14 @@ impl crate::traits::ShaderDevice for super::Context {
                     })
                 };
             }
-            for (i, mapping) in vs.attribute_mappings.into_iter().enumerate() {
+            for mapping in vs.attribute_mappings.into_iter() {
                 let vf = &desc.vertex_fetches[mapping.buffer_index];
                 let (_, attrib) = vf.layout.attributes[mapping.attribute_index];
                 let (vertex_format, _) = super::map_vertex_format(attrib.format);
                 unsafe {
-                    let attribute_desc = vertex_descriptor.attributes().objectAtIndexedSubscript(i);
+                    let attribute_desc = vertex_descriptor
+                        .attributes()
+                        .objectAtIndexedSubscript(mapping.location as usize);
                     attribute_desc.setFormat(vertex_format);
                     attribute_desc.setBufferIndex(mapping.buffer_index);
                     attribute_desc.setOffset(attrib.offset as usize);

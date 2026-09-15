@@ -862,6 +862,8 @@ fn map_texture_format(format: crate::TextureFormat) -> vk::Format {
     use crate::TextureFormat as Tf;
     match format {
         Tf::R8Unorm => vk::Format::R8_UNORM,
+        Tf::R8Snorm => vk::Format::R8_SNORM,
+        Tf::R8Uint => vk::Format::R8_UINT,
         Tf::Rg8Unorm => vk::Format::R8G8_UNORM,
         Tf::Rg8Snorm => vk::Format::R8G8_SNORM,
         Tf::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
@@ -869,6 +871,9 @@ fn map_texture_format(format: crate::TextureFormat) -> vk::Format {
         Tf::Bgra8Unorm => vk::Format::B8G8R8A8_UNORM,
         Tf::Bgra8UnormSrgb => vk::Format::B8G8R8A8_SRGB,
         Tf::Rgba8Snorm => vk::Format::R8G8B8A8_SNORM,
+        Tf::R16Uint => vk::Format::R16_UINT,
+        Tf::Rg16Uint => vk::Format::R16G16_UINT,
+        Tf::Rgba16Uint => vk::Format::R16G16B16A16_UINT,
         Tf::R16Float => vk::Format::R16_SFLOAT,
         Tf::Rg16Float => vk::Format::R16G16_SFLOAT,
         Tf::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,

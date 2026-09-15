@@ -16,6 +16,13 @@ The measured revisions are Blade
 `7d37a77c086f3d3b8a9dbda6b476cd7ac195fcfc`. The tags pin code rather than
 the submitted article revision, which arXiv preserves independently.
 
+`sync-study-v1` is an annotated GitHub release (29 July 2026) at `16b201e`.
+That commit is eight paper-directory follow-ups after `87ed067` and does not
+change the compiled `sync-bench` binary; it is easy to miss on GitHub's
+paginated tags list, which is headed by later crate-version tags. The
+measured Blade commit is also tagged `sync-study-measured-v1`. wgpu's
+`blade-sync-study-v1` already points at `7d37a77`.
+
 The raw measurements are not Git objects. They ship as a checksummed arXiv
 ancillary archive and extract to `paper/data/raw/`; generated tables remain
 rebuildable from that directory. This keeps the 160 RenderDoc captures and
@@ -27,6 +34,9 @@ A reader inspecting the measured code can clone both repositories as siblings:
 ```sh
 git clone --branch sync-study-v1 https://github.com/kvark/blade
 git clone --branch blade-sync-study-v1 https://github.com/kvark/wgpu
+# Measured Blade binary, if you want that commit rather than the
+# paper-directory snapshot:
+#   git -C blade checkout sync-study-measured-v1
 ```
 
 and then extract the ancillary data under `blade/paper/data/raw/`. A

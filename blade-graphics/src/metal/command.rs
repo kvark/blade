@@ -1029,24 +1029,11 @@ fn map_extent(extent: &crate::Extent) -> metal::MTLSize {
 }
 
 fn map_clear_color(color: crate::TextureColor) -> metal::MTLClearColor {
-    match color {
-        crate::TextureColor::TransparentBlack => metal::MTLClearColor {
-            red: 0.0,
-            green: 0.0,
-            blue: 0.0,
-            alpha: 0.0,
-        },
-        crate::TextureColor::OpaqueBlack => metal::MTLClearColor {
-            red: 0.0,
-            green: 0.0,
-            blue: 0.0,
-            alpha: 1.0,
-        },
-        crate::TextureColor::White => metal::MTLClearColor {
-            red: 1.0,
-            green: 1.0,
-            blue: 1.0,
-            alpha: 1.0,
-        },
+    let [red, green, blue, alpha] = color.float4();
+    metal::MTLClearColor {
+        red: red as f64,
+        green: green as f64,
+        blue: blue as f64,
+        alpha: alpha as f64,
     }
 }

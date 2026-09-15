@@ -58,6 +58,8 @@ impl super::TextureFormat {
         }
         match *self {
             Self::R8Unorm => uncompressed(1),
+            Self::R8Snorm => uncompressed(1),
+            Self::R8Uint => uncompressed(1),
             Self::Rg8Unorm => uncompressed(2),
             Self::Rg8Snorm => uncompressed(2),
             Self::Rgba8Unorm => uncompressed(4),
@@ -65,6 +67,9 @@ impl super::TextureFormat {
             Self::Bgra8Unorm => uncompressed(4),
             Self::Bgra8UnormSrgb => uncompressed(4),
             Self::Rgba8Snorm => uncompressed(4),
+            Self::R16Uint => uncompressed(2),
+            Self::Rg16Uint => uncompressed(4),
+            Self::Rgba16Uint => uncompressed(8),
             Self::R16Float => uncompressed(2),
             Self::Rg16Float => uncompressed(4),
             Self::Rgba16Float => uncompressed(8),
@@ -118,6 +123,7 @@ impl super::TextureColor {
             crate::TextureColor::TransparentBlack => 0,
             crate::TextureColor::OpaqueBlack => !0,
             crate::TextureColor::White => !0,
+            crate::TextureColor::Rgba(c) => c[3] as u32,
         }
     }
 
@@ -126,6 +132,16 @@ impl super::TextureColor {
             crate::TextureColor::TransparentBlack => 0.0,
             crate::TextureColor::OpaqueBlack => 0.0,
             crate::TextureColor::White => 1.0,
+            crate::TextureColor::Rgba(c) => c[0],
+        }
+    }
+
+    pub const fn float4(&self) -> [f32; 4] {
+        match *self {
+            crate::TextureColor::TransparentBlack => [0.0; 4],
+            crate::TextureColor::OpaqueBlack => [0.0, 0.0, 0.0, 1.0],
+            crate::TextureColor::White => [1.0; 4],
+            crate::TextureColor::Rgba(c) => c,
         }
     }
 }

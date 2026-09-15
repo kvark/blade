@@ -620,3 +620,193 @@ Passing `--blade-device-id` or `--wgpu-adapter-name` pins one device and
 restores the previous single-collection behaviour. Either way the collector
 aborts if Blade and wgpu end up reporting different `device_name` values, which
 is the failure the `rubik` collection hit before this check existed.
+
+## Bevy family
+
+`collect.py` / `run-study-matrix.py` also collect a headless Bevy cell,
+`bevy-headless`, on both Blade (`--features blade`) and wgpu-core. The scene is
+the cube+ground capture from `examples/app/sync_bench.rs` with shadows, GPU
+mesh preprocessing, a depth/normal prepass, and SSAO. MSAA stays off. Host
+`record_ns` / `submit_ns` are measured at wgpu `CommandEncoder::finish` /
+`Queue::submit` (bind-group creation is outside those scopes). GPU elapsed is
+wait-to-idle (`Device::poll(Wait)`), recorded as `gpu_timing_method`. The Bevy
+cell is skipped when `--validation` or `--skip-bevy` is set, and its output
+hash is not part of the synthetic shader-hash agreement.
+
+Sibling layout:
+
+```text
+Code/
+  blade/
+  wgpu/
+  bevy/
+```
+
+`--bevy` defaults to `../bevy`. The two Bevy binaries are built into
+`bevy/target/blade-bench` and `bevy/target/wgpu-bench` so the feature flag
+does not overwrite a single `target/release` binary.
+
+## Running the combined protocol on another machine
+
+This is the JCGT / application collection. It is a **different source
+snapshot** from the archival arXiv round. Do not mix the two in one
+`data/raw/` interpretation: archival numbers come from blade `87ed067` +
+wgpu `7d37a77` (tags `sync-study-measured-v1` / `sync-study-v1` and
+`blade-sync-study-v1`). The Bevy family needs the three working trees
+below, with `blade-wgpu` and the wgpu frontend `dispatch_stats` counters.
+
+### What has to be published first
+
+The protocol lives on the same branch name in each sibling:
+
+| Tree | Branch | Remote |
+|---|---|---|
+| `blade/` | `jcgt-extension` | `kvark/blade` |
+| `wgpu/` | `jcgt-extension` | `kvark/wgpu` (not `gfx-rs/wgpu`) |
+| `bevy/` | `jcgt-extension` | a **fork** (`kvark/bevy`). Do not push this to `bevyengine/bevy` |
+
+`jcgt-extension` on Blade is the archival `blade-sync-study` tree plus
+`blade-wgpu/` and the Bevy collector cells. wgpu's branch is current trunk
+plus the restored `sync_bench` and `wgpu::util::dispatch_stats`. Bevy's
+branch is current `main` plus `--features blade` and
+`examples/app/sync_bench.rs`.
+
+A collector who clones only `sync-study-v1` will get the archival synthetic
+matrix and **no** Bevy family.
+
+### Layout and toolchain
+
+```text
+Code/
+  blade/     # kvark/blade, branch jcgt-extension
+  wgpu/      # kvark/wgpu,  branch jcgt-extension
+  bevy/      # kvark/bevy,  branch jcgt-extension
+```
+
+```sh
+git clone --branch jcgt-extension https://github.com/kvark/blade
+git clone --branch jcgt-extension https://github.com/kvark/wgpu
+git clone --branch jcgt-extension https://github.com/kvark/bevy
+```
+
+Need a recent stable Rust (Bevy wants 1.96+), Python 3, Vulkan ICD, and
+`vulkan-validationlayers` for the correctness step:
+
+```sh
+sudo apt install vulkan-validationlayers   # Debian/Ubuntu
+rustc --version
+```
+
+### Pin the device, then smoke Bevy before the overnight run
+
+```sh
+cd blade
+cargo run --release --example sync-bench -- --list-adapters
+WGPU_BACKEND=vulkan cargo run --release -p wgpu-sync-bench \
+  --manifest-path ../wgpu/Cargo.toml -- --list-adapters
+```
+
+The two names must be the same physical GPU. Then prove the Bevy cell
+completes **before** launching the matrix (first release compile is several
+minutes; a panic here is an unimplemented `blade-wgpu` path, not a collector
+bug):
+
+```sh
+# Blade wgpu backend
+RUST_LOG=error cargo run --release \
+  --manifest-path ../bevy/Cargo.toml \
+  --example sync_bench --features blade \
+  --target-dir ../bevy/target/blade-bench -- \
+  --workload bevy-headless --policy automatic \
+  --width 640 --height 360 --pre-roll 90 --warmups 2 --samples 2 \
+  --output-image /tmp/bevy-blade.png
+
+# wgpu-core
+RUST_LOG=error cargo run --release \
+  --manifest-path ../bevy/Cargo.toml \
+  --example sync_bench \
+  --target-dir ../bevy/target/wgpu-bench -- \
+  --workload bevy-headless --policy tracked \
+  --width 640 --height 360 --pre-roll 90 --warmups 2 --samples 2 \
+  --output-image /tmp/bevy-wgpu.png
+```
+
+Both must print `# schema,blade-sync-bench-v1`, `gpu_pass_count` **> 1**, a
+non-blank PNG (cube + ground + shadow, not clear-color), and preferably the
+same `# validation_hash`. MSAA is off in the example on purpose: Blade's
+resolve path has produced transparent-zero readbacks. `create_surface` is
+unimplemented, so windowed Bevy examples are not the protocol.
+
+### Clock lock, then one command
+
+On AMD, pin DPM before collecting (the collector records the knobs and
+warns if they are still `auto`; it does not change them):
+
+```sh
+for card in /sys/class/drm/card*/device/power_dpm_force_performance_level; do
+  echo high | sudo tee "$card"
+done
+sudo cpupower frequency-set -g performance   # for host numbers
+```
+
+Quiet machine. Do not pass `--allow-dirty` for data you will quote. The
+collector refuses to reuse an output directory.
+
+**Pilot** (this host's JCGT first pass; minutes, not hours):
+
+```sh
+python3 paper/collect.py \
+  --wgpu ../wgpu --bevy ../bevy \
+  --skip-profile --skip-captures \
+  --repetitions 1 --warmups 8 --samples 5 --passes 4 \
+  --elements 65536 --rounds 2 --width 256 --height 256 \
+  --output paper/data/raw/<id>-<host>-jcgt-pilot
+```
+
+**Publishable matrix** (same shape as the archival round, plus Bevy cells):
+
+```sh
+python3 paper/collect.py \
+  --wgpu ../wgpu --bevy ../bevy \
+  --blade-device-id 0x<id> \
+  --wgpu-adapter-name "<unique adapter substring>" \
+  --skip-profile --skip-captures \
+  --repetitions 10 --warmups 1000 \
+  --output paper/data/raw/<id>-<host>-jcgt
+```
+
+`collect.py` runs the small Khronos-validation matrix first (synthetic only;
+Bevy is skipped under `--validation`), then the timing matrix with Bevy
+cells included. Add `--sweeps` only if you also want the 1..64 pass-count
+synthetic sweep. Copy the **whole** output directory back; the manifest
+records revisions, lockfile hashes, dirty status, `power_state`, and
+`clocks_locked`.
+
+### What "worked" means
+
+- Validation step: no `SYNC-HAZARD` / `Validation Error`; synthetic
+  `validation_hash` agrees across Blade policies and wgpu for each
+  `(workload, passes)` cell.
+- Timing step: parseable `# schema,blade-sync-bench-v1` rows for **both**
+  families, Blade **and** wgpu-core. `device_name` identical.
+- Bevy CSVs: `gpu_pass_count > 1`, `gpu_timing_method,wait-to-idle`, a PNG
+  next to the CSV, unique colors well above 1. Two consecutive Bevy launches
+  should agree on the image hash.
+- Do **not** compare `record_ns` across backends in isolation. Blade's wgpu
+  `CommandEncoder::finish` only takes the encoder; `Queue::submit` is where
+  Blade actually submits. wgpu-core bakes the command buffer in `finish`.
+  The comparable host number is `record_ns + submit_ns`. Bind-group
+  creation is outside both.
+
+### What not to do
+
+- Do not collect on llvmpipe (`--allow-software` is correctness-only).
+- Do not enable MSAA on the Blade Bevy cell until resolve/readback is
+  fixed.
+- Do not quote GPU elapsed from a wait-to-idle column as if it were a
+  timestamp query, and do not quote a pilot with `clocks_locked: false`
+  as a device-span result.
+- Do not point `build-tables.py` at a JCGT collection and expect the
+  archival macros to absorb Bevy rows; the table builder still knows only
+  the synthetic schema. Keep JCGT Bevy CSVs next to the manuscript in
+  `paper/jcgt/` analysis until that wiring exists.
