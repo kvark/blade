@@ -244,13 +244,15 @@ fn inspect_adapter(
         vk::PhysicalDevicePortabilitySubsetPropertiesKHR::default();
 
     let mut driver_properties = vk::PhysicalDeviceDriverPropertiesKHR::default();
+    let mut subgroup_properties = vk::PhysicalDeviceSubgroupProperties::default();
     let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::default()
         .push_next(&mut inline_uniform_block_properties)
         .push_next(&mut timeline_semaphore_properties)
         .push_next(&mut descriptor_indexing_properties)
         .push_next(&mut acceleration_structure_properties)
         .push_next(&mut portability_subset_properties)
-        .push_next(&mut driver_properties);
+        .push_next(&mut driver_properties)
+        .push_next(&mut subgroup_properties);
     unsafe {
         instance
             .get_physical_device_properties2
@@ -579,7 +581,11 @@ fn inspect_adapter(
         } else {
             0
         };
-        let cm = crate::CooperativeMatrix { f32_tile, f16_tile };
+        let cm = crate::CooperativeMatrix {
+            f32_tile,
+            f16_tile,
+            subgroup_size: subgroup_properties.subgroup_size,
+        };
         if cm.is_supported() {
             log::info!(
                 "Cooperative matrix: f32 tile={}, f16 tile={}",

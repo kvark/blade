@@ -241,6 +241,8 @@ pub struct CooperativeMatrix {
     pub f32_tile: u32,
     /// Tile size for f16-input, f32-accumulator operations.
     pub f16_tile: u32,
+    /// Default subgroup size for cooperative matrix operations.
+    pub subgroup_size: u32,
 }
 
 impl CooperativeMatrix {

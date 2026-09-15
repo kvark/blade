@@ -639,6 +639,7 @@ impl Context {
                 crate::CooperativeMatrix {
                     f32_tile: 8,
                     f16_tile: 0,
+                    subgroup_size: 32,
                 }
             } else {
                 crate::CooperativeMatrix::default()
