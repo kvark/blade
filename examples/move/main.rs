@@ -62,6 +62,14 @@ impl Game {
                 gui_enabled: cfg!(debug_assertions),
             },
         );
+        engine.set_raster_config(blade_render::RasterConfig {
+            directional_shadows: Some(blade_render::DirectionalShadowConfig {
+                distance: 20.0,
+                depth: 80.0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
 
         let ground_handle = engine.add_object(
             &blade_engine::config::Object {
