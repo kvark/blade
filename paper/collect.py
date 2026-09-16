@@ -84,17 +84,20 @@ def parse_arguments() -> tuple[argparse.Namespace, list[str]]:
     return parser.parse_known_args()
 
 
-def shared_selectors(arguments: argparse.Namespace) -> list[str]:
-    selectors = [
-        "--backend",
-        arguments.backend,
-        "--bevy",
-        str(arguments.bevy),
-    ]
+def device_selectors(arguments: argparse.Namespace) -> list[str]:
+    """Flags every collection script accepts (matrix, profile, captures)."""
+    selectors = ["--backend", arguments.backend]
     if arguments.blade_device_id is not None:
         selectors += ["--blade-device-id", hex(arguments.blade_device_id)]
     if arguments.wgpu_adapter_name:
         selectors += ["--wgpu-adapter-name", arguments.wgpu_adapter_name]
+    return selectors
+
+
+def matrix_selectors(arguments: argparse.Namespace) -> list[str]:
+    """run-study-matrix.py also takes the Bevy family; profile/captures do not."""
+    selectors = device_selectors(arguments)
+    selectors += ["--bevy", str(arguments.bevy)]
     if arguments.skip_bevy:
         selectors.append("--skip-bevy")
     return selectors
@@ -132,7 +135,8 @@ def main() -> None:
     arguments, passthrough = parse_arguments()
     blade = arguments.blade.resolve()
     wgpu = arguments.wgpu.resolve()
-    selectors = shared_selectors(arguments)
+    selectors = matrix_selectors(arguments)
+    common = device_selectors(arguments)
     # These execution switches are safe and useful for the small correctness
     # run too. Shape, sample-count, output, and seed arguments deliberately
     # remain confined to the requested timing collection.
@@ -241,7 +245,7 @@ def main() -> None:
                 str(blade),
                 "--wgpu",
                 str(wgpu),
-                *selectors,
+                *common,
             ],
             blade,
             required=False,
@@ -258,7 +262,7 @@ def main() -> None:
                 str(blade),
                 "--wgpu",
                 str(wgpu),
-                *selectors,
+                *common,
             ],
             blade,
             required=False,

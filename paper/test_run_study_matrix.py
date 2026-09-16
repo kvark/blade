@@ -1,3 +1,4 @@
+import argparse
 import importlib.util
 import unittest
 from pathlib import Path
@@ -91,6 +92,29 @@ sample,workload,policy,passes,elements,rounds,width,height,start_ns,record_ns,su
         self.assertIn("bevy-headless", csv)
         self.assertIn("gpu_pass_count", csv)
         self.assertIn("wait-to-idle", csv)
+
+
+class CollectSelectorTests(unittest.TestCase):
+    def test_profile_and_capture_do_not_receive_bevy_flags(self) -> None:
+        collect = Path(__file__).with_name("collect.py")
+        spec = importlib.util.spec_from_file_location("collect_py", collect)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        arguments = argparse.Namespace(
+            backend="vulkan",
+            bevy=Path("/tmp/bevy"),
+            skip_bevy=True,
+            blade_device_id=0x2F04,
+            wgpu_adapter_name="RTX",
+        )
+        common = module.device_selectors(arguments)
+        matrix = module.matrix_selectors(arguments)
+        self.assertNotIn("--bevy", common)
+        self.assertNotIn("--skip-bevy", common)
+        self.assertIn("--bevy", matrix)
+        self.assertIn("--skip-bevy", matrix)
+        self.assertIn("--backend", common)
 
 
 class CargoLockSha256Tests(unittest.TestCase):
