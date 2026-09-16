@@ -4,9 +4,12 @@ Changelog for *Blade* project
 
 - graphics: `CommandEncoder::last_timing` returns `Timing` with borrowed pass names; wait on its sync point first
 - graphics: `Capabilities::timing` tells whether the device can timestamp passes at all
+- engine: enable GPU timing only when the device supports it
+- examples: enable directional shadows in `move`
 - graphics: allow `quantizeToF16`, `pack2x16float` and `unpack2x16float` in shaders
 - graphics: allow multisampled shading, cube array textures, and subgroup barriers in shaders
 - render: harden directional shadow receivers for skinned meshes (normal + light-dir bias, stronger depth bias, defaults that keep characters lit under lavapipe)
+- render: init the directional shadow map even when the effect is off, so Vulkan does not sample it from `UNDEFINED`
 
 
 ## blade-graphics-0.9, blade-util-0.5, blade-egui-0.9, blade-particle-0.2, blade-asset-0.2.2, blade-render-0.6, blade-helpers-0.3, blade-engine-0.2 (5 Sep 2026)

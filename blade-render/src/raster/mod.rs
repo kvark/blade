@@ -563,6 +563,8 @@ impl Rasterizer {
         // The engine can safely replace this default when raster configuration changes.
         let shadow_size = DirectionalShadowConfig::default().resolution;
         let (shadow_texture, shadow_view) = Self::create_shadow_target(shadow_size, gpu);
+        // Main pass always binds this view, including when the effect is off.
+        encoder.init_texture(shadow_texture);
         Self {
             shaders,
             pipelines,
@@ -778,11 +780,12 @@ impl Rasterizer {
         asset_hub: &AssetHub,
         config: &RasterConfig,
     ) {
+        // Main pass always binds this view, including when the effect is off.
+        encoder.init_texture(self.shadow_texture);
         let Some(shadow_config) = config.directional_shadows else {
             return;
         };
         let light_view_proj = make_light_view_proj(camera, config.light_dir, shadow_config);
-        encoder.init_texture(self.shadow_texture);
         if let mut pass = encoder.render(
             "directional shadows",
             gpu::RenderTargetSet {

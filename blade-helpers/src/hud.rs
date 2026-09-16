@@ -127,6 +127,11 @@ impl ExposeHud for blade_render::RasterConfig {
             };
         }
         ui.label("Ambient color");
+
+        let mut shadows = self.directional_shadows.is_some();
+        if ui.checkbox(&mut shadows, "Directional shadows").changed() {
+            self.directional_shadows = shadows.then(blade_render::DirectionalShadowConfig::default);
+        }
     }
 }
 
