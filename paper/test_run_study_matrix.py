@@ -93,5 +93,24 @@ sample,workload,policy,passes,elements,rounds,width,height,start_ns,record_ns,su
         self.assertIn("wait-to-idle", csv)
 
 
+class CargoLockSha256Tests(unittest.TestCase):
+    def test_missing_lockfile_is_absent_not_an_exception(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(run_study_matrix.cargo_lock_sha256(root), "absent")
+
+    def test_present_lockfile_is_hashed(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Cargo.lock").write_text("lock", encoding="utf-8")
+            digest = run_study_matrix.cargo_lock_sha256(root)
+            self.assertEqual(len(digest), 64)
+            self.assertNotEqual(digest, "absent")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -159,6 +159,21 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def cargo_lock_sha256(root: Path) -> str:
+    """Blade gitignores the root lockfile; a fresh clone has none until cargo runs."""
+    lock = root / "Cargo.lock"
+    if not lock.is_file():
+        try:
+            generated = run(
+                ["cargo", "generate-lockfile"], root, check=False
+            )
+        except FileNotFoundError:
+            return "absent"
+        if generated.returncode != 0 or not lock.is_file():
+            return "absent"
+    return file_sha256(lock)
+
+
 def write_command_capture(
     output: Path,
     name: str,
@@ -846,7 +861,7 @@ def main() -> None:
             "revision": git_output(root, "rev-parse", "HEAD"),
             "branch": git_output(root, "branch", "--show-current"),
             "status": status,
-            "cargo_lock_sha256": file_sha256(root / "Cargo.lock"),
+            "cargo_lock_sha256": cargo_lock_sha256(root),
         }
 
     if not arguments.skip_build:
