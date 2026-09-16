@@ -66,8 +66,11 @@ pub trait CommandEncoder {
     fn start(&mut self);
     fn init_texture(&mut self, texture: Self::Texture);
     fn present(&mut self, frame: Self::Frame);
-    /// Resolve available timestamp queries and return the result.
-    fn get_timings(&mut self) -> &super::Timings;
+    /// Timing of the last submission.
+    ///
+    /// The caller must have waited on that submission's sync point.
+    /// Panics if GPU timing was not enabled, or if nothing has been submitted.
+    fn last_timing(&self) -> super::Timing<'_>;
 }
 
 pub trait TransferEncoder {

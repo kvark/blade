@@ -1,4 +1,5 @@
 use glow::HasContext as _;
+use std::sync::Arc;
 use wasm_bindgen::JsCast;
 
 const PRESENT_VS: &str = r#"#version 300 es
@@ -32,8 +33,27 @@ struct PresentCopy {
 pub struct PlatformContext {
     #[allow(unused)]
     webgl2: web_sys::WebGl2RenderingContext,
-    glow: glow::Context,
+    glow: Arc<glow::Context>,
     present_copy: PresentCopy,
+}
+
+#[derive(Clone)]
+pub(super) struct GlHandle {
+    glow: Arc<glow::Context>,
+}
+
+impl GlHandle {
+    pub fn lock(&self) -> &glow::Context {
+        &self.glow
+    }
+}
+
+impl PlatformContext {
+    pub(super) fn gl_handle(&self) -> GlHandle {
+        GlHandle {
+            glow: Arc::clone(&self.glow),
+        }
+    }
 }
 
 pub struct PlatformSurface {
@@ -96,7 +116,7 @@ impl PlatformContext {
 }
 
 impl super::Context {
-    pub unsafe fn init(_desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
+    pub unsafe fn init(desc: crate::ContextDesc) -> Result<Self, crate::NotSupportedError> {
         let canvas = web_sys::window()
             .and_then(|win| win.document())
             .expect("Cannot get document")
@@ -120,7 +140,7 @@ impl super::Context {
             .and_then(|context| context.dyn_into::<web_sys::WebGl2RenderingContext>().ok())
             .expect("Cannot convert into WebGL2 context");
 
-        let glow = glow::Context::from_webgl2_context(webgl2.clone());
+        let glow = Arc::new(glow::Context::from_webgl2_context(webgl2.clone()));
         let present_copy = Self::compile_present_copy(&glow);
 
         let capabilities = super::Capabilities::empty();
@@ -145,7 +165,13 @@ impl super::Context {
                 present_copy,
             },
             capabilities,
-            toggles: super::Toggles::default(),
+            toggles: {
+                assert!(
+                    !desc.timing,
+                    "GPU timing was requested but is not supported on this device"
+                );
+                super::Toggles::default()
+            },
             limits,
             device_information,
         })

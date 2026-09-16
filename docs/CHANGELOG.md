@@ -2,6 +2,8 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- graphics: `CommandEncoder::last_timing` returns `Timing` with borrowed pass names; wait on its sync point first
+- graphics: `Capabilities::timing` tells whether the device can timestamp passes at all
 - graphics: allow `quantizeToF16`, `pack2x16float` and `unpack2x16float` in shaders
 - graphics: allow multisampled shading, cube array textures, and subgroup barriers in shaders
 - render: harden directional shadow receivers for skinned meshes (normal + light-dir bias, stronger depth bias, defaults that keep characters lit under lavapipe)
