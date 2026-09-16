@@ -57,16 +57,25 @@ impl TimestampCalibration {
     }
 
     fn map(self, timestamp: u64) -> Instant {
-        // Vulkan only guarantees `timestampValidBits` low bits. Masking the
-        // wrapping subtraction preserves a short forward interval across wrap.
+        // Vulkan only guarantees `timestampValidBits` low bits. Interpret the
+        // nearest modular delta as signed: calibration has an uncertainty, so
+        // a query submitted immediately afterwards can still appear slightly
+        // earlier than the sampled GPU tick.
+        let mask = timestamp_mask(self.valid_bits);
         let delta_ticks = self.delta_ticks(timestamp);
-        assert!(
-            delta_ticks <= timestamp_mask(self.valid_bits) >> 1,
-            "GPU timestamp {timestamp} predates calibration {}",
-            self.gpu_ticks,
-        );
-        let delta_ns = (delta_ticks as f64 * f64::from(self.period)).round() as u64;
-        self.cpu + Duration::from_nanos(delta_ns)
+        let backwards = delta_ticks > mask >> 1;
+        let magnitude = if backwards {
+            0u64.wrapping_sub(delta_ticks) & mask
+        } else {
+            delta_ticks
+        };
+        let delta_ns = (magnitude as f64 * f64::from(self.period)).round() as u64;
+        let delta = Duration::from_nanos(delta_ns);
+        if backwards {
+            self.cpu.checked_sub(delta).unwrap_or(self.cpu)
+        } else {
+            self.cpu.checked_add(delta).unwrap_or(self.cpu)
+        }
     }
 }
 
