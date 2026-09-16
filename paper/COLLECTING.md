@@ -797,6 +797,12 @@ records revisions, lockfile hashes, dirty status, `power_state`, and
   Blade actually submits. wgpu-core bakes the command buffer in `finish`.
   The comparable host number is `record_ns + submit_ns`. Bind-group
   creation is outside both.
+- A 5 ms Blade `submit_ns` is a bug, not a barrier cost: it meant
+  `destroy_command_encoder` of ~28 fresh 2×1 MiB scratch encoders per
+  frame. `blade-wgpu` now pools them (wait on that encoder's timeline
+  before `start`). After the pool, `submit_ns` should sit next to
+  wgpu-core's submit (~0.6 ms here) and `# encoder_lifecycle` should show
+  `alloc_n=0` / `destroy_ns=0` on steady samples.
 
 ### What not to do
 

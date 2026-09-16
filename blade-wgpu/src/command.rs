@@ -19,7 +19,7 @@ use crate::{
 /// Blade's command encoder contains mapped pointers and is not `Send`. wgpu's
 /// custom backend traits require `Send + Sync`; the encoder is only used from
 /// the recording thread.
-struct SendEnc(gpu::CommandEncoder);
+pub(crate) struct SendEnc(pub gpu::CommandEncoder);
 unsafe impl Send for SendEnc {}
 unsafe impl Sync for SendEnc {}
 impl std::fmt::Debug for SendEnc {

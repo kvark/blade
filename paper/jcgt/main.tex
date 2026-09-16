@@ -250,7 +250,18 @@ result. Both are $\gg 1$: the cell is not a clear-only frame and not a
 single blit.
 
 \paragraph{Host cost.}
-Median of the five $256\times256$ samples, nanoseconds:
+The first Bevy pilot showed Blade \texttt{submit\_ns} at $\sim$5\,ms
+versus wgpu-core's $\sim$0.7\,ms. That was not \texttt{vkQueueSubmit}.
+Bevy opens $\sim$28 wgpu command encoders per frame. Blade's native
+loop creates one encoder and reuses it (\texttt{start} $\to$ record
+$\to$ \texttt{submit}, with a wait before the next \texttt{start}).
+\texttt{blade-wgpu} was instead allocating a fresh encoder --- two 1\,MiB
+host-visible scratch buffers plus descriptor pools --- and
+\texttt{destroy\_command\_encoder} inside \texttt{Queue::submit}.
+Splitting that path: $\sim$3.5\,ms destroy, $\sim$0.66\,ms actual
+queue submit (matching wgpu-core), plus $\sim$3\,ms of create that
+was not even in the CSV. After pooling encoders and waiting on that
+encoder's timeline before reuse, a $256\times256$ sample is:
 
 \begin{center}
 \small
@@ -258,25 +269,14 @@ Median of the five $256\times256$ samples, nanoseconds:
 \toprule
  & record & submit & sum \\
 \midrule
-Blade & $2.7\times 10^{4}$ & $4.92\times 10^{6}$ & $4.95$\,ms \\
-wgpu-core & $7.53\times 10^{5}$ & $6.67\times 10^{5}$ & $1.42$\,ms \\
+Blade (pooled) & $2.2$--$2.7\times 10^{4}$ & $0.57$--$0.67$\,ms & $\sim$0.6\,ms \\
+wgpu-core (earlier pilot) & $0.75$\,ms & $0.67$\,ms & $1.42$\,ms \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Blade's \texttt{finish} is almost empty, as Table~\ref{tab:split}
-predicts; the submit column carries the encoder. wgpu-core's cost sits
-in \texttt{finish}. The \emph{sum} on this cell is higher for Blade in
-the pilot. That contradicts a naive transfer of the archival sentence
-``wgpu's record-and-submit cost is higher in every measured cell'',
-which was about the matched synthetic programs, not about a custom
-backend that still translates bind groups and still does Blade's
-end-of-encoder barrier, running a 30-pass engine graph. Possible
-contributors, none isolated here: extra begins on wgpu-core, Blade
-submit including the final encoder barrier, unlocked clocks, bind-group
-translation paid earlier but perturbing what gets submitted, the
-\texttt{Send} wrapper around a non-thread-safe Blade encoder while Bevy
-finishes encoders on a task pool.
+The image hash is unchanged (\texttt{ceae91dd19c2e122}). Do not quote
+the pre-pool 5\,ms submit as a barrier or tracking cost.
 
 \paragraph{GPU elapsed.}
 Wait-to-idle medians were $1.26$\,ms (Blade) and $1.75$\,ms (wgpu-core).
@@ -311,7 +311,9 @@ runbook is \texttt{paper/COLLECTING.md}.
 A GPU-time win for \texttt{GENERAL} or for dropping barriers on Bevy.
 A causal ``tracking is the host cost'' decomposition. MSAA correctness.
 Swapchain present. Production-quality \texttt{blade-wgpu}. Any number
-from the unlocked-clock five-sample Bevy pilot as a device-span result.
+from an unlocked-clock few-sample Bevy pilot as a device-span result.
+The 5\,ms Blade submit from the first pilot, which was encoder
+alloc/free.
 
 \section{Limitations the next collector will hit}
 

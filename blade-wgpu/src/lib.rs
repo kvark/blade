@@ -6,6 +6,7 @@
 
 mod command;
 mod conv;
+mod lifecycle;
 
 use std::{
     fmt,
@@ -36,6 +37,9 @@ use wgpu::custom::{
 };
 
 pub use command::{BladeCommandBuffer, BladeCommandEncoder, BladeComputePass, BladeRenderPass};
+pub use lifecycle::{
+    reset as lifecycle_reset, take as take_encoder_lifecycle, EncoderLifecycle,
+};
 
 fn todo(what: &str) -> ! {
     unimplemented!("blade-wgpu: {what}")
@@ -49,6 +53,16 @@ pub struct Shared {
     submit_index: Mutex<u64>,
     pending_inits: Mutex<Vec<gpu::Texture>>,
     keep_alive: Mutex<Vec<gpu::Buffer>>,
+    /// Recycled Blade encoders. Creating one allocates two 1 MiB scratch
+    /// buffers and descriptor pools; the native Blade loop reuses them via
+    /// `start` after waiting for that encoder's last submit. Destroying them
+    /// inside `Queue::submit` was the host-cost outlier versus wgpu-core.
+    encoder_pool: Mutex<Vec<PooledEncoder>>,
+}
+
+struct PooledEncoder {
+    encoder: command::SendEnc,
+    inflight: Option<gpu::SyncPoint>,
 }
 
 impl fmt::Debug for Shared {
@@ -56,6 +70,17 @@ impl fmt::Debug for Shared {
         f.debug_struct("Shared")
             .field("device", &self.context.device_information().device_name)
             .finish()
+    }
+}
+
+impl Drop for Shared {
+    fn drop(&mut self) {
+        for enc in self.encoder_pool.lock().unwrap().drain(..) {
+            let mut encoder = enc.encoder.0;
+            let start = std::time::Instant::now();
+            self.context.destroy_command_encoder(&mut encoder);
+            lifecycle::note_destroy(lifecycle::elapsed_ns(start));
+        }
     }
 }
 
@@ -92,6 +117,7 @@ impl BladeInstance {
                 submit_index: Mutex::new(0),
                 pending_inits: Mutex::new(Vec::new()),
                 keep_alive: Mutex::new(Vec::new()),
+                encoder_pool: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -257,6 +283,46 @@ fn map_memory(usage: wgpu::BufferUsages, mapped_at_creation: bool) -> gpu::Memor
         let _ = mapped_at_creation;
         gpu::Memory::Shared
     }
+}
+
+fn acquire_encoder(shared: &Shared) -> gpu::CommandEncoder {
+    let start = std::time::Instant::now();
+    let popped = shared.encoder_pool.lock().unwrap().pop();
+    let (mut encoder, allocated) = match popped {
+        Some(pooled) => {
+            if let Some(sp) = pooled.inflight {
+                let _ = shared.context.wait_for(&sp, !0);
+            }
+            (pooled.encoder.0, false)
+        }
+        None => (
+            shared.context.create_command_encoder(gpu::CommandEncoderDesc {
+                name: "blade-wgpu-encoder",
+                buffer_count: 2,
+                manual_barriers: false,
+                barrier_scope: gpu::BarrierScope::PassKind,
+            }),
+            true,
+        ),
+    };
+    lifecycle::note_create(lifecycle::elapsed_ns(start), allocated);
+    encoder.start();
+    init_pending(shared, &mut encoder);
+    encoder
+}
+
+fn recycle_encoder(shared: &Shared, encoder: gpu::CommandEncoder, inflight: gpu::SyncPoint) {
+    shared.encoder_pool.lock().unwrap().push(PooledEncoder {
+        encoder: command::SendEnc(encoder),
+        inflight: Some(inflight),
+    });
+}
+
+fn submit_encoder(shared: &Shared, encoder: &mut gpu::CommandEncoder) -> gpu::SyncPoint {
+    let start = std::time::Instant::now();
+    let sp = shared.context.submit(encoder);
+    lifecycle::note_vk_submit(lifecycle::elapsed_ns(start));
+    sp
 }
 
 fn init_pending(shared: &Shared, encoder: &mut gpu::CommandEncoder) {
@@ -753,17 +819,8 @@ impl DeviceInterface for BladeDevice {
         desc: &wgpu::CommandEncoderDescriptor<'_>,
     ) -> DispatchCommandEncoder {
         profiling::scope!("blade-wgpu::create_command_encoder");
-        let mut encoder = self
-            .shared
-            .context
-            .create_command_encoder(gpu::CommandEncoderDesc {
-                name: desc.label.unwrap_or("blade-wgpu-encoder"),
-                buffer_count: 2,
-                manual_barriers: false,
-                barrier_scope: gpu::BarrierScope::PassKind,
-            });
-        encoder.start();
-        init_pending(&self.shared, &mut encoder);
+        let _ = desc;
+        let encoder = acquire_encoder(&self.shared);
         DispatchCommandEncoder::custom(BladeCommandEncoder::new(encoder))
     }
 
@@ -881,17 +938,7 @@ impl QueueInterface for BladeQueue {
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), staging.data(), data.len());
         }
-        let mut encoder = self
-            .shared
-            .context
-            .create_command_encoder(gpu::CommandEncoderDesc {
-                name: "write-texture",
-                buffer_count: 1,
-                manual_barriers: false,
-                barrier_scope: gpu::BarrierScope::PassKind,
-            });
-        encoder.start();
-        init_pending(&self.shared, &mut encoder);
+        let mut encoder = acquire_encoder(&self.shared);
         {
             let mut pass = encoder.transfer("write-texture");
             pass.copy_buffer_to_texture(
@@ -910,10 +957,10 @@ impl QueueInterface for BladeQueue {
                 }),
             );
         }
-        let sp = self.shared.context.submit(&mut encoder);
-        *self.shared.last_submit.lock().unwrap() = Some(sp);
+        let sp = submit_encoder(&self.shared, &mut encoder);
+        *self.shared.last_submit.lock().unwrap() = Some(sp.clone());
         self.shared.keep_alive.lock().unwrap().push(staging);
-        self.shared.context.destroy_command_encoder(&mut encoder);
+        recycle_encoder(&self.shared, encoder, sp);
     }
 
     fn submit(
@@ -929,9 +976,9 @@ impl QueueInterface for BladeQueue {
             let mut encoder = blade
                 .take_encoder()
                 .expect("command buffer already submitted");
-            let sp = self.shared.context.submit(&mut encoder);
-            *self.shared.last_submit.lock().unwrap() = Some(sp);
-            self.shared.context.destroy_command_encoder(&mut encoder);
+            let sp = submit_encoder(&self.shared, &mut encoder);
+            *self.shared.last_submit.lock().unwrap() = Some(sp.clone());
+            recycle_encoder(&self.shared, encoder, sp);
             last += 1;
         }
         *self.shared.submit_index.lock().unwrap() = last;
