@@ -1391,7 +1391,7 @@ mod tests {
     use super::super::{CommandEncoder, PassKind, PassKinds, TimestampCalibration};
 
     #[test]
-    fn calibrated_timestamp_mapping_handles_wrap() {
+    fn calibrated_timestamp_mapping_handles_wrap_and_skew() {
         let cpu = Instant::now();
         let calibration = TimestampCalibration {
             cpu,
@@ -1401,6 +1401,14 @@ mod tests {
         };
 
         assert_eq!(calibration.map(5), cpu + Duration::from_nanos(22));
+        let ten_ns_earlier = cpu.checked_sub(Duration::from_nanos(10)).unwrap();
+        assert_eq!(calibration.map(245), ten_ns_earlier);
+        let full_width = TimestampCalibration {
+            gpu_ticks: 5,
+            valid_bits: 64,
+            ..calibration
+        };
+        assert_eq!(full_width.map(0), ten_ns_earlier);
     }
 
     #[test]
