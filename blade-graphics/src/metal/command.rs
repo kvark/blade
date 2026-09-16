@@ -513,6 +513,10 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.raw.as_mut().unwrap().presentDrawable(&frame.drawable);
     }
 
+    fn timing_enabled(&self) -> bool {
+        self.timing_state.is_some()
+    }
+
     fn last_timing(&self) -> crate::Timing<'_> {
         let ts = self
             .timing_state

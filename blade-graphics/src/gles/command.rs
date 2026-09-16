@@ -302,6 +302,10 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.present_frames.push(frame.platform);
     }
 
+    fn timing_enabled(&self) -> bool {
+        self.timing.is_some()
+    }
+
     fn last_timing(&self) -> crate::Timing<'_> {
         let timing = self.timing.as_ref().expect("GPU timing is not enabled");
         let gl = self.gl.lock();
