@@ -59,8 +59,9 @@ class SystemInfoRedactionTests(unittest.TestCase):
 
 
 class BevyFamilyTests(unittest.TestCase):
-    def test_bevy_workload_name(self) -> None:
-        self.assertEqual(run_study_matrix.BEVY_WORKLOAD, "bevy-headless")
+    def test_bevy_workload_names(self) -> None:
+        self.assertIn("bevy-headless", run_study_matrix.BEVY_WORKLOADS)
+        self.assertGreaterEqual(len(run_study_matrix.BEVY_WORKLOADS), 5)
 
     def test_synthetic_workloads_still_agree_on_hash(self) -> None:
         for workload in run_study_matrix.SHARED_WORKLOADS:
@@ -73,11 +74,10 @@ class BevyFamilyTests(unittest.TestCase):
             )
 
     def test_bevy_family_is_excluded_from_shader_hash_agreement(self) -> None:
-        self.assertFalse(
-            run_study_matrix.participates_in_hash_agreement(
-                run_study_matrix.BEVY_WORKLOAD
+        for workload in run_study_matrix.BEVY_WORKLOADS:
+            self.assertFalse(
+                run_study_matrix.participates_in_hash_agreement(workload)
             )
-        )
 
     def test_bevy_csv_rows_are_retained(self) -> None:
         source = """\

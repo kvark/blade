@@ -623,15 +623,26 @@ is the failure the `rubik` collection hit before this check existed.
 
 ## Bevy family
 
-`collect.py` / `run-study-matrix.py` also collect a headless Bevy cell,
-`bevy-headless`, on both Blade (`--features blade`) and wgpu-core. The scene is
-the cube+ground capture from `examples/app/sync_bench.rs` with shadows, GPU
-mesh preprocessing, a depth/normal prepass, and SSAO. MSAA stays off. Host
+`collect.py` / `run-study-matrix.py` also collect a Bevy family on both Blade
+(`--features blade`) and wgpu-core. The binary is
+`examples/app/sync_bench.rs`; `--workload` selects the scene:
+
+| Workload | Pass graph |
+|---|---|
+| `bevy-headless` | cube+ground, point-light shadows, depth/normal prepass, SSAO |
+| `bevy-lighting` | walls+meshes, point + spot + cascaded directional shadows |
+| `bevy-shapes` | several primitives, 3-cascade directional shadows |
+| `bevy-bloom` | HDR + bloom postprocess, emissive spheres |
+| `bevy-ssao` | clustered occluders, directional shadow, high SSAO |
+
+Deferred lighting (`examples/3d/deferred_rendering.rs`) is not in the
+family: on Blade the capture was clear-only (GBuffer path). MSAA stays off.
+
+MSAA stays off. GPU mesh preprocessing is the engine default. Host
 `record_ns` / `submit_ns` are measured at wgpu `CommandEncoder::finish` /
-`Queue::submit` (bind-group creation is outside those scopes). GPU elapsed is
-wait-to-idle (`Device::poll(Wait)`), recorded as `gpu_timing_method`. The Bevy
-cell is skipped when `--validation` or `--skip-bevy` is set, and its output
-hash is not part of the synthetic shader-hash agreement.
+`Queue::submit`. GPU elapsed is wait-to-idle. Bevy cells are skipped when
+`--validation` or `--skip-bevy` is set, and their hashes are not part of the
+synthetic shader-hash agreement.
 
 Sibling layout:
 

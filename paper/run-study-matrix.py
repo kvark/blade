@@ -32,10 +32,16 @@ BLADE_ONLY_WORKLOADS = (
     "mixed-chain",
 )
 BLADE_WORKLOADS = SHARED_WORKLOADS + BLADE_ONLY_WORKLOADS
-# Application cell. Same scene on Blade wgpu and wgpu-core; excluded from the
-# synthetic shader-hash agreement because the frame is a Bevy graph, not the
-# matched sync-bench programs.
-BEVY_WORKLOAD = "bevy-headless"
+# Application cells. Same scenes on Blade wgpu and wgpu-core; excluded from
+# the synthetic shader-hash agreement because the frames are Bevy graphs, not
+# the matched sync-bench programs.
+BEVY_WORKLOADS = (
+    "bevy-headless",
+    "bevy-lighting",
+    "bevy-shapes",
+    "bevy-bloom",
+    "bevy-ssao",
+)
 
 # Placement crossed with scope. Neither axis is a default for the other, so
 # every combination is collected and the comparison is symmetric.
@@ -430,7 +436,7 @@ def discover_devices(
 
 def participates_in_hash_agreement(workload: str) -> bool:
     """Synthetic cells share a shader; the Bevy family does not."""
-    return workload != BEVY_WORKLOAD
+    return workload not in BEVY_WORKLOADS
 
 
 def ensure_positive(arguments: argparse.Namespace) -> None:
@@ -594,10 +600,11 @@ def collect_device(
         for workload in SHARED_WORKLOADS
     )
     if not arguments.skip_bevy and not arguments.validation:
-        # One Bevy cell per implementation per repetition, independent of the
-        # synthetic pass-count sweep.
-        configurations.append(("blade", BEVY_WORKLOAD, "automatic", 1))
-        configurations.append(("wgpu", BEVY_WORKLOAD, "tracked", 1))
+        # One cell per Bevy scene per implementation per repetition, independent
+        # of the synthetic pass-count sweep.
+        for workload in BEVY_WORKLOADS:
+            configurations.append(("blade", workload, "automatic", 1))
+            configurations.append(("wgpu", workload, "tracked", 1))
     rng = random.Random(seed)
     common_arguments = [
         "--elements",
@@ -644,7 +651,7 @@ def collect_device(
                 if len(pass_counts) > 1:
                     run_id = f"{run_id}__p{passes:04d}"
                 csv_name = f"{run_id}.csv"
-                if workload == BEVY_WORKLOAD:
+                if workload in BEVY_WORKLOADS:
                     bevy_binary = (
                         blade_bevy_binary
                         if implementation == "blade"
@@ -714,8 +721,8 @@ def collect_device(
                         )
 
                 print(f"{output.name}/{run_id}", file=sys.stderr, flush=True)
-                timeout = 1800 if workload == BEVY_WORKLOAD else 900
-                cwd = arguments.bevy.resolve() if workload == BEVY_WORKLOAD else blade
+                timeout = 1800 if workload in BEVY_WORKLOADS else 900
+                cwd = arguments.bevy.resolve() if workload in BEVY_WORKLOADS else blade
                 result = run(
                     command, cwd, env=environment, timeout=timeout, check=False
                 )
