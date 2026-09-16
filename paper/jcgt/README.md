@@ -20,8 +20,16 @@ Build:
 latexmk -pdf main.tex
 ```
 
-Sources are the `jcgt-extension` branch of `kvark/blade`, `kvark/wgpu`,
-and the `kvark/bevy` fork, checked out as siblings.
+One clone:
+
+```bash
+git clone --recursive https://github.com/kvark/blade-sync-bench
+cd blade-sync-bench
+python3 collect.py
+```
+
+Sources are also the `jcgt-extension` branch of `kvark/blade`,
+`kvark/wgpu`, and the `kvark/bevy` fork as siblings.
 
 Collection protocol: `../COLLECTING.md`, section “Running the combined
 protocol on another machine”. Do not feed JCGT Bevy CSVs to
