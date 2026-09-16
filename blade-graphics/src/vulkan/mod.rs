@@ -825,71 +825,7 @@ impl crate::traits::CommandDevice for Context {
                             .wait_semaphores(&wait_info, !0)
                             .unwrap();
                     }
-                    let swapchain = unsafe { &mut *(swapchain as *mut xr::Swapchain<xr::Vulkan>) };
-                    swapchain.release_image().unwrap();
-
-                    let xr_state = self.xr.as_ref().expect("XR is not enabled in this context");
-                    let mut xr_state = xr_state.lock().unwrap();
-                    let environment_blend_mode = xr_state.environment_blend_mode;
-                    let space = xr_state.space.take().expect("XR space is not initialized");
-                    let predicted_display_time = xr_state
-                        .predicted_display_time
-                        .expect("XR frame timing is not initialized");
-                    let rect = xr::Rect2Di {
-                        offset: xr::Offset2Di { x: 0, y: 0 },
-                        extent: xr::Extent2Di {
-                            width: target_size[0] as _,
-                            height: target_size[1] as _,
-                        },
-                    };
-                    let projection_views = views[..view_count as usize]
-                        .iter()
-                        .enumerate()
-                        .map(|(i, view)| {
-                            xr::CompositionLayerProjectionView::new()
-                                .pose(xr::Posef {
-                                    orientation: xr::Quaternionf {
-                                        x: view.pose.orientation[0],
-                                        y: view.pose.orientation[1],
-                                        z: view.pose.orientation[2],
-                                        w: view.pose.orientation[3],
-                                    },
-                                    position: xr::Vector3f {
-                                        x: view.pose.position[0],
-                                        y: view.pose.position[1],
-                                        z: view.pose.position[2],
-                                    },
-                                })
-                                .fov(xr::Fovf {
-                                    angle_left: view.fov.angle_left,
-                                    angle_right: view.fov.angle_right,
-                                    angle_up: view.fov.angle_up,
-                                    angle_down: view.fov.angle_down,
-                                })
-                                .sub_image(
-                                    xr::SwapchainSubImage::new()
-                                        .swapchain(swapchain)
-                                        .image_array_index(i as u32)
-                                        .image_rect(rect),
-                                )
-                        })
-                        .collect::<Vec<_>>();
-                    match xr_state.frame_stream.end(
-                        predicted_display_time,
-                        environment_blend_mode,
-                        &[&xr::CompositionLayerProjection::new()
-                            .space(&space)
-                            .views(&projection_views)],
-                    ) {
-                        Ok(()) => {}
-                        Err(xr::sys::Result::ERROR_POSE_INVALID) => {
-                            // Tracking was lost between frame acquire and
-                            // present — transient, safe to ignore.
-                            log::warn!("XR frame end: pose invalid (tracking lost?)");
-                        }
-                        Err(e) => panic!("XR frame end failed: {e}"),
-                    }
-                    xr_state.space = Some(space);
+                    self.present_xr(swapchain, view_count, target_size, views);
                 }
             }
         }
