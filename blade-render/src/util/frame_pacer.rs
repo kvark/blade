@@ -72,7 +72,10 @@ impl FramePacer {
         self.prev_sync_point.as_ref().unwrap()
     }
 
-    pub fn get_timings(&mut self) -> &blade_graphics::Timings {
-        self.command_encoder.get_timings()
+    /// Timing of the last submission.
+    ///
+    /// The caller must have waited on [`Self::last_sync_point`].
+    pub fn last_timing(&self) -> blade_graphics::Timing<'_> {
+        self.command_encoder.last_timing()
     }
 }

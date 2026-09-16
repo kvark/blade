@@ -69,12 +69,13 @@ pub mod derive;
 )]
 #[cfg_attr(any(gles, target_arch = "wasm32"), path = "gles/mod.rs")]
 mod hal;
+mod internal;
 mod shader;
 pub mod traits;
 pub mod util;
 pub mod limits {
     /// Max number of passes inside a command encoder.
-    pub const PASS_COUNT: usize = 1000;
+    pub const PASS_COUNT: usize = 1234;
     /// Max plain data size for a pipeline.
     pub const PLAIN_DATA_SIZE: u32 = 256;
     /// Max number of resources in a bind group.
@@ -155,6 +156,8 @@ pub struct ContextDesc {
     /// and insert crash markers into command buffers.
     pub validation: bool,
     /// Enable GPU timing of all passes.
+    ///
+    /// Panics at context init if the device cannot timestamp.
     pub timing: bool,
     /// Enable capture support with GAPI tools and collection of available
     /// compute-pipeline compiler statistics.
@@ -268,6 +271,10 @@ pub struct Capabilities {
     pub shader_float16: bool,
     /// Cooperative matrix support.
     pub cooperative_matrix: CooperativeMatrix,
+    /// Support for timestamping passes on the GPU.
+    ///
+    /// [`ContextDesc::timing`] panics on init if this is false.
+    pub timing: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1467,28 +1474,23 @@ pub struct Viewport {
 }
 
 /// GPU pass timestamps mapped onto the process monotonic clock.
+///
+/// Pass names are borrowed from the encoder.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Timings {
+pub struct Timing<'a> {
     /// Pass starts in execution order.
-    pub passes: Vec<(String, std::time::Instant)>,
+    pub passes: Vec<(&'a str, std::time::Instant)>,
     /// Completion time of the final pass.
     pub done: std::time::Instant,
 }
 
-impl Timings {
-    pub(crate) fn pending() -> Self {
-        Self {
-            passes: Vec::new(),
-            done: std::time::Instant::now(),
-        }
-    }
-
+impl Timing<'_> {
     /// Return each pass's start-to-next-start duration, with the final pass
     /// ending at [`Self::done`].
     pub fn pass_durations(&self) -> impl Iterator<Item = (&str, std::time::Duration)> + '_ {
         self.passes.iter().enumerate().map(move |(i, pass)| {
             let end = self.passes.get(i + 1).map_or(self.done, |next| next.1);
-            (pass.0.as_str(), end.duration_since(pass.1))
+            (pass.0, end.duration_since(pass.1))
         })
     }
 }

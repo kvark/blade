@@ -308,6 +308,73 @@ fn manual_barrier_gpu_test() {
     run_dispatch_gpu_test(true);
 }
 
+/// `last_timing` reports the last submission after its sync point is waited on.
+#[test]
+#[ignore = "requires a working GPU context"]
+fn last_timing_reports_the_last_submission() {
+    let probe = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    if !probe.capabilities().timing {
+        println!("Skipping: this device does not support GPU timestamps");
+        return;
+    }
+    drop(probe);
+    let context = unsafe {
+        gpu::Context::init(gpu::ContextDesc {
+            timing: true,
+            ..Default::default()
+        })
+        .unwrap()
+    };
+
+    let shader = context.create_shader(gpu::ShaderDesc {
+        source: "@compute @workgroup_size(1) fn main() {}",
+        naga_module: None,
+    });
+    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        name: "timing-test",
+        data_layouts: &[],
+        compute: shader.at("main"),
+    });
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "timing-test",
+        buffer_count: 2,
+        manual_barriers: false,
+    });
+
+    let submit = |encoder: &mut gpu::CommandEncoder, label: &str| {
+        encoder.start();
+        if let mut compute = encoder.compute(label)
+            && let mut pass = compute.with(&pipeline)
+        {
+            pass.dispatch([1, 1, 1]);
+        }
+        let sync_point = context.submit(encoder);
+        assert!(context.wait_for(&sync_point, 5000).unwrap());
+        encoder
+            .last_timing()
+            .passes
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    let first = submit(&mut encoder, "first");
+    let first_again = encoder
+        .last_timing()
+        .passes
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect::<Vec<_>>();
+    let second = submit(&mut encoder, "second");
+
+    context.destroy_command_encoder(&mut encoder);
+    context.destroy_compute_pipeline(&mut pipeline);
+
+    assert_eq!(first, ["first"]);
+    assert_eq!(first_again, first);
+    assert_eq!(second, ["second"]);
+}
+
 /// Big enough for the weight chain to have several levels, so a mistake in the
 /// mip math has somewhere to show up.
 const ENV_TEST_SIZE: gpu::Extent = gpu::Extent {

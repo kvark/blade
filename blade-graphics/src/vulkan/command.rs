@@ -1,5 +1,5 @@
 use ash::vk;
-use std::{ptr, str, time::Instant};
+use std::{ptr, str};
 
 impl super::CrashHandler {
     fn add_marker(&mut self, marker: &str) -> u32 {
@@ -27,37 +27,31 @@ impl super::CrashHandler {
     }
 }
 
-impl super::CommandBuffer {
-    fn resolve_timings(
-        &mut self,
-        device: &ash::Device,
-        timings: &mut crate::Timings,
-    ) -> Option<Instant> {
-        let n = self.timed_pass_names.len();
-        if n == 0 || self.timing_calibration.is_none() {
-            return None;
-        }
-
+impl super::TimingState {
+    fn resolve(&self, device: &ash::Device) -> crate::Timing<'_> {
+        let calibration = self.calibration.expect("no last submission");
+        let n = self.submitted_count;
         let mut timestamps = [0u64; super::QUERY_POOL_SIZE];
-        let result = unsafe {
-            device.get_query_pool_results(
-                self.query_pool,
-                0,
-                &mut timestamps[..n + 1],
-                vk::QueryResultFlags::TYPE_64,
-            )
-        };
-        match result {
-            Ok(()) => {}
-            Err(vk::Result::NOT_READY) => return None,
-            Err(error) => panic!("Unable to resolve GPU timestamps: {error}"),
+        unsafe {
+            device
+                .get_query_pool_results(
+                    self.query_pool,
+                    0,
+                    &mut timestamps[..n + 1],
+                    vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
+                )
+                .unwrap_or_else(|error| panic!("Unable to resolve GPU timestamps: {error}"));
         }
-
-        let calibration = self.timing_calibration.take().unwrap();
-        for (name, &timestamp) in self.timed_pass_names.drain(..).zip(timestamps.iter()) {
-            timings.passes.push((name, calibration.map(timestamp)));
+        crate::Timing {
+            passes: self
+                .pass_names
+                .iter()
+                .take(n)
+                .zip(timestamps.iter())
+                .map(|(name, &timestamp)| (name, calibration.map(timestamp)))
+                .collect(),
+            done: calibration.map(timestamps[n]),
         }
-        Some(calibration.map(timestamps[n]))
     }
 }
 
@@ -341,22 +335,23 @@ impl super::CommandEncoder {
     }
 
     fn add_timestamp(&mut self, label: &str) {
-        if let Some(_) = self.device.timing {
-            let cmd_buf = self.buffers.first_mut().unwrap();
-            if cmd_buf.timed_pass_names.len() == crate::limits::PASS_COUNT {
+        let cmd_buf = self.buffers[0].raw;
+        if let Some(ref mut timing) = self.timing {
+            let index = timing.pass_names.len() - timing.submitted_count;
+            if index == crate::limits::PASS_COUNT {
                 log::warn!("Reached the maximum for `limits::PASS_COUNT`, skipping the timer");
                 return;
             }
-            let index = cmd_buf.timed_pass_names.len() as u32;
+            let query_pool = timing.query_pool;
             unsafe {
                 self.device.core.cmd_write_timestamp(
-                    cmd_buf.raw,
+                    cmd_buf,
                     vk::PipelineStageFlags::TOP_OF_PIPE,
-                    cmd_buf.query_pool,
-                    index,
+                    query_pool,
+                    index as u32,
                 );
             }
-            cmd_buf.timed_pass_names.push(label.to_string());
+            timing.pass_names.push(label);
         }
     }
 
@@ -391,15 +386,20 @@ impl super::CommandEncoder {
         // conservative while deriving the source from the passes that ran.
         self.barrier_before(super::PassKind::Unknown);
         self.add_marker("finish");
+        let done = self.timing.as_ref().map(|timing| {
+            (
+                (timing.pass_names.len() - timing.submitted_count) as u32,
+                timing.query_pool,
+            )
+        });
         let cmd_buf = self.buffers.first_mut().unwrap();
         unsafe {
-            if self.device.timing.is_some() {
-                let index = cmd_buf.timed_pass_names.len() as u32;
+            if let Some((done_index, query_pool)) = done {
                 self.device.core.cmd_write_timestamp(
                     cmd_buf.raw,
                     vk::PipelineStageFlags::TOP_OF_PIPE,
-                    cmd_buf.query_pool,
-                    index,
+                    query_pool,
+                    done_index,
                 );
             }
             self.device.core.end_command_buffer(cmd_buf.raw).unwrap();
@@ -699,6 +699,9 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
             self.producer_kinds.insert(super::PassKind::Unknown);
         }
         self.buffers.rotate_left(1);
+        if let Some(ref mut timing) = self.timing {
+            timing.pass_names.truncate(timing.submitted_count);
+        }
         let cmd_buf = self.buffers.first_mut().unwrap();
         self.device
             .reset_descriptor_pool(&mut cmd_buf.descriptor_pool);
@@ -717,13 +720,12 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
                 .unwrap();
         }
 
-        if self.device.timing.is_some() {
-            cmd_buf.timed_pass_names.clear();
-            cmd_buf.timing_calibration = None;
+        if let Some(ref timing) = self.timing {
+            let query_pool = timing.query_pool;
             unsafe {
                 self.device.core.cmd_reset_query_pool(
                     cmd_buf.raw,
-                    cmd_buf.query_pool,
+                    query_pool,
                     0,
                     super::QUERY_POOL_SIZE as u32,
                 );
@@ -811,20 +813,11 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         });
     }
 
-    fn get_timings(&mut self) -> &crate::Timings {
-        self.timings.passes.clear();
-        let mut done = None;
-        // `start` rotates the current buffer to index zero, leaving older submissions in order.
-        let (current, older) = self.buffers.split_at_mut(1);
-        for cmd_buf in older.iter_mut().chain(current.iter_mut()) {
-            if let Some(candidate) = cmd_buf.resolve_timings(&self.device.core, &mut self.timings) {
-                done = Some(candidate);
-            }
-        }
-        if let Some(done) = done {
-            self.timings.done = done;
-        }
-        &self.timings
+    fn last_timing(&self) -> crate::Timing<'_> {
+        self.timing
+            .as_ref()
+            .expect("GPU timing is not enabled")
+            .resolve(&self.device.core)
     }
 }
 

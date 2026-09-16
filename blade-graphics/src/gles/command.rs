@@ -8,6 +8,38 @@ fn map_gpu_ns(cal_cpu: Instant, cal_gpu_ns: u64, ts_ns: u64) -> Instant {
     cal_cpu + Duration::from_nanos(ts_ns - cal_gpu_ns)
 }
 
+impl super::TimingState {
+    fn resolve(&self, gl: &glow::Context) -> crate::Timing<'_> {
+        use glow::HasContext as _;
+        let (cal_cpu, cal_gpu) = self.calibration.expect("no last submission");
+        let n = self.submitted_count;
+        let mut passes = Vec::with_capacity(n);
+        for (i, name) in self.pass_names.iter().take(n).enumerate() {
+            let mut start_ns = 0;
+            unsafe {
+                gl.get_query_parameter_u64_with_offset(
+                    self.queries[i],
+                    glow::QUERY_RESULT,
+                    &mut start_ns as *mut _ as usize,
+                );
+            }
+            passes.push((name, map_gpu_ns(cal_cpu, cal_gpu, start_ns)));
+        }
+        let mut done_ns = 0;
+        unsafe {
+            gl.get_query_parameter_u64_with_offset(
+                self.queries[n],
+                glow::QUERY_RESULT,
+                &mut done_ns as *mut _ as usize,
+            );
+        }
+        crate::Timing {
+            passes,
+            done: map_gpu_ns(cal_cpu, cal_gpu, done_ns),
+        }
+    }
+}
+
 const COLOR_ATTACHMENTS: &[u32] = &[
     glow::COLOR_ATTACHMENT0,
     glow::COLOR_ATTACHMENT1,
@@ -105,13 +137,12 @@ impl super::CommandEncoder {
                 name_range: start..self.string_data.len(),
             });
         }
-        if let Some(ref mut timing_datas) = self.timing_datas {
-            let td = timing_datas.first_mut().unwrap();
-            let id = td.pass_names.len();
+        if let Some(ref mut timing) = self.timing {
+            let id = timing.pass_names.len() - timing.submitted_count;
             self.commands.push(super::Command::QueryCounter {
-                query: td.queries[id],
+                query: timing.queries[id],
             });
-            td.pass_names.push(label.to_string());
+            timing.pass_names.push(label);
         }
     }
 
@@ -131,48 +162,16 @@ impl super::CommandEncoder {
 
     pub(super) fn finish(&mut self, gl: &glow::Context) {
         use glow::HasContext as _;
-        #[allow(trivial_casts)]
-        if let Some(ref mut timing_datas) = self.timing_datas {
-            {
-                let td = timing_datas.first_mut().unwrap();
-                let before = Instant::now();
-                let gpu_ns = unsafe { gl.get_parameter_i64(glow::TIMESTAMP) } as u64;
-                td.calibration = Some((before + before.elapsed().div_f64(2.0), gpu_ns));
-                let id = td.pass_names.len();
-                self.commands.push(super::Command::QueryCounter {
-                    query: td.queries[id],
-                });
-            }
-
-            timing_datas.rotate_left(1);
-            self.timings.passes.clear();
-            let td = timing_datas.first_mut().unwrap();
-            if !td.pass_names.is_empty() {
-                let (cal_cpu, cal_gpu) = td.calibration.take().unwrap();
-                let mut start_ns = 0;
-                unsafe {
-                    gl.get_query_parameter_u64_with_offset(
-                        td.queries[0],
-                        glow::QUERY_RESULT,
-                        &mut start_ns as *mut _ as usize,
-                    );
-                }
-                for (i, name) in td.pass_names.drain(..).enumerate() {
-                    let mut end_ns = 0;
-                    unsafe {
-                        gl.get_query_parameter_u64_with_offset(
-                            td.queries[i + 1],
-                            glow::QUERY_RESULT,
-                            &mut end_ns as *mut _ as usize,
-                        );
-                    }
-                    self.timings
-                        .passes
-                        .push((name, map_gpu_ns(cal_cpu, cal_gpu, start_ns)));
-                    start_ns = end_ns;
-                }
-                self.timings.done = map_gpu_ns(cal_cpu, cal_gpu, start_ns);
-            }
+        if let Some(ref mut timing) = self.timing {
+            let before = Instant::now();
+            let gpu_ns = unsafe { gl.get_parameter_i64(glow::TIMESTAMP) } as u64;
+            timing.calibration = Some((before + before.elapsed().div_f64(2.0), gpu_ns));
+            let id = timing.pass_names.len() - timing.submitted_count;
+            self.commands.push(super::Command::QueryCounter {
+                query: timing.queries[id],
+            });
+            timing.pass_names.drain_prefix(timing.submitted_count);
+            timing.submitted_count = timing.pass_names.len();
         }
     }
 
@@ -292,6 +291,9 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.plain_data.clear();
         self.string_data.clear();
         self.present_frames.clear();
+        if let Some(ref mut timing) = self.timing {
+            timing.pass_names.truncate(timing.submitted_count);
+        }
     }
 
     fn init_texture(&mut self, _texture: super::Texture) {}
@@ -300,8 +302,10 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.present_frames.push(frame.platform);
     }
 
-    fn get_timings(&mut self) -> &crate::Timings {
-        &self.timings
+    fn last_timing(&self) -> crate::Timing<'_> {
+        let timing = self.timing.as_ref().expect("GPU timing is not enabled");
+        let gl = self.gl.lock();
+        timing.resolve(&gl)
     }
 }
 

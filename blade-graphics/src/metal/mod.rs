@@ -15,7 +15,7 @@ mod pipeline;
 mod resource;
 mod surface;
 
-const MAX_TIMESTAMPS: usize = crate::limits::PASS_COUNT * 2;
+const MAX_TIMESTAMPS: usize = crate::limits::PASS_COUNT + 1;
 
 pub struct Surface {
     view: Option<objc2::rc::Retained<objc2::runtime::NSObject>>,
@@ -209,15 +209,16 @@ impl AccelerationStructure {
 //TODO: make this copyable?
 #[derive(Clone, Debug)]
 pub struct SyncPoint {
-    cmd_buf: Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>,
+    cmd_buf: RawCommandBuffer,
 }
 // Safe because all mutability is externalized
 unsafe impl Send for SyncPoint {}
 unsafe impl Sync for SyncPoint {}
 
-struct TimingData {
-    pass_names: Vec<String>,
+struct TimingState {
     sample_buffer: Retained<ProtocolObject<dyn metal::MTLCounterSampleBuffer>>,
+    pass_names: crate::internal::StringBuffer,
+    submitted_count: usize,
     calibration: Option<TimestampSample>,
 }
 
@@ -245,6 +246,35 @@ fn sample_timestamps(device: &ProtocolObject<dyn metal::MTLDevice>) -> Timestamp
     }
 }
 
+/// The device's timestamp counter set, if passes can actually be sampled with it.
+///
+/// Both halves matter: a device can expose the counter set and still refuse the
+/// sampling point our timestamps sit on, which leaves us unable to time a pass.
+fn find_timestamp_counter_set(
+    device: &ProtocolObject<dyn metal::MTLDevice>,
+) -> Option<Retained<ProtocolObject<dyn metal::MTLCounterSet>>> {
+    use metal::{MTLCounterSet as _, MTLDevice as _};
+
+    if !device.supportsCounterSampling(metal::MTLCounterSamplingPoint::AtStageBoundary) {
+        log::info!("No timing because the device cannot sample counters at stage boundary");
+        return None;
+    }
+    let Some(counter_sets) = device.counterSets() else {
+        log::info!("No timing because the device has no counter sets");
+        return None;
+    };
+    match counter_sets
+        .into_iter()
+        .find(|counter_set| counter_set.name().to_string() == "timestamp")
+    {
+        Some(counter_set) => Some(counter_set),
+        None => {
+            log::info!("No timing because there is no timestamp counter set");
+            None
+        }
+    }
+}
+
 type RawCommandBuffer = Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>;
 pub struct CommandEncoder {
     raw: Option<RawCommandBuffer>,
@@ -253,8 +283,7 @@ pub struct CommandEncoder {
     enable_debug_groups: bool,
     enable_dispatch_type: bool,
     has_open_debug_group: bool,
-    timing_datas: Option<Box<[TimingData]>>,
-    timings: crate::Timings,
+    timing_state: Option<TimingState>,
 }
 
 #[derive(Debug)]
@@ -566,26 +595,14 @@ impl Context {
             driver_info: "".to_string(),
         };
 
-        let mut timestamp_counter_set = None;
-        if desc.timing {
-            use metal::MTLCounterSet as _;
-            if let Some(counter_sets) = unsafe { device.counterSets() } {
-                for counter_set in counter_sets {
-                    let name = unsafe { counter_set.name() };
-                    if name.to_string() == "timestamp" {
-                        timestamp_counter_set = Some(counter_set);
-                    }
-                }
-            }
-            if timestamp_counter_set.is_none() {
-                log::warn!("Timing counters are not supported by the device");
-            } else if !device
-                .supportsCounterSampling(metal::MTLCounterSamplingPoint::AtStageBoundary)
-            {
-                log::warn!("Timing counters do not support stage boundary");
-                timestamp_counter_set = None;
-            }
-        }
+        let timestamp_counter_set = if desc.timing {
+            Some(
+                find_timestamp_counter_set(&device)
+                    .expect("GPU timing was requested but is not supported on this device"),
+            )
+        } else {
+            None
+        };
 
         Ok(Context {
             device: Mutex::new(device),
@@ -632,6 +649,7 @@ impl Context {
             dual_source_blending: true,
             // Metal Shading Language supports half-precision floats on all supported devices.
             shader_float16: true,
+            timing: find_timestamp_counter_set(device).is_some(),
             cooperative_matrix: if device.supportsFamily(metal::MTLGPUFamily::Apple7)
                 || device.supportsFamily(metal::MTLGPUFamily::Mac2)
                 || device.supportsFamily(metal::MTLGPUFamily::Metal3)
@@ -709,8 +727,8 @@ impl crate::traits::CommandDevice for Context {
     fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
         use metal::MTLDevice as _;
 
-        let timing_datas = if let Some(ref counter_set) = self.timestamp_counter_set {
-            let mut array = Vec::with_capacity(desc.buffer_count as usize);
+        let timing_state = if let Some(ref counter_set) = self.timestamp_counter_set {
+            let device = self.device.lock().unwrap();
             let csb_desc = unsafe {
                 let desc = metal::MTLCounterSampleBufferDescriptor::new();
                 desc.setCounterSet(Some(counter_set));
@@ -718,23 +736,22 @@ impl crate::traits::CommandDevice for Context {
                 desc.setSampleCount(MAX_TIMESTAMPS);
                 desc
             };
-            for i in 0..desc.buffer_count {
-                let label = format!("{}/counter{}", desc.name, i);
-                let sample_buffer = unsafe {
-                    csb_desc.setLabel(&objc2_foundation::NSString::from_str(&label));
-                    self.device
-                        .lock()
-                        .unwrap()
+            unsafe {
+                csb_desc.setLabel(&objc2_foundation::NSString::from_str(&format!(
+                    "{}/counter",
+                    desc.name
+                )));
+            }
+            Some(TimingState {
+                sample_buffer: unsafe {
+                    device
                         .newCounterSampleBufferWithDescriptor_error(&csb_desc)
                         .unwrap()
-                };
-                array.push(TimingData {
-                    sample_buffer,
-                    pass_names: Vec::new(),
-                    calibration: None,
-                });
-            }
-            Some(array.into_boxed_slice())
+                },
+                pass_names: Default::default(),
+                submitted_count: 0,
+                calibration: None,
+            })
         } else {
             None
         };
@@ -746,8 +763,7 @@ impl crate::traits::CommandDevice for Context {
             enable_debug_groups: self.info.enable_debug_groups,
             enable_dispatch_type: self.info.enable_dispatch_type,
             has_open_debug_group: false,
-            timing_datas,
-            timings: crate::Timings::pending(),
+            timing_state,
         }
     }
 
@@ -755,9 +771,14 @@ impl crate::traits::CommandDevice for Context {
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         use metal::MTLCommandBuffer as _;
-        if let Some(ref mut td_array) = encoder.timing_datas {
-            let td = td_array.first_mut().unwrap();
-            td.calibration = Some(sample_timestamps(&self.device.lock().unwrap()));
+        if encoder.timing_state.is_some() {
+            encoder.write_gpu_done();
+            let timing_state = encoder.timing_state.as_mut().unwrap();
+            timing_state
+                .pass_names
+                .drain_prefix(timing_state.submitted_count);
+            timing_state.submitted_count = timing_state.pass_names.len();
+            timing_state.calibration = Some(sample_timestamps(&self.device.lock().unwrap()));
         }
         let cmd_buf = encoder.finish();
         cmd_buf.commit();

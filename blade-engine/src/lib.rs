@@ -17,7 +17,12 @@
 )]
 
 use blade_graphics as gpu;
-use std::{ops, path::PathBuf, sync::Arc};
+use std::{
+    ops,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 pub use blade_asset::vfs;
 
@@ -36,6 +41,8 @@ const ZERO_V3: mint::Vector3<f32> = mint::Vector3 {
     y: 0.0,
     z: 0.0,
 };
+
+const GPU_TIMING_SAMPLE_PERIOD: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Transform {
@@ -536,6 +543,8 @@ pub struct Engine {
     time_ahead: f32,
     particle_clock: f32,
     last_particle_clock: f32,
+    gpu_timing: Vec<(String, Duration)>,
+    gpu_timing_sampled: Instant,
 }
 
 impl Engine {
@@ -687,7 +696,14 @@ impl Engine {
             xr,
             ray_tracing: config.render_backend.uses_ray_tracing(),
             validation: cfg!(debug_assertions),
-            timing: true,
+            timing: gpu::Context::enumerate().ok().is_some_and(|reports| {
+                reports.iter().any(|report| {
+                    matches!(
+                        &report.status,
+                        gpu::DeviceReportStatus::Available { caps, .. } if caps.timing
+                    )
+                })
+            }),
             ..Default::default()
         };
         let gpu_context = match unsafe { gpu::Context::init(context_desc.clone()) } {
@@ -878,6 +894,10 @@ impl Engine {
             time_ahead: 0.0,
             particle_clock: 0.0,
             last_particle_clock: 0.0,
+            gpu_timing: Vec::new(),
+            gpu_timing_sampled: Instant::now()
+                .checked_sub(GPU_TIMING_SAMPLE_PERIOD)
+                .unwrap_or_else(Instant::now),
         }
     }
 
@@ -1845,7 +1865,21 @@ impl Engine {
             });
 
         egui::CollapsingHeader::new("Performance").show(ui, |ui| {
-            for (name, duration) in self.pacer.get_timings().pass_durations() {
+            if self.gpu_context.capabilities().timing
+                && self.gpu_timing_sampled.elapsed() >= GPU_TIMING_SAMPLE_PERIOD
+            {
+                if let Some(sp) = self.pacer.last_sync_point() {
+                    let _ = self.gpu_context.wait_for(sp, !0);
+                    self.gpu_timing = self
+                        .pacer
+                        .last_timing()
+                        .pass_durations()
+                        .map(|(name, duration)| (name.to_string(), duration))
+                        .collect();
+                }
+                self.gpu_timing_sampled = Instant::now();
+            }
+            for &(ref name, duration) in self.gpu_timing.iter() {
                 let millis = duration.as_secs_f32() * 1000.0;
                 ui.horizontal(|ui| {
                     ui.label(name);

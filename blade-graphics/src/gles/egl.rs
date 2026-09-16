@@ -237,11 +237,32 @@ impl Drop for GbmState {
 }
 
 pub struct PlatformContext {
-    inner: Mutex<ContextInner>,
+    inner: Arc<Mutex<ContextInner>>,
     /// DMA-BUF function pointers, present when the main display supports import.
     dmabuf_fn: Option<DmaBufFunctions>,
     /// GBM state for buffer allocation and display backing.
     gbm: Option<GbmState>,
+}
+
+#[derive(Clone)]
+pub(super) struct GlHandle {
+    inner: Arc<Mutex<ContextInner>>,
+}
+
+impl GlHandle {
+    pub fn lock(&self) -> ContextLock<'_> {
+        let inner = self.inner.lock().unwrap();
+        inner.egl.make_current();
+        ContextLock { guard: inner }
+    }
+}
+
+impl PlatformContext {
+    pub(super) fn gl_handle(&self) -> GlHandle {
+        GlHandle {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 pub struct ContextLock<'a> {
@@ -383,10 +404,10 @@ impl super::Context {
 
             Ok(Self {
                 platform: PlatformContext {
-                    inner: Mutex::new(ContextInner {
+                    inner: Arc::new(Mutex::new(ContextInner {
                         glow,
                         egl: egl_context,
-                    }),
+                    })),
                     dmabuf_fn,
                     gbm: gbm_state,
                 },
@@ -1539,6 +1560,10 @@ impl EglContext {
                 extensions.contains("GL_EXT_buffer_storage"),
             );
             capabilities.set(
+                super::Capabilities::DISJOINT_TIMER_QUERY,
+                extensions.contains("GL_EXT_disjoint_timer_query"),
+            );
+            capabilities.set(
                 super::Capabilities::DRAW_BUFFERS_INDEXED,
                 if gl.version().is_embedded {
                     (gl.version().major, gl.version().minor) >= (3, 2)
@@ -1555,11 +1580,15 @@ impl EglContext {
                         log::warn!("Scoping is not supported");
                         false
                     }),
-                timing: desc.timing
-                    && (extensions.contains("GL_EXT_disjoint_timer_query") || {
-                        log::warn!("Timing is not supported");
-                        false
-                    }),
+                timing: if desc.timing {
+                    assert!(
+                        capabilities.contains(super::Capabilities::DISJOINT_TIMER_QUERY),
+                        "GPU timing was requested but is not supported on this device"
+                    );
+                    true
+                } else {
+                    false
+                },
             };
 
             let limits = super::Limits {

@@ -1,6 +1,9 @@
 #![allow(irrefutable_let_patterns)]
 
 use blade_graphics as gpu;
+use std::time::{Duration, Instant};
+
+const GPU_TIMING_SAMPLE_PERIOD: Duration = Duration::from_secs(1);
 
 struct Example {
     command_encoder: gpu::CommandEncoder,
@@ -18,6 +21,8 @@ struct Example {
     msaa_view: Option<gpu::TextureView>,
 
     export_image: bool,
+    gpu_timing: Vec<(String, Duration)>,
+    gpu_timing_sampled: Instant,
 }
 
 impl Example {
@@ -118,7 +123,14 @@ impl Example {
             gpu::Context::init(gpu::ContextDesc {
                 presentation: true,
                 validation: cfg!(debug_assertions),
-                timing: true,
+                timing: gpu::Context::enumerate().ok().is_some_and(|reports| {
+                    reports.iter().any(|report| {
+                        matches!(
+                            &report.status,
+                            gpu::DeviceReportStatus::Available { caps, .. } if caps.timing
+                        )
+                    })
+                }),
                 capture: false,
 
                 ..Default::default()
@@ -188,6 +200,10 @@ impl Example {
             msaa_texture: None,
             msaa_view: None,
             export_image: false,
+            gpu_timing: Vec::new(),
+            gpu_timing_sampled: Instant::now()
+                .checked_sub(GPU_TIMING_SAMPLE_PERIOD)
+                .unwrap_or_else(Instant::now),
         }
     }
 
@@ -388,7 +404,21 @@ impl Example {
 
         ui.add_space(5.0);
         ui.heading("Timings");
-        for (name, duration) in self.command_encoder.get_timings().pass_durations() {
+        if self.context.capabilities().timing
+            && self.gpu_timing_sampled.elapsed() >= GPU_TIMING_SAMPLE_PERIOD
+        {
+            if let Some(sp) = self.prev_sync_point.as_ref() {
+                let _ = self.context.wait_for(sp, !0);
+                self.gpu_timing = self
+                    .command_encoder
+                    .last_timing()
+                    .pass_durations()
+                    .map(|(name, duration)| (name.to_string(), duration))
+                    .collect();
+            }
+            self.gpu_timing_sampled = Instant::now();
+        }
+        for (name, duration) in &self.gpu_timing {
             let millis = duration.as_secs_f32() * 1000.0;
             ui.horizontal(|ui| {
                 ui.label(name);

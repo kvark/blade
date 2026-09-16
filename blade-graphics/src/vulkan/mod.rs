@@ -351,6 +351,7 @@ pub struct Context {
     shader_float16: bool,
     cooperative_matrix: crate::CooperativeMatrix,
     binding_array: bool,
+    timing_supported: bool,
     memory_budget: bool,
     inner: VulkanInstance,
     xr: Option<Mutex<XrSessionState>>,
@@ -497,10 +498,14 @@ pub struct RenderPipeline {
 struct CommandBuffer {
     raw: vk::CommandBuffer,
     descriptor_pool: descriptor::DescriptorPool,
-    query_pool: vk::QueryPool,
-    timed_pass_names: Vec<String>,
-    timing_calibration: Option<TimestampCalibration>,
     scratch: Option<ScratchBuffer>,
+}
+
+struct TimingState {
+    pass_names: crate::internal::StringBuffer,
+    submitted_count: usize,
+    calibration: Option<TimestampCalibration>,
+    query_pool: vk::QueryPool,
 }
 
 struct CrashHandler {
@@ -562,7 +567,7 @@ pub struct CommandEncoder {
     present: Option<Presentation>,
     crash_handler: Option<CrashHandler>,
     temp_label: Vec<u8>,
-    timings: crate::Timings,
+    timing: Option<TimingState>,
     manual_barriers: bool,
     producer_kinds: PassKinds,
 }
@@ -636,19 +641,6 @@ impl crate::traits::CommandDevice for Context {
                     self.set_object_name(raw, desc.name);
                 };
                 let descriptor_pool = self.device.create_descriptor_pool();
-                let query_pool = if self.device.timing.is_some() {
-                    let query_pool_info = vk::QueryPoolCreateInfo::default()
-                        .query_type(vk::QueryType::TIMESTAMP)
-                        .query_count(QUERY_POOL_SIZE as u32);
-                    unsafe {
-                        self.device
-                            .core
-                            .create_query_pool(&query_pool_info, None)
-                            .unwrap()
-                    }
-                } else {
-                    vk::QueryPool::null()
-                };
                 // Always create a scratch buffer for UBO bindings.
                 // Even when inline uniform blocks are supported, individual
                 // bindings that exceed the device limit fall back to UBOs.
@@ -669,9 +661,6 @@ impl crate::traits::CommandDevice for Context {
                 CommandBuffer {
                     raw,
                     descriptor_pool,
-                    query_pool,
-                    timed_pass_names: Vec::new(),
-                    timing_calibration: None,
                     scratch,
                 }
             })
@@ -700,7 +689,22 @@ impl crate::traits::CommandDevice for Context {
             present: None,
             crash_handler,
             temp_label: Vec::new(),
-            timings: crate::Timings::pending(),
+            timing: self.device.timing.as_ref().map(|_| {
+                let query_pool_info = vk::QueryPoolCreateInfo::default()
+                    .query_type(vk::QueryType::TIMESTAMP)
+                    .query_count(QUERY_POOL_SIZE as u32);
+                TimingState {
+                    pass_names: Default::default(),
+                    submitted_count: 0,
+                    calibration: None,
+                    query_pool: unsafe {
+                        self.device
+                            .core
+                            .create_query_pool(&query_pool_info, None)
+                            .unwrap()
+                    },
+                }
+            }),
             manual_barriers: desc.manual_barriers,
             producer_kinds: PassKinds::default(),
         }
@@ -716,13 +720,6 @@ impl crate::traits::CommandDevice for Context {
             }
             self.device
                 .destroy_descriptor_pool(&mut cmd_buf.descriptor_pool);
-            if self.device.timing.is_some() {
-                unsafe {
-                    self.device
-                        .core
-                        .destroy_query_pool(cmd_buf.query_pool, None);
-                }
-            }
             if let Some(ref scratch) = cmd_buf.scratch {
                 self.destroy_buffer(super::Buffer {
                     raw: scratch.raw,
@@ -741,16 +738,20 @@ impl crate::traits::CommandDevice for Context {
         if let Some(crash_handler) = command_encoder.crash_handler.take() {
             self.destroy_buffer(crash_handler.marker_buf);
         };
+        if let Some(timing) = command_encoder.timing.take() {
+            unsafe {
+                self.device.core.destroy_query_pool(timing.query_pool, None);
+            }
+        }
     }
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         let raw_cmd_buf = encoder.finish();
         let mut queue = self.queue.lock().unwrap();
-        if let Some(ref timing) = encoder.device.timing {
-            let cmd_buf = encoder.buffers.first_mut().unwrap();
-            if !cmd_buf.timed_pass_names.is_empty() {
-                cmd_buf.timing_calibration = Some(timing.calibrate());
-            }
+        if let Some(ref mut timing) = encoder.timing {
+            timing.pass_names.drain_prefix(timing.submitted_count);
+            timing.submitted_count = timing.pass_names.len();
+            timing.calibration = Some(encoder.device.timing.as_ref().unwrap().calibrate());
         }
         queue.last_progress += 1;
         let progress = queue.last_progress;

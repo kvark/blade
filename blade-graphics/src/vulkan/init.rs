@@ -135,6 +135,7 @@ impl AdapterCapabilities {
                 .as_raw(),
             dual_source_blending: self.dual_source_blending,
             shader_float16: self.shader_float16,
+            timing: self.timing,
             cooperative_matrix: self.cooperative_matrix,
         }
     }
@@ -1074,7 +1075,7 @@ impl super::Context {
             if use_low_priority {
                 device_extensions.push(vk::KHR_GLOBAL_PRIORITY_NAME);
             }
-            if desc.timing && capabilities.timing {
+            if desc.timing {
                 device_extensions.push(vk::EXT_CALIBRATED_TIMESTAMPS_NAME);
             }
 
@@ -1246,7 +1247,11 @@ impl super::Context {
         };
 
         let instance = &inner.instance;
-        let timing = if desc.timing && capabilities.timing {
+        let timing = if desc.timing {
+            assert!(
+                capabilities.timing,
+                "GPU timing was requested but is not supported on this device"
+            );
             Some(super::TimingDevice {
                 period: capabilities.properties.limits.timestamp_period,
                 valid_bits: capabilities.timestamp_valid_bits,
@@ -1539,6 +1544,7 @@ impl super::Context {
             shader_float16: capabilities.shader_float16,
             cooperative_matrix: capabilities.cooperative_matrix,
             binding_array: capabilities.binding_array,
+            timing_supported: capabilities.timing,
             memory_budget: capabilities.memory_budget,
             inner,
             xr,
@@ -1569,6 +1575,7 @@ impl super::Context {
             sample_count_mask: self.sample_count_flags.as_raw(),
             dual_source_blending: self.dual_source_blending,
             shader_float16: self.shader_float16,
+            timing: self.timing_supported,
             cooperative_matrix: self.cooperative_matrix,
         }
     }

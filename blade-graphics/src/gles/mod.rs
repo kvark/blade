@@ -10,7 +10,6 @@ use std::{marker::PhantomData, mem, ops::Range};
 type BindTarget = u32;
 const DEBUG_ID: u32 = 0;
 const MAX_TIMEOUT: u64 = 1_000_000_000; // MAX_CLIENT_WAIT_TIMEOUT_WEBGL;
-const MAX_QUERIES: usize = crate::limits::PASS_COUNT + 1;
 
 bitflags::bitflags! {
     struct Capabilities: u32 {
@@ -396,9 +395,10 @@ enum Command {
     PopScope,
 }
 
-struct TimingData {
-    pass_names: Vec<String>,
+struct TimingState {
     queries: Box<[glow::Query]>,
+    pass_names: crate::internal::StringBuffer,
+    submitted_count: usize,
     calibration: Option<(std::time::Instant, u64)>,
 }
 
@@ -410,8 +410,8 @@ pub struct CommandEncoder {
     needs_scopes: bool,
     present_frames: Vec<platform::PlatformFrame>,
     limits: Limits,
-    timing_datas: Option<Box<[TimingData]>>,
-    timings: crate::Timings,
+    timing: Option<TimingState>,
+    gl: platform::GlHandle,
 }
 
 enum PassKind {
@@ -482,6 +482,9 @@ impl Context {
             sample_count_mask: 0x1 | 0x4, //TODO: accurate info
             dual_source_blending: false,
             shader_float16: false,
+            timing: self
+                .capabilities
+                .contains(Capabilities::DISJOINT_TIMER_QUERY),
             cooperative_matrix: crate::CooperativeMatrix::default(),
         }
     }
@@ -519,21 +522,16 @@ impl crate::traits::CommandDevice for Context {
     fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
         use glow::HasContext as _;
 
-        let timing_datas = if self.toggles.timing {
+        let timing = if self.toggles.timing {
             let gl = self.lock();
-            let mut array = Vec::new();
-            // Allocating one extra set of timers because we are resolving them
-            // in submit() as opposed to start().
-            for _ in 0..desc.buffer_count + 1 {
-                array.push(TimingData {
-                    pass_names: Vec::new(),
-                    queries: (0..MAX_QUERIES)
-                        .map(|_| unsafe { gl.create_query().unwrap() })
-                        .collect(),
-                    calibration: None,
-                });
-            }
-            Some(array.into_boxed_slice())
+            Some(TimingState {
+                queries: (0..=crate::limits::PASS_COUNT)
+                    .map(|_| unsafe { gl.create_query().unwrap() })
+                    .collect(),
+                pass_names: Default::default(),
+                submitted_count: 0,
+                calibration: None,
+            })
         } else {
             None
         };
@@ -545,20 +543,18 @@ impl crate::traits::CommandDevice for Context {
             needs_scopes: self.toggles.scoping,
             present_frames: Vec::new(),
             limits: self.limits.clone(),
-            timing_datas,
-            timings: crate::Timings::pending(),
+            timing,
+            gl: self.platform.gl_handle(),
         }
     }
 
     fn destroy_command_encoder(&self, encoder: &mut CommandEncoder) {
         use glow::HasContext as _;
 
-        if let Some(timing_datas) = encoder.timing_datas.take() {
+        if let Some(timing) = encoder.timing.take() {
             let gl = self.lock();
-            for td in timing_datas {
-                for query in td.queries {
-                    unsafe { gl.delete_query(query) };
-                }
+            for query in timing.queries.iter() {
+                unsafe { gl.delete_query(*query) };
             }
         }
     }

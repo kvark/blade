@@ -1,7 +1,8 @@
+use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSArray, NSRange, NSString};
 use objc2_metal::{
     self as metal, MTLAccelerationStructureCommandEncoder as _, MTLBlitCommandEncoder,
-    MTLCommandBuffer as _, MTLCommandEncoder, MTLComputeCommandEncoder as _,
+    MTLCommandBuffer as _, MTLCommandEncoder as _, MTLComputeCommandEncoder as _,
     MTLCounterSampleBuffer, MTLRenderCommandEncoder,
 };
 use std::{
@@ -197,11 +198,42 @@ impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable
     }
 }
 
-impl super::TimingData {
-    fn add(&mut self, label: &str) -> usize {
-        let counter_index = self.pass_names.len() * 2;
-        self.pass_names.push(label.to_string());
-        counter_index
+impl super::TimingState {
+    fn add(&mut self, label: &str) -> Option<usize> {
+        let index = self.pass_names.len() - self.submitted_count;
+        if index == crate::limits::PASS_COUNT {
+            log::warn!("Reached the maximum for `limits::PASS_COUNT`, skipping the timer");
+            return None;
+        }
+        self.pass_names.push(label);
+        Some(index)
+    }
+
+    fn resolve(&self, device: &ProtocolObject<dyn metal::MTLDevice>) -> crate::Timing<'_> {
+        let begin = self.calibration.expect("no last submission");
+        let n = self.submitted_count;
+        let ns_data = unsafe {
+            self.sample_buffer
+                .resolveCounterRange(NSRange::new(0, n + 1))
+                .unwrap()
+        };
+        let counters = unsafe {
+            slice::from_raw_parts(
+                ns_data.as_bytes_unchecked().as_ptr() as *const u64,
+                ns_data.len() / mem::size_of::<u64>(),
+            )
+        };
+        let end = super::sample_timestamps(device);
+        crate::Timing {
+            passes: self
+                .pass_names
+                .iter()
+                .take(n)
+                .zip(counters)
+                .map(|(name, &timestamp)| (name, map_gpu_ns(begin, end, timestamp)))
+                .collect(),
+            done: map_gpu_ns(begin, end, counters[n]),
+        }
     }
 }
 
@@ -228,19 +260,40 @@ impl super::CommandEncoder {
         self.raw.take().unwrap()
     }
 
+    pub(super) fn write_gpu_done(&mut self) {
+        let Some(ref timing_state) = self.timing_state else {
+            return;
+        };
+        let end_index = timing_state.pass_names.len() - timing_state.submitted_count;
+        let cmd_buf = self.raw.as_mut().unwrap();
+        objc2::rc::autoreleasepool(|_| unsafe {
+            let descriptor = metal::MTLBlitPassDescriptor::new();
+            let sba = descriptor
+                .sampleBufferAttachments()
+                .objectAtIndexedSubscript(0);
+            sba.setSampleBuffer(Some(&timing_state.sample_buffer));
+            sba.setStartOfEncoderSampleIndex(metal::MTLCounterDontSample);
+            sba.setEndOfEncoderSampleIndex(end_index);
+            cmd_buf
+                .blitCommandEncoderWithDescriptor(&descriptor)
+                .unwrap()
+                .endEncoding();
+        });
+    }
+
     pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder<'_> {
         self.begin_pass(label);
         let raw = objc2::rc::autoreleasepool(|_| unsafe {
             let descriptor = metal::MTLBlitPassDescriptor::new();
-            if let Some(ref mut td_array) = self.timing_datas {
-                let td = td_array.first_mut().unwrap();
-                let counter_index = td.add(label);
+            if let Some(ref mut timing_state) = self.timing_state
+                && let Some(start) = timing_state.add(label)
+            {
                 let sba = descriptor
                     .sampleBufferAttachments()
                     .objectAtIndexedSubscript(0);
-                sba.setSampleBuffer(Some(&td.sample_buffer));
-                sba.setStartOfEncoderSampleIndex(counter_index);
-                sba.setEndOfEncoderSampleIndex(counter_index + 1);
+                sba.setSampleBuffer(Some(&timing_state.sample_buffer));
+                sba.setStartOfEncoderSampleIndex(start);
+                sba.setEndOfEncoderSampleIndex(metal::MTLCounterDontSample);
             }
 
             self.raw
@@ -262,15 +315,15 @@ impl super::CommandEncoder {
         let raw = objc2::rc::autoreleasepool(|_| unsafe {
             let descriptor = metal::MTLAccelerationStructurePassDescriptor::new();
 
-            if let Some(ref mut td_array) = self.timing_datas {
-                let td = td_array.first_mut().unwrap();
-                let counter_index = td.add(label);
+            if let Some(ref mut timing_state) = self.timing_state
+                && let Some(start) = timing_state.add(label)
+            {
                 let sba = descriptor
                     .sampleBufferAttachments()
                     .objectAtIndexedSubscript(0);
-                sba.setSampleBuffer(Some(&td.sample_buffer));
-                sba.setStartOfEncoderSampleIndex(counter_index);
-                sba.setEndOfEncoderSampleIndex(counter_index + 1);
+                sba.setSampleBuffer(Some(&timing_state.sample_buffer));
+                sba.setStartOfEncoderSampleIndex(start);
+                sba.setEndOfEncoderSampleIndex(metal::MTLCounterDontSample);
             }
 
             self.raw
@@ -291,15 +344,15 @@ impl super::CommandEncoder {
                 descriptor.setDispatchType(metal::MTLDispatchType::Concurrent);
             }
 
-            if let Some(ref mut td_array) = self.timing_datas {
-                let td = td_array.first_mut().unwrap();
-                let counter_index = td.add(label);
+            if let Some(ref mut timing_state) = self.timing_state
+                && let Some(start) = timing_state.add(label)
+            {
                 let sba = descriptor
                     .sampleBufferAttachments()
                     .objectAtIndexedSubscript(0);
-                sba.setSampleBuffer(Some(&td.sample_buffer));
-                sba.setStartOfEncoderSampleIndex(counter_index);
-                sba.setEndOfEncoderSampleIndex(counter_index + 1);
+                sba.setSampleBuffer(Some(&timing_state.sample_buffer));
+                sba.setStartOfEncoderSampleIndex(start);
+                sba.setEndOfEncoderSampleIndex(metal::MTLCounterDontSample);
             }
 
             self.raw
@@ -402,16 +455,16 @@ impl super::CommandEncoder {
                 }
             }
 
-            if let Some(ref mut td_array) = self.timing_datas {
-                let td = td_array.first_mut().unwrap();
-                let counter_index = td.add(label);
+            if let Some(ref mut timing_state) = self.timing_state
+                && let Some(start) = timing_state.add(label)
+            {
                 unsafe {
                     let sba = descriptor
                         .sampleBufferAttachments()
                         .objectAtIndexedSubscript(0);
-                    sba.setSampleBuffer(Some(&td.sample_buffer));
-                    sba.setStartOfVertexSampleIndex(counter_index);
-                    sba.setEndOfFragmentSampleIndex(counter_index + 1);
+                    sba.setSampleBuffer(Some(&timing_state.sample_buffer));
+                    sba.setStartOfVertexSampleIndex(start);
+                    sba.setEndOfFragmentSampleIndex(metal::MTLCounterDontSample);
                 }
             }
 
@@ -436,36 +489,10 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     type Frame = super::Frame;
 
     fn start(&mut self) {
-        if let Some(ref mut td_array) = self.timing_datas {
-            self.timings.passes.clear();
-            td_array.rotate_left(1);
-            let td = td_array.first_mut().unwrap();
-            if !td.pass_names.is_empty() {
-                let ns_data = unsafe {
-                    td.sample_buffer
-                        .resolveCounterRange(NSRange::new(0, td.pass_names.len() * 2))
-                        .unwrap()
-                };
-                let counters = unsafe {
-                    slice::from_raw_parts(
-                        ns_data.as_bytes_unchecked().as_ptr() as *const u64,
-                        ns_data.len() / mem::size_of::<u64>(),
-                    )
-                };
-                let begin = td.calibration.take().unwrap();
-                let end = {
-                    use metal::MTLCommandQueue as _;
-                    let queue = self.queue.lock().unwrap();
-                    super::sample_timestamps(&queue.device())
-                };
-                let done_ns = *counters.last().unwrap();
-                for (name, chunk) in td.pass_names.drain(..).zip(counters.chunks(2)) {
-                    self.timings
-                        .passes
-                        .push((name, map_gpu_ns(begin, end, chunk[0])));
-                }
-                self.timings.done = map_gpu_ns(begin, end, done_ns);
-            }
+        if let Some(ref mut timing_state) = self.timing_state {
+            timing_state
+                .pass_names
+                .truncate(timing_state.submitted_count);
         }
 
         let queue = self.queue.lock().unwrap();
@@ -486,8 +513,14 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.raw.as_mut().unwrap().presentDrawable(&frame.drawable);
     }
 
-    fn get_timings(&mut self) -> &crate::Timings {
-        &self.timings
+    fn last_timing(&self) -> crate::Timing<'_> {
+        let ts = self
+            .timing_state
+            .as_ref()
+            .expect("GPU timing is not enabled");
+        use metal::MTLCommandQueue as _;
+        let device = self.queue.lock().unwrap().device();
+        ts.resolve(&device)
     }
 }
 
