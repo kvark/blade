@@ -81,7 +81,23 @@ def parse_arguments() -> tuple[argparse.Namespace, list[str]]:
         action="store_true",
         help="also collect the pass-count sweeps (adds roughly half an hour)",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help=(
+            "base directory for this run's timing matrix; validation, profile, "
+            "captures, and sweeps use the same path with a suffix. Default is "
+            "paper/data/raw/<id>-<host> inside the Blade tree"
+        ),
+    )
     return parser.parse_known_args()
+
+
+def output_flag(base: Path | None, suffix: str = "") -> list[str]:
+    if base is None:
+        return []
+    path = base if not suffix else Path(str(base) + suffix)
+    return ["--output", str(path)]
 
 
 def device_selectors(arguments: argparse.Namespace) -> list[str]:
@@ -137,6 +153,9 @@ def main() -> None:
     wgpu = arguments.wgpu.resolve()
     selectors = matrix_selectors(arguments)
     common = device_selectors(arguments)
+    output = arguments.output.resolve() if arguments.output is not None else None
+    if output is not None:
+        print(f"Collection base: {output}", file=sys.stderr, flush=True)
     # These execution switches are safe and useful for the small correctness
     # run too. Shape, sample-count, output, and seed arguments deliberately
     # remain confined to the requested timing collection.
@@ -183,6 +202,7 @@ def main() -> None:
                 "--cpu-only",
                 *selectors,
                 *validation_execution_flags,
+                *output_flag(output, "-validation"),
             ],
             blade,
             required=True,
@@ -203,6 +223,7 @@ def main() -> None:
             str(arguments.repetitions),
             *selectors,
             *passthrough,
+            *output_flag(output),
         ],
         blade,
         required=True,
@@ -229,6 +250,10 @@ def main() -> None:
                     "1,2,4,8,16,32,64",
                     *selectors,
                     *extra,
+                    *output_flag(
+                        output,
+                        "-sweep-cpu" if extra else "-sweep",
+                    ),
                 ],
                 blade,
                 required=False,
@@ -246,6 +271,7 @@ def main() -> None:
                 "--wgpu",
                 str(wgpu),
                 *common,
+                *output_flag(output, "-profile"),
             ],
             blade,
             required=False,
@@ -263,6 +289,7 @@ def main() -> None:
                 "--wgpu",
                 str(wgpu),
                 *common,
+                *output_flag(output, "-captures"),
             ],
             blade,
             required=False,
@@ -279,8 +306,8 @@ def main() -> None:
     if skipped:
         print(
             "\nThe timing matrix is what the study needs; the skipped steps add "
-            "explanation, not results. Copy the whole paper/data/raw directory "
-            "back either way.",
+            "explanation, not results. Copy the collection directory "
+            "(see Collection base / Raw results above) back either way.",
             file=sys.stderr,
         )
 

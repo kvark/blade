@@ -700,9 +700,11 @@ cd blade-sync-bench
 python3 collect.py
 ```
 
-That harness pins the three `jcgt-extension` trees as submodules. Extra
-flags pass through to `blade/paper/collect.py`. Manual sibling clones
-still work:
+Results go to `blade-sync-bench/results/<timestamp>-<host>/` (timing) and
+sibling `*-validation` / `*-profile` / `*-captures` directories, not
+`blade/paper/data/raw/`. Extra flags pass through to
+`blade/paper/collect.py`. Manual sibling clones still default to
+`paper/data/raw/` unless you pass `--output`.
 
 ```sh
 git clone --branch jcgt-extension https://github.com/kvark/blade

@@ -116,6 +116,22 @@ class CollectSelectorTests(unittest.TestCase):
         self.assertIn("--skip-bevy", matrix)
         self.assertIn("--backend", common)
 
+    def test_output_flag_suffixes_the_base_path(self) -> None:
+        collect = Path(__file__).with_name("collect.py")
+        spec = importlib.util.spec_from_file_location("collect_py_output", collect)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(module.output_flag(None), [])
+        self.assertEqual(
+            module.output_flag(Path("/tmp/run")),
+            ["--output", "/tmp/run"],
+        )
+        self.assertEqual(
+            module.output_flag(Path("/tmp/run"), "-validation"),
+            ["--output", "/tmp/run-validation"],
+        )
+
 
 class CargoLockSha256Tests(unittest.TestCase):
     def test_missing_lockfile_is_absent_not_an_exception(self) -> None:
