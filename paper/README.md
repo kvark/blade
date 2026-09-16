@@ -70,11 +70,17 @@ one command collects everything this machine can contribute:
 python3 paper/collect.py --wgpu ../wgpu
 ```
 
-The JCGT protocol adds a Bevy family on the same command. See
-[COLLECTING.md](COLLECTING.md#running-the-combined-protocol-on-another-machine)
-for the three-tree checkout, the Bevy smoke, clock locking, and the
-`record_ns+submit_ns` comparison rule. That collection is **not** the
-archival `87ed067` round.
+The JCGT protocol is one clone and one command:
+
+```bash
+git clone --recursive https://github.com/kvark/blade-sync-bench
+cd blade-sync-bench
+python3 collect.py
+```
+
+See [COLLECTING.md](COLLECTING.md#running-the-combined-protocol-on-another-machine)
+for clock locking, the Bevy smoke, and the `record_ns+submit_ns` comparison
+rule. That collection is **not** the archival `87ed067` round.
 
 On Vulkan that first runs a small correctness matrix with the Khronos
 synchronization-validation feature forced on, retains its output, and aborts on

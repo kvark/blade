@@ -684,6 +684,16 @@ Code/
 ```
 
 ```sh
+git clone --recursive https://github.com/kvark/blade-sync-bench
+cd blade-sync-bench
+python3 collect.py
+```
+
+That harness pins the three `jcgt-extension` trees as submodules. Extra
+flags pass through to `blade/paper/collect.py`. Manual sibling clones
+still work:
+
+```sh
 git clone --branch jcgt-extension https://github.com/kvark/blade
 git clone --branch jcgt-extension https://github.com/kvark/wgpu
 git clone --branch jcgt-extension https://github.com/kvark/bevy
