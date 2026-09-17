@@ -113,6 +113,7 @@ struct AdapterCapabilities {
     timestamp_valid_bits: u32,
     dual_source_blending: bool,
     shader_float16: bool,
+    shader_integer_dot_product: bool,
     cooperative_matrix: crate::CooperativeMatrix,
     global_low_priority: bool,
     unified_image_layouts: bool,
@@ -135,6 +136,7 @@ impl AdapterCapabilities {
                 .as_raw(),
             dual_source_blending: self.dual_source_blending,
             shader_float16: self.shader_float16,
+            shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing,
             cooperative_matrix: self.cooperative_matrix,
         }
@@ -332,6 +334,8 @@ fn inspect_adapter(
     let mut vulkan_memory_model_features = vk::PhysicalDeviceVulkanMemoryModelFeatures::default();
     let mut float16_int8_features = vk::PhysicalDeviceShaderFloat16Int8Features::default();
     let mut storage_16bit_features = vk::PhysicalDevice16BitStorageFeatures::default();
+    let mut integer_dot_product_features =
+        vk::PhysicalDeviceShaderIntegerDotProductFeaturesKHR::default();
     let mut unified_image_layouts_features =
         unified_image_layouts::PhysicalDeviceFeatures::default();
     let global_priority_extension =
@@ -350,6 +354,7 @@ fn inspect_adapter(
         .push_next(&mut vulkan_memory_model_features)
         .push_next(&mut float16_int8_features)
         .push_next(&mut storage_16bit_features)
+        .push_next(&mut integer_dot_product_features)
         .push_next(&mut unified_image_layouts_features);
     if global_priority_extension {
         features2_khr = features2_khr.push_next(&mut global_priority_query_features);
@@ -362,6 +367,13 @@ fn inspect_adapter(
 
     let dual_source_blending = features2_khr.features.dual_src_blend != 0;
     let shader_float16 = float16_int8_features.shader_float16 != 0;
+    // `VK_KHR_shader_integer_dot_product` is promoted to core in Vulkan 1.3.
+    let shader_integer_dot_product = integer_dot_product_features.shader_integer_dot_product != 0
+        && (api_version >= vk::API_VERSION_1_3
+            || supported_extensions.contains(&vk::KHR_SHADER_INTEGER_DOT_PRODUCT_NAME));
+    if shader_integer_dot_product {
+        log::info!("Integer dot product is supported");
+    }
     let global_low_priority = if global_priority_extension
         && global_priority_query_features.global_priority_query == vk::TRUE
     {
@@ -641,6 +653,7 @@ fn inspect_adapter(
         timestamp_valid_bits: queue_family.timestamp_valid_bits,
         dual_source_blending,
         shader_float16,
+        shader_integer_dot_product,
         cooperative_matrix,
         global_low_priority,
         unified_image_layouts: supported_extensions.contains(&unified_image_layouts::NAME)
@@ -1065,6 +1078,11 @@ impl super::Context {
                     device_extensions.push(vk::KHR_VULKAN_MEMORY_MODEL_NAME);
                 }
             }
+            if capabilities.shader_integer_dot_product
+                && capabilities.api_version < vk::API_VERSION_1_3
+            {
+                device_extensions.push(vk::KHR_SHADER_INTEGER_DOT_PRODUCT_NAME);
+            }
             if capabilities.memory_budget {
                 device_extensions.push(vk::EXT_MEMORY_BUDGET_NAME);
             }
@@ -1166,6 +1184,15 @@ impl super::Context {
                     ..Default::default()
                 };
                 device_create_info = device_create_info.push_next(&mut storage_16bit);
+            }
+
+            let mut khr_integer_dot_product;
+            if capabilities.shader_integer_dot_product {
+                khr_integer_dot_product = vk::PhysicalDeviceShaderIntegerDotProductFeaturesKHR {
+                    shader_integer_dot_product: vk::TRUE,
+                    ..Default::default()
+                };
+                device_create_info = device_create_info.push_next(&mut khr_integer_dot_product);
             }
 
             let mut khr_cooperative_matrix;
@@ -1542,6 +1569,7 @@ impl super::Context {
                     .framebuffer_depth_sample_counts,
             dual_source_blending: capabilities.dual_source_blending,
             shader_float16: capabilities.shader_float16,
+            shader_integer_dot_product: capabilities.shader_integer_dot_product,
             cooperative_matrix: capabilities.cooperative_matrix,
             binding_array: capabilities.binding_array,
             timing_supported: capabilities.timing,
@@ -1575,6 +1603,7 @@ impl super::Context {
             sample_count_mask: self.sample_count_flags.as_raw(),
             dual_source_blending: self.dual_source_blending,
             shader_float16: self.shader_float16,
+            shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing_supported,
             cooperative_matrix: self.cooperative_matrix,
         }

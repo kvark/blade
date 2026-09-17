@@ -48,6 +48,11 @@ impl super::Context {
             flags: self.naga_flags,
             fake_missing_bindings: false,
             binding_map,
+            // Permitted to be `None`: naga then emits the SPIR-V
+            // `DotProduct`/`DotProductInput4x8BitPacked` capabilities and the
+            // `OpSDot`/`OpUDot` instructions for the `dot4I8Packed`/`dot4U8Packed`
+            // builtins, matching the enabled
+            // `PhysicalDeviceShaderIntegerDotProductFeaturesKHR`.
             capabilities: None,
             bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
             zero_initialize_workgroup_memory: spv::ZeroInitializeWorkgroupMemoryMode::None,
