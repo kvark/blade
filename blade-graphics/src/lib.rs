@@ -269,6 +269,9 @@ pub struct Capabilities {
     pub dual_source_blending: bool,
     /// Support for 16-bit floating-point types in shaders.
     pub shader_float16: bool,
+    /// Support for integer dot product instructions in shaders,
+    /// such as `dot4U8Packed`.
+    pub shader_integer_dot_product: bool,
     /// Cooperative matrix support.
     pub cooperative_matrix: CooperativeMatrix,
     /// Support for timestamping passes on the GPU.

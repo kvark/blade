@@ -482,6 +482,7 @@ impl Context {
             sample_count_mask: 0x1 | 0x4, //TODO: accurate info
             dual_source_blending: false,
             shader_float16: false,
+            shader_integer_dot_product: false,
             timing: self
                 .capabilities
                 .contains(Capabilities::DISJOINT_TIMER_QUERY),

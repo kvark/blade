@@ -649,6 +649,8 @@ impl Context {
             dual_source_blending: true,
             // Metal Shading Language supports half-precision floats on all supported devices.
             shader_float16: true,
+            // MSL provides `dot4U8Packed`-equivalent math via packed char vectors.
+            shader_integer_dot_product: true,
             timing: find_timestamp_counter_set(device).is_some(),
             cooperative_matrix: if device.supportsFamily(metal::MTLGPUFamily::Apple7)
                 || device.supportsFamily(metal::MTLGPUFamily::Mac2)

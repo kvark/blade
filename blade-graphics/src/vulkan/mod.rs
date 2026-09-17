@@ -358,6 +358,7 @@ pub struct Context {
     sample_count_flags: vk::SampleCountFlags,
     dual_source_blending: bool,
     shader_float16: bool,
+    shader_integer_dot_product: bool,
     cooperative_matrix: crate::CooperativeMatrix,
     binding_array: bool,
     timing_supported: bool,
