@@ -570,6 +570,7 @@ impl PassKinds {
 }
 
 pub struct CommandEncoder {
+    finished: bool,
     pool: vk::CommandPool,
     buffers: Box<[CommandBuffer]>,
     device: Device,
@@ -692,6 +693,7 @@ impl crate::traits::CommandDevice for Context {
         };
 
         CommandEncoder {
+            finished: false,
             pool,
             buffers,
             device: self.device.clone(),

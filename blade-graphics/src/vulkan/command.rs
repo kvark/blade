@@ -382,6 +382,11 @@ impl super::CommandEncoder {
     }
 
     pub(super) fn finish(&mut self) -> vk::CommandBuffer {
+        if self.finished {
+            assert!(self.timing.is_none() && self.present.is_none());
+            return self.buffers[0].raw;
+        }
+        self.finished = true;
         // A later queue consumer is not known here, so keep the destination
         // conservative while deriving the source from the passes that ran.
         self.barrier_before(super::PassKind::Unknown);
@@ -690,6 +695,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     type Frame = super::Frame;
 
     fn start(&mut self) {
+        self.finished = false;
         self.producer_kinds.clear();
         if !self.manual_barriers {
             // Preserve the automatic barrier before the first pass. Its source
@@ -710,7 +716,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         }
 
         let vk_info = vk::CommandBufferBeginInfo {
-            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            flags: vk::CommandBufferUsageFlags::empty(),
             ..Default::default()
         };
         unsafe {
