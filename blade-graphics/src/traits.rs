@@ -57,6 +57,13 @@ pub trait CommandDevice {
     fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> Self::CommandEncoder;
     fn destroy_command_encoder(&self, encoder: &mut Self::CommandEncoder);
     fn submit(&self, encoder: &mut Self::CommandEncoder) -> Self::SyncPoint;
+    /// Resubmit a completed reusable recording, or return `None` without submitting.
+    ///
+    /// The caller must wait for its previous submission, retain all referenced
+    /// resources, and preserve their bindings. Buffer contents may change.
+    /// Timed recordings and presentation are not replayable. Unsupported
+    /// backends return `None`; the caller can record and submit normally.
+    fn try_replay(&self, encoder: &mut Self::CommandEncoder) -> Option<Self::SyncPoint>;
     fn wait_for(&self, sp: &Self::SyncPoint, timeout_ms: u32) -> Result<bool, super::DeviceError>;
 }
 
@@ -64,6 +71,10 @@ pub trait CommandEncoder {
     type Texture: Send + Sync + Clone + Copy + Debug;
     type Frame: Send + Sync + Debug;
     fn start(&mut self);
+    /// Start an optional reusable recording. If unsupported, return `false`
+    /// without starting; the caller must then use `start`.
+    /// Submit normally once, then use `CommandDevice::try_replay` after waiting.
+    fn start_reusable(&mut self) -> bool;
     fn init_texture(&mut self, texture: Self::Texture);
     fn present(&mut self, frame: Self::Frame);
     /// Timing of the last submission.

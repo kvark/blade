@@ -248,7 +248,11 @@ fn run_dispatch_gpu_test(manual_barriers: bool) {
         buffer_count: 1,
         manual_barriers,
     });
-    command_encoder.start();
+    assert!(context.try_replay(&mut command_encoder).is_none());
+    let reusable = command_encoder.start_reusable();
+    if !reusable {
+        command_encoder.start();
+    }
     if let mut compute = command_encoder.compute("dispatch")
         && let mut pass = compute.with(&pipeline)
     {
@@ -288,6 +292,31 @@ fn run_dispatch_gpu_test(manual_barriers: bool) {
         [3, 5, 7, 9]
     };
     assert_eq!(actual, expected);
+
+    if reusable {
+        unsafe {
+            slice::from_raw_parts_mut(input.data() as *mut u32, 4)
+                .copy_from_slice(&[10, 20, 30, 40]);
+        }
+        context.sync_buffer(input.into(), input.size(), gpu::BufferTarget::Data);
+        let replay = context.try_replay(&mut command_encoder).unwrap();
+        assert!(context.wait_for(&replay, 2000).unwrap());
+        let actual = unsafe { slice::from_raw_parts(actual_buffer.data() as *const u32, 4) };
+        assert_eq!(
+            actual,
+            if manual_barriers {
+                [43, 83, 123, 163]
+            } else {
+                [21, 41, 61, 81]
+            }
+        );
+    }
+
+    command_encoder.start();
+    assert!(context.try_replay(&mut command_encoder).is_none());
+    let sync_point = context.submit(&mut command_encoder);
+    assert!(context.wait_for(&sync_point, 2000).unwrap());
+    assert!(context.try_replay(&mut command_encoder).is_none());
 
     context.destroy_command_encoder(&mut command_encoder);
     context.destroy_compute_pipeline(&mut pipeline);
@@ -340,6 +369,8 @@ fn last_timing_reports_the_last_submission() {
         buffer_count: 2,
         manual_barriers: false,
     });
+    assert!(!encoder.start_reusable());
+    assert!(context.try_replay(&mut encoder).is_none());
 
     let submit = |encoder: &mut gpu::CommandEncoder, label: &str| {
         encoder.start();
@@ -359,6 +390,7 @@ fn last_timing_reports_the_last_submission() {
     };
 
     let first = submit(&mut encoder, "first");
+    assert!(context.try_replay(&mut encoder).is_none());
     let first_again = encoder
         .last_timing()
         .passes

@@ -296,6 +296,10 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         }
     }
 
+    fn start_reusable(&mut self) -> bool {
+        false
+    }
+
     fn init_texture(&mut self, _texture: super::Texture) {}
 
     fn present(&mut self, frame: super::Frame) {

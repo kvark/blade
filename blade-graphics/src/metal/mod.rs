@@ -726,6 +726,10 @@ impl crate::traits::CommandDevice for Context {
     type CommandEncoder = CommandEncoder;
     type SyncPoint = SyncPoint;
 
+    fn try_replay(&self, _encoder: &mut CommandEncoder) -> Option<SyncPoint> {
+        None
+    }
+
     fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
         use metal::MTLDevice as _;
 

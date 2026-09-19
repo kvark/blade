@@ -382,6 +382,15 @@ impl super::CommandEncoder {
     }
 
     pub(super) fn finish(&mut self) -> vk::CommandBuffer {
+        if self.finished {
+            assert!(
+                self.reusable && self.present.is_none(),
+                "recording is not reusable"
+            );
+            return self.buffers[0].raw;
+        }
+        self.finished = true;
+        self.reusable &= self.present.is_none();
         // A later queue consumer is not known here, so keep the destination
         // conservative while deriving the source from the passes that ran.
         self.barrier_before(super::PassKind::Unknown);
@@ -684,12 +693,10 @@ impl super::CommandEncoder {
     }
 }
 
-#[hidden_trait::expose]
-impl crate::traits::CommandEncoder for super::CommandEncoder {
-    type Texture = super::Texture;
-    type Frame = super::Frame;
-
-    fn start(&mut self) {
+impl super::CommandEncoder {
+    fn start_impl(&mut self, reusable: bool) {
+        self.reusable = reusable;
+        self.finished = false;
         self.producer_kinds.clear();
         if !self.manual_barriers {
             // Preserve the automatic barrier before the first pass. Its source
@@ -710,7 +717,11 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         }
 
         let vk_info = vk::CommandBufferBeginInfo {
-            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            flags: if reusable {
+                vk::CommandBufferUsageFlags::empty()
+            } else {
+                vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT
+            },
             ..Default::default()
         };
         unsafe {
@@ -731,6 +742,24 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
                 );
             }
         }
+    }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::CommandEncoder for super::CommandEncoder {
+    type Texture = super::Texture;
+    type Frame = super::Frame;
+
+    fn start(&mut self) {
+        self.start_impl(false);
+    }
+
+    fn start_reusable(&mut self) -> bool {
+        if self.timing.is_some() {
+            return false;
+        }
+        self.start_impl(true);
+        true
     }
 
     fn init_texture(&mut self, texture: super::Texture) {

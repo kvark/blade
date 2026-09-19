@@ -570,6 +570,8 @@ impl PassKinds {
 }
 
 pub struct CommandEncoder {
+    reusable: bool,
+    finished: bool,
     pool: vk::CommandPool,
     buffers: Box<[CommandBuffer]>,
     device: Device,
@@ -692,6 +694,8 @@ impl crate::traits::CommandDevice for Context {
         };
 
         CommandEncoder {
+            reusable: false,
+            finished: false,
             pool,
             buffers,
             device: self.device.clone(),
@@ -752,6 +756,14 @@ impl crate::traits::CommandDevice for Context {
             unsafe {
                 self.device.core.destroy_query_pool(timing.query_pool, None);
             }
+        }
+    }
+
+    fn try_replay(&self, encoder: &mut CommandEncoder) -> Option<SyncPoint> {
+        if encoder.reusable && encoder.finished && encoder.present.is_none() {
+            Some(self.submit(encoder))
+        } else {
+            None
         }
     }
 
