@@ -344,9 +344,11 @@ impl super::CommandEncoder {
             }
             let query_pool = timing.query_pool;
             unsafe {
+                // Wait for preceding work before starting this pass's interval.
+                // TOP_OF_PIPE can charge that work to the following pass.
                 self.device.core.cmd_write_timestamp(
                     cmd_buf,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
                     query_pool,
                     index as u32,
                 );
@@ -397,7 +399,7 @@ impl super::CommandEncoder {
             if let Some((done_index, query_pool)) = done {
                 self.device.core.cmd_write_timestamp(
                     cmd_buf.raw,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
                     query_pool,
                     done_index,
                 );

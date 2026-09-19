@@ -158,6 +158,8 @@ pub struct ContextDesc {
     /// Enable GPU timing of all passes.
     ///
     /// Panics at context init if the device cannot timestamp.
+    /// Timing may serialize pass boundaries; leave it disabled when measuring
+    /// the application's ordinary end-to-end performance.
     pub timing: bool,
     /// Enable capture support with GAPI tools and collection of available
     /// compute-pipeline compiler statistics.
