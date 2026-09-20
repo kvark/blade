@@ -657,8 +657,9 @@ impl Context {
                 || device.supportsFamily(metal::MTLGPUFamily::Metal3)
             {
                 crate::CooperativeMatrix {
-                    f32_tile: 8,
-                    f16_tile: 0,
+                    f32: vec![[8, 8, 8]],
+                    f16: Vec::new(),
+                    subgroup_size: 0,
                 }
             } else {
                 crate::CooperativeMatrix::default()

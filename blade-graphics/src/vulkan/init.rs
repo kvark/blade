@@ -138,7 +138,7 @@ impl AdapterCapabilities {
             shader_float16: self.shader_float16,
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing,
-            cooperative_matrix: self.cooperative_matrix,
+            cooperative_matrix: self.cooperative_matrix.clone(),
         }
     }
 }
@@ -247,12 +247,14 @@ fn inspect_adapter(
         vk::PhysicalDevicePortabilitySubsetPropertiesKHR::default();
 
     let mut driver_properties = vk::PhysicalDeviceDriverPropertiesKHR::default();
+    let mut subgroup_properties = vk::PhysicalDeviceSubgroupProperties::default();
     let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::default()
         .push_next(&mut inline_uniform_block_properties)
         .push_next(&mut timeline_semaphore_properties)
         .push_next(&mut descriptor_indexing_properties)
         .push_next(&mut acceleration_structure_properties)
         .push_next(&mut portability_subset_properties)
+        .push_next(&mut subgroup_properties)
         .push_next(&mut driver_properties);
     unsafe {
         instance
@@ -560,44 +562,53 @@ fn inspect_adapter(
         );
         crate::CooperativeMatrix::default()
     } else {
-        // Query supported cooperative matrix configurations and find
-        // square float configurations (Naga supports 8x8 and 16x16).
+        // Naga's IR supports independent 8- or 16-element dimensions.
         let coop_props = unsafe {
             instance
                 .cooperative_matrix
                 .get_physical_device_cooperative_matrix_properties(phd)
                 .unwrap_or_default()
         };
-        let find_tile = |a_type, b_type, c_type, result_type| {
-            [8u32, 16].into_iter().find(|&size| {
-                coop_props.iter().any(|p| {
-                    p.m_size == size
-                        && p.n_size == size
-                        && p.k_size == size
+        let find_shapes = |a_type, b_type, c_type, result_type| {
+            let mut shapes: Vec<_> = coop_props
+                .iter()
+                .filter(|p| {
+                    [p.m_size, p.n_size, p.k_size]
+                        .iter()
+                        .all(|s| matches!(s, 8 | 16))
                         && p.a_type == a_type
                         && p.b_type == b_type
                         && p.c_type == c_type
                         && p.result_type == result_type
                         && p.scope == vk::ScopeKHR::SUBGROUP
+                        && p.saturating_accumulation == vk::FALSE
                 })
-            })
+                .map(|p| [p.m_size, p.n_size, p.k_size])
+                .collect();
+            shapes.sort_unstable();
+            shapes.dedup();
+            shapes
         };
         let f32t = vk::ComponentTypeKHR::FLOAT32;
         let f16t = vk::ComponentTypeKHR::FLOAT16;
-        let f32_tile = find_tile(f32t, f32t, f32t, f32t).unwrap_or(0);
-        let f16_tile = if float16_int8_features.shader_float16 != 0
+        let f32 = find_shapes(f32t, f32t, f32t, f32t);
+        let f16 = if float16_int8_features.shader_float16 != 0
             && storage_16bit_features.storage_buffer16_bit_access != 0
         {
-            find_tile(f16t, f16t, f32t, f32t).unwrap_or(0)
+            find_shapes(f16t, f16t, f32t, f32t)
         } else {
-            0
+            Vec::new()
         };
-        let cm = crate::CooperativeMatrix { f32_tile, f16_tile };
+        let cm = crate::CooperativeMatrix {
+            f32,
+            f16,
+            subgroup_size: subgroup_properties.subgroup_size,
+        };
         if cm.is_supported() {
             log::info!(
-                "Cooperative matrix: f32 tile={}, f16 tile={}",
-                cm.f32_tile,
-                cm.f16_tile,
+                "Cooperative matrix: f32 shapes={:?}, f16 shapes={:?}",
+                cm.f32,
+                cm.f16,
             );
         } else {
             log::info!(
@@ -608,7 +619,7 @@ fn inspect_adapter(
         cm
     };
     // Auto-enable shader_float16 when cooperative matrix has f16 support.
-    let shader_float16 = shader_float16 || cooperative_matrix.f16_tile > 0;
+    let shader_float16 = shader_float16 || !cooperative_matrix.f16.is_empty();
 
     let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
@@ -1177,7 +1188,7 @@ impl super::Context {
                 };
                 device_create_info = device_create_info.push_next(&mut khr_float16_int8);
             }
-            if capabilities.cooperative_matrix.f16_tile > 0 {
+            if !capabilities.cooperative_matrix.f16.is_empty() {
                 storage_16bit = vk::PhysicalDevice16BitStorageFeatures {
                     storage_buffer16_bit_access: vk::TRUE,
                     uniform_and_storage_buffer16_bit_access: vk::TRUE,
@@ -1605,7 +1616,7 @@ impl super::Context {
             shader_float16: self.shader_float16,
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing_supported,
-            cooperative_matrix: self.cooperative_matrix,
+            cooperative_matrix: self.cooperative_matrix.clone(),
         }
     }
 
