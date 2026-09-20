@@ -257,6 +257,9 @@ impl CooperativeMatrix {
 pub struct Capabilities {
     /// Compute pipeline support.
     pub compute: bool,
+    /// Guaranteed compute subgroup width, or `None` if unknown or variable.
+    /// This is not merely the device's default subgroup size.
+    pub fixed_compute_subgroup_size: Option<u32>,
     /// Indirect draw command support.
     pub indirect_draw: bool,
     /// Support binding arrays of handles.

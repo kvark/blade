@@ -631,6 +631,7 @@ impl Context {
         use metal::MTLDevice as _;
         crate::Capabilities {
             compute: true,
+            fixed_compute_subgroup_size: None,
             indirect_draw: true,
             binding_array: false,
             ray_query: if device.supportsFamily(metal::MTLGPUFamily::Apple6) {

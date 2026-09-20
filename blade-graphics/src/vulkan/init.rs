@@ -114,6 +114,7 @@ struct AdapterCapabilities {
     dual_source_blending: bool,
     shader_float16: bool,
     shader_integer_dot_product: bool,
+    fixed_compute_subgroup_size: Option<u32>,
     cooperative_matrix: crate::CooperativeMatrix,
     global_low_priority: bool,
     unified_image_layouts: bool,
@@ -125,6 +126,7 @@ impl AdapterCapabilities {
     fn to_capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             compute: true,
+            fixed_compute_subgroup_size: self.fixed_compute_subgroup_size,
             indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.ray_tracing {
@@ -296,6 +298,29 @@ fn inspect_adapter(
             ));
         }
     }
+
+    let fixed_compute_subgroup_size = if api_version >= vk::API_VERSION_1_3
+        || supported_extensions.contains(&vk::EXT_SUBGROUP_SIZE_CONTROL_NAME)
+    {
+        let mut subgroup = vk::PhysicalDeviceSubgroupProperties::default();
+        let mut sizes = vk::PhysicalDeviceSubgroupSizeControlProperties::default();
+        let mut subgroup_properties = vk::PhysicalDeviceProperties2::default()
+            .push_next(&mut subgroup)
+            .push_next(&mut sizes);
+        unsafe {
+            instance
+                .get_physical_device_properties2
+                .get_physical_device_properties2(phd, &mut subgroup_properties);
+        }
+        (subgroup
+            .supported_stages
+            .contains(vk::ShaderStageFlags::COMPUTE)
+            && sizes.min_subgroup_size > 0
+            && sizes.min_subgroup_size == sizes.max_subgroup_size)
+            .then_some(sizes.min_subgroup_size)
+    } else {
+        None
+    };
 
     let bugs = SystemBugs {
         intel_fix_descriptor_pool_leak: cfg!(windows) && properties.vendor_id == db::intel::VENDOR,
@@ -654,6 +679,7 @@ fn inspect_adapter(
         dual_source_blending,
         shader_float16,
         shader_integer_dot_product,
+        fixed_compute_subgroup_size,
         cooperative_matrix,
         global_low_priority,
         unified_image_layouts: supported_extensions.contains(&unified_image_layouts::NAME)
@@ -1570,6 +1596,7 @@ impl super::Context {
             dual_source_blending: capabilities.dual_source_blending,
             shader_float16: capabilities.shader_float16,
             shader_integer_dot_product: capabilities.shader_integer_dot_product,
+            fixed_compute_subgroup_size: capabilities.fixed_compute_subgroup_size,
             cooperative_matrix: capabilities.cooperative_matrix,
             binding_array: capabilities.binding_array,
             timing_supported: capabilities.timing,
@@ -1594,6 +1621,7 @@ impl super::Context {
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             compute: true,
+            fixed_compute_subgroup_size: self.fixed_compute_subgroup_size,
             indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.device.ray_tracing {

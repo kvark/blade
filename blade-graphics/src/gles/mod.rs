@@ -476,6 +476,7 @@ impl Context {
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             compute: self.capabilities.contains(Capabilities::BUFFER_STORAGE),
+            fixed_compute_subgroup_size: None,
             indirect_draw: false,
             binding_array: false,
             ray_query: crate::ShaderVisibility::empty(),
