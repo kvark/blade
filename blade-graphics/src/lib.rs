@@ -236,20 +236,22 @@ pub struct MemoryStats {
 
 /// Cooperative matrix support information.
 ///
-/// Each field is a tile size (8 or 16), or 0 if that configuration
-/// is not supported. Naga supports square tiles only (8×8 and 16×16).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// Supported `[M, N, K]` dimensions for subgroup-scoped matrix multiply-add.
+/// An empty list means the corresponding operand type is unsupported.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct CooperativeMatrix {
-    /// Tile size for all-f32 operations.
-    pub f32_tile: u32,
-    /// Tile size for f16-input, f32-accumulator operations.
-    pub f16_tile: u32,
+    /// Default subgroup width, or zero if not exposed by the backend.
+    pub subgroup_size: u32,
+    /// All-f32 operands, accumulator and result.
+    pub f32: Vec<[u32; 3]>,
+    /// f16 operands, f32 accumulator and result.
+    pub f16: Vec<[u32; 3]>,
 }
 
 impl CooperativeMatrix {
     /// Returns true if any cooperative matrix configuration is supported.
     pub fn is_supported(&self) -> bool {
-        self.f32_tile > 0 || self.f16_tile > 0
+        !self.f32.is_empty() || !self.f16.is_empty()
     }
 }
 
