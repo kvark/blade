@@ -47,13 +47,19 @@ fn main() {
     let caps = context.capabilities();
     let cm = caps.cooperative_matrix;
     // Prefer f32 inputs, fall back to f16 inputs with f32 accumulator.
-    let (tile, f16_input) = if cm.f32_tile > 0 {
-        (cm.f32_tile, false)
-    } else if cm.f16_tile > 0 {
-        (cm.f16_tile, true)
+    let square = |shapes: &[[u32; 3]]| {
+        shapes
+            .iter()
+            .find(|s| s[0] == s[1] && s[1] == s[2])
+            .map(|s| s[0])
+    };
+    let (tile, f16_input) = if let Some(tile) = square(&cm.f32) {
+        (tile, false)
+    } else if let Some(tile) = square(&cm.f16) {
+        (tile, true)
     } else {
         eprintln!(
-            "Cooperative matrix not supported on this device ({}).",
+            "No square cooperative matrix supported on this device ({}).",
             context.device_information().device_name
         );
         eprintln!("Requires VK_KHR_cooperative_matrix (Vulkan) or Apple7+ (Metal).");
