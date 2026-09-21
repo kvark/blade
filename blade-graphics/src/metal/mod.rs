@@ -631,6 +631,7 @@ impl Context {
         use metal::MTLDevice as _;
         crate::Capabilities {
             compute: true,
+            max_compute_shared_memory_size: device.maxThreadgroupMemoryLength() as u32,
             indirect_draw: true,
             binding_array: false,
             ray_query: if device.supportsFamily(metal::MTLGPUFamily::Apple6) {
