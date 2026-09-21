@@ -259,6 +259,8 @@ impl CooperativeMatrix {
 pub struct Capabilities {
     /// Compute pipeline support.
     pub compute: bool,
+    /// Maximum shared-memory bytes per compute workgroup; zero if not reported.
+    pub max_compute_shared_memory_size: u32,
     /// Indirect draw command support.
     pub indirect_draw: bool,
     /// Support binding arrays of handles.

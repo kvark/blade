@@ -125,6 +125,7 @@ impl AdapterCapabilities {
     fn to_capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             compute: true,
+            max_compute_shared_memory_size: self.properties.limits.max_compute_shared_memory_size,
             indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.ray_tracing {
@@ -1578,6 +1579,10 @@ impl super::Context {
                     .properties
                     .limits
                     .framebuffer_depth_sample_counts,
+            max_compute_shared_memory_size: capabilities
+                .properties
+                .limits
+                .max_compute_shared_memory_size,
             dual_source_blending: capabilities.dual_source_blending,
             shader_float16: capabilities.shader_float16,
             shader_integer_dot_product: capabilities.shader_integer_dot_product,
@@ -1605,6 +1610,7 @@ impl super::Context {
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             compute: true,
+            max_compute_shared_memory_size: self.max_compute_shared_memory_size,
             indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.device.ray_tracing {

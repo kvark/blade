@@ -355,6 +355,7 @@ pub struct Context {
     shader_debug_path: Option<PathBuf>,
     min_buffer_alignment: u64,
     min_uniform_buffer_offset_alignment: u64,
+    max_compute_shared_memory_size: u32,
     sample_count_flags: vk::SampleCountFlags,
     dual_source_blending: bool,
     shader_float16: bool,
