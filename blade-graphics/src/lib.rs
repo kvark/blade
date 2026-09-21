@@ -236,22 +236,24 @@ pub struct MemoryStats {
 
 /// Cooperative matrix support information.
 ///
-/// Supported `[M, N, K]` dimensions for subgroup-scoped matrix multiply-add.
-/// An empty list means the corresponding operand type is unsupported.
+/// Each list holds `[M, N, K]` configurations for a subgroup-scoped
+/// multiply-add. A is M×K, B is K×N, and the accumulator is M×N, so K is
+/// not implied by M and N. An empty list means that operand combination
+/// is unsupported. Components are 8 or 16, matching Naga's
+/// `CooperativeSize`. Naga's WGSL frontend only spells `coop_mat8x8` and
+/// `coop_mat16x16`, so a listed triple is a device fact rather than a WGSL type.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CooperativeMatrix {
-    /// Default subgroup width, or zero if not exposed by the backend.
-    pub subgroup_size: u32,
-    /// All-f32 operands, accumulator and result.
-    pub f32: Vec<[u32; 3]>,
-    /// f16 operands, f32 accumulator and result.
-    pub f16: Vec<[u32; 3]>,
+    /// All-f32 operands, accumulator, and result.
+    pub f32_shapes: Vec<[u32; 3]>,
+    /// f16 operands with an f32 accumulator and result.
+    pub f16_f32_shapes: Vec<[u32; 3]>,
 }
 
 impl CooperativeMatrix {
     /// Returns true if any cooperative matrix configuration is supported.
     pub fn is_supported(&self) -> bool {
-        !self.f32.is_empty() || !self.f16.is_empty()
+        !self.f32_shapes.is_empty() || !self.f16_f32_shapes.is_empty()
     }
 }
 
@@ -259,8 +261,21 @@ impl CooperativeMatrix {
 pub struct Capabilities {
     /// Compute pipeline support.
     pub compute: bool,
-    /// Maximum shared-memory bytes per compute workgroup; zero if not reported.
+    /// Maximum shared-memory bytes per compute workgroup, or zero if not reported.
     pub max_compute_shared_memory_size: u32,
+    /// Default subgroup width, or zero if this backend does not report one.
+    ///
+    /// On Vulkan this is `VkPhysicalDeviceSubgroupProperties::subgroupSize`.
+    /// Blade does not request a required subgroup size, so a compute shader
+    /// may run at another width. [`Self::min_subgroup_size`] and
+    /// [`Self::max_subgroup_size`] carry the `VK_EXT_subgroup_size_control`
+    /// range when the device provides it, including on Vulkan 1.3, and are
+    /// zero when that range is unknown.
+    pub subgroup_size: u32,
+    /// Smallest advertised subgroup size, or zero when the range is unknown.
+    pub min_subgroup_size: u32,
+    /// Largest advertised subgroup size, or zero when the range is unknown.
+    pub max_subgroup_size: u32,
     /// Indirect draw command support.
     pub indirect_draw: bool,
     /// Support binding arrays of handles.

@@ -53,15 +53,19 @@ fn main() {
             .find(|s| s[0] == s[1] && s[1] == s[2])
             .map(|s| s[0])
     };
-    let (tile, f16_input) = if let Some(tile) = square(&cm.f32) {
+    let device_name = context.device_information().device_name.clone();
+    let (tile, f16_input) = if let Some(tile) = square(&cm.f32_shapes) {
         (tile, false)
-    } else if let Some(tile) = square(&cm.f16) {
+    } else if let Some(tile) = square(&cm.f16_f32_shapes) {
         (tile, true)
-    } else {
+    } else if cm.is_supported() {
         eprintln!(
-            "No square cooperative matrix supported on this device ({}).",
-            context.device_information().device_name
+            "This example only emits square tiles. {device_name} reports f32 {:?}, f16/f32 {:?}.",
+            cm.f32_shapes, cm.f16_f32_shapes
         );
+        return;
+    } else {
+        eprintln!("Cooperative matrix is not supported on {device_name}.");
         eprintln!("Requires VK_KHR_cooperative_matrix (Vulkan) or Apple7+ (Metal).");
         return;
     };

@@ -114,6 +114,9 @@ struct AdapterCapabilities {
     dual_source_blending: bool,
     shader_float16: bool,
     shader_integer_dot_product: bool,
+    subgroup_size: u32,
+    min_subgroup_size: u32,
+    max_subgroup_size: u32,
     cooperative_matrix: crate::CooperativeMatrix,
     global_low_priority: bool,
     unified_image_layouts: bool,
@@ -139,6 +142,9 @@ impl AdapterCapabilities {
             shader_float16: self.shader_float16,
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing,
+            subgroup_size: self.subgroup_size,
+            min_subgroup_size: self.min_subgroup_size,
+            max_subgroup_size: self.max_subgroup_size,
             cooperative_matrix: self.cooperative_matrix.clone(),
         }
     }
@@ -291,6 +297,18 @@ fn inspect_adapter(
         .iter()
         .map(|ext_prop| unsafe { ffi::CStr::from_ptr(ext_prop.extension_name.as_ptr()) })
         .collect::<Vec<_>>();
+    let mut subgroup_size_control = vk::PhysicalDeviceSubgroupSizeControlProperties::default();
+    if api_version >= vk::API_VERSION_1_3
+        || supported_extensions.contains(&vk::EXT_SUBGROUP_SIZE_CONTROL_NAME)
+    {
+        let mut subgroup_properties2 =
+            vk::PhysicalDeviceProperties2KHR::default().push_next(&mut subgroup_size_control);
+        unsafe {
+            instance
+                .get_physical_device_properties2
+                .get_physical_device_properties2(phd, &mut subgroup_properties2);
+        }
+    }
     for extension in REQUIRED_DEVICE_EXTENSIONS {
         if !supported_extensions.contains(extension) {
             return Err(format!(
@@ -563,7 +581,7 @@ fn inspect_adapter(
         );
         crate::CooperativeMatrix::default()
     } else {
-        // Naga's IR supports independent 8- or 16-element dimensions.
+        // Keep components Naga can store. K stays explicit: it is not a function of M and N.
         let coop_props = unsafe {
             instance
                 .cooperative_matrix
@@ -592,8 +610,8 @@ fn inspect_adapter(
         };
         let f32t = vk::ComponentTypeKHR::FLOAT32;
         let f16t = vk::ComponentTypeKHR::FLOAT16;
-        let f32 = find_shapes(f32t, f32t, f32t, f32t);
-        let f16 = if float16_int8_features.shader_float16 != 0
+        let f32_shapes = find_shapes(f32t, f32t, f32t, f32t);
+        let f16_f32_shapes = if float16_int8_features.shader_float16 != 0
             && storage_16bit_features.storage_buffer16_bit_access != 0
         {
             find_shapes(f16t, f16t, f32t, f32t)
@@ -601,15 +619,14 @@ fn inspect_adapter(
             Vec::new()
         };
         let cm = crate::CooperativeMatrix {
-            f32,
-            f16,
-            subgroup_size: subgroup_properties.subgroup_size,
+            f32_shapes,
+            f16_f32_shapes,
         };
         if cm.is_supported() {
             log::info!(
-                "Cooperative matrix: f32 shapes={:?}, f16 shapes={:?}",
-                cm.f32,
-                cm.f16,
+                "Cooperative matrix: f32 shapes={:?}, f16/f32 shapes={:?}",
+                cm.f32_shapes,
+                cm.f16_f32_shapes,
             );
         } else {
             log::info!(
@@ -620,7 +637,7 @@ fn inspect_adapter(
         cm
     };
     // Auto-enable shader_float16 when cooperative matrix has f16 support.
-    let shader_float16 = shader_float16 || !cooperative_matrix.f16.is_empty();
+    let shader_float16 = shader_float16 || !cooperative_matrix.f16_f32_shapes.is_empty();
 
     let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
@@ -666,6 +683,9 @@ fn inspect_adapter(
         dual_source_blending,
         shader_float16,
         shader_integer_dot_product,
+        subgroup_size: subgroup_properties.subgroup_size,
+        min_subgroup_size: subgroup_size_control.min_subgroup_size,
+        max_subgroup_size: subgroup_size_control.max_subgroup_size,
         cooperative_matrix,
         global_low_priority,
         unified_image_layouts: supported_extensions.contains(&unified_image_layouts::NAME)
@@ -1189,7 +1209,7 @@ impl super::Context {
                 };
                 device_create_info = device_create_info.push_next(&mut khr_float16_int8);
             }
-            if !capabilities.cooperative_matrix.f16.is_empty() {
+            if !capabilities.cooperative_matrix.f16_f32_shapes.is_empty() {
                 storage_16bit = vk::PhysicalDevice16BitStorageFeatures {
                     storage_buffer16_bit_access: vk::TRUE,
                     uniform_and_storage_buffer16_bit_access: vk::TRUE,
@@ -1583,6 +1603,9 @@ impl super::Context {
                 .properties
                 .limits
                 .max_compute_shared_memory_size,
+            subgroup_size: capabilities.subgroup_size,
+            min_subgroup_size: capabilities.min_subgroup_size,
+            max_subgroup_size: capabilities.max_subgroup_size,
             dual_source_blending: capabilities.dual_source_blending,
             shader_float16: capabilities.shader_float16,
             shader_integer_dot_product: capabilities.shader_integer_dot_product,
@@ -1611,6 +1634,9 @@ impl super::Context {
         crate::Capabilities {
             compute: true,
             max_compute_shared_memory_size: self.max_compute_shared_memory_size,
+            subgroup_size: self.subgroup_size,
+            min_subgroup_size: self.min_subgroup_size,
+            max_subgroup_size: self.max_subgroup_size,
             indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.device.ray_tracing {

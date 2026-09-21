@@ -148,6 +148,8 @@ impl super::Context {
             uniform_buffer_alignment: unsafe {
                 glow.get_parameter_i32(glow::UNIFORM_BUFFER_OFFSET_ALIGNMENT) as u32
             },
+            // WebGL2 has no compute shaders.
+            max_compute_shared_memory_size: 0,
         };
         let device_information = unsafe {
             crate::DeviceInformation {
