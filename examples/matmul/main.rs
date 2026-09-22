@@ -47,15 +47,25 @@ fn main() {
     let caps = context.capabilities();
     let cm = caps.cooperative_matrix;
     // Prefer f32 inputs, fall back to f16 inputs with f32 accumulator.
-    let (tile, f16_input) = if cm.f32_tile > 0 {
-        (cm.f32_tile, false)
-    } else if cm.f16_tile > 0 {
-        (cm.f16_tile, true)
-    } else {
+    let square = |shapes: &[[u32; 3]]| {
+        shapes
+            .iter()
+            .find(|s| s[0] == s[1] && s[1] == s[2])
+            .map(|s| s[0])
+    };
+    let device_name = context.device_information().device_name.clone();
+    let (tile, f16_input) = if let Some(tile) = square(&cm.f32_shapes) {
+        (tile, false)
+    } else if let Some(tile) = square(&cm.f16_f32_shapes) {
+        (tile, true)
+    } else if cm.is_supported() {
         eprintln!(
-            "Cooperative matrix not supported on this device ({}).",
-            context.device_information().device_name
+            "This example only emits square tiles. {device_name} reports f32 {:?}, f16/f32 {:?}.",
+            cm.f32_shapes, cm.f16_f32_shapes
         );
+        return;
+    } else {
+        eprintln!("Cooperative matrix is not supported on {device_name}.");
         eprintln!("Requires VK_KHR_cooperative_matrix (Vulkan) or Apple7+ (Metal).");
         return;
     };

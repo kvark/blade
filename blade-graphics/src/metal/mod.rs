@@ -631,6 +631,9 @@ impl Context {
         use metal::MTLDevice as _;
         crate::Capabilities {
             compute: true,
+            max_compute_shared_memory_size: device.maxThreadgroupMemoryLength() as u32,
+            // `threadExecutionWidth` is a property of a compiled pipeline, not the device.
+            subgroup_size: 0,
             indirect_draw: true,
             binding_array: false,
             ray_query: if device.supportsFamily(metal::MTLGPUFamily::Apple6) {
@@ -657,8 +660,8 @@ impl Context {
                 || device.supportsFamily(metal::MTLGPUFamily::Metal3)
             {
                 crate::CooperativeMatrix {
-                    f32_tile: 8,
-                    f16_tile: 0,
+                    f32_shapes: vec![[8, 8, 8]],
+                    f16_f32_shapes: Vec::new(),
                 }
             } else {
                 crate::CooperativeMatrix::default()

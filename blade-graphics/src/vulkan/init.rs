@@ -114,6 +114,7 @@ struct AdapterCapabilities {
     dual_source_blending: bool,
     shader_float16: bool,
     shader_integer_dot_product: bool,
+    subgroup_size: u32,
     cooperative_matrix: crate::CooperativeMatrix,
     global_low_priority: bool,
     unified_image_layouts: bool,
@@ -125,6 +126,7 @@ impl AdapterCapabilities {
     fn to_capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             compute: true,
+            max_compute_shared_memory_size: self.properties.limits.max_compute_shared_memory_size,
             indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.ray_tracing {
@@ -138,7 +140,8 @@ impl AdapterCapabilities {
             shader_float16: self.shader_float16,
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing,
-            cooperative_matrix: self.cooperative_matrix,
+            subgroup_size: self.subgroup_size,
+            cooperative_matrix: self.cooperative_matrix.clone(),
         }
     }
 }
@@ -247,12 +250,14 @@ fn inspect_adapter(
         vk::PhysicalDevicePortabilitySubsetPropertiesKHR::default();
 
     let mut driver_properties = vk::PhysicalDeviceDriverPropertiesKHR::default();
+    let mut subgroup_properties = vk::PhysicalDeviceSubgroupProperties::default();
     let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::default()
         .push_next(&mut inline_uniform_block_properties)
         .push_next(&mut timeline_semaphore_properties)
         .push_next(&mut descriptor_indexing_properties)
         .push_next(&mut acceleration_structure_properties)
         .push_next(&mut portability_subset_properties)
+        .push_next(&mut subgroup_properties)
         .push_next(&mut driver_properties);
     unsafe {
         instance
@@ -560,44 +565,52 @@ fn inspect_adapter(
         );
         crate::CooperativeMatrix::default()
     } else {
-        // Query supported cooperative matrix configurations and find
-        // square float configurations (Naga supports 8x8 and 16x16).
+        // Keep components Naga can store. K stays explicit: it is not a function of M and N.
         let coop_props = unsafe {
             instance
                 .cooperative_matrix
                 .get_physical_device_cooperative_matrix_properties(phd)
                 .unwrap_or_default()
         };
-        let find_tile = |a_type, b_type, c_type, result_type| {
-            [8u32, 16].into_iter().find(|&size| {
-                coop_props.iter().any(|p| {
-                    p.m_size == size
-                        && p.n_size == size
-                        && p.k_size == size
+        let find_shapes = |a_type, b_type, c_type, result_type| {
+            let mut shapes: Vec<_> = coop_props
+                .iter()
+                .filter(|p| {
+                    [p.m_size, p.n_size, p.k_size]
+                        .iter()
+                        .all(|s| matches!(s, 8 | 16))
                         && p.a_type == a_type
                         && p.b_type == b_type
                         && p.c_type == c_type
                         && p.result_type == result_type
                         && p.scope == vk::ScopeKHR::SUBGROUP
+                        && p.saturating_accumulation == vk::FALSE
                 })
-            })
+                .map(|p| [p.m_size, p.n_size, p.k_size])
+                .collect();
+            shapes.sort_unstable();
+            shapes.dedup();
+            shapes
         };
         let f32t = vk::ComponentTypeKHR::FLOAT32;
         let f16t = vk::ComponentTypeKHR::FLOAT16;
-        let f32_tile = find_tile(f32t, f32t, f32t, f32t).unwrap_or(0);
-        let f16_tile = if float16_int8_features.shader_float16 != 0
+        let f32_shapes = find_shapes(f32t, f32t, f32t, f32t);
+        let f16_f32_shapes = if float16_int8_features.shader_float16 != 0
             && storage_16bit_features.storage_buffer16_bit_access != 0
         {
-            find_tile(f16t, f16t, f32t, f32t).unwrap_or(0)
+            find_shapes(f16t, f16t, f32t, f32t)
         } else {
-            0
+            Vec::new()
         };
-        let cm = crate::CooperativeMatrix { f32_tile, f16_tile };
+        let cm = crate::CooperativeMatrix {
+            f32_shapes,
+            f16_f32_shapes,
+        };
         if cm.is_supported() {
             log::info!(
-                "Cooperative matrix: f32 tile={}, f16 tile={}",
-                cm.f32_tile,
-                cm.f16_tile,
+                "Cooperative matrix: f32 shapes={:?}, f16/f32 shapes={:?}",
+                cm.f32_shapes,
+                cm.f16_f32_shapes,
             );
         } else {
             log::info!(
@@ -608,7 +621,7 @@ fn inspect_adapter(
         cm
     };
     // Auto-enable shader_float16 when cooperative matrix has f16 support.
-    let shader_float16 = shader_float16 || cooperative_matrix.f16_tile > 0;
+    let shader_float16 = shader_float16 || !cooperative_matrix.f16_f32_shapes.is_empty();
 
     let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
@@ -654,6 +667,7 @@ fn inspect_adapter(
         dual_source_blending,
         shader_float16,
         shader_integer_dot_product,
+        subgroup_size: subgroup_properties.subgroup_size,
         cooperative_matrix,
         global_low_priority,
         unified_image_layouts: supported_extensions.contains(&unified_image_layouts::NAME)
@@ -1177,7 +1191,7 @@ impl super::Context {
                 };
                 device_create_info = device_create_info.push_next(&mut khr_float16_int8);
             }
-            if capabilities.cooperative_matrix.f16_tile > 0 {
+            if !capabilities.cooperative_matrix.f16_f32_shapes.is_empty() {
                 storage_16bit = vk::PhysicalDevice16BitStorageFeatures {
                     storage_buffer16_bit_access: vk::TRUE,
                     uniform_and_storage_buffer16_bit_access: vk::TRUE,
@@ -1567,6 +1581,11 @@ impl super::Context {
                     .properties
                     .limits
                     .framebuffer_depth_sample_counts,
+            max_compute_shared_memory_size: capabilities
+                .properties
+                .limits
+                .max_compute_shared_memory_size,
+            subgroup_size: capabilities.subgroup_size,
             dual_source_blending: capabilities.dual_source_blending,
             shader_float16: capabilities.shader_float16,
             shader_integer_dot_product: capabilities.shader_integer_dot_product,
@@ -1594,6 +1613,8 @@ impl super::Context {
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             compute: true,
+            max_compute_shared_memory_size: self.max_compute_shared_memory_size,
+            subgroup_size: self.subgroup_size,
             indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.device.ray_tracing {
@@ -1605,7 +1626,7 @@ impl super::Context {
             shader_float16: self.shader_float16,
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing_supported,
-            cooperative_matrix: self.cooperative_matrix,
+            cooperative_matrix: self.cooperative_matrix.clone(),
         }
     }
 

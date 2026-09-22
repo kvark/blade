@@ -236,20 +236,24 @@ pub struct MemoryStats {
 
 /// Cooperative matrix support information.
 ///
-/// Each field is a tile size (8 or 16), or 0 if that configuration
-/// is not supported. Naga supports square tiles only (8×8 and 16×16).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// Each list holds `[M, N, K]` configurations for a subgroup-scoped
+/// multiply-add. A is M×K, B is K×N, and the accumulator is M×N, so K is
+/// not implied by M and N. An empty list means that operand combination
+/// is unsupported. Components are 8 or 16, matching Naga's
+/// `CooperativeSize`. Naga's WGSL frontend only spells `coop_mat8x8` and
+/// `coop_mat16x16`, so a listed triple is a device fact rather than a WGSL type.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct CooperativeMatrix {
-    /// Tile size for all-f32 operations.
-    pub f32_tile: u32,
-    /// Tile size for f16-input, f32-accumulator operations.
-    pub f16_tile: u32,
+    /// All-f32 operands, accumulator, and result.
+    pub f32_shapes: Vec<[u32; 3]>,
+    /// f16 operands with an f32 accumulator and result.
+    pub f16_f32_shapes: Vec<[u32; 3]>,
 }
 
 impl CooperativeMatrix {
     /// Returns true if any cooperative matrix configuration is supported.
     pub fn is_supported(&self) -> bool {
-        self.f32_tile > 0 || self.f16_tile > 0
+        !self.f32_shapes.is_empty() || !self.f16_f32_shapes.is_empty()
     }
 }
 
@@ -257,6 +261,14 @@ impl CooperativeMatrix {
 pub struct Capabilities {
     /// Compute pipeline support.
     pub compute: bool,
+    /// Maximum shared-memory bytes per compute workgroup, or zero if not reported.
+    pub max_compute_shared_memory_size: u32,
+    /// Default subgroup width, or zero if this backend does not report one.
+    ///
+    /// On Vulkan this is `VkPhysicalDeviceSubgroupProperties::subgroupSize`.
+    /// Blade does not request a required subgroup size, so a compute shader
+    /// may run at another width.
+    pub subgroup_size: u32,
     /// Indirect draw command support.
     pub indirect_draw: bool,
     /// Support binding arrays of handles.

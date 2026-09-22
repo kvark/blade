@@ -1595,6 +1595,7 @@ impl EglContext {
                 uniform_buffer_alignment: gl
                     .get_parameter_i32(glow::UNIFORM_BUFFER_OFFSET_ALIGNMENT)
                     as u32,
+                max_compute_shared_memory_size: max_compute_shared_memory_size(&gl),
             };
             (gl, capabilities, toggles, device_information, limits)
         }
@@ -1611,6 +1612,20 @@ impl Drop for EglContext {
         {
             log::warn!("Error in terminate: {:?}", e);
         }
+    }
+}
+
+fn max_compute_shared_memory_size(gl: &glow::Context) -> u32 {
+    let version = gl.version();
+    let compute = if version.is_embedded {
+        (version.major, version.minor) >= (3, 1)
+    } else {
+        (version.major, version.minor) >= (4, 3)
+    };
+    if compute {
+        unsafe { gl.get_parameter_i32(glow::MAX_COMPUTE_SHARED_MEMORY_SIZE) }.max(0) as u32
+    } else {
+        0
     }
 }
 
