@@ -582,6 +582,8 @@ pub struct CommandEncoder {
     timing: Option<TimingState>,
     manual_barriers: bool,
     producer_kinds: PassKinds,
+    /// Source stage of a barrier not yet followed by a timestamp.
+    boundary_source: Option<vk::PipelineStageFlags>,
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
@@ -719,6 +721,7 @@ impl crate::traits::CommandDevice for Context {
             }),
             manual_barriers: desc.manual_barriers,
             producer_kinds: PassKinds::default(),
+            boundary_source: None,
         }
     }
 

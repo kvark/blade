@@ -25,6 +25,12 @@ This is aggregate access tracking, not resource tracking. It stores no
 resource identity, range, layout, lifetime, or dependency edge. It does not
 change the public API or the placement of automatic barriers.
 
+A GPU timestamp written at one of these boundaries uses that barrier's source
+stage, which is the completion that releases the next pass.
+`vkCmdWriteTimestamp` accepts one stage flag, so a source that names several
+stages is sampled at `ALL_COMMANDS`. A pass opened with no preceding barrier
+is sampled at `TOP_OF_PIPE`.
+
 With `CommandEncoderDesc::manual_barriers`, an application can suppress the
 automatic pass-boundary barriers and call `CommandEncoder::barrier()` only at
 dependency cuts. A manual barrier is emitted immediately. Its source is

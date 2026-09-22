@@ -334,7 +334,7 @@ impl super::CommandEncoder {
         }
     }
 
-    fn add_timestamp(&mut self, label: &str) {
+    fn add_timestamp(&mut self, label: &str, stage: vk::PipelineStageFlags) {
         let cmd_buf = self.buffers[0].raw;
         if let Some(ref mut timing) = self.timing {
             let index = timing.pass_names.len() - timing.submitted_count;
@@ -344,26 +344,26 @@ impl super::CommandEncoder {
             }
             let query_pool = timing.query_pool;
             unsafe {
-                self.device.core.cmd_write_timestamp(
-                    cmd_buf,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    query_pool,
-                    index as u32,
-                );
+                self.device
+                    .core
+                    .cmd_write_timestamp(cmd_buf, stage, query_pool, index as u32);
             }
             timing.pass_names.push(label);
         }
     }
 
     fn begin_pass(&mut self, label: &str, kind: super::PassKind) {
-        if !self.manual_barriers {
-            self.barrier_before(kind);
-        }
+        let inserted = if !self.manual_barriers {
+            self.barrier_before(kind)
+        } else {
+            None
+        };
+        let boundary = inserted.or(self.boundary_source.take());
         // Keep the history in manual mode as well: the next explicit barrier
         // must cover every pass recorded since the previous one.
         self.producer_kinds.insert(kind);
         self.add_marker(label);
-        self.add_timestamp(label);
+        self.add_timestamp(label, Self::timestamp_stage(boundary));
 
         if let Some(_) = self.device.command_scope {
             self.temp_label.clear();
@@ -384,23 +384,23 @@ impl super::CommandEncoder {
     pub(super) fn finish(&mut self) -> vk::CommandBuffer {
         // A later queue consumer is not known here, so keep the destination
         // conservative while deriving the source from the passes that ran.
-        self.barrier_before(super::PassKind::Unknown);
+        let boundary = self
+            .barrier_before(super::PassKind::Unknown)
+            .or(self.boundary_source.take());
         self.add_marker("finish");
         let done = self.timing.as_ref().map(|timing| {
             (
                 (timing.pass_names.len() - timing.submitted_count) as u32,
                 timing.query_pool,
+                Self::timestamp_stage(boundary),
             )
         });
         let cmd_buf = self.buffers.first_mut().unwrap();
         unsafe {
-            if let Some((done_index, query_pool)) = done {
-                self.device.core.cmd_write_timestamp(
-                    cmd_buf.raw,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    query_pool,
-                    done_index,
-                );
+            if let Some((done_index, query_pool, stage)) = done {
+                self.device
+                    .core
+                    .cmd_write_timestamp(cmd_buf.raw, stage, query_pool, done_index);
             }
             self.device.core.end_command_buffer(cmd_buf.raw).unwrap();
         }
@@ -517,18 +517,32 @@ impl super::CommandEncoder {
         (stages, accesses)
     }
 
+    /// Stage flag for a timestamp written at a barrier with this source.
+    ///
+    /// `vkCmdWriteTimestamp` accepts one stage. A source that is already one
+    /// flag, including `ALL_GRAPHICS` and `ALL_COMMANDS`, is that completion.
+    /// A combination is widened to `ALL_COMMANDS`. No barrier means nothing
+    /// earlier in this buffer has to retire, so the sample is `TOP_OF_PIPE`.
+    fn timestamp_stage(source: Option<vk::PipelineStageFlags>) -> vk::PipelineStageFlags {
+        match source {
+            Some(stage) if stage.as_raw().count_ones() == 1 => stage,
+            Some(_) => vk::PipelineStageFlags::ALL_COMMANDS,
+            None => vk::PipelineStageFlags::TOP_OF_PIPE,
+        }
+    }
+
     /// Insert a global memory barrier at the current pass boundary.
     ///
     /// The source covers all passes recorded since the previous barrier. A
     /// caller-placed barrier remains immediate and uses a conservative
     /// destination because its consumer has not been declared yet.
     pub fn barrier(&mut self) {
-        self.barrier_before(super::PassKind::Unknown);
+        self.boundary_source = self.barrier_before(super::PassKind::Unknown);
     }
 
-    fn barrier_before(&mut self, consumer: super::PassKind) {
+    fn barrier_before(&mut self, consumer: super::PassKind) -> Option<vk::PipelineStageFlags> {
         if self.producer_kinds.is_empty() {
-            return;
+            return None;
         }
 
         let unknown_producer = self.producer_kinds.contains(super::PassKind::Unknown);
@@ -561,6 +575,7 @@ impl super::CommandEncoder {
                 &[],
             );
         }
+        Some(src_stage_mask)
     }
 
     pub fn transfer(&mut self, label: &str) -> super::TransferCommandEncoder<'_> {
@@ -691,6 +706,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
 
     fn start(&mut self) {
         self.producer_kinds.clear();
+        self.boundary_source = None;
         if !self.manual_barriers {
             // Preserve the automatic barrier before the first pass. Its source
             // is work from an earlier submission, so its kind is unknown.
