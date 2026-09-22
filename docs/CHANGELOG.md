@@ -3,7 +3,7 @@ Changelog for *Blade* project
 ## (TBD)
 
 - graphics: `CooperativeMatrix` lists `[M, N, K]` shapes in `f32_shapes` and `f16_f32_shapes` instead of square tile sizes, and is no longer `Copy`
-- graphics: `Capabilities` reports the default subgroup size, the advertised subgroup-size range when known, and `max_compute_shared_memory_size`
+- graphics: `Capabilities` reports the default subgroup size and `max_compute_shared_memory_size`
 - graphics: `CommandEncoder::last_timing` returns `Timing` with borrowed pass names; wait on its sync point first
 - graphics: `Capabilities::timing` tells whether the device can timestamp passes at all
 - engine: enable GPU timing only when the device supports it

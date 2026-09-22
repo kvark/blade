@@ -115,8 +115,6 @@ struct AdapterCapabilities {
     shader_float16: bool,
     shader_integer_dot_product: bool,
     subgroup_size: u32,
-    min_subgroup_size: u32,
-    max_subgroup_size: u32,
     cooperative_matrix: crate::CooperativeMatrix,
     global_low_priority: bool,
     unified_image_layouts: bool,
@@ -143,8 +141,6 @@ impl AdapterCapabilities {
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing,
             subgroup_size: self.subgroup_size,
-            min_subgroup_size: self.min_subgroup_size,
-            max_subgroup_size: self.max_subgroup_size,
             cooperative_matrix: self.cooperative_matrix.clone(),
         }
     }
@@ -297,18 +293,6 @@ fn inspect_adapter(
         .iter()
         .map(|ext_prop| unsafe { ffi::CStr::from_ptr(ext_prop.extension_name.as_ptr()) })
         .collect::<Vec<_>>();
-    let mut subgroup_size_control = vk::PhysicalDeviceSubgroupSizeControlProperties::default();
-    if api_version >= vk::API_VERSION_1_3
-        || supported_extensions.contains(&vk::EXT_SUBGROUP_SIZE_CONTROL_NAME)
-    {
-        let mut subgroup_properties2 =
-            vk::PhysicalDeviceProperties2KHR::default().push_next(&mut subgroup_size_control);
-        unsafe {
-            instance
-                .get_physical_device_properties2
-                .get_physical_device_properties2(phd, &mut subgroup_properties2);
-        }
-    }
     for extension in REQUIRED_DEVICE_EXTENSIONS {
         if !supported_extensions.contains(extension) {
             return Err(format!(
@@ -684,8 +668,6 @@ fn inspect_adapter(
         shader_float16,
         shader_integer_dot_product,
         subgroup_size: subgroup_properties.subgroup_size,
-        min_subgroup_size: subgroup_size_control.min_subgroup_size,
-        max_subgroup_size: subgroup_size_control.max_subgroup_size,
         cooperative_matrix,
         global_low_priority,
         unified_image_layouts: supported_extensions.contains(&unified_image_layouts::NAME)
@@ -1604,8 +1586,6 @@ impl super::Context {
                 .limits
                 .max_compute_shared_memory_size,
             subgroup_size: capabilities.subgroup_size,
-            min_subgroup_size: capabilities.min_subgroup_size,
-            max_subgroup_size: capabilities.max_subgroup_size,
             dual_source_blending: capabilities.dual_source_blending,
             shader_float16: capabilities.shader_float16,
             shader_integer_dot_product: capabilities.shader_integer_dot_product,
@@ -1635,8 +1615,6 @@ impl super::Context {
             compute: true,
             max_compute_shared_memory_size: self.max_compute_shared_memory_size,
             subgroup_size: self.subgroup_size,
-            min_subgroup_size: self.min_subgroup_size,
-            max_subgroup_size: self.max_subgroup_size,
             indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.device.ray_tracing {

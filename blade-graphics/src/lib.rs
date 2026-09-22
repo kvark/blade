@@ -267,15 +267,8 @@ pub struct Capabilities {
     ///
     /// On Vulkan this is `VkPhysicalDeviceSubgroupProperties::subgroupSize`.
     /// Blade does not request a required subgroup size, so a compute shader
-    /// may run at another width. [`Self::min_subgroup_size`] and
-    /// [`Self::max_subgroup_size`] carry the `VK_EXT_subgroup_size_control`
-    /// range when the device provides it, including on Vulkan 1.3, and are
-    /// zero when that range is unknown.
+    /// may run at another width.
     pub subgroup_size: u32,
-    /// Smallest advertised subgroup size, or zero when the range is unknown.
-    pub min_subgroup_size: u32,
-    /// Largest advertised subgroup size, or zero when the range is unknown.
-    pub max_subgroup_size: u32,
     /// Indirect draw command support.
     pub indirect_draw: bool,
     /// Support binding arrays of handles.

@@ -1623,8 +1623,7 @@ fn max_compute_shared_memory_size(gl: &glow::Context) -> u32 {
         (version.major, version.minor) >= (4, 3)
     };
     if compute {
-        gl.get_parameter_i32(glow::MAX_COMPUTE_SHARED_MEMORY_SIZE)
-            .max(0) as u32
+        unsafe { gl.get_parameter_i32(glow::MAX_COMPUTE_SHARED_MEMORY_SIZE) }.max(0) as u32
     } else {
         0
     }
