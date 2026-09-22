@@ -158,6 +158,9 @@ pub struct ContextDesc {
     /// Enable GPU timing of all passes.
     ///
     /// Panics at context init if the device cannot timestamp.
+    /// Each boundary sample uses the source stage of the barrier recorded
+    /// there, so the timestamp matches the completion that releases the next
+    /// pass. A pass with no preceding barrier is sampled at `TOP_OF_PIPE`.
     pub timing: bool,
     /// Enable capture support with GAPI tools and collection of available
     /// compute-pipeline compiler statistics.
