@@ -9,6 +9,7 @@ license = "MIT"
 repository = "https://github.com/kvark/blade"
 include = [
     "src/**/*",
+    "shaders/**/*",
     "code/**/*",
     "etc/**/*",
     "README.md",
@@ -33,6 +34,7 @@ asset = [
 ]
 
 [dependencies]
+synaga-shader = { path = "../../synaga/crates/shader" }
 base64 = { workspace = true, optional = true }
 bitflags = { workspace = true }
 blade-graphics = { workspace = true }
@@ -74,6 +76,9 @@ allowed_external_types = [
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }
+
+[build-dependencies]
+synaga = { path = "../../synaga" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

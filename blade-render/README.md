@@ -14,7 +14,8 @@ ray tracer requires a backend and device with ray-query support.
 
 ## Shader sources / shipping
 
-Canonical WGSL lives in this crate’s `code/` directory. It is listed in
+Shader source is Rust under `shaders/`. `build.rs` writes the WGSL into
+`code/`, which is what the runtime loads. That directory is listed in
 `Cargo.toml` `include` so **crates.io** packages contain it; **git** and **path**
 dependencies already see the full tree. Do **not** copy these files into every
 game repo.

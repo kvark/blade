@@ -13,7 +13,13 @@
     clippy::pattern_type_mismatch,
 )]
 
-const SHADER_SOURCE: &str = include_str!("../shader.wgsl");
+mod shaders;
+
+mod shader_wgsl {
+    include!(concat!(env!("OUT_DIR"), "/shaders.rs"));
+}
+
+const SHADER_SOURCE: &str = shader_wgsl::EGUI;
 
 use blade_util::{BufferBelt, BufferBeltDescriptor};
 use std::collections::hash_map::{Entry, HashMap};

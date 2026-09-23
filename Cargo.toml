@@ -61,7 +61,11 @@ readme = "docs/README.md"
 
 [dependencies]
 
+[build-dependencies]
+synaga = { path = "../synaga" }
+
 [dev-dependencies]
+synaga-shader = { path = "../synaga/crates/shader" }
 blade-graphics.workspace = true
 blade-helpers.workspace = true
 blade-egui.workspace = true
