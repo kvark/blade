@@ -13,6 +13,9 @@
     clippy::pattern_type_mismatch,
 )]
 
+#[path = "../shaders/mod.rs"]
+mod shader_sources;
+
 mod dummy;
 mod env_map;
 pub use dummy::DummyResources;
@@ -71,7 +74,7 @@ pub struct DebugLine {
     pub b: DebugPoint,
 }
 
-// Has to match the `Vertex` in `code/vertex.inc.wgsl`.
+// Has to match `Vertex` in `shaders/vertex.rs`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct Vertex {
@@ -85,7 +88,7 @@ pub struct Vertex {
 /// Per-vertex skinning data, kept in a separate buffer so that the base
 /// vertex layout is identical for skinned and rigid models.
 ///
-/// Has to match the `SkinVertex` in `code/skin.inc.wgsl`.
+/// Has to match `SkinVertex` in `shaders/skin_inc.rs`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct SkinVertex {

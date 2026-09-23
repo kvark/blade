@@ -67,7 +67,7 @@ pub struct ParticlePipeline {
 
 impl ParticlePipeline {
     pub fn new(context: &gpu::Context, desc: PipelineDesc) -> Self {
-        let source = include_str!("particle.wgsl");
+        let source = crate::shader_wgsl::PARTICLE;
         let shader = context.create_shader(gpu::ShaderDesc {
             source,
             naga_module: None,

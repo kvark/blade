@@ -1,4 +1,11 @@
 use blade_graphics as gpu;
+
+#[path = "shaders/mod.rs"]
+mod shaders;
+
+mod shader_wgsl {
+    include!(concat!(env!("OUT_DIR"), "/bunnymark_shaders.rs"));
+}
 use bytemuck::{Pod, Zeroable};
 use std::{mem, ptr};
 
@@ -62,12 +69,8 @@ impl Example {
     ) -> Self {
         let global_layout = <Params as gpu::ShaderData>::layout();
         let local_layout = <SpriteData as gpu::ShaderData>::layout();
-        #[cfg(target_arch = "wasm32")]
-        let shader_source = include_str!("shader.wgsl");
-        #[cfg(not(target_arch = "wasm32"))]
-        let shader_source = std::fs::read_to_string("examples/bunnymark/shader.wgsl").unwrap();
         let shader = context.create_shader(gpu::ShaderDesc {
-            source: &shader_source,
+            source: shader_wgsl::SPRITE,
             naga_module: None,
         });
 

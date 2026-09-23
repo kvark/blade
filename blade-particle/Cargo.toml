@@ -8,8 +8,12 @@ license = "MIT"
 repository = "https://github.com/kvark/blade"
 
 [dependencies]
+synaga-shader = { path = "../../synaga/crates/shader" }
 blade-graphics = { workspace = true }
 blade-macros = { workspace = true }
 bytemuck = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 ron = "0.12"
+
+[build-dependencies]
+synaga = { path = "../../synaga" }
