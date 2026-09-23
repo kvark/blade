@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 /// Compact joint palettes fit in a WebGL2 uniform block. Must match
-/// `MAX_JOINTS_PER_DRAW` in `blade-render/code/skin.inc.wgsl`.
+/// `MAX_JOINTS_PER_DRAW` in `shaders/config.rs`.
 pub const MAX_JOINTS_PER_DRAW: usize = 64;
 const NO_INDEX: u32 = u32::MAX;
 

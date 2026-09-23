@@ -191,7 +191,7 @@ pub struct GBufferViews {
     /// `Rgba8Snorm`. The shading tangent frame as a quaternion, which is where
     /// normal mapping ends up. The shading normal is the quaternion applied to
     /// `+Z`: `v + 2 * cross(q.xyz, cross(q.xyz, v) + q.w * v)` for
-    /// `v = (0, 0, 1)`, matching `qrot` in `quaternion.inc.wgsl`.
+    /// `v = (0, 0, 1)`, matching `qrot` in `shaders/quaternion.rs`.
     pub basis: blade_graphics::TextureView,
     /// `Rgba8Snorm`. The geometric normal in XYZ, straight from the triangle,
     /// with no normal map applied. Cheaper to consume than [`basis`] when the
@@ -207,7 +207,7 @@ pub struct GBufferViews {
     /// Emitted radiance, in the renderer's radiance format.
     pub emissive: blade_graphics::TextureView,
     /// `Rg16Float`. Screen space motion since the previous frame, scaled by
-    /// `MOTION_SCALE` from `gbuf.inc.wgsl`. Half precision keeps subpixel
+    /// `MOTION_SCALE` from `shaders/gbuf.rs`. Half precision keeps subpixel
     /// reprojection accurate enough for temporal upscaling; `Rg8Snorm` stepped
     /// by roughly 0.4 pixels after decoding.
     pub motion: blade_graphics::TextureView,
@@ -901,7 +901,7 @@ impl ShaderPipelines {
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "a-trous",
             data_layouts: &[&layout],
-            compute: shader.at("atrous3x3"),
+            compute: shader.at("atrous_filter"),
         })
     }
 
