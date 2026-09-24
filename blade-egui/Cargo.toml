@@ -11,7 +11,7 @@ repository = "https://github.com/kvark/blade"
 [lib]
 
 [dependencies]
-synaga-shader = { path = "../../synaga/crates/shader" }
+synaga-shader.workspace = true
 blade-graphics = { workspace = true }
 naga = { workspace = true }
 serde_json = { workspace = true }
@@ -22,7 +22,7 @@ bytemuck = { workspace = true }
 profiling = { workspace = true }
 
 [build-dependencies]
-synaga = { path = "../../synaga" }
+synaga.workspace = true
 
 [package.metadata.cargo_check_external_types]
 allowed_external_types = ["blade_graphics::*", "epaint::*"]
