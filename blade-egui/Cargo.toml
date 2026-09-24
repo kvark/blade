@@ -13,6 +13,8 @@ repository = "https://github.com/kvark/blade"
 [dependencies]
 synaga-shader = { path = "../../synaga/crates/shader" }
 blade-graphics = { workspace = true }
+naga = { workspace = true }
+serde_json = { workspace = true }
 blade-macros = { workspace = true }
 blade-util = { workspace = true }
 egui = { workspace = true, features = ["bytemuck"] }

@@ -1,13 +1,6 @@
 #![cfg(target_os = "android")]
 
-use std::{
-    ffi::CString,
-    fs,
-    io::Read,
-    path::Path,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use blade_graphics as gpu;
@@ -344,50 +337,6 @@ enum AppState {
     },
 }
 
-fn prepare_shader_dir(app: &AndroidApp) -> PathBuf {
-    let internal_path = app
-        .internal_data_path()
-        .expect("No internal data path available");
-    let shader_dir = internal_path.join("blade-render").join("code");
-    fs::create_dir_all(&shader_dir).unwrap();
-    copy_assets_to_dir(app, "", &shader_dir);
-
-    shader_dir
-}
-
-fn copy_assets_to_dir(app: &AndroidApp, asset_dir_name: &str, output_dir: &Path) {
-    let asset_manager = app.asset_manager();
-    let dir_name = CString::new(asset_dir_name).unwrap();
-    let mut asset_dir = asset_manager
-        .open_dir(&dir_name)
-        .unwrap_or_else(|| panic!("Unable to open asset dir '{asset_dir_name}'"));
-
-    let mut copied = 0usize;
-    for file_name in &mut asset_dir {
-        let file_name = file_name.to_string_lossy();
-        if !file_name.ends_with(".wgsl") {
-            continue;
-        }
-        let asset_path = if asset_dir_name.is_empty() {
-            file_name.to_string()
-        } else {
-            format!("{asset_dir_name}/{file_name}")
-        };
-        let asset_path_c = CString::new(asset_path.as_str()).unwrap();
-        let mut asset = asset_manager
-            .open(&asset_path_c)
-            .unwrap_or_else(|| panic!("Unable to open asset '{asset_path}'"));
-        let mut contents = Vec::with_capacity(asset.length());
-        asset.read_to_end(&mut contents).unwrap();
-        fs::write(output_dir.join(file_name.as_ref()), contents).unwrap();
-        copied += 1;
-    }
-    assert!(
-        copied > 0,
-        "No WGSL files copied from asset dir '{asset_dir_name}'"
-    );
-}
-
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
     let xr_debug = std::env::var_os("BLADE_XR_DEBUG").is_some();
@@ -447,8 +396,6 @@ fn android_main(app: AndroidApp) {
         .system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)
         .unwrap();
     mark!("XR mark: OpenXR system acquired");
-    let shader_dir = prepare_shader_dir(&app);
-    mark!("XR mark: shader dir prepared");
     let internal_path = app
         .internal_data_path()
         .expect("No internal data path available");
@@ -459,7 +406,6 @@ fn android_main(app: AndroidApp) {
             system_id: system,
         }),
         &blade_engine::config::Engine {
-            shader_path: shader_dir.to_string_lossy().into_owned(),
             data_path: String::new(),
             cache_path: cache_path.to_string_lossy().into_owned(),
             time_step: 0.01,

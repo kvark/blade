@@ -1,7 +1,7 @@
 //! Shader modules.
 //!
 //! `rustc` type-checks these against `synaga-shader`. `build.rs` reads the
-//! same files and writes WGSL into `code/`.
+//! same files and serializes a Naga module for each one.
 #![allow(
     non_camel_case_types,
     non_snake_case,

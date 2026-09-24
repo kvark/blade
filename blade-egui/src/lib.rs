@@ -15,11 +15,9 @@
 
 mod shaders;
 
-mod shader_wgsl {
+mod shader_ir {
     include!(concat!(env!("OUT_DIR"), "/shaders.rs"));
 }
-
-const SHADER_SOURCE: &str = shader_wgsl::EGUI;
 
 use blade_util::{BufferBelt, BufferBeltDescriptor};
 use std::collections::hash_map::{Entry, HashMap};
@@ -182,9 +180,10 @@ impl GuiPainter {
     /// and this attachment format must be The `output_format`.
     #[profiling::function]
     pub fn new(info: blade_graphics::SurfaceInfo, context: &blade_graphics::Context) -> Self {
+        let module: naga::Module = serde_json::from_slice(shader_ir::EGUI).expect("egui shader IR");
         let shader = context.create_shader(blade_graphics::ShaderDesc {
-            source: SHADER_SOURCE,
-            naga_module: None,
+            source: "egui",
+            naga_module: Some(module),
         });
         let globals_layout = <Globals as blade_graphics::ShaderData>::layout();
         let locals_layout = <Locals as blade_graphics::ShaderData>::layout();

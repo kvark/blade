@@ -16,6 +16,14 @@
 #[path = "../shaders/mod.rs"]
 mod shader_sources;
 
+/// Stock shaders, serialized as Naga IR.
+///
+/// `build.rs` writes one JSON module per shader. The renderer deserializes
+/// these bytes and passes the module to blade-graphics.
+pub mod ir {
+    include!(concat!(env!("OUT_DIR"), "/shader_ir.rs"));
+}
+
 mod dummy;
 mod env_map;
 pub use dummy::DummyResources;
@@ -44,21 +52,6 @@ pub use texture::Texture;
 pub use util::FrameResources;
 
 pub use render::*;
-
-/// Absolute path to the WGSL sources shipped with this crate (`code/`).
-///
-/// Point game `config.shader_path` at this directory so dependents do not need
-/// to copy shaders. Keep game-only overrides in the game repository.
-///
-/// This is `CARGO_MANIFEST_DIR/code`, resolved when **this crate** is compiled.
-/// It works for git, path, and crates.io dependencies during `cargo run` / CI
-/// because Cargo materializes `code/` next to the crate manifest. It is **not**
-/// a portable install path for a shipped native binary — embed the WGSL (as for
-/// WASM) or install `code/` next to the executable. See `blade-render/README.md`
-/// (“Shader sources / shipping”).
-pub fn shader_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("code")
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]

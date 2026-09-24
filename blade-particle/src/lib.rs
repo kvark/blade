@@ -26,7 +26,7 @@
 mod shaders;
 mod system;
 
-mod shader_wgsl {
+mod shader_ir {
     include!(concat!(env!("OUT_DIR"), "/shaders.rs"));
 }
 

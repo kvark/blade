@@ -139,7 +139,6 @@ fn default_cache_path() -> String {
 
 #[derive(serde::Deserialize)]
 pub struct Engine {
-    pub shader_path: String,
     pub data_path: String,
     #[serde(default = "default_cache_path")]
     pub cache_path: String,

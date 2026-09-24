@@ -3,7 +3,7 @@ use blade_graphics as gpu;
 #[path = "shaders/mod.rs"]
 mod shaders;
 
-mod shader_wgsl {
+mod shader_ir {
     include!(concat!(env!("OUT_DIR"), "/bunnymark_shaders.rs"));
 }
 use bytemuck::{Pod, Zeroable};
@@ -69,9 +69,11 @@ impl Example {
     ) -> Self {
         let global_layout = <Params as gpu::ShaderData>::layout();
         let local_layout = <SpriteData as gpu::ShaderData>::layout();
+        let module: naga::Module =
+            serde_json::from_slice(shader_ir::SPRITE).expect("sprite shader IR");
         let shader = context.create_shader(gpu::ShaderDesc {
-            source: shader_wgsl::SPRITE,
-            naga_module: None,
+            source: "sprite",
+            naga_module: Some(module),
         });
 
         let pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
