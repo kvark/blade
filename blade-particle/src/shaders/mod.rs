@@ -1,4 +1,4 @@
-//! Particle shaders, checked as Rust and transpiled to WGSL by the build script.
+//! Particle shaders, checked as Rust. The build script serializes them as a Naga module.
 #![allow(
     non_camel_case_types,
     non_snake_case,

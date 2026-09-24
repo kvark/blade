@@ -72,7 +72,10 @@ fn list_shaders(dir: &Path) -> Vec<PathBuf> {
     list
 }
 
-/// Runs through all pass shaders and ensures they are valid WGSL.
+/// Runs through hand-written example shaders and ensures they are valid WGSL.
+///
+/// Stock renderer shaders are serialized Naga IR, covered by
+/// `blade-render`'s `stock_ir_deserializes` and by [`raster_exports_to_webgl2`].
 #[test]
 fn parse_wgsl() {
     use blade_render::shader::Expansion;
@@ -101,7 +104,7 @@ fn parse_wgsl() {
     );
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut directories = vec![root.join("blade-render").join("code")];
+    let mut directories = Vec::new();
 
     for sub_entry in root.join("examples").read_dir().unwrap() {
         match sub_entry {
@@ -118,26 +121,12 @@ fn parse_wgsl() {
 }
 
 /// Keep the portable renderer within the GLSL ES 3.00 feature set exposed by
-/// WebGL2. WGSL validation alone does not catch backend-only resources such as
+/// WebGL2. IR validation alone does not catch backend-only resources such as
 /// shader-storage buffers.
 #[test]
 fn raster_exports_to_webgl2() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let shader_dir = root.join("blade-render").join("code");
-    let shader_raw = fs::read(shader_dir.join("raster.wgsl")).unwrap();
-    let cooker = blade_asset::Cooker::new(&shader_dir, Default::default());
-    let mut expansions = HashMap::new();
-    expansions.insert(
-        "MAX_LOCAL_LIGHTS".to_string(),
-        blade_render::shader::Expansion::Size(blade_render::MAX_LOCAL_LIGHTS as u32),
-    );
-    expansions.insert(
-        "MAX_JOINTS_PER_DRAW".to_string(),
-        blade_render::shader::Expansion::Size(blade_render::MAX_JOINTS_PER_DRAW as u32),
-    );
-    let source = blade_render::shader::parse_shader(&shader_raw, &cooker, &expansions);
-    let mut module =
-        wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+    let mut module: naga::Module =
+        serde_json::from_slice(blade_render::ir::RASTER).expect("raster shader IR");
     let info = Validator::new(
         naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS,
         naga::valid::Capabilities::empty(),

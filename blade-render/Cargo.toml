@@ -10,7 +10,6 @@ repository = "https://github.com/kvark/blade"
 include = [
     "src/**/*",
     "shaders/**/*",
-    "code/**/*",
     "etc/**/*",
     "README.md",
 ]
@@ -52,7 +51,9 @@ glam = { workspace = true }
 log = { workspace = true }
 mikktspace = { package = "bevy_mikktspace", version = "0.15.0-rc.3", optional = true }
 mint = { workspace = true }
+naga = { workspace = true }
 profiling = { workspace = true }
+serde_json = { workspace = true }
 slab = { workspace = true, optional = true }
 strum = { workspace = true }
 texpresso = { version = "2.0", optional = true }
@@ -78,6 +79,7 @@ allowed_external_types = [
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }
 
 [build-dependencies]
+serde_json = { workspace = true }
 synaga = { path = "../../synaga" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

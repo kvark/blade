@@ -210,8 +210,7 @@ impl Example {
             .collect();
 
         let asset_hub = blade_render::AssetHub::new(Path::new("asset-cache"), &choir, &context);
-        let (shaders, shader_task) =
-            blade_render::Shaders::load("blade-render/code/".as_ref(), &asset_hub, true);
+        let (shaders, shader_task) = blade_render::Shaders::load(&asset_hub, true);
 
         log::info!("Spinning up the renderer");
         shader_task.join();
