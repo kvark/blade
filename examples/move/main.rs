@@ -54,7 +54,6 @@ impl Game {
         let mut engine = blade_engine::Engine::new(
             blade_engine::Presentation::Window(&window),
             &blade_engine::config::Engine {
-                shader_path: "blade-render/code".to_string(),
                 data_path: data_path.as_os_str().to_string_lossy().into_owned(),
                 cache_path: "asset-cache".to_string(),
                 time_step: 0.01,

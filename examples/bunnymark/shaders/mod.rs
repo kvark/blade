@@ -1,4 +1,4 @@
-//! Bunnymark's shader, checked as Rust and transpiled to WGSL by the build script.
+//! Bunnymark's shader, checked as Rust. The build script serializes it as a Naga module.
 #![allow(
     non_camel_case_types,
     non_snake_case,

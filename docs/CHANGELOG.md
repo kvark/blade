@@ -2,6 +2,7 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- render: stock shaders are serialized Naga IR embedded in the crate. `shader_dir()` and `Engine.shader_path` are gone
 - graphics: `CooperativeMatrix` lists `[M, N, K]` shapes in `f32_shapes` and `f16_f32_shapes` instead of square tile sizes, and is no longer `Copy`
 - graphics: `Capabilities` reports the default subgroup size and `max_compute_shared_memory_size`
 - graphics: a pass-boundary GPU timestamp uses that barrier's source stage, so the sample is the completion that releases the next pass

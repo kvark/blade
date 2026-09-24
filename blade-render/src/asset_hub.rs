@@ -102,6 +102,18 @@ impl LoadContext<'_> {
         handle
     }
 
+    /// Cook a serialized Naga module.
+    ///
+    /// `name` is a pretend file name whose extension is `json`.
+    pub fn load_shader_ir(&mut self, name: &str, ir: &[u8]) -> blade_asset::Handle<crate::Shader> {
+        let (handle, task) =
+            self.asset_hub
+                .shaders
+                .load_data(name.as_ref(), ir, crate::shader::Meta);
+        self.finish_task.depend_on(task);
+        handle
+    }
+
     pub fn close(self) -> choir::RunningTask {
         self.finish_task.run()
     }
