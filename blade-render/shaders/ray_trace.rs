@@ -119,6 +119,33 @@ pub static out_debug: texture_storage_2d<Rgba8Unorm, Write> = binding();
 pub static mut debug_len: Private<f32> = binding();
 
 #[shader]
+pub fn divide_if_positive(numer: f32, denom: f32) -> f32 {
+    if (denom > 0.0) {
+        return numer / denom;
+    } else {
+        return 0.0;
+    }
+}
+
+#[shader]
+pub fn normalize_nonzero(v: vec4) -> vec4 {
+    if (dot(v, v) > 0.0) {
+        return normalize(v);
+    } else {
+        return vec4::splat(0.0);
+    }
+}
+
+#[shader]
+pub fn normalize_nonzero3(v: vec3) -> vec3 {
+    if (dot(v, v) > 0.0) {
+        return normalize(v);
+    } else {
+        return vec3::splat(0.0);
+    }
+}
+
+#[shader]
 pub fn zero_radiance() -> Radiance {
     return Radiance {
         diffuse: vec3::splat(0.0),
@@ -209,15 +236,17 @@ pub fn pack_reservoir_detail(r: LiveReservoir, denom_factor: f32) -> StoredReser
     f.target_score = r.selected_target_score;
     f.confidence = r.history;
     let denom = f.target_score * denom_factor;
-    f.contribution_weight = select(0.0, r.weight_sum / denom, denom > 0.0);
+    // `select` evaluates both arms. A zero denominator is 0/0, and lavapipe
+    // built with LLVM 22 keeps that NaN instead of the selected zero.
+    f.contribution_weight = divide_if_positive(r.weight_sum, denom);
     return f;
 }
 
 #[shader]
 pub fn read_surface(pixel: vec2i) -> Surface {
     let mut surface = Surface::default();
-    surface.basis = normalize(textureLoad(&t_basis, pixel, 0));
-    surface.flat_normal = normalize(textureLoad(&t_flat_normal, pixel, 0).xyz());
+    surface.basis = normalize_nonzero(textureLoad(&t_basis, pixel, 0));
+    surface.flat_normal = normalize_nonzero3(textureLoad(&t_flat_normal, pixel, 0).xyz());
     surface.depth = textureLoad(&t_depth, pixel, 0).x;
     surface.view_dir = -get_ray_direction(*camera, pixel);
     surface.diffuse_albedo = textureLoad(&t_diffuse_albedo, pixel, 0).xyz();
@@ -230,8 +259,8 @@ pub fn read_surface(pixel: vec2i) -> Surface {
 #[shader]
 pub fn read_prev_surface(pixel: vec2i) -> Surface {
     let mut surface = Surface::default();
-    surface.basis = normalize(textureLoad(&t_prev_basis, pixel, 0));
-    surface.flat_normal = normalize(textureLoad(&t_prev_flat_normal, pixel, 0).xyz());
+    surface.basis = normalize_nonzero(textureLoad(&t_prev_basis, pixel, 0));
+    surface.flat_normal = normalize_nonzero3(textureLoad(&t_prev_flat_normal, pixel, 0).xyz());
     surface.depth = textureLoad(&t_prev_depth, pixel, 0).x;
     surface.view_dir = -get_ray_direction(*prev_camera, pixel);
     surface.diffuse_albedo = textureLoad(&t_prev_diffuse_albedo, pixel, 0).xyz();
@@ -314,7 +343,7 @@ pub fn get_prev_pixel(pixel: vec2i, pos_world: vec3) -> vec2 {
 
 #[shader]
 pub fn ratio(a: f32, b: f32) -> f32 {
-    return select(0.0, a / (a + b), a + b > 0.0);
+    return divide_if_positive(a, a + b);
 }
 
 #[shader]
@@ -337,7 +366,7 @@ pub fn make_reservoir(
     r.selected_uv = ls.uv;
     r.selected_light_index = light_index;
     r.selected_target_score = compute_target_score(r.selected_radiance, diffuse_albedo);
-    r.weight_sum = select(0.0, r.selected_target_score / ls.pdf, ls.pdf > 0.0);
+    r.weight_sum = divide_if_positive(r.selected_target_score, ls.pdf);
     r.history = 1.0;
     return r;
 }
@@ -542,7 +571,12 @@ pub fn compute_restir(
         1.0,
         accepted_count == 0u32 || parameters.use_pairwise_mis == 0u32,
     );
-    let inv_count = 1.0 / (accepted_count) as f32;
+    // No accepted neighbors means this factor is unused. Dividing by zero
+    // here still produces an infinity that LLVM 22 folds into later results.
+    let mut inv_count = 0.0;
+    if (accepted_count != 0u32) {
+        inv_count = 1.0 / (accepted_count) as f32;
+    }
 
     for rid in (0u32)..(accepted_count) {
         let neighbor_index = accepted_reservoir_indices[(rid) as usize];
