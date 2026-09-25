@@ -67,10 +67,11 @@ pub struct ParticlePipeline {
 
 impl ParticlePipeline {
     pub fn new(context: &gpu::Context, desc: PipelineDesc) -> Self {
-        let source = include_str!("particle.wgsl");
+        let module: naga::Module =
+            serde_json::from_slice(crate::shader_ir::PARTICLE).expect("particle shader IR");
         let shader = context.create_shader(gpu::ShaderDesc {
-            source,
-            naga_module: None,
+            source: "particle",
+            naga_module: Some(module),
         });
 
         let particle_size = shader.get_struct_size("Particle");

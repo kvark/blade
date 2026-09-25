@@ -13,6 +13,17 @@
     clippy::pattern_type_mismatch,
 )]
 
+#[path = "../shaders/mod.rs"]
+mod shader_sources;
+
+/// Stock shaders, serialized as Naga IR.
+///
+/// `build.rs` writes one JSON module per shader. The renderer deserializes
+/// these bytes and passes the module to blade-graphics.
+pub mod ir {
+    include!(concat!(env!("OUT_DIR"), "/shader_ir.rs"));
+}
+
 mod dummy;
 mod env_map;
 pub use dummy::DummyResources;
@@ -42,21 +53,6 @@ pub use util::FrameResources;
 
 pub use render::*;
 
-/// Absolute path to the WGSL sources shipped with this crate (`code/`).
-///
-/// Point game `config.shader_path` at this directory so dependents do not need
-/// to copy shaders. Keep game-only overrides in the game repository.
-///
-/// This is `CARGO_MANIFEST_DIR/code`, resolved when **this crate** is compiled.
-/// It works for git, path, and crates.io dependencies during `cargo run` / CI
-/// because Cargo materializes `code/` next to the crate manifest. It is **not**
-/// a portable install path for a shipped native binary — embed the WGSL (as for
-/// WASM) or install `code/` next to the executable. See `blade-render/README.md`
-/// (“Shader sources / shipping”).
-pub fn shader_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("code")
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DebugPoint {
@@ -71,7 +67,7 @@ pub struct DebugLine {
     pub b: DebugPoint,
 }
 
-// Has to match the `Vertex` in `code/vertex.inc.wgsl`.
+// Has to match `Vertex` in `shaders/vertex.rs`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct Vertex {
@@ -85,7 +81,7 @@ pub struct Vertex {
 /// Per-vertex skinning data, kept in a separate buffer so that the base
 /// vertex layout is identical for skinned and rigid models.
 ///
-/// Has to match the `SkinVertex` in `code/skin.inc.wgsl`.
+/// Has to match `SkinVertex` in `shaders/skin_inc.rs`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct SkinVertex {

@@ -23,7 +23,12 @@
     clippy::pattern_type_mismatch,
 )]
 
+mod shaders;
 mod system;
+
+mod shader_ir {
+    include!(concat!(env!("OUT_DIR"), "/shaders.rs"));
+}
 
 pub use system::{ParticlePipeline, ParticleSystem, PipelineDesc};
 

@@ -1,6 +1,7 @@
 use std::{any, collections::HashMap, fmt, fs, path::Path, str, sync::Arc};
 
-const FAILURE_DUMP_NAME: &str = "_failure.wgsl";
+const FAILURE_DUMP_WGSL: &str = "_failure.wgsl";
+const FAILURE_DUMP_IR: &str = "_failure.json";
 
 #[derive(blade_macros::Flat)]
 pub struct CookedShader<'a> {
@@ -156,6 +157,11 @@ impl blade_asset::Baker for Baker {
         cooker: Arc<blade_asset::Cooker<Self>>,
         _exe_context: &choir::ExecutionContext,
     ) {
+        if extension == "json" {
+            // Already a Naga module. Constants were baked when it was serialized.
+            cooker.finish(CookedShader { data: source });
+            return;
+        }
         assert_eq!(extension, "wgsl");
         let text_out = parse_shader(source, &cooker, &self.expansions);
         cooker.finish(CookedShader {
@@ -163,20 +169,39 @@ impl blade_asset::Baker for Baker {
         });
     }
     fn serve(&self, cooked: CookedShader, _exe_context: &choir::ExecutionContext) -> Shader {
-        let source = str::from_utf8(cooked.data).unwrap();
-        let raw = self
-            .gpu_context
-            .try_create_shader(blade_graphics::ShaderDesc {
-                source,
-                naga_module: None,
-            });
+        // Serialized modules are JSON objects. Hand-written shaders are WGSL text.
+        let ir = cooked.data.first() == Some(&b'{');
+        let raw = if ir {
+            match serde_json::from_slice(cooked.data) {
+                Ok(module) => self
+                    .gpu_context
+                    .try_create_shader(blade_graphics::ShaderDesc {
+                        source: "",
+                        naga_module: Some(module),
+                    }),
+                Err(err) => {
+                    log::warn!("Shader IR did not deserialize: {err}");
+                    Err("shader IR did not deserialize")
+                }
+            }
+        } else {
+            let source = str::from_utf8(cooked.data).unwrap();
+            self.gpu_context
+                .try_create_shader(blade_graphics::ShaderDesc {
+                    source,
+                    naga_module: None,
+                })
+        };
         if let Err(e) = raw {
-            match fs::write(FAILURE_DUMP_NAME, source) {
-                Ok(()) => log::warn!(
-                    "Shader compilation failed: {e:?}, source dumped as '{FAILURE_DUMP_NAME}'."
-                ),
+            let dump = if ir {
+                FAILURE_DUMP_IR
+            } else {
+                FAILURE_DUMP_WGSL
+            };
+            match fs::write(dump, cooked.data) {
+                Ok(()) => log::warn!("Shader compilation failed: {e:?}, dumped as '{dump}'."),
                 Err(write_error) => log::warn!(
-                    "Shader compilation failed: {e:?}; unable to dump source: {write_error}"
+                    "Shader compilation failed: {e:?}; unable to dump shader: {write_error}"
                 ),
             }
         }

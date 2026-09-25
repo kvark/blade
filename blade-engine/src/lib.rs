@@ -789,11 +789,8 @@ impl Engine {
         let asset_hub = blade_render::AssetHub::new(&asset_cache_path, &choir, &gpu_context);
         let animation_models =
             blade_asset::AssetManager::new(&asset_cache_path, &choir, animation::Baker);
-        let (shaders, shader_task) = blade_render::Shaders::load(
-            config.shader_path.as_ref(),
-            &asset_hub,
-            render_backend.uses_ray_tracing(),
-        );
+        let (shaders, shader_task) =
+            blade_render::Shaders::load(&asset_hub, render_backend.uses_ray_tracing());
 
         log::info!("Spinning up the renderer");
         if workers.is_empty() {

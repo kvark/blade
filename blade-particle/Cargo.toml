@@ -8,8 +8,14 @@ license = "MIT"
 repository = "https://github.com/kvark/blade"
 
 [dependencies]
+synaga-shader.workspace = true
 blade-graphics = { workspace = true }
+naga = { workspace = true }
+serde_json = { workspace = true }
 blade-macros = { workspace = true }
 bytemuck = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 ron = "0.12"
+
+[build-dependencies]
+synaga.workspace = true

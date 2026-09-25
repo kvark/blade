@@ -35,7 +35,13 @@ glam = { version = "0.32", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
-naga = { version = "30", git = "https://github.com/gfx-rs/wgpu", rev = "323acfb729a00c3030e362faa27252afe6368792", features = ["wgsl-in", "termcolor"] }
+# `deserialize` loads Naga IR that synaga serializes. `wgsl-in` stays for shaders that are still text.
+naga = { version = "30", git = "https://github.com/gfx-rs/wgpu", rev = "323acfb729a00c3030e362faa27252afe6368792", features = ["wgsl-in", "termcolor", "deserialize"] }
+# Synaga is not published. This revision is what CI builds. A local checkout
+# can replace these with path = "../synaga" and path = "../synaga/crates/shader".
+synaga = { git = "https://github.com/kvark/synaga", rev = "c3ffa5e1107b655518fde32a459573edc16d72a6" }
+synaga-shader = { git = "https://github.com/kvark/synaga", rev = "c3ffa5e1107b655518fde32a459573edc16d72a6" }
+serde_json = "1"
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.28", features = ["derive"] }
@@ -61,7 +67,11 @@ readme = "docs/README.md"
 
 [dependencies]
 
+[build-dependencies]
+synaga.workspace = true
+
 [dev-dependencies]
+synaga-shader.workspace = true
 blade-graphics.workspace = true
 blade-helpers.workspace = true
 blade-egui.workspace = true
@@ -89,6 +99,7 @@ png = "0.18"
 profiling = { workspace = true }
 ron = "0.12"
 serde = { version = "1", features = ["serde_derive"] }
+serde_json = { workspace = true }
 strum = { workspace = true }
 # not following semver :(
 del-msh-core = "=0.1.33"

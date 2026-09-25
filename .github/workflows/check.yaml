@@ -149,12 +149,49 @@ jobs:
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
           install_runtime: true
-          install_lavapipe: true
+          # This package is Mesa 25.2.5. The next step installs a newer lavapipe.
+          install_lavapipe: false
           cache: true
-          # The action queries GitHub for LavaPipe releases. Anonymous hosted
-          # runners share a tiny rate limit and made unrelated PRs fail before
-          # any Vulkan test ran.
+          # Anonymous hosted runners share a tiny GitHub API rate limit and made
+          # unrelated PRs fail before any Vulkan test ran.
           github_token: ${{ github.token }}
+
+      - name: Install lavapipe 26.1.5 (Windows)
+        if: matrix.name == 'Windows'
+        shell: pwsh
+        run: |
+          # 25.2.5 and 25.3.3 access-violate in animated_blas_memory_stays_bounded.
+          # 26.1.5 runs that test. The ReSTIR NaNs it produced were from the
+          # older, much larger shader modules.
+          $url = "https://github.com/jakoch/rasterizers/releases/download/20260730/lavapipe-x64-26.1.5.zip"
+          $dest = Join-Path $env:RUNNER_TEMP "lavapipe-26.1.5"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\lavapipe.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\lavapipe.zip" -DestinationPath $dest -Force
+          $dll = Join-Path $dest "bin\vulkan_lvp.dll"
+          $icd = Join-Path $dest "share\vulkan\icd.d\lvp_icd.x86_64.json"
+          if (-not (Test-Path $dll)) { throw "lavapipe DLL missing: $dll" }
+          if (-not (Test-Path $icd)) { throw "lavapipe ICD missing: $icd" }
+          # The runner is elevated, so the loader ignores VK_DRIVER_FILES and
+          # reads this registry key.
+          $api = (Get-Content $icd -Raw | ConvertFrom-Json).ICD.api_version
+          @{
+            file_format_version = '1.0.1'
+            ICD = @{
+              api_version = $api
+              library_arch = '64'
+              library_path = $dll
+            }
+          } | ConvertTo-Json | Set-Content -Path $icd -Encoding ascii
+          reg add "HKLM\SOFTWARE\Khronos\Vulkan\Drivers" /f | Out-Null
+          reg add "HKLM\SOFTWARE\Khronos\Vulkan\Drivers" /v "$icd" /t REG_DWORD /d 0 /f
+          if ($LASTEXITCODE -ne 0) { throw "failed to register lavapipe ICD" }
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $dest "bin")
+          $vulkaninfo = Join-Path $env:VULKAN_SDK "Bin\vulkaninfoSDK.exe"
+          if (-not (Test-Path $vulkaninfo)) {
+            $vulkaninfo = Join-Path $env:VULKAN_SDK "runtime\x64\vulkaninfo.exe"
+          }
+          & $vulkaninfo --summary
+          if ($LASTEXITCODE -ne 0) { throw "vulkaninfo could not see lavapipe" }
 
       # One test at a time, as the GLES step below already does. Each of these
       # stands up its own GPU context, and the ray traced ones also build

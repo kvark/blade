@@ -1,5 +1,4 @@
 use blade_graphics as gpu;
-use std::collections::HashMap;
 use std::io::BufReader;
 use std::path::Path;
 
@@ -17,34 +16,6 @@ pub const READBACK_TIMEOUT_MS: u32 = 120_000;
 const C1: f64 = 6.5025; // (0.01 * 255)^2
 const C2: f64 = 58.5225; // (0.03 * 255)^2
 const BLOCK: usize = 8;
-
-/// Read a shader from the renderer's code directory, expanding `#include` and
-/// the `#use` constants the raster path registers on the asset hub.
-pub fn shader_source(name: &str) -> String {
-    use blade_render::shader::Expansion;
-
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("blade-render")
-        .join("code");
-    let path = dir.join(name);
-    let bytes =
-        std::fs::read(&path).unwrap_or_else(|e| panic!("Unable to read '{}': {e}", path.display()));
-    let cooker = blade_asset::Cooker::new(&dir, Default::default());
-    let mut expansions = HashMap::new();
-    expansions.insert(
-        "MAX_LOCAL_LIGHTS".to_string(),
-        Expansion::Size(blade_render::MAX_LOCAL_LIGHTS as u32),
-    );
-    expansions.insert(
-        "MAX_JOINTS_PER_DRAW".to_string(),
-        Expansion::Size(blade_render::MAX_JOINTS_PER_DRAW as u32),
-    );
-    expansions.insert(
-        "DEBUG_MODE".to_string(),
-        Expansion::Bool(cfg!(debug_assertions)),
-    );
-    blade_render::shader::parse_shader(&bytes, &cooker, &expansions)
-}
 
 pub struct OffscreenTarget {
     pub texture: gpu::Texture,
