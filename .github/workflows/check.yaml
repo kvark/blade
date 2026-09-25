@@ -156,15 +156,15 @@ jobs:
           # unrelated PRs fail before any Vulkan test ran.
           github_token: ${{ github.token }}
 
-      - name: Install lavapipe 25.3.3 (Windows)
+      - name: Install lavapipe 26.1.5 (Windows)
         if: matrix.name == 'Windows'
         shell: pwsh
         run: |
-          # 26.1.5 returns NaN from the ReSTIR shader. 25.2.5 access-violates
-          # while compiling it. 25.3.3 is the newest Windows build of the line
-          # that matches Linux CI's 25.2 lavapipe.
-          $url = "https://github.com/jakoch/rasterizers/releases/download/20260113/lavapipe-x64-25.3.3.zip"
-          $dest = Join-Path $env:RUNNER_TEMP "lavapipe-25.3.3"
+          # 25.2.5 and 25.3.3 access-violate in animated_blas_memory_stays_bounded.
+          # 26.1.5 runs that test. The ReSTIR NaNs it produced were from the
+          # older, much larger shader modules.
+          $url = "https://github.com/jakoch/rasterizers/releases/download/20260730/lavapipe-x64-26.1.5.zip"
+          $dest = Join-Path $env:RUNNER_TEMP "lavapipe-26.1.5"
           Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\lavapipe.zip"
           Expand-Archive -Path "$env:RUNNER_TEMP\lavapipe.zip" -DestinationPath $dest -Force
           $dll = Join-Path $dest "bin\vulkan_lvp.dll"
