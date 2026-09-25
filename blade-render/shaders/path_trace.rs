@@ -178,7 +178,13 @@ pub fn resolve_hit(intersection: RayIntersection) -> PathVertex {
 #[shader]
 pub fn mis_weight(count: f32, pdf: f32, other_count: f32, other_pdf: f32) -> f32 {
     let total = count * pdf + other_count * other_pdf;
-    return select(0.0, count * pdf / total, total > 0.0);
+    // Same reason as `divide_if_positive` in the ReSTIR shader: the unselected
+    // arm of a select is still evaluated, and a zero total is 0/0.
+    if (total > 0.0) {
+        return count * pdf / total;
+    } else {
+        return 0.0;
+    }
 }
 
 #[shader]
