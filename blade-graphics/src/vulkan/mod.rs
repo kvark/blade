@@ -11,6 +11,10 @@ use std::{
 
 mod command;
 mod descriptor;
+#[cfg(target_os = "linux")]
+mod external;
+#[cfg(target_os = "linux")]
+pub use external::VulkanBufferImport;
 mod init;
 mod pipeline;
 mod resource;
