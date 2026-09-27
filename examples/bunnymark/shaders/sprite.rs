@@ -18,7 +18,7 @@ pub struct Vertex {
     pub pos: vec2,
 }
 
-#[io]
+#[derive(Clone, Copy, Debug, Default, Io)]
 pub struct VertexOutput {
     #[builtin(position)]
     position: vec4,
@@ -36,7 +36,6 @@ pub static sprite_texture: texture_2d<f32> = binding();
 
 pub static sprite_sampler: sampler = binding();
 
-#[shader]
 pub fn unpack_color(raw: u32) -> vec4 {
     //TODO: https://github.com/gfx-rs/naga/issues/2188
     //return unpack4x8unorm(raw);
@@ -45,14 +44,13 @@ pub fn unpack_color(raw: u32) -> vec4 {
     ) / 255.0;
 }
 
-#[fragment]
+#[entry_point(fragment)]
 #[output(location(0))]
 pub fn fs_main(vertex: VertexOutput) -> vec4 {
-    return vertex.color
-        * textureSampleLevel(&sprite_texture, &sprite_sampler, vertex.tex_coords, 0.0);
+    return vertex.color * sprite_texture.sample_level(&sprite_sampler, vertex.tex_coords, 0.0);
 }
 
-#[vertex]
+#[entry_point(vertex)]
 pub fn vs_main(vertex: Vertex) -> VertexOutput {
     let tc = vertex.pos;
     let offset = tc * globals.sprite_size;

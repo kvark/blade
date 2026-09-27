@@ -24,12 +24,10 @@ pub struct BrdfLobes {
     pub specular: vec3,
 }
 
-#[shader]
 pub fn compute_luminocity(color: vec3) -> f32 {
     return dot(color, LUMINOCITY_WEIGHTS);
 }
 
-#[shader]
 pub fn material_from_metallic_roughness(
     base_color: vec3,
     metalness: f32,
@@ -42,30 +40,25 @@ pub fn material_from_metallic_roughness(
     return mat;
 }
 
-#[shader]
 pub fn material_alpha(mat: Material) -> f32 {
     let r = clamp(mat.roughness, MIN_ROUGHNESS, 1.0);
     return r * r;
 }
 
-#[shader]
 pub fn fresnel_schlick(cos_theta: f32, f0: vec3) -> vec3 {
     return f0 + (vec3::splat(1.0) - f0) * pow(1.0 - cos_theta, 5.0);
 }
 
-#[shader]
 pub fn fresnel_schlick_scalar(cos_theta: f32, f0: f32) -> f32 {
     return f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
 }
 
-#[shader]
 pub fn distribution_ggx(n_dot_h: f32, alpha: f32) -> f32 {
     let a2 = alpha * alpha;
     let denom = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
     return a2 / max(PI * denom * denom, 1e-7);
 }
 
-#[shader]
 pub fn visibility_smith(n_dot_v: f32, n_dot_l: f32, alpha: f32) -> f32 {
     let a2 = alpha * alpha;
     let lambda_v = n_dot_l * sqrt(n_dot_v * n_dot_v * (1.0 - a2) + a2);
@@ -73,7 +66,6 @@ pub fn visibility_smith(n_dot_v: f32, n_dot_l: f32, alpha: f32) -> f32 {
     return 0.5 / max(lambda_v + lambda_l, 1e-7);
 }
 
-#[shader]
 pub fn zero_brdf() -> BrdfLobes {
     return BrdfLobes {
         diffuse: 0.0,
@@ -81,24 +73,20 @@ pub fn zero_brdf() -> BrdfLobes {
     };
 }
 
-#[shader]
 pub fn is_brdf_black(lobes: BrdfLobes) -> bool {
     return lobes.diffuse <= 0.0 && all(lobes.specular.cmple(vec3::splat(0.0)));
 }
 
-#[shader]
 pub fn evaluate_ambient(mat: Material) -> vec3 {
     return mat.diffuse_albedo * (vec3::splat(1.0) - mat.specular_f0) + mat.specular_f0;
 }
 
-#[shader]
 pub fn specular_sampling_ratio(mat: Material) -> f32 {
     let diffuse = compute_luminocity(mat.diffuse_albedo);
     let specular = compute_luminocity(mat.specular_f0);
     return clamp(specular / max(diffuse + specular, 1.0e-5), 0.1, 0.9);
 }
 
-#[shader]
 pub fn evaluate_brdf(mat: Material, normal: vec3, view_dir: vec3, light_dir: vec3) -> BrdfLobes {
     let n_dot_l = dot(normal, light_dir);
     let n_dot_v = dot(normal, view_dir);

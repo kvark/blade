@@ -180,7 +180,7 @@ impl GuiPainter {
     /// and this attachment format must be The `output_format`.
     #[profiling::function]
     pub fn new(info: blade_graphics::SurfaceInfo, context: &blade_graphics::Context) -> Self {
-        let module: naga::Module = serde_json::from_slice(shader_ir::EGUI).expect("egui shader IR");
+        let module: naga::Module = shader_ir::EGUI.decode().expect("egui shader IR");
         let shader = context.create_shader(blade_graphics::ShaderDesc {
             source: "egui",
             naga_module: Some(module),

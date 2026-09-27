@@ -125,8 +125,7 @@ fn parse_wgsl() {
 /// shader-storage buffers.
 #[test]
 fn raster_exports_to_webgl2() {
-    let mut module: naga::Module =
-        serde_json::from_slice(blade_render::ir::RASTER).expect("raster shader IR");
+    let mut module: naga::Module = blade_render::ir::RASTER.decode().expect("raster shader IR");
     let info = Validator::new(
         naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS,
         naga::valid::Capabilities::empty(),

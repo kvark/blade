@@ -84,7 +84,7 @@ pub static acc_struct: acceleration_structure = binding();
 
 pub static prev_acc_struct: acceleration_structure = binding();
 
-pub static mut reservoirs: StorageMut<[StoredReservoir]> = binding();
+pub static reservoirs: StorageMut<[StoredReservoir]> = binding();
 
 pub static prev_reservoirs: Storage<[StoredReservoir]> = binding();
 
@@ -116,9 +116,8 @@ pub static out_specular: texture_storage_2d<Rgba16Float, Write> = binding();
 
 pub static out_debug: texture_storage_2d<Rgba8Unorm, Write> = binding();
 
-pub static mut debug_len: Private<f32> = binding();
+pub static debug_len: Private<f32> = binding();
 
-#[shader]
 pub fn divide_if_positive(numer: f32, denom: f32) -> f32 {
     if (denom > 0.0) {
         return numer / denom;
@@ -127,7 +126,6 @@ pub fn divide_if_positive(numer: f32, denom: f32) -> f32 {
     }
 }
 
-#[shader]
 pub fn normalize_nonzero(v: vec4) -> vec4 {
     if (dot(v, v) > 0.0) {
         return normalize(v);
@@ -136,7 +134,6 @@ pub fn normalize_nonzero(v: vec4) -> vec4 {
     }
 }
 
-#[shader]
 pub fn normalize_nonzero3(v: vec3) -> vec3 {
     if (dot(v, v) > 0.0) {
         return normalize(v);
@@ -145,7 +142,6 @@ pub fn normalize_nonzero3(v: vec3) -> vec3 {
     }
 }
 
-#[shader]
 pub fn zero_radiance() -> Radiance {
     return Radiance {
         diffuse: vec3::splat(0.0),
@@ -153,7 +149,6 @@ pub fn zero_radiance() -> Radiance {
     };
 }
 
-#[shader]
 pub fn reflect_light(brdf: BrdfLobes, light: vec3) -> Radiance {
     return Radiance {
         diffuse: brdf.diffuse * light,
@@ -161,12 +156,10 @@ pub fn reflect_light(brdf: BrdfLobes, light: vec3) -> Radiance {
     };
 }
 
-#[shader]
 pub fn compute_target_score(radiance: Radiance, diffuse_albedo: vec3) -> f32 {
     return compute_luminocity(diffuse_albedo * radiance.diffuse + radiance.specular);
 }
 
-#[shader]
 pub fn get_reservoir_index(pixel: vec2i, cam: CameraParams) -> i32 {
     if (all(vec2u::from(pixel).cmplt(cam.target_size))) {
         return pixel.y * (cam.target_size.x) as i32 + pixel.x;
@@ -175,19 +168,16 @@ pub fn get_reservoir_index(pixel: vec2i, cam: CameraParams) -> i32 {
     }
 }
 
-#[shader]
 pub fn get_pixel_from_reservoir_index(index: i32, cam: CameraParams) -> vec2i {
     let y = index / (cam.target_size.x) as i32;
     let x = index - y * (cam.target_size.x) as i32;
     return vec2i(x, y);
 }
 
-#[shader]
 pub fn bump_reservoir(r: &mut LiveReservoir, history: f32) {
     r.history += history;
 }
 
-#[shader]
 pub fn merge_reservoir(r: &mut LiveReservoir, other: LiveReservoir, random: f32) -> bool {
     r.weight_sum += other.weight_sum;
     r.history += other.history;
@@ -202,7 +192,6 @@ pub fn merge_reservoir(r: &mut LiveReservoir, other: LiveReservoir, random: f32)
     }
 }
 
-#[shader]
 pub fn normalize_reservoir(r: &mut LiveReservoir, history: f32) {
     let h = r.history;
     if (h > 0.0) {
@@ -211,7 +200,6 @@ pub fn normalize_reservoir(r: &mut LiveReservoir, history: f32) {
     }
 }
 
-#[shader]
 pub fn unpack_reservoir(
     f: StoredReservoir,
     max_confidence: f32,
@@ -228,7 +216,6 @@ pub fn unpack_reservoir(
     return r;
 }
 
-#[shader]
 pub fn pack_reservoir_detail(r: LiveReservoir, denom_factor: f32) -> StoredReservoir {
     let mut f = StoredReservoir::default();
     f.light_index = r.selected_light_index;
@@ -242,40 +229,36 @@ pub fn pack_reservoir_detail(r: LiveReservoir, denom_factor: f32) -> StoredReser
     return f;
 }
 
-#[shader]
 pub fn read_surface(pixel: vec2i) -> Surface {
     let mut surface = Surface::default();
-    surface.basis = normalize_nonzero(textureLoad(&t_basis, pixel, 0));
-    surface.flat_normal = normalize_nonzero3(textureLoad(&t_flat_normal, pixel, 0).xyz());
-    surface.depth = textureLoad(&t_depth, pixel, 0).x;
+    surface.basis = normalize_nonzero(t_basis.load(pixel, 0));
+    surface.flat_normal = normalize_nonzero3(t_flat_normal.load(pixel, 0).xyz());
+    surface.depth = t_depth.load(pixel, 0).x;
     surface.view_dir = -get_ray_direction(*camera, pixel);
-    surface.diffuse_albedo = textureLoad(&t_diffuse_albedo, pixel, 0).xyz();
-    let specular = textureLoad(&t_specular_f0, pixel, 0);
+    surface.diffuse_albedo = t_diffuse_albedo.load(pixel, 0).xyz();
+    let specular = t_specular_f0.load(pixel, 0);
     surface.specular_f0 = specular.xyz();
     surface.roughness = specular.w;
     return surface;
 }
 
-#[shader]
 pub fn read_prev_surface(pixel: vec2i) -> Surface {
     let mut surface = Surface::default();
-    surface.basis = normalize_nonzero(textureLoad(&t_prev_basis, pixel, 0));
-    surface.flat_normal = normalize_nonzero3(textureLoad(&t_prev_flat_normal, pixel, 0).xyz());
-    surface.depth = textureLoad(&t_prev_depth, pixel, 0).x;
+    surface.basis = normalize_nonzero(t_prev_basis.load(pixel, 0));
+    surface.flat_normal = normalize_nonzero3(t_prev_flat_normal.load(pixel, 0).xyz());
+    surface.depth = t_prev_depth.load(pixel, 0).x;
     surface.view_dir = -get_ray_direction(*prev_camera, pixel);
-    surface.diffuse_albedo = textureLoad(&t_prev_diffuse_albedo, pixel, 0).xyz();
-    let specular = textureLoad(&t_prev_specular_f0, pixel, 0);
+    surface.diffuse_albedo = t_prev_diffuse_albedo.load(pixel, 0).xyz();
+    let specular = t_prev_specular_f0.load(pixel, 0);
     surface.specular_f0 = specular.xyz();
     surface.roughness = specular.w;
     return surface;
 }
 
-#[shader]
 pub fn surface_normal(surface: Surface) -> vec3 {
     return qrot(surface.basis, vec3(0.0, 0.0, 1.0));
 }
 
-#[shader]
 pub fn surface_material(surface: Surface) -> Material {
     return Material {
         diffuse_albedo: surface.diffuse_albedo,
@@ -284,7 +267,6 @@ pub fn surface_material(surface: Surface) -> Material {
     };
 }
 
-#[shader]
 pub fn evaluate_incoming_radiance(
     acs: acceleration_structure,
     position: vec3,
@@ -293,8 +275,7 @@ pub fn evaluate_incoming_radiance(
     debug_color: u32,
 ) -> vec3 {
     let mut rq = ray_query::default();
-    rayQueryInitialize(
-        rq,
+    rq.initialize(
         &acs,
         RayDesc {
             flags: RAY_FLAG_CULL_NO_OPAQUE,
@@ -305,8 +286,8 @@ pub fn evaluate_incoming_radiance(
             dir: direction,
         },
     );
-    rayQueryProceed(rq);
-    let intersection = rayQueryGetCommittedIntersection(rq);
+    rq.proceed();
+    let intersection = rq.committed_intersection();
 
     if (DEBUG_MODE && ray_len > 0.0) {
         let hit = intersection.kind != RAY_QUERY_INTERSECTION_NONE;
@@ -331,22 +312,19 @@ pub fn evaluate_incoming_radiance(
     return sample_hit_emissive(entry, tex_coords, 0.0, 0u32);
 }
 
-#[shader]
 pub fn get_prev_pixel(pixel: vec2i, pos_world: vec3) -> vec2 {
     if (USE_MOTION_VECTORS && parameters.use_motion_vectors != 0u32) {
-        let motion = textureLoad(&t_motion, pixel, 0).xy() / MOTION_SCALE;
+        let motion = t_motion.load(pixel, 0).xy() / MOTION_SCALE;
         return vec2::from(pixel) + 0.5 + motion;
     } else {
         return get_projected_pixel_float(*prev_camera, pos_world);
     }
 }
 
-#[shader]
 pub fn ratio(a: f32, b: f32) -> f32 {
     return divide_if_positive(a, a + b);
 }
 
-#[shader]
 pub fn zero_target_score() -> TargetScore {
     return TargetScore {
         radiance: zero_radiance(),
@@ -354,7 +332,6 @@ pub fn zero_target_score() -> TargetScore {
     };
 }
 
-#[shader]
 pub fn make_reservoir(
     ls: LightSample,
     light_index: u32,
@@ -371,7 +348,6 @@ pub fn make_reservoir(
     return r;
 }
 
-#[shader]
 pub fn make_target_score(radiance: Radiance, diffuse_albedo: vec3) -> TargetScore {
     return TargetScore {
         radiance: radiance,
@@ -379,12 +355,10 @@ pub fn make_target_score(radiance: Radiance, diffuse_albedo: vec3) -> TargetScor
     };
 }
 
-#[shader]
 pub fn pack_reservoir(r: LiveReservoir) -> StoredReservoir {
     return pack_reservoir_detail(r, r.history);
 }
 
-#[shader]
 pub fn evaluate_surface_brdf(surface: Surface, dir: vec3) -> BrdfLobes {
     return evaluate_brdf(
         surface_material(surface),
@@ -394,7 +368,6 @@ pub fn evaluate_surface_brdf(surface: Surface, dir: vec3) -> BrdfLobes {
     );
 }
 
-#[shader]
 pub fn sample_incoming_light(
     surface: Surface,
     from_light: bool,
@@ -422,7 +395,6 @@ pub fn sample_incoming_light(
     return ls;
 }
 
-#[shader]
 pub fn estimate_target_score_with_occlusion(
     surface: Surface,
     position: vec3,
@@ -448,7 +420,6 @@ pub fn estimate_target_score_with_occlusion(
     return make_target_score(reflect_light(brdf, radiance), surface.diffuse_albedo);
 }
 
-#[shader]
 pub fn evaluate_sample(
     ls: &mut LightSample,
     surface: Surface,
@@ -477,7 +448,6 @@ pub fn evaluate_sample(
     return brdf;
 }
 
-#[shader]
 pub fn compute_restir(
     surface: Surface,
     pixel: vec2i,
@@ -487,7 +457,9 @@ pub fn compute_restir(
     let ray_dir = get_ray_direction(*camera, pixel);
     let pixel_index = get_reservoir_index(pixel, *camera);
     if (surface.depth == 0.0) {
-        reservoirs[(pixel_index) as usize] = StoredReservoir::default();
+        unsafe {
+            reservoirs.get_mut()[(pixel_index) as usize] = StoredReservoir::default();
+        }
         // Note: the diffuse albedo of the sky is 1.0, so the environment
         // survives the modulation in the post-processing.
         let env = evaluate_environment_background(ray_dir);
@@ -500,7 +472,7 @@ pub fn compute_restir(
     }
 
     if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Depth) {
-        textureStore(&out_debug, pixel, vec4::splat(1.0 / surface.depth));
+        out_debug.store(pixel, vec4::splat(1.0 / surface.depth));
     }
     let position = camera.position + surface.depth * ray_dir;
     let ray_len = select(0.0, surface.depth * 0.2, enable_debug);
@@ -558,7 +530,7 @@ pub fn compute_restir(
         for i in (0u32)..(min(3u32, accepted_count)) {
             color[(i) as usize] = 1.0;
         }
-        textureStore(&out_debug, pixel, color);
+        out_debug.store(pixel, color);
     }
 
     // Next, evaluate the MIS of each of the samples versus the canonical one.
@@ -690,7 +662,9 @@ pub fn compute_restir(
 
     let effective_history = select(reservoir.history, 1.0, parameters.use_pairwise_mis != 0u32);
     let stored = pack_reservoir_detail(reservoir, effective_history);
-    reservoirs[(pixel_index) as usize] = stored;
+    unsafe {
+        reservoirs.get_mut()[(pixel_index) as usize] = stored;
+    }
     let mut ro = RestirOutput::default();
     if (DECOUPLED_SHADING) {
         let denom = max(shaded_weight, 0.001);
@@ -708,8 +682,7 @@ pub fn compute_restir(
     return ro;
 }
 
-#[compute]
-#[workgroup_size(8, 4)]
+#[entry_point(compute, threads(8, 4))]
 pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
     if (any(global_id.xy().cmpge(camera.target_size))) {
         return;
@@ -731,18 +704,12 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
     if (enable_debug) {
         // Note: the variance is tracked on the fully modulated color
         let color = surface.diffuse_albedo * ro.radiance.diffuse + ro.radiance.specular;
-        debug_buf.variance.color_sum += color;
-        debug_buf.variance.color2_sum += color * color;
-        debug_buf.variance.count += 1u32;
+        unsafe {
+            debug_buf.get_mut().variance.color_sum += color;
+            debug_buf.get_mut().variance.color2_sum += color * color;
+            debug_buf.get_mut().variance.count += 1u32;
+        }
     }
-    textureStore(
-        &out_diffuse,
-        global_id.xy(),
-        (ro.radiance.diffuse).extend(1.0),
-    );
-    textureStore(
-        &out_specular,
-        global_id.xy(),
-        (ro.radiance.specular).extend(1.0),
-    );
+    out_diffuse.store(global_id.xy(), (ro.radiance.diffuse).extend(1.0));
+    out_specular.store(global_id.xy(), (ro.radiance.specular).extend(1.0));
 }

@@ -74,8 +74,7 @@ impl Example {
     ) -> Self {
         let global_layout = <Params as gpu::ShaderData>::layout();
         let local_layout = <SpriteData as gpu::ShaderData>::layout();
-        let module: naga::Module =
-            serde_json::from_slice(shader_ir::SPRITE).expect("sprite shader IR");
+        let module: naga::Module = shader_ir::SPRITE.decode().expect("sprite shader IR");
         let shader = context.create_shader(gpu::ShaderDesc {
             source: "sprite",
             naga_module: Some(module),

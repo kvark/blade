@@ -3,7 +3,7 @@ use super::debug::*;
 use super::quaternion::*;
 use synaga_shader::*;
 
-#[io]
+#[derive(Clone, Copy, Debug, Default, Io)]
 pub struct DebugVarying {
     #[builtin(position)]
     pos: vec4,
@@ -19,7 +19,17 @@ pub static debug_lines: Storage<[DebugLine]> = binding();
 
 pub static depth: texture_2d<f32> = binding();
 
-#[vertex]
+/// The draw entry points only see the line array. This entry point is what
+/// keeps `DebugBuffer` in the module, which is the layout the host uses to
+/// size that buffer.
+#[entry_point(compute, threads(1))]
+pub fn debug_buffer_layout() {
+    unsafe {
+        debug_buf.get_mut().open = debug_buf.open;
+    }
+}
+
+#[entry_point(vertex)]
 pub fn debug_vs(
     #[builtin(vertex_index)] vertex_id: u32,
     #[builtin(instance_index)] instance_id: u32,
@@ -41,15 +51,15 @@ pub fn debug_vs(
     return out;
 }
 
-#[fragment]
+#[entry_point(fragment)]
 #[output(location(0))]
 pub fn debug_fs(input: DebugVarying) -> vec4 {
-    let geo_dim = textureDimensions(&depth);
+    let geo_dim = depth.dimensions();
     let depth_itc = vec2i(
         (input.pos.x) as i32,
         (geo_dim.y) as i32 - (input.pos.y) as i32,
     );
-    let stored = textureLoad(&depth, depth_itc, 0).x;
+    let stored = depth.load(depth_itc, 0).x;
     let alpha = select(
         0.8,
         0.2,

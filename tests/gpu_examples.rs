@@ -441,7 +441,9 @@ fn env_map_gpu_test() {
     let shader_prepare = context.create_shader(gpu::ShaderDesc {
         source: "env-prepare",
         naga_module: Some(
-            serde_json::from_slice(blade_render::ir::ENV_PREPARE).expect("env-prepare shader IR"),
+            blade_render::ir::ENV_PREPARE
+                .decode()
+                .expect("env-prepare shader IR"),
         ),
     });
     let shader_sample = context.create_shader(gpu::ShaderDesc {
@@ -753,9 +755,7 @@ fn snapshot_space_sky() {
     // The raster shader is embedded IR. Sky draws with no depth attachment.
     let shader = context.create_shader(gpu::ShaderDesc {
         source: "raster",
-        naga_module: Some(
-            serde_json::from_slice(blade_render::ir::RASTER).expect("raster shader IR"),
-        ),
+        naga_module: Some(blade_render::ir::RASTER.decode().expect("raster shader IR")),
     });
     let sky_layout = <SkyTestData as gpu::ShaderData>::layout();
     let mut sky_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {

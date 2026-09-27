@@ -11,7 +11,7 @@
     unused_imports,
     unused_variables,
     unused_mut,
-    static_mut_refs,
+    unused_parens,
     clippy::all
 )]
 

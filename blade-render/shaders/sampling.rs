@@ -10,7 +10,6 @@ pub struct BsdfSample {
     pub pdf: f32,
 }
 
-#[shader]
 pub fn make_tangent_frame(normal: vec3) -> mat3x3 {
     let s = select(-1.0, 1.0, normal.z >= 0.0);
     let a = -1.0 / (s + normal.z);
@@ -22,13 +21,11 @@ pub fn make_tangent_frame(normal: vec3) -> mat3x3 {
     );
 }
 
-#[shader]
 pub fn sample_circle_uniform(random: f32) -> vec2 {
     let angle = 2.0 * PI * random;
     return vec2(cos(angle), sin(angle));
 }
 
-#[shader]
 pub fn compute_bsdf_pdf(mat: Material, normal: vec3, view_dir: vec3, light_dir: vec3) -> f32 {
     let n_dot_l = dot(normal, light_dir);
     if (n_dot_l <= 0.0 || dot(normal, view_dir) <= 0.0) {
@@ -42,20 +39,17 @@ pub fn compute_bsdf_pdf(mat: Material, normal: vec3, view_dir: vec3, light_dir: 
     return mix(diffuse_pdf, specular_pdf, specular_sampling_ratio(mat));
 }
 
-#[shader]
 pub fn evaluate_bsdf(mat: Material, normal: vec3, view_dir: vec3, light_dir: vec3) -> vec3 {
     let brdf = evaluate_brdf(mat, normal, view_dir, light_dir);
     return mat.diffuse_albedo * brdf.diffuse + brdf.specular;
 }
 
-#[shader]
 pub fn sample_hemisphere_cosine(rng: &mut RandomState) -> vec3 {
     let r = random_gen(rng);
     let tangential = sqrt(r) * sample_circle_uniform(random_gen(rng));
     return (tangential).extend(sqrt(max(0.0, 1.0 - r)));
 }
 
-#[shader]
 pub fn sample_ggx_half_dir(alpha: f32, rng: &mut RandomState) -> vec3 {
     let a2 = alpha * alpha;
     let r = random_gen(rng);
@@ -64,7 +58,6 @@ pub fn sample_ggx_half_dir(alpha: f32, rng: &mut RandomState) -> vec3 {
     return (sin_theta * sample_circle_uniform(random_gen(rng))).extend(cos_theta);
 }
 
-#[shader]
 pub fn sample_bsdf(
     mat: Material,
     normal: vec3,

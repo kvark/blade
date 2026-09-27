@@ -68,11 +68,9 @@ pub static accumulator_specular: texture_storage_2d<Rgba32Float, ReadWrite> = bi
 
 pub static accumulator_emissive: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
 
-#[shader]
 pub fn trace_ray(position: vec3, direction: vec3, t_min: f32) -> RayIntersection {
     let mut rq = ray_query::default();
-    rayQueryInitialize(
-        rq,
+    rq.initialize(
         &acc_struct,
         RayDesc {
             flags: RAY_FLAG_CULL_NO_OPAQUE,
@@ -83,16 +81,14 @@ pub fn trace_ray(position: vec3, direction: vec3, t_min: f32) -> RayIntersection
             dir: direction,
         },
     );
-    rayQueryProceed(rq);
-    return rayQueryGetCommittedIntersection(rq);
+    rq.proceed();
+    return rq.committed_intersection();
 }
 
-#[shader]
 pub fn is_occluded(position: vec3, direction: vec3) -> bool {
     let mut rq = ray_query::default();
     let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
-    rayQueryInitialize(
-        rq,
+    rq.initialize(
         &acc_struct,
         RayDesc {
             flags: flags,
@@ -103,11 +99,10 @@ pub fn is_occluded(position: vec3, direction: vec3) -> bool {
             dir: direction,
         },
     );
-    rayQueryProceed(rq);
-    return rayQueryGetCommittedIntersection(rq).kind != RAY_QUERY_INTERSECTION_NONE;
+    rq.proceed();
+    return rq.committed_intersection().kind != RAY_QUERY_INTERSECTION_NONE;
 }
 
-#[shader]
 pub fn resolve_hit(intersection: RayIntersection) -> PathVertex {
     let entry =
         hit_entries[(intersection.instance_custom_data + intersection.geometry_index) as usize];
@@ -175,7 +170,6 @@ pub fn resolve_hit(intersection: RayIntersection) -> PathVertex {
     return vertex;
 }
 
-#[shader]
 pub fn mis_weight(count: f32, pdf: f32, other_count: f32, other_pdf: f32) -> f32 {
     let total = count * pdf + other_count * other_pdf;
     // Same reason as `divide_if_positive` in the ReSTIR shader: the unselected
@@ -187,7 +181,6 @@ pub fn mis_weight(count: f32, pdf: f32, other_count: f32, other_pdf: f32) -> f32
     }
 }
 
-#[shader]
 pub fn zero_path_radiance() -> PathRadiance {
     return PathRadiance {
         total: vec3::splat(0.0),
@@ -197,7 +190,6 @@ pub fn zero_path_radiance() -> PathRadiance {
     };
 }
 
-#[shader]
 pub fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
     let importance = parameters.environment_importance_sampling != 0u32;
     let num_light = (parameters.num_environment_samples) as f32;
@@ -339,8 +331,7 @@ pub fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
     return radiance;
 }
 
-#[compute]
-#[workgroup_size(8, 4)]
+#[entry_point(compute, threads(8, 4))]
 pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
     if (any(global_id.xy().cmpge(camera.target_size))) {
         return;
@@ -351,16 +342,16 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
     let mut total_specular = vec4::splat(0.0);
     let mut total_emissive = vec4::splat(0.0);
     if (parameters.reset_accumulation == 0u32) {
-        total = textureLoadStorage(&accumulator, global_id.xy());
+        total = accumulator.load(global_id.xy());
         if (parameters.max_accumulated_samples != 0u32
             && total.w >= (parameters.max_accumulated_samples) as f32)
         {
             // Converged enough, leave the accumulator alone.
             return;
         }
-        total_diffuse = textureLoadStorage(&accumulator_diffuse, global_id.xy());
-        total_specular = textureLoadStorage(&accumulator_specular, global_id.xy());
-        total_emissive = textureLoadStorage(&accumulator_emissive, global_id.xy());
+        total_diffuse = accumulator_diffuse.load(global_id.xy());
+        total_specular = accumulator_specular.load(global_id.xy());
+        total_emissive = accumulator_emissive.load(global_id.xy());
     }
 
     let global_index = global_id.y * camera.target_size.x + global_id.x;
@@ -387,23 +378,13 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
     }
 
     let count = (num_paths) as f32;
-    textureStore(
-        &accumulator,
-        global_id.xy(),
-        total + (sum.total).extend(count),
-    );
-    textureStore(
-        &accumulator_diffuse,
-        global_id.xy(),
-        total_diffuse + (sum.diffuse).extend(count),
-    );
-    textureStore(
-        &accumulator_specular,
+    accumulator.store(global_id.xy(), total + (sum.total).extend(count));
+    accumulator_diffuse.store(global_id.xy(), total_diffuse + (sum.diffuse).extend(count));
+    accumulator_specular.store(
         global_id.xy(),
         total_specular + (sum.specular).extend(count),
     );
-    textureStore(
-        &accumulator_emissive,
+    accumulator_emissive.store(
         global_id.xy(),
         total_emissive + (sum.emissive).extend(count),
     );

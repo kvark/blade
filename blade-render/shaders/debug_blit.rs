@@ -7,7 +7,7 @@ pub struct DebugBlitParams {
     pub mip_level: f32,
 }
 
-#[io]
+#[derive(Clone, Copy, Debug, Default, Io)]
 pub struct VertexOutput {
     #[builtin(position)]
     clip_pos: vec4,
@@ -21,7 +21,7 @@ pub static input: texture_2d<f32> = binding();
 
 pub static samp: sampler = binding();
 
-#[vertex]
+#[entry_point(vertex)]
 pub fn blit_vs(#[builtin(vertex_index)] vi: u32) -> VertexOutput {
     let tc = vec2::from(vec2u(vi & 1u32, (vi & 2u32) >> 1u32));
     let transformed = params.target_offset + params.target_size * vec2(tc.x, 1.0 - tc.y);
@@ -31,8 +31,8 @@ pub fn blit_vs(#[builtin(vertex_index)] vi: u32) -> VertexOutput {
     return vo;
 }
 
-#[fragment]
+#[entry_point(fragment)]
 #[output(location(0))]
 pub fn blit_fs(vo: VertexOutput) -> vec4 {
-    return textureSampleLevel(&input, &samp, vo.tc, params.mip_level);
+    return input.sample_level(&samp, vo.tc, params.mip_level);
 }
