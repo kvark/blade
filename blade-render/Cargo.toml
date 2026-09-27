@@ -79,7 +79,6 @@ allowed_external_types = [
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }
 
 [build-dependencies]
-serde_json = { workspace = true }
 synaga.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

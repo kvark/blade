@@ -9,12 +9,10 @@ pub struct Vertex {
     pub tangent: u32,
 }
 
-#[shader]
 pub fn decode_normal(raw: u32) -> vec3 {
     return unpack4x8snorm(raw).xyz();
 }
 
-#[shader]
 pub fn tangent_basis(
     n: vec3,
     transformed_tangent: vec3,

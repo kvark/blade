@@ -16,23 +16,19 @@ pub struct SkinVertex {
 
 pub static skinning_params: Uniform<SkinningParams> = binding();
 
-#[shader]
 pub fn unpack_joints(raw: u32) -> vec4u {
     return (vec4u::splat(raw) >> vec4u(0u32, 8u32, 16u32, 24u32)) & vec4u::splat(0xFFu32);
 }
 
-#[shader]
 pub fn apply_affine(m: mat3x4, p: vec3) -> vec3 {
     let h = (p).extend(1.0);
     return h * m;
 }
 
-#[shader]
 pub fn skin_linear(skin: mat3x4) -> mat3x3 {
     return transpose(mat3x3(skin[0].xyz(), skin[1].xyz(), skin[2].xyz()));
 }
 
-#[shader]
 pub fn skin_blend(skin: SkinVertex) -> mat3x4 {
     let joints = unpack_joints(skin.joints);
     let weights = unpack4x8unorm(skin.weights);

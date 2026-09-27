@@ -6,7 +6,6 @@ pub struct RandomState {
     pub index: u32,
 }
 
-#[shader]
 pub fn hash_jenkins(value: u32) -> u32 {
     let mut a = value;
     // http://burtleburtle.net/bob/hash/integer.html
@@ -19,12 +18,10 @@ pub fn hash_jenkins(value: u32) -> u32 {
     return a;
 }
 
-#[shader]
 pub fn rot32(x: u32, bits: u32) -> u32 {
     return (x << bits) | (x >> (32u32 - bits));
 }
 
-#[shader]
 pub fn random_init(pixel_index: u32, frame_index: u32) -> RandomState {
     let mut rs = RandomState::default();
     rs.seed = hash_jenkins(pixel_index) + frame_index;
@@ -32,7 +29,6 @@ pub fn random_init(pixel_index: u32, frame_index: u32) -> RandomState {
     return rs;
 }
 
-#[shader]
 pub fn murmur3(rng: &mut RandomState) -> u32 {
     let c1 = 0xcc9e2d51u32;
     let c2 = 0x1b873593u32;
@@ -61,7 +57,6 @@ pub fn murmur3(rng: &mut RandomState) -> u32 {
     return hash;
 }
 
-#[shader]
 pub fn random_gen(rng: &mut RandomState) -> f32 {
     let v = murmur3(rng);
     let one = bitcast::<u32>(1.0);

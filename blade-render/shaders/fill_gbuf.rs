@@ -33,7 +33,6 @@ pub static out_motion: texture_storage_2d<Rg16Float, Write> = binding();
 
 pub static out_debug: texture_storage_2d<Rgba8Unorm, Write> = binding();
 
-#[shader]
 pub fn debug_raw_normal(
     pos: vec3,
     normal_raw: u32,
@@ -46,20 +45,18 @@ pub fn debug_raw_normal(
     debug_line(pos, pos + debug_len * nw, color);
 }
 
-#[compute]
-#[workgroup_size(8, 4)]
+#[entry_point(compute, threads(8, 4))]
 pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
     if (any(global_id.xy().cmpge(camera.target_size))) {
         return;
     }
     if (WRITE_DEBUG_IMAGE && debug.view_mode != DebugMode_Final) {
-        textureStore(&out_debug, global_id.xy(), vec4::splat(0.0));
+        out_debug.store(global_id.xy(), vec4::splat(0.0));
     }
 
     let mut rq = ray_query::default();
     let ray_dir = get_ray_direction(*camera, vec2i::from(global_id.xy()));
-    rayQueryInitialize(
-        rq,
+    rq.initialize(
         &acc_struct,
         RayDesc {
             flags: RAY_FLAG_CULL_NO_OPAQUE,
@@ -70,8 +67,8 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
             dir: ray_dir,
         },
     );
-    rayQueryProceed(rq);
-    let intersection = rayQueryGetCommittedIntersection(rq);
+    rq.proceed();
+    let intersection = rq.committed_intersection();
 
     let mut depth = 0.0;
     let mut basis = vec4::splat(0.0);
@@ -166,13 +163,15 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
 
         let hit_position = camera.position + intersection.t * ray_dir;
         if (enable_debug) {
-            debug_buf.entry.custom_index = intersection.instance_custom_data;
-            debug_buf.entry.depth = intersection.t;
-            debug_buf.entry.tex_coords = tex_coords;
-            debug_buf.entry.base_color_texture = entry.base_color_texture;
-            debug_buf.entry.normal_texture = entry.normal_texture;
-            debug_buf.entry.position = hit_position;
-            debug_buf.entry.flat_normal = flat_normal;
+            unsafe {
+                debug_buf.get_mut().entry.custom_index = intersection.instance_custom_data;
+                debug_buf.get_mut().entry.depth = intersection.t;
+                debug_buf.get_mut().entry.tex_coords = tex_coords;
+                debug_buf.get_mut().entry.base_color_texture = entry.base_color_texture;
+                debug_buf.get_mut().entry.normal_texture = entry.normal_texture;
+                debug_buf.get_mut().entry.position = hit_position;
+                debug_buf.get_mut().entry.flat_normal = flat_normal;
+            }
         }
         if (enable_debug && (debug.draw_flags & DebugDrawFlags_SPACE) != 0u32) {
             let normal_w = 0.15 * intersection.t * tangent_space_world[2];
@@ -249,43 +248,31 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
 
         if (WRITE_DEBUG_IMAGE) {
             if (debug.view_mode == DebugMode_DiffuseAlbedoTexture) {
-                textureStore(
-                    &out_debug,
-                    global_id.xy(),
-                    (material.diffuse_albedo).extend(0.0),
-                );
+                out_debug.store(global_id.xy(), (material.diffuse_albedo).extend(0.0));
             }
             if (debug.view_mode == DebugMode_DiffuseAlbedoFactor) {
-                textureStore(
-                    &out_debug,
-                    global_id.xy(),
-                    unpack4x8unorm(entry.base_color_factor),
-                );
+                out_debug.store(global_id.xy(), unpack4x8unorm(entry.base_color_factor));
             }
             if (debug.view_mode == DebugMode_NormalTexture) {
-                textureStore(&out_debug, global_id.xy(), (normal_local).extend(0.0));
+                out_debug.store(global_id.xy(), (normal_local).extend(0.0));
             }
             if (debug.view_mode == DebugMode_NormalScale) {
-                textureStore(&out_debug, global_id.xy(), vec4::splat(entry.normal_scale));
+                out_debug.store(global_id.xy(), vec4::splat(entry.normal_scale));
             }
             if (debug.view_mode == DebugMode_Roughness) {
-                textureStore(&out_debug, global_id.xy(), vec4::splat(material.roughness));
+                out_debug.store(global_id.xy(), vec4::splat(material.roughness));
             }
             if (debug.view_mode == DebugMode_SpecularF0) {
-                textureStore(
-                    &out_debug,
-                    global_id.xy(),
-                    (material.specular_f0).extend(0.0),
-                );
+                out_debug.store(global_id.xy(), (material.specular_f0).extend(0.0));
             }
             if (debug.view_mode == DebugMode_Emissive) {
-                textureStore(&out_debug, global_id.xy(), (emissive).extend(0.0));
+                out_debug.store(global_id.xy(), (emissive).extend(0.0));
             }
             if (debug.view_mode == DebugMode_GeometryNormal) {
-                textureStore(&out_debug, global_id.xy(), (normal_geo).extend(0.0));
+                out_debug.store(global_id.xy(), (normal_geo).extend(0.0));
             }
             if (debug.view_mode == DebugMode_ShadingNormal) {
-                textureStore(&out_debug, global_id.xy(), (normal).extend(0.0));
+                out_debug.store(global_id.xy(), (normal).extend(0.0));
             }
             if (debug.view_mode == DebugMode_HitConsistency) {
                 let reprojected = get_projected_pixel(*camera, hit_position);
@@ -298,7 +285,7 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
                     0.0,
                     0.0,
                 );
-                textureStore(&out_debug, global_id.xy(), consistency);
+                out_debug.store(global_id.xy(), consistency);
             }
         }
 
@@ -309,35 +296,30 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
         //TODO: technically this "0.5" is just a waste compute on both packing and unpacking
         motion = prev_screen - vec2::from(global_id.xy()) - 0.5;
         if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Motion) {
-            textureStore(
-                &out_debug,
+            out_debug.store(
                 global_id.xy(),
                 ((motion * MOTION_SCALE + vec2::splat(0.5)).extend(0.0)).extend(1.0),
             );
         }
     } else {
         if (enable_debug) {
-            debug_buf.entry = DebugEntry::default();
+            unsafe {
+                debug_buf.get_mut().entry = DebugEntry::default();
+            }
         }
     }
 
     // TODO: option to avoid writing data for the sky
-    textureStore(&out_depth, global_id.xy(), vec4(depth, 0.0, 0.0, 0.0));
-    textureStore(&out_basis, global_id.xy(), basis);
-    textureStore(&out_flat_normal, global_id.xy(), (flat_normal).extend(0.0));
-    textureStore(
-        &out_diffuse_albedo,
-        global_id.xy(),
-        (material.diffuse_albedo).extend(0.0),
-    );
-    textureStore(
-        &out_specular_f0,
+    out_depth.store(global_id.xy(), vec4(depth, 0.0, 0.0, 0.0));
+    out_basis.store(global_id.xy(), basis);
+    out_flat_normal.store(global_id.xy(), (flat_normal).extend(0.0));
+    out_diffuse_albedo.store(global_id.xy(), (material.diffuse_albedo).extend(0.0));
+    out_specular_f0.store(
         global_id.xy(),
         (material.specular_f0).extend(material.roughness),
     );
-    textureStore(&out_emissive, global_id.xy(), (emissive).extend(0.0));
-    textureStore(
-        &out_motion,
+    out_emissive.store(global_id.xy(), (emissive).extend(0.0));
+    out_motion.store(
         global_id.xy(),
         ((motion * MOTION_SCALE).extend(0.0)).extend(0.0),
     );

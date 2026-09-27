@@ -33,7 +33,7 @@ pub struct DebugEntry {
 
 pub struct DebugBuffer {
     pub vertex_count: u32,
-    pub instance_count: atomic<u32>,
+    pub instance_count: AtomicU32,
     pub first_vertex: u32,
     pub first_instance: u32,
     pub capacity: u32,
@@ -43,26 +43,27 @@ pub struct DebugBuffer {
     pub lines: [DebugLine],
 }
 
-pub static mut debug_buf: StorageMut<DebugBuffer> = binding();
+pub static debug_buf: StorageMut<DebugBuffer> = binding();
 
-#[shader]
 pub fn debug_line(a: vec3, b: vec3, color: u32) {
     if (debug_buf.open != 0u32) {
-        let index = atomicAdd(debug_buf.instance_count, 1u32);
+        let index = debug_buf.instance_count.fetch_add(1u32);
         if (index < debug_buf.capacity) {
-            debug_buf.lines[(index) as usize] = DebugLine {
-                a: DebugPoint {
-                    pos: a,
-                    color: color,
-                },
-                b: DebugPoint {
-                    pos: b,
-                    color: color,
-                },
-            };
+            unsafe {
+                debug_buf.get_mut().lines[(index) as usize] = DebugLine {
+                    a: DebugPoint {
+                        pos: a,
+                        color: color,
+                    },
+                    b: DebugPoint {
+                        pos: b,
+                        color: color,
+                    },
+                };
+            }
         } else {
             // ensure the final value is never above the capacity
-            atomicSub(debug_buf.instance_count, 1u32);
+            debug_buf.instance_count.fetch_sub(1u32);
         }
     }
 }

@@ -20,7 +20,7 @@ pub struct PostProcParams {
     pub _pad: u32,
 }
 
-#[io]
+#[derive(Clone, Copy, Debug, Default, Io)]
 pub struct VertexOutput {
     #[builtin(position)]
     clip_pos: vec4,
@@ -47,7 +47,7 @@ pub static post_proc_params: Uniform<PostProcParams> = binding();
 
 pub static debug_params: Uniform<DebugParams> = binding();
 
-#[vertex]
+#[entry_point(vertex)]
 pub fn postfx_vs(#[builtin(vertex_index)] vi: u32) -> VertexOutput {
     let mut vo = VertexOutput::default();
     vo.clip_pos = vec4(
@@ -56,29 +56,29 @@ pub fn postfx_vs(#[builtin(vertex_index)] vi: u32) -> VertexOutput {
         0.0,
         1.0,
     );
-    vo.input_size = textureDimensionsLevel(&light_diffuse, 0);
+    vo.input_size = light_diffuse.level_dimensions(0);
     return vo;
 }
 
-#[fragment]
+#[entry_point(fragment)]
 #[output(location(0))]
 pub fn postfx_fs(vo: VertexOutput) -> vec4 {
     let tc = vec2i((vo.clip_pos.x) as i32, (vo.clip_pos.y) as i32);
-    let illumination = textureLoad(&light_diffuse, tc, 0);
+    let illumination = light_diffuse.load(tc, 0);
     if (debug_params.view_mode == DebugMode_Final) {
         let mut color = vec3::default();
         if (post_proc_params.external_input != 0u32) {
-            color = textureLoad(&t_external, tc, 0).xyz();
+            color = t_external.load(tc, 0).xyz();
         } else if (post_proc_params.accumulated != 0u32) {
             // The canonical renderer produces the final radiance directly.
-            let total = textureLoad(&t_accumulation, tc, 0);
+            let total = t_accumulation.load(tc, 0);
             color = total.xyz() / max(total.w, 1.0);
         } else {
             // The diffuse light is demodulated by the albedo, while the specular
             // one is not, since it's tinted by the Fresnel reflectance.
-            let diffuse_albedo = textureLoad(&t_diffuse_albedo, tc, 0).xyz();
-            let specular = textureLoad(&light_specular, tc, 0).xyz();
-            let emissive = textureLoad(&t_emissive, tc, 0).xyz();
+            let diffuse_albedo = t_diffuse_albedo.load(tc, 0).xyz();
+            let specular = light_specular.load(tc, 0).xyz();
+            let emissive = t_emissive.load(tc, 0).xyz();
             color = diffuse_albedo * illumination.xyz() + specular + emissive;
         }
         if (post_proc_params.tone_map_enabled == 0u32) {
@@ -96,6 +96,6 @@ pub fn postfx_fs(vo: VertexOutput) -> vec4 {
     } else if (debug_params.view_mode == DebugMode_Variance) {
         return vec4::splat(illumination.w);
     } else {
-        return textureLoad(&t_debug, tc, 0);
+        return t_debug.load(tc, 0);
     }
 }

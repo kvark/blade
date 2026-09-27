@@ -43,44 +43,38 @@ pub static input: texture_2d<f32> = binding();
 
 pub static output: texture_storage_2d<Rgba16Float, ReadWrite> = binding();
 
-#[shader]
 pub fn read_surface(pixel: vec2i) -> Surface {
     let mut surface = Surface::default();
-    surface.flat_normal = normalize(textureLoad(&t_flat_normal, pixel, 0).xyz());
-    surface.depth = textureLoad(&t_depth, pixel, 0).x;
+    surface.flat_normal = normalize(t_flat_normal.load(pixel, 0).xyz());
+    surface.depth = t_depth.load(pixel, 0).x;
     return surface;
 }
 
-#[shader]
 pub fn read_prev_surface(pixel: vec2i) -> Surface {
     let mut surface = Surface::default();
-    surface.flat_normal = normalize(textureLoad(&t_prev_flat_normal, pixel, 0).xyz());
-    surface.depth = textureLoad(&t_prev_depth, pixel, 0).x;
+    surface.flat_normal = normalize(t_prev_flat_normal.load(pixel, 0).xyz());
+    surface.depth = t_prev_depth.load(pixel, 0).x;
     return surface;
 }
 
-#[shader]
 pub fn get_prev_pixel(pixel: vec2i, pos_world: vec3) -> vec2 {
     if (USE_MOTION_VECTORS && params.use_motion_vectors != 0u32) {
-        let motion = textureLoad(&t_motion, pixel, 0).xy() / MOTION_SCALE;
+        let motion = t_motion.load(pixel, 0).xy() / MOTION_SCALE;
         return vec2::from(pixel) + 0.5 + motion;
     } else {
         return get_projected_pixel_float(*prev_camera, pos_world);
     }
 }
 
-#[shader]
 pub fn compare_luminance(a_lum: f32, b_lum: f32, variance: f32) -> f32 {
     return exp(-abs(a_lum - b_lum) / (SIGMA_L * variance + EPSILON));
 }
 
-#[shader]
 pub fn w4(w: f32) -> vec4 {
     return (vec3::splat(w)).extend(w * w);
 }
 
-#[compute]
-#[workgroup_size(8, 8)]
+#[entry_point(compute, threads(8, 8))]
 pub fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
     let pixel = vec2i::from(global_id.xy());
     if (any(pixel.cmpge(params.extent))) {
@@ -123,14 +117,14 @@ pub fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
                 }
                 let w = prev_weights[(i) as usize];
                 sum_weight += w;
-                let illumination = w * textureLoad(&input, prev_pixel, 0).xyz();
+                let illumination = w * input.load(prev_pixel, 0).xyz();
                 let luminocity = dot(illumination, LUMA);
                 sum_ilm += (illumination).extend(luminocity * luminocity);
             }
         }
     }
 
-    let cur_illumination = textureLoadStorage(&output, pixel).xyz();
+    let cur_illumination = output.load(pixel).xyz();
     let cur_luminocity = dot(cur_illumination, LUMA);
     let mut mixed_ilm = (cur_illumination).extend(cur_luminocity * cur_luminocity);
     if (sum_weight > MIN_WEIGHT) {
@@ -143,18 +137,17 @@ pub fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
         );
     }
     //Note: could also use HW blending for this
-    textureStore(&output, pixel, mixed_ilm);
+    output.store(pixel, mixed_ilm);
 }
 
-#[compute]
-#[workgroup_size(8, 8)]
+#[entry_point(compute, threads(8, 8))]
 pub fn atrous_filter(#[builtin(global_invocation_id)] global_id: vec3u) {
     let center = vec2i::from(global_id.xy());
     if (any(center.cmpge(params.extent))) {
         return;
     }
 
-    let center_ilm = textureLoad(&input, center, 0);
+    let center_ilm = input.load(center, 0);
     let center_luma = dot(center_ilm.xyz(), LUMA);
     let center_suf = read_surface(center);
     let mut filtered_ilm = center_ilm;
@@ -177,7 +170,7 @@ pub fn atrous_filter(#[builtin(global_invocation_id)] global_id: vec3u) {
             weight *= compare_flat_normals(surface.flat_normal, center_suf.flat_normal);
             //Note: should we use a projected depth instead of the surface one?
             weight *= compare_depths(surface.depth, center_suf.depth);
-            let other_ilm = textureLoad(&input, p, 0);
+            let other_ilm = input.load(p, 0);
             // The luminance gate must be symmetric. Using only the centre's
             // variance lets a noisy bright pixel accept a dark neighbour while
             // the dark pixel rejects the bright one, which systematically
@@ -201,5 +194,5 @@ pub fn atrous_filter(#[builtin(global_invocation_id)] global_id: vec3u) {
         }
     }
 
-    textureStore(&output, global_id.xy(), filtered_ilm);
+    output.store(global_id.xy(), filtered_ilm);
 }

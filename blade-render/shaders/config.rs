@@ -1,7 +1,8 @@
-//! Constants the WGSL preprocessor used to paste in with `#use`.
+//! Constants shared by the shader modules.
 //!
-//! `DEBUG_MODE` is `cfg!(debug_assertions)` when rustc checks this file. The
-//! build script replaces that `cfg` with a literal before synaga parses it.
+//! `DEBUG_MODE` is `cfg!(debug_assertions)`. The build script reads the same
+//! predicate from Cargo, so a debug build and a release build disagree here
+//! the way `rustc` does.
 
 pub const DEBUG_MODE: bool = cfg!(debug_assertions);
 

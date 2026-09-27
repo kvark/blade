@@ -1,6 +1,6 @@
 use synaga_shader::*;
 
-#[io]
+#[derive(Clone, Copy, Debug, Default, Io)]
 pub struct VertexOutput {
     #[location(0)]
     tex_coord: vec2,
@@ -30,7 +30,6 @@ pub static r_texture: texture_2d<f32> = binding();
 
 pub static r_sampler: sampler = binding();
 
-#[shader]
 pub fn linear_from_gamma(srgb: vec3) -> vec3 {
     let cutoff = srgb.cmplt(vec3::splat(0.04045));
     let lower = srgb / vec3::splat(12.92);
@@ -41,7 +40,7 @@ pub fn linear_from_gamma(srgb: vec3) -> vec3 {
     return select(higher, lower, cutoff);
 }
 
-#[vertex]
+#[entry_point(vertex)]
 pub fn vs_main(input: Vertex) -> VertexOutput {
     let mut out = VertexOutput::default();
     out.tex_coord = input.uv;
@@ -55,12 +54,12 @@ pub fn vs_main(input: Vertex) -> VertexOutput {
     return out;
 }
 
-#[fragment]
+#[entry_point(fragment)]
 #[output(location(0))]
 pub fn fs_main(input: VertexOutput) -> vec4 {
     //Note: we always assume rendering to linear color space,
     // but Egui wants to blend in gamma space, see
     // https://github.com/emilk/egui/pull/2071
-    let blended = input.color * textureSample(&r_texture, &r_sampler, input.tex_coord);
+    let blended = input.color * r_texture.sample(&r_sampler, input.tex_coord);
     return (linear_from_gamma(blended.xyz())).extend(blended.a());
 }

@@ -1,16 +1,13 @@
 use synaga_shader::*;
 
-#[shader]
 pub fn qrot(q: vec4, v: vec3) -> vec3 {
     return v + 2.0 * cross(q.xyz(), cross(q.xyz(), v) + q.w * v);
 }
 
-#[shader]
 pub fn qinv(q: vec4) -> vec4 {
     return (-q.xyz()).extend(q.w);
 }
 
-#[shader]
 pub fn make_quat(m: mat3x3) -> vec4 {
     let mut q = vec4::default();
     if (m[2].z < 0.0) {
@@ -59,7 +56,6 @@ pub fn make_quat(m: mat3x3) -> vec4 {
     return normalize(q);
 }
 
-#[shader]
 pub fn shortest_arc_quat(a: vec3, b: vec3) -> vec4 {
     if (dot(a, b) < -0.99999) {
         // Choose the axis of rotation that doesn't align with the vectors

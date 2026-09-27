@@ -40,31 +40,37 @@ impl Shaders {
         let noop = if ray_tracing {
             None
         } else {
-            Some(ctx.load_shader_ir("noop.json", crate::ir::NOOP))
+            Some(ctx.load_shader_ir("noop.naga", crate::ir::NOOP.bytes()))
         };
         let shaders = Self {
-            env_prepare: noop
-                .unwrap_or_else(|| ctx.load_shader_ir("env_prepare.json", crate::ir::ENV_PREPARE)),
-            fill_gbuf: noop
-                .unwrap_or_else(|| ctx.load_shader_ir("fill_gbuf.json", crate::ir::FILL_GBUF)),
-            ray_trace: noop
-                .unwrap_or_else(|| ctx.load_shader_ir("ray_trace.json", crate::ir::RAY_TRACE)),
-            path_trace: noop
-                .unwrap_or_else(|| ctx.load_shader_ir("path_trace.json", crate::ir::PATH_TRACE)),
-            a_trous: noop.unwrap_or_else(|| ctx.load_shader_ir("a_trous.json", crate::ir::A_TROUS)),
-            post_proc: noop
-                .unwrap_or_else(|| ctx.load_shader_ir("post_proc.json", crate::ir::POST_PROC)),
-            raster: ctx.load_shader_ir("raster.json", crate::ir::RASTER),
+            env_prepare: noop.unwrap_or_else(|| {
+                ctx.load_shader_ir("env_prepare.naga", crate::ir::ENV_PREPARE.bytes())
+            }),
+            fill_gbuf: noop.unwrap_or_else(|| {
+                ctx.load_shader_ir("fill_gbuf.naga", crate::ir::FILL_GBUF.bytes())
+            }),
+            ray_trace: noop.unwrap_or_else(|| {
+                ctx.load_shader_ir("ray_trace.naga", crate::ir::RAY_TRACE.bytes())
+            }),
+            path_trace: noop.unwrap_or_else(|| {
+                ctx.load_shader_ir("path_trace.naga", crate::ir::PATH_TRACE.bytes())
+            }),
+            a_trous: noop
+                .unwrap_or_else(|| ctx.load_shader_ir("a_trous.naga", crate::ir::A_TROUS.bytes())),
+            post_proc: noop.unwrap_or_else(|| {
+                ctx.load_shader_ir("post_proc.naga", crate::ir::POST_PROC.bytes())
+            }),
+            raster: ctx.load_shader_ir("raster.naga", crate::ir::RASTER.bytes()),
             // GLES/WebGL keep vertex-stage skinning; compute skin is native-only.
             // `cfg!(gles)` is not set for wasm32 git dependents unless they
             // pass RUSTFLAGS, so match blade-graphics: wasm32 == GLES profile.
             skin: if cfg!(any(gles, target_arch = "wasm32")) {
-                ctx.load_shader_ir("noop.json", crate::ir::NOOP)
+                ctx.load_shader_ir("noop.naga", crate::ir::NOOP.bytes())
             } else {
-                ctx.load_shader_ir("skin.json", crate::ir::SKIN)
+                ctx.load_shader_ir("skin.naga", crate::ir::SKIN.bytes())
             },
-            debug_draw: ctx.load_shader_ir("debug_draw.json", crate::ir::DEBUG_DRAW),
-            debug_blit: ctx.load_shader_ir("debug_blit.json", crate::ir::DEBUG_BLIT),
+            debug_draw: ctx.load_shader_ir("debug_draw.naga", crate::ir::DEBUG_DRAW.bytes()),
+            debug_blit: ctx.load_shader_ir("debug_blit.naga", crate::ir::DEBUG_BLIT.bytes()),
         };
         (shaders, ctx.close())
     }
@@ -80,9 +86,10 @@ mod tests {
             | naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY_NON_UNIFORM_INDEXING
             | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY
             | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING;
-        for &(name, bytes) in crate::ir::ALL {
-            let module: naga::Module = serde_json::from_slice(bytes)
-                .unwrap_or_else(|err| panic!("{name} did not deserialize: {err}"));
+        for (name, ir) in crate::ir::ALL {
+            let module: naga::Module = ir
+                .decode()
+                .unwrap_or_else(|err| panic!("{name} did not decode: {err}"));
             naga::valid::Validator::new(flags, caps)
                 .validate(&module)
                 .unwrap_or_else(|err| panic!("{name} failed validation: {err}"));

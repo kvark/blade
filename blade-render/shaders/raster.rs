@@ -60,7 +60,7 @@ pub struct ShadowDrawParams {
     pub model: mat4x4,
 }
 
-#[io]
+#[derive(Clone, Copy, Debug, Default, Io)]
 pub struct VertexOutput {
     #[builtin(position)]
     clip_pos: vec4,
@@ -76,7 +76,7 @@ pub struct VertexOutput {
     uv: vec2,
 }
 
-#[io]
+#[derive(Clone, Copy, Debug, Default, Io)]
 pub struct SkyOutput {
     #[builtin(position)]
     clip_pos: vec4,
@@ -112,14 +112,14 @@ pub static sky_params: Uniform<RasterFrameParams> = binding();
 
 pub static env_map: texture_2d<f32> = binding();
 
-#[vertex]
+#[entry_point(vertex)]
 #[output(builtin(position))]
 pub fn raster_shadow_vs(input: Vertex) -> vec4 {
     let world = shadow_draw_params.model * (input.position).extend(1.0);
     return shadow_frame_params.light_view_proj * world;
 }
 
-#[vertex]
+#[entry_point(vertex)]
 #[output(builtin(position))]
 pub fn raster_shadow_skinned_vs(input: Vertex, skin_input: SkinVertex) -> vec4 {
     let skinned = apply_affine(skin_blend(skin_input), input.position);
@@ -127,22 +127,19 @@ pub fn raster_shadow_skinned_vs(input: Vertex, skin_input: SkinVertex) -> vec4 {
     return shadow_frame_params.light_view_proj * world;
 }
 
-#[fragment]
+#[entry_point(fragment)]
 pub fn raster_shadow_fs() {}
 
-#[shader]
 pub fn quat_rotate(q: vec4, v: vec3) -> vec3 {
     return v + 2.0 * cross(q.xyz(), cross(q.xyz(), v) + q.w * v);
 }
 
-#[shader]
 pub fn map_equirect_dir_to_uv(dir: vec3) -> vec2 {
     let yaw = atan2(dir.x, dir.z);
     let pitch = asin(clamp(dir.y, -1.0, 1.0));
     return vec2((yaw / PI + 1.0) * 0.5, pitch / PI + 0.5);
 }
 
-#[shader]
 pub fn directional_shadow(world_pos: vec3, n: vec3) -> f32 {
     if (frame_params.shadow_params.x < 0.5) {
         return 1.0;
@@ -167,43 +164,24 @@ pub fn directional_shadow(world_pos: vec3, n: vec3) -> f32 {
     }
 
     // Four bilinear comparison samples give a compact 4x4 percentage-closer filter.
-    let texel = 1.0 / (textureDimensions(&shadow_tex).x) as f32;
+    let texel = 1.0 / (shadow_tex.dimensions().x) as f32;
     let reference = ndc.z;
     let mut visibility = 0.0;
-    visibility += textureSampleCompare(
-        &shadow_tex,
-        &shadow_samp,
-        uv + vec2(-0.75, -0.75) * texel,
-        reference,
-    );
-    visibility += textureSampleCompare(
-        &shadow_tex,
-        &shadow_samp,
-        uv + vec2(0.75, -0.75) * texel,
-        reference,
-    );
-    visibility += textureSampleCompare(
-        &shadow_tex,
-        &shadow_samp,
-        uv + vec2(-0.75, 0.75) * texel,
-        reference,
-    );
-    visibility += textureSampleCompare(
-        &shadow_tex,
-        &shadow_samp,
-        uv + vec2(0.75, 0.75) * texel,
-        reference,
-    );
+    visibility +=
+        shadow_tex.sample_compare(&shadow_samp, uv + vec2(-0.75, -0.75) * texel, reference);
+    visibility +=
+        shadow_tex.sample_compare(&shadow_samp, uv + vec2(0.75, -0.75) * texel, reference);
+    visibility +=
+        shadow_tex.sample_compare(&shadow_samp, uv + vec2(-0.75, 0.75) * texel, reference);
+    visibility += shadow_tex.sample_compare(&shadow_samp, uv + vec2(0.75, 0.75) * texel, reference);
     visibility *= 0.25;
     return mix(1.0, visibility, frame_params.shadow_params.y);
 }
 
-#[shader]
 pub fn hash31(p: vec3) -> f32 {
     return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
 }
 
-#[shader]
 pub fn angular_attenuation(light: LocalLight, direction_to_light: vec3) -> f32 {
     if (light.spot.w < 0.5) {
         return 1.0;
@@ -217,7 +195,7 @@ pub fn angular_attenuation(light: LocalLight, direction_to_light: vec3) -> f32 {
     return pow(blend, light.spot.z);
 }
 
-#[vertex]
+#[entry_point(vertex)]
 pub fn raster_sky_vs(#[builtin(vertex_index)] vertex_id: u32) -> SkyOutput {
     let positions = [vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0)];
     let pos = positions[(vertex_id) as usize];
@@ -227,7 +205,6 @@ pub fn raster_sky_vs(#[builtin(vertex_index)] vertex_id: u32) -> SkyOutput {
     return out;
 }
 
-#[shader]
 pub fn raster_vertex(
     input: Vertex,
     position: vec3,
@@ -252,7 +229,7 @@ pub fn raster_vertex(
     return out;
 }
 
-#[fragment]
+#[entry_point(fragment)]
 #[output(location(0))]
 pub fn raster_sky_fs(input: SkyOutput) -> vec4 {
     // Use z=0 (near plane) instead of z=1 (far plane) to avoid precision
@@ -266,7 +243,7 @@ pub fn raster_sky_fs(input: SkyOutput) -> vec4 {
     let mut color = vec3::splat(0.0);
     if (env_enabled) {
         let uv = map_equirect_dir_to_uv(dir);
-        color = textureSampleLevel(&env_map, &samp, uv, 0.0).xyz();
+        color = env_map.sample_level(&samp, uv, 0.0).xyz();
     } else {
         // Use ambient_color.w as a flag: values > 0.5 mean "space mode" (black sky)
         let space_mode = sky_params.ambient_color.w > 0.5;
@@ -328,7 +305,6 @@ pub fn raster_sky_fs(input: SkyOutput) -> vec4 {
     return (encode_surface_color(mapped, sky_params.settings.y > 0.5)).extend(1.0);
 }
 
-#[shader]
 pub fn local_light_score(light: LocalLight, world_pos: vec3, n: vec3) -> f32 {
     let delta = light.position_range.xyz() - world_pos;
     let dist2 = max(dot(delta, delta), 0.04);
@@ -341,7 +317,7 @@ pub fn local_light_score(light: LocalLight, world_pos: vec3, n: vec3) -> f32 {
     return intensity * angular_attenuation(light, ldir) * falloff * falloff * (0.2 + 0.8 * ndotl);
 }
 
-#[vertex]
+#[entry_point(vertex)]
 pub fn raster_vs(input: Vertex) -> VertexOutput {
     return raster_vertex(
         input,
@@ -352,7 +328,7 @@ pub fn raster_vs(input: Vertex) -> VertexOutput {
     );
 }
 
-#[vertex]
+#[entry_point(vertex)]
 pub fn raster_skinned_vs(input: Vertex, skin_input: SkinVertex) -> VertexOutput {
     let skin = skin_blend(skin_input);
     let linear = skin_linear(skin);
@@ -365,7 +341,6 @@ pub fn raster_skinned_vs(input: Vertex, skin_input: SkinVertex) -> VertexOutput 
     );
 }
 
-#[shader]
 pub fn shade_local_light(mat: Material, n: vec3, v: vec3, world_pos: vec3) -> vec3 {
     let count = min((light_params.count_seed.x) as u32, MAX_LOCAL_LIGHTS);
     if (count == 0u32) {
@@ -415,12 +390,12 @@ pub fn shade_local_light(mat: Material, n: vec3, v: vec3, world_pos: vec3) -> ve
         * inverse_probability;
 }
 
-#[fragment]
+#[entry_point(fragment)]
 #[output(location(0))]
 pub fn raster_fs(input: VertexOutput) -> vec4 {
-    let mr_sample = textureSample(&metallic_roughness_tex, &samp, input.uv);
+    let mr_sample = metallic_roughness_tex.sample(&samp, input.uv);
     let base_color =
-        textureSample(&base_color_tex, &samp, input.uv).rgb() * draw_params.base_color_factor.rgb();
+        base_color_tex.sample(&samp, input.uv).rgb() * draw_params.base_color_factor.rgb();
     let mat = material_from_metallic_roughness(
         base_color,
         clamp(draw_params.material.y * mr_sample.z, 0.0, 1.0),
@@ -430,7 +405,7 @@ pub fn raster_fs(input: VertexOutput) -> vec4 {
     let mut n = normalize(input.normal);
     let normal_scale = draw_params.material.x;
     if (normal_scale > 0.0) {
-        let raw_unorm = textureSample(&normal_tex, &samp, input.uv).xy();
+        let raw_unorm = normal_tex.sample(&samp, input.uv).xy();
         let n_xy = normal_scale * (2.0 * raw_unorm - 1.0);
         let n_z = sqrt(max(0.0, 1.0 - dot(n_xy, n_xy)));
         let n_tangent = normalize((n_xy).extend(n_z));
@@ -447,8 +422,7 @@ pub fn raster_fs(input: VertexOutput) -> vec4 {
         * frame_params.light_color.xyz()
         * visibility;
     let ambient = evaluate_ambient(mat) * frame_params.ambient_color.xyz();
-    let emissive =
-        draw_params.emissive_factor.rgb() * textureSample(&emissive_tex, &samp, input.uv).rgb();
+    let emissive = draw_params.emissive_factor.rgb() * emissive_tex.sample(&samp, input.uv).rgb();
     let local = shade_local_light(mat, n, v, input.world_pos);
     let color = ambient + light + local + emissive;
 

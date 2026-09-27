@@ -157,7 +157,7 @@ impl blade_asset::Baker for Baker {
         cooker: Arc<blade_asset::Cooker<Self>>,
         _exe_context: &choir::ExecutionContext,
     ) {
-        if extension == "json" {
+        if extension == "naga" || extension == "json" {
             // Already a Naga module. Constants were baked when it was serialized.
             cooker.finish(CookedShader { data: source });
             return;
@@ -169,10 +169,17 @@ impl blade_asset::Baker for Baker {
         });
     }
     fn serve(&self, cooked: CookedShader, _exe_context: &choir::ExecutionContext) -> Shader {
-        // Serialized modules are JSON objects. Hand-written shaders are WGSL text.
-        let ir = cooked.data.first() == Some(&b'{');
-        let raw = if ir {
-            match serde_json::from_slice(cooked.data) {
+        // Stock shaders are synaga's bincode. Older cooks were JSON. The rest
+        // is hand-written WGSL.
+        let synaga_ir = cooked.data.starts_with(synaga_shader::ir::MAGIC);
+        let json_ir = cooked.data.first() == Some(&b'{');
+        let raw = if synaga_ir || json_ir {
+            let decoded = if synaga_ir {
+                synaga_shader::ir::decode(cooked.data).map_err(|err| err.to_string())
+            } else {
+                serde_json::from_slice(cooked.data).map_err(|err| err.to_string())
+            };
+            match decoded {
                 Ok(module) => self
                     .gpu_context
                     .try_create_shader(blade_graphics::ShaderDesc {
@@ -180,8 +187,8 @@ impl blade_asset::Baker for Baker {
                         naga_module: Some(module),
                     }),
                 Err(err) => {
-                    log::warn!("Shader IR did not deserialize: {err}");
-                    Err("shader IR did not deserialize")
+                    log::warn!("Shader IR did not decode: {err}");
+                    Err("shader IR did not decode")
                 }
             }
         } else {
@@ -193,7 +200,7 @@ impl blade_asset::Baker for Baker {
                 })
         };
         if let Err(e) = raw {
-            let dump = if ir {
+            let dump = if synaga_ir || json_ir {
                 FAILURE_DUMP_IR
             } else {
                 FAILURE_DUMP_WGSL

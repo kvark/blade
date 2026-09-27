@@ -12,7 +12,7 @@ pub struct Particle {
 }
 
 pub struct FreeList {
-    pub count: atomic<i32>,
+    pub count: AtomicI32,
     pub data: [u32],
 }
 
@@ -45,7 +45,7 @@ pub struct CameraParams {
     pub camera_up: vec4,
 }
 
-#[io]
+#[derive(Clone, Copy, Debug, Default, Io)]
 pub struct VertexOutput {
     #[builtin(position)]
     proj_pos: vec4,
@@ -55,37 +55,37 @@ pub struct VertexOutput {
     uv: vec2,
 }
 
-pub static mut particles: StorageMut<[Particle]> = binding();
+pub static particles: StorageMut<[Particle]> = binding();
 
-pub static mut free_list: StorageMut<FreeList> = binding();
+pub static free_list: StorageMut<FreeList> = binding();
 
 pub static emit_params: Uniform<EmitParams> = binding();
 
 pub static update_params: Uniform<UpdateParams> = binding();
 
-pub static mut emit_end: Workgroup<i32> = binding();
+pub static emit_end: Workgroup<i32> = binding();
 
 pub static draw_particles: Storage<[Particle]> = binding();
 
 pub static camera: Uniform<CameraParams> = binding();
 
-#[compute]
-#[workgroup_size(64, 1, 1)]
+#[entry_point(compute, threads(64, 1, 1))]
 pub fn reset(
     #[builtin(global_invocation_id)] global_id: vec3u,
     #[builtin(num_workgroups)] num_groups: vec3u,
 ) {
     let total = num_groups.x * 64u32;
     // reversing the order because it works like a stack
-    free_list.data[(global_id.x) as usize] = total - 1u32 - global_id.x;
     let mut p = Particle::default();
-    particles[(global_id.x) as usize] = p;
+    unsafe {
+        free_list.get_mut().data[(global_id.x) as usize] = total - 1u32 - global_id.x;
+        particles.get_mut()[(global_id.x) as usize] = p;
+    }
     if (global_id.x == 0u32) {
-        atomicStore(free_list.count, (total) as i32);
+        free_list.count.store((total) as i32);
     }
 }
 
-#[shader]
 pub fn hash_u32(x: u32) -> u32 {
     let mut h = x;
     h = h ^ (h >> 16u32);
@@ -96,7 +96,6 @@ pub fn hash_u32(x: u32) -> u32 {
     return h;
 }
 
-#[shader]
 pub fn rotate_to(to: vec3, v: vec3) -> vec3 {
     // d = dot(+Z, to) = to.z
     let d = to.z;
@@ -113,22 +112,23 @@ pub fn rotate_to(to: vec3, v: vec3) -> vec3 {
     return v * d + cross(a, v) * s + a * dot(a, v) * (1.0 - d);
 }
 
-#[compute]
-#[workgroup_size(64, 1, 1)]
+#[entry_point(compute, threads(64, 1, 1))]
 pub fn update(#[builtin(global_invocation_id)] global_id: vec3u) {
     if ((particles[(global_id.x) as usize]).scale != 0.0) {
-        (particles[(global_id.x) as usize]).pos +=
-            (particles[(global_id.x) as usize]).vel * update_params.time_delta;
-        (particles[(global_id.x) as usize]).life -= update_params.time_delta;
-        if ((particles[(global_id.x) as usize]).life < 0.0) {
-            let list_index = atomicAdd(free_list.count, 1);
-            free_list.data[(list_index) as usize] = global_id.x;
-            (particles[(global_id.x) as usize]).scale = 0.0;
+        let index = (global_id.x) as usize;
+        unsafe {
+            particles.get_mut()[index].pos += particles[index].vel * update_params.time_delta;
+            particles.get_mut()[index].life -= update_params.time_delta;
+            if (particles[index].life < 0.0) {
+                let list_index = free_list.count.fetch_add(1);
+                free_list.get_mut().data[(list_index) as usize] = global_id.x;
+                particles.get_mut()[index].scale = 0.0;
+            }
         }
     }
 }
 
-#[vertex]
+#[entry_point(vertex)]
 pub fn draw_vs(
     #[builtin(vertex_index)] vertex_index: u32,
     #[builtin(instance_index)] instance_index: u32,
@@ -163,7 +163,7 @@ pub fn draw_vs(
     return out;
 }
 
-#[fragment]
+#[entry_point(fragment)]
 #[output(location(0))]
 pub fn draw_fs(input: VertexOutput) -> vec4 {
     // Soft circular particle: smooth falloff from center
@@ -175,22 +175,22 @@ pub fn draw_fs(input: VertexOutput) -> vec4 {
     return (input.color.rgb()).extend(input.color.a() * softness);
 }
 
-#[shader]
 pub fn rand01(seed: u32) -> f32 {
     return (hash_u32(seed) & 0xFFFFu32) as f32 / 65535.0;
 }
 
-#[compute]
-#[workgroup_size(64, 1, 1)]
+#[entry_point(compute, threads(64, 1, 1))]
 pub fn emit(#[builtin(local_invocation_index)] local_index: u32) {
     let count = (emit_params.emit_count) as i32;
     if (local_index == 0u32) {
-        *emit_end = atomicSub(free_list.count, count);
+        unsafe {
+            *emit_end.get_mut() = free_list.count.fetch_sub(count);
+        }
         if (*emit_end < count) {
-            atomicAdd(free_list.count, count - max(0, *emit_end));
+            free_list.count.fetch_add(count - max(0, *emit_end));
         }
     }
-    workgroupBarrier();
+    workgroup_barrier();
 
     let my_index = (local_index) as i32;
     let list_index = *emit_end - 1 - my_index;
@@ -233,5 +233,7 @@ pub fn emit(#[builtin(local_invocation_index)] local_index: u32) {
     let ci = (r5 * (emit_params.color_count) as f32) as u32 % emit_params.color_count;
     p.color = emit_params.colors[(ci) as usize];
 
-    particles[(p_index) as usize] = p;
+    unsafe {
+        particles.get_mut()[(p_index) as usize] = p;
+    }
 }
