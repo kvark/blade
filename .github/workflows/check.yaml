@@ -161,8 +161,8 @@ jobs:
         shell: pwsh
         run: |
           # 25.2.5 and 25.3.3 access-violate in animated_blas_memory_stays_bounded.
-          # 26.1.5 runs that test. The ReSTIR NaNs it produced were from the
-          # older, much larger shader modules.
+          # 26.1.5 runs that test. LLVM 22 returns NaN from sqrt of a negative
+          # A-trous variance; the filter clamps that input.
           $url = "https://github.com/jakoch/rasterizers/releases/download/20260730/lavapipe-x64-26.1.5.zip"
           $dest = Join-Path $env:RUNNER_TEMP "lavapipe-26.1.5"
           Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\lavapipe.zip"

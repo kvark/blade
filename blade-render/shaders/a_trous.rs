@@ -182,7 +182,10 @@ pub fn atrous_filter(#[builtin(global_invocation_id)] global_id: vec3u) {
             // variance lets a noisy bright pixel accept a dark neighbour while
             // the dark pixel rejects the bright one, which systematically
             // moves radiance out of highlights and shadowed geometry.
-            let variance = sqrt(max(center_ilm.w, other_ilm.w));
+            // The variance channel is a second moment, but the convex update
+            // below can drive it negative. sqrt of a negative is undefined and
+            // lavapipe LLVM 22 returns NaN, which then blanks the frame.
+            let variance = sqrt(max(max(center_ilm.w, other_ilm.w), 0.0));
             weight *= compare_luminance(center_luma, dot(other_ilm.xyz(), LUMA), variance);
 
             // Rejected neighbour weight stays on the centre instead of
@@ -190,7 +193,11 @@ pub fn atrous_filter(#[builtin(global_invocation_id)] global_id: vec3u) {
             // equal and opposite RGB deltas, so an A-trous pass conserves
             // linear radiance over the frame. The Gaussian neighbour weights
             // sum to less than one, keeping this a convex update.
-            filtered_ilm += w4(weight) * (other_ilm - center_ilm);
+            // 0 * NaN is NaN. A non-positive weight adds nothing and must
+            // not be multiplied through, or one neighbour blanks later passes.
+            if (weight > 0.0) {
+                filtered_ilm += w4(weight) * (other_ilm - center_ilm);
+            }
         }
     }
 
