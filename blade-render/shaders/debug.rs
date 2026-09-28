@@ -1,34 +1,41 @@
 use synaga_shader::*;
 
-#[derive(Clone, Copy, Default)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct DebugPoint {
     pub pos: Vec3,
     pub color: u32,
 }
 
-#[derive(Clone, Copy, Default)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct DebugLine {
     pub a: DebugPoint,
     pub b: DebugPoint,
 }
 
-#[derive(Clone, Copy, Default)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct DebugVariance {
     pub color_sum: Vec3,
+    pub _pad: u32,
     pub color2_sum: Vec3,
     pub count: u32,
 }
 
-#[derive(Clone, Copy, Default)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct DebugEntry {
     pub custom_index: u32,
     pub depth: f32,
     pub tex_coords: Vec2,
     pub base_color_texture: u32,
     pub normal_texture: u32,
-    pub _pad: Vec2<u32>,
+    pub _pad0: Vec2<u32>,
     pub position: Vec3,
+    pub _pad1: f32,
     pub flat_normal: Vec3,
+    pub _pad2: f32,
 }
 
 /// The first four fields are the arguments of the indirect draw that shows

@@ -3,8 +3,9 @@ use super::config::DebugMode;
 use super::debug_param::DebugParams;
 use synaga_shader::*;
 
-#[derive(Clone, Copy, Default)]
-struct PostProcParams {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct PostProcParams {
     pub tone_map_enabled: u32,
     pub average_lum: f32,
     pub key_value: f32,

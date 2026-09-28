@@ -1,10 +1,12 @@
 use synaga_shader::*;
 
-#[derive(Clone, Copy, Default)]
-struct DebugBlitParams {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct DebugBlitParams {
     pub target_offset: Vec2,
     pub target_size: Vec2,
     pub mip_level: f32,
+    pub _pad: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Io)]

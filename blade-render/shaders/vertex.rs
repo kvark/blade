@@ -1,6 +1,7 @@
 use synaga_shader::*;
 
-#[derive(Clone, Copy, Default)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct Vertex {
     pub position: Vec3,
     pub bitangent_sign: f32,

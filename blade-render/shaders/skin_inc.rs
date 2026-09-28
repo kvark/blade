@@ -1,15 +1,24 @@
-use super::config::MAX_JOINTS_PER_DRAW_LEN;
+use super::config::MAX_JOINTS_PER_DRAW;
 use synaga_shader::*;
 
-#[derive(Clone, Copy)]
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct SkinningParams {
     pub post_transform: Mat3x4,
-    pub joint_matrices: [Mat3x4; MAX_JOINTS_PER_DRAW_LEN],
+    pub joint_matrices: [Mat3x4; MAX_JOINTS_PER_DRAW],
 }
 
-#[derive(Clone, Copy, Default)]
+/// Per-vertex skinning data, kept in a separate buffer so that the base
+/// vertex layout is identical for skinned and rigid models.
+///
+/// Its `Default`, in the host, puts all the weight on the first joint.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct SkinVertex {
+    /// Four 8-bit indices into the geometry's compact joint palette, the
+    /// first in the lowest byte.
     pub joints: u32,
+    /// Four unorm8 linear-blend skinning weights, one for each of `joints`.
     pub weights: u32,
 }
 

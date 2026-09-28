@@ -1,11 +1,6 @@
 use crate::DummyResources;
+use crate::shader_sources::env_prepare::EnvPreprocParams;
 use std::num::NonZeroU32;
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct EnvPreprocParams {
-    target_level: u32,
-}
 
 #[derive(blade_macros::ShaderData)]
 struct EnvPreprocData {

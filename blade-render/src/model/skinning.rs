@@ -1,8 +1,7 @@
 use std::borrow::Cow;
 
-/// Compact joint palettes fit in a WebGL2 uniform block. Must match
-/// `MAX_JOINTS_PER_DRAW` in `shaders/config.rs`.
-pub const MAX_JOINTS_PER_DRAW: usize = 64;
+/// Compact joint palettes fit in a WebGL2 uniform block.
+pub const MAX_JOINTS_PER_DRAW: usize = crate::shader_sources::config::MAX_JOINTS_PER_DRAW;
 const NO_INDEX: u32 = u32::MAX;
 
 /// Rest-pose transform of one node in a skinned model.

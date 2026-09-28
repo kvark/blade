@@ -10,11 +10,11 @@ struct VertexOutput {
     position: Vec4,
 }
 
-#[derive(Clone, Copy, Default)]
-struct Uniforms {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct Uniforms {
     pub screen_size: Vec2,
-    pub _convert_to_linear: f32,
-    pub _padding: f32,
+    pub _pad: Vec2,
 }
 
 #[derive(Clone, Copy, Default)]

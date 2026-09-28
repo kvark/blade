@@ -3,8 +3,10 @@ Changelog for *Blade* project
 ## (TBD)
 
 - render: stock shaders are serialized Naga IR embedded in the crate. `shader_dir()` and `Engine.shader_path` are gone
-- graphics: `CommandEncoder::present_with_damage` tells the compositor which rectangles changed since the previous present, empty if none did: `VK_KHR_incremental_present` on Vulkan, `EGL_KHR/EXT_swap_buffers_with_damage` on GLES, ignored on Metal and WebGL
+- render: `Vertex`, `SkinVertex`, `DebugPoint` and `DebugLine` are the shaders' own structs, with synaga-shader vectors where they had arrays. `SkinVertex` packs its joints and its weights into a `u32` each
+- particle: `CameraParams` is the shader's struct, with a `Mat4` and `Vec4`s where it had arrays
 - graphics: `CooperativeMatrix` lists `[M, N, K]` shapes in `f32_shapes` and `f16_f32_shapes` instead of square tile sizes, and is no longer `Copy`
+- graphics: `CommandEncoder::present_with_damage` tells the compositor which rectangles changed since the previous present, empty if none did: `VK_KHR_incremental_present` on Vulkan, `EGL_KHR/EXT_swap_buffers_with_damage` on GLES, ignored on Metal and WebGL
 - graphics: `Capabilities` reports the default subgroup size and `max_compute_shared_memory_size`
 - graphics: a pass-boundary GPU timestamp uses that barrier's source stage, so the sample is the completion that releases the next pass
 - graphics: `CommandEncoder::last_timing` returns `Timing` with borrowed pass names; wait on its sync point first

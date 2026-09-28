@@ -17,8 +17,9 @@ struct FreeList {
     pub data: [u32],
 }
 
-#[derive(Clone, Copy, Default)]
-struct EmitParams {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct EmitParams {
     pub origin: Vec3,
     pub emitter_radius: f32,
     pub direction: Vec3,
@@ -34,15 +35,22 @@ struct EmitParams {
     pub scale_max: f32,
 }
 
-#[derive(Clone, Copy, Default)]
-struct UpdateParams {
+/// Uploaded by the host as is.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct UpdateParams {
     pub time_delta: f32,
 }
 
-#[derive(Clone, Copy, Default)]
-struct CameraParams {
+/// Camera parameters for 3D particle projection.
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct CameraParams {
+    /// View-projection matrix.
     pub view_proj: Mat4,
+    /// Camera right vector in world space (for billboard X offset).
     pub camera_right: Vec4,
+    /// Camera up vector in world space (for billboard Y offset).
     pub camera_up: Vec4,
 }
 

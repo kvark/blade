@@ -1,13 +1,14 @@
 use super::brdf::{Material, evaluate_ambient, evaluate_brdf, material_from_metallic_roughness};
 use super::color::encode_surface_color;
-use super::config::{MAX_LOCAL_LIGHTS, MAX_LOCAL_LIGHTS_LEN};
+use super::config::MAX_LOCAL_LIGHTS;
 use super::skin_inc::{SkinVertex, apply_affine, skin_blend, skin_linear};
 use super::vertex::{Vertex, decode_normal};
 use core::f32::consts::PI;
 use synaga_shader::*;
 
-#[derive(Clone, Copy, Default)]
-struct LocalLight {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct LocalLight {
     pub position_range: Vec4,
     pub intensity: Vec4,
     pub direction: Vec4,
@@ -15,15 +16,17 @@ struct LocalLight {
     pub spot: Vec4,
 }
 
-#[derive(Clone, Copy, Default)]
-struct LocalLightParams {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct LocalLightParams {
     // x: submitted light count, y: stochastic seed
     pub count_seed: Vec4,
-    pub lights: [LocalLight; MAX_LOCAL_LIGHTS_LEN],
+    pub lights: [LocalLight; MAX_LOCAL_LIGHTS],
 }
 
-#[derive(Clone, Copy, Default)]
-struct RasterFrameParams {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct RasterFrameParams {
     pub view_proj: Mat4,
     pub inv_view_proj: Mat4,
     pub light_view_proj: Mat4,
@@ -39,8 +42,9 @@ struct RasterFrameParams {
     pub shadow_params: Vec4,
 }
 
-#[derive(Clone, Copy, Default)]
-struct RasterDrawParams {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct RasterDrawParams {
     pub model: Mat4,
     // Rotation of the object/geometry transform. Skinning assumes uniform
     // scale, so a quaternion is sufficient for normals.
@@ -51,13 +55,15 @@ struct RasterDrawParams {
     pub material: Vec4,
 }
 
-#[derive(Clone, Copy, Default)]
-struct ShadowFrameParams {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct ShadowFrameParams {
     pub light_view_proj: Mat4,
 }
 
-#[derive(Clone, Copy, Default)]
-struct ShadowDrawParams {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct ShadowDrawParams {
     pub model: Mat4,
 }
 
@@ -330,7 +336,7 @@ fn raster_skinned_vs(input: Vertex, skin_input: SkinVertex) -> VertexOutput {
 }
 
 fn shade_local_light(mat: Material, n: Vec3, v: Vec3, world_pos: Vec3) -> Vec3 {
-    let count = (light_params.count_seed.x as u32).min(MAX_LOCAL_LIGHTS);
+    let count = (light_params.count_seed.x as u32).min(MAX_LOCAL_LIGHTS as u32);
     if count == 0 {
         return Vec3::splat(0.0);
     }
@@ -341,7 +347,7 @@ fn shade_local_light(mat: Material, n: Vec3, v: Vec3, world_pos: Vec3) -> Vec3 {
     let mut chosen = 0u32;
     let mut chosen_score = 0.0;
     let mut weight_sum = 0.0;
-    for i in 0..MAX_LOCAL_LIGHTS {
+    for i in 0..MAX_LOCAL_LIGHTS as u32 {
         if i >= count {
             break;
         }

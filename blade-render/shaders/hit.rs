@@ -11,7 +11,8 @@ struct IndexBuffer {
     pub data: [u32],
 }
 
-#[derive(Clone, Copy, Default)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct HitEntry {
     pub index_buf: u32,
     pub vertex_buf: u32,

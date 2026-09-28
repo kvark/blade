@@ -16,8 +16,9 @@ use synaga_shader::*;
 const ROULETTE_START: u32 = 4;
 const MAX_RADIANCE: f32 = 1.0e6;
 
-#[derive(Clone, Copy, Default)]
-struct PathTraceParams {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct PathTraceParams {
     pub frame_index: u32,
     // light samples taken at every vertex of a path
     pub num_environment_samples: u32,

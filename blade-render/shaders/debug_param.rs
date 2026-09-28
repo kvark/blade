@@ -1,6 +1,7 @@
 use synaga_shader::*;
 
-#[derive(Clone, Copy, Default)]
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct DebugParams {
     pub view_mode: u32,
     pub draw_flags: u32,

@@ -40,8 +40,11 @@ mint = "0.5"
 naga = { version = "30", git = "https://github.com/gfx-rs/wgpu", rev = "323acfb729a00c3030e362faa27252afe6368792", features = ["wgsl-in", "termcolor", "deserialize"] }
 # Synaga is not published. This revision is what CI builds. A local checkout
 # can replace these with path = "../synaga" and path = "../synaga/crates/shader".
-synaga = { git = "https://github.com/kvark/synaga", rev = "be57897ec39b544bbb6c5a66e66a812f97a257ae" }
-synaga-shader = { git = "https://github.com/kvark/synaga", rev = "be57897ec39b544bbb6c5a66e66a812f97a257ae" }
+synaga = { git = "https://github.com/kvark/synaga", rev = "4ea8acf990b353d4912219dd31ebfb2ebe3fe798" }
+synaga-shader = { git = "https://github.com/kvark/synaga", rev = "4ea8acf990b353d4912219dd31ebfb2ebe3fe798", features = [
+    "bytemuck",
+    "mint",
+] }
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.28", features = ["derive"] }

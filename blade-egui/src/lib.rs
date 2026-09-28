@@ -20,14 +20,8 @@ mod shader_ir {
 }
 
 use blade_util::{BufferBelt, BufferBeltDescriptor};
+use shaders::egui::Uniforms;
 use std::collections::hash_map::{Entry, HashMap};
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct Uniforms {
-    screen_size: [f32; 2],
-    padding: [f32; 2],
-}
 
 #[derive(blade_macros::ShaderData)]
 struct Globals {
@@ -354,8 +348,8 @@ impl GuiPainter {
             0,
             &Globals {
                 r_uniforms: Uniforms {
-                    screen_size: [logical_size.0, logical_size.1],
-                    padding: [0.0; 2],
+                    screen_size: synaga_shader::vec2(logical_size.0, logical_size.1),
+                    ..Default::default()
                 },
             },
         );

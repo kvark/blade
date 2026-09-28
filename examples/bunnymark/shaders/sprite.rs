@@ -1,18 +1,21 @@
 use synaga_shader::*;
 
-#[derive(Clone, Copy, Default)]
-struct Globals {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct Globals {
     pub mvp_transform: Mat4,
     pub sprite_size: Vec2,
+    pub _pad: Vec2,
 }
 
-#[derive(Clone, Copy, Default)]
-struct Locals {
+/// One bunny, as the host moves it; only the host reads `velocity`.
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct Locals {
     pub position: Vec2,
-    // Only the host reads it, to move the bunny.
-    #[allow(dead_code)]
     pub velocity: Vec2,
     pub color: u32,
+    pub _pad: u32,
 }
 
 #[derive(Clone, Copy, Default)]

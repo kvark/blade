@@ -673,9 +673,9 @@ fn snapshot_particle() {
         let proj = glam::camera::rh::proj::directx::perspective(fov_y, aspect, near, far);
         let view_proj = proj * view;
         blade_particle::CameraParams {
-            view_proj: view_proj.to_cols_array(),
-            camera_right: [1.0, 0.0, 0.0, 0.0],
-            camera_up: [0.0, 1.0, 0.0, 0.0],
+            view_proj: view_proj.to_cols_array_2d().into(),
+            camera_right: [1.0, 0.0, 0.0, 0.0].into(),
+            camera_up: [0.0, 1.0, 0.0, 0.0].into(),
         }
     };
 
@@ -1630,15 +1630,15 @@ fn animated_blas_memory_stays_bounded() {
                 name: "triangle".into(),
                 vertices: vec![
                     blade_render::Vertex {
-                        position: [-0.25, -0.25, 0.0],
+                        position: [-0.25, -0.25, 0.0].into(),
                         ..Default::default()
                     },
                     blade_render::Vertex {
-                        position: [0.25, -0.25, 0.0],
+                        position: [0.25, -0.25, 0.0].into(),
                         ..Default::default()
                     },
                     blade_render::Vertex {
-                        position: [0.0, 0.25, 0.0],
+                        position: [0.0, 0.25, 0.0].into(),
                         ..Default::default()
                     },
                 ],

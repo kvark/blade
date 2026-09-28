@@ -3,7 +3,8 @@ use synaga_shader::*;
 
 const VFLIP: Vec2 = vec2(1.0, -1.0);
 
-#[derive(Clone, Copy, Default)]
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct CameraParams {
     pub position: Vec3,
     pub depth: f32,
@@ -11,6 +12,7 @@ pub struct CameraParams {
     pub fov: Vec2,
     pub film_offset: Vec2,
     pub target_size: Vec2<u32>,
+    pub _pad: Vec2<u32>,
 }
 
 pub fn get_ray_direction_at(cp: CameraParams, film_pos: Vec2) -> Vec3 {
