@@ -4,19 +4,30 @@
 //! predicate from Cargo, so a debug build and a release build disagree here
 //! the way `rustc` does.
 //!
-//! The enums match the host types in `blade-render`. A shader compares or
-//! masks with `Variant as u32` because the uniform itself is a plain integer.
+//! The host reads these too: `blade_render::DebugMode` is the enum here, the
+//! host's flag sets take each bit from the flag enums, and its limits are the
+//! ones here. A shader compares or masks with `Variant as u32` because the
+//! uniform itself is a plain integer.
 
 pub const DEBUG_MODE: bool = cfg!(debug_assertions);
+pub const MAX_LOCAL_LIGHTS: usize = 8;
+pub const MAX_JOINTS_PER_DRAW: usize = 64;
 
-pub const MAX_LOCAL_LIGHTS: u32 = 8;
-pub const MAX_LOCAL_LIGHTS_LEN: usize = 8;
-pub const MAX_JOINTS_PER_DRAW: u32 = 64;
-pub const MAX_JOINTS_PER_DRAW_LEN: usize = 64;
-
+/// What the renderer shows: the final image, or one of its inputs.
 #[repr(u32)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    blade_macros::AsPrimitive,
+    strum::EnumIter,
+)]
 pub enum DebugMode {
+    #[default]
     Final = 0,
     Depth = 1,
     DiffuseAlbedoTexture = 2,

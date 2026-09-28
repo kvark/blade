@@ -45,9 +45,10 @@ fn sphere(center: [f32; 3], radius: f32) -> (Vec<blade_render::Vertex>, Vec<u32>
                     center[0] + radius * normal[0],
                     center[1] + radius * normal[1],
                     center[2] + radius * normal[2],
-                ],
+                ]
+                .into(),
                 bitangent_sign: 1.0,
-                tex_coords: [segment as f32 / SEGMENTS as f32, ring as f32 / RINGS as f32],
+                tex_coords: [segment as f32 / SEGMENTS as f32, ring as f32 / RINGS as f32].into(),
                 normal: encode_normal(normal),
                 tangent: encode_normal([-sin_phi, 0.0, cos_phi]),
             });

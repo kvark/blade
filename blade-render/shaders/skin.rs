@@ -2,8 +2,9 @@ use super::skin_inc::{SkinVertex, apply_affine, skin_blend, skin_linear, skinnin
 use super::vertex::{Vertex, decode_normal};
 use synaga_shader::*;
 
-#[derive(Clone, Copy, Default)]
-struct SkinDispatch {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct SkinDispatch {
     pub vertex_count: u32,
     pub _pad0: u32,
     pub _pad1: u32,

@@ -9,17 +9,19 @@ const GAUSSIAN_WEIGHTS: Vec2 = vec2(0.44198, 0.27901);
 const SIGMA_L: f32 = 4.0;
 const EPSILON: f32 = 0.001;
 
-#[derive(Clone, Copy, Default)]
-struct Params {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct BlurParams {
     pub extent: Vec2<i32>,
     pub temporal_weight: f32,
     pub iteration: u32,
     pub use_motion_vectors: u32,
+    pub _pad: u32,
 }
 
 static camera: Uniform<CameraParams> = binding();
 static prev_camera: Uniform<CameraParams> = binding();
-static params: Uniform<Params> = binding();
+static params: Uniform<BlurParams> = binding();
 static t_depth: Texture2D<f32> = binding();
 static t_prev_depth: Texture2D<f32> = binding();
 static t_flat_normal: Texture2D<f32> = binding();

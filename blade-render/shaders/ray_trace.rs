@@ -23,8 +23,9 @@ const MAX_RESERVOIRS: u32 = 4;
 const DECOUPLED_SHADING: bool = false;
 const FACTOR_CANDIDATES: u32 = 3;
 
-#[derive(Clone, Copy, Default)]
-struct MainParams {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct MainParams {
     pub frame_index: u32,
     pub num_environment_samples: u32,
     pub num_brdf_samples: u32,

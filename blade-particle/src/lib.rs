@@ -30,6 +30,7 @@ mod shader_ir {
     synaga_shader::include_ir!();
 }
 
+pub use shaders::particle::CameraParams;
 pub use system::{ParticlePipeline, ParticleSystem, PipelineDesc};
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -90,16 +91,4 @@ impl ParticleEffect {
     pub fn load(source: &str) -> Result<Self, ron::error::SpannedError> {
         ron::from_str(source)
     }
-}
-
-/// Camera parameters for 3D particle projection.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct CameraParams {
-    /// Column-major 4x4 view-projection matrix.
-    pub view_proj: [f32; 16],
-    /// Camera right vector in world space (for billboard X offset).
-    pub camera_right: [f32; 4],
-    /// Camera up vector in world space (for billboard Y offset).
-    pub camera_up: [f32; 4],
 }

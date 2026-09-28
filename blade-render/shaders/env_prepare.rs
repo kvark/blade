@@ -5,8 +5,9 @@ const LUMA: Vec3 = vec3(0.299, 0.587, 0.114);
 const MAX_FP16: f32 = 65504.0;
 const SUM: Vec4 = vec4(0.25, 0.25, 0.25, 0.25);
 
-#[derive(Clone, Copy, Default)]
-struct EnvPreprocParams {
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct EnvPreprocParams {
     pub target_level: u32,
 }
 

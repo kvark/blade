@@ -32,16 +32,3 @@ pub mod skin;
 pub mod skin_inc;
 pub mod surface;
 pub mod vertex;
-
-const _: () = {
-    assert!(crate::DebugMode::Final as u32 == config::DebugMode::Final as u32);
-    assert!(crate::DebugMode::Variance as u32 == config::DebugMode::Variance as u32);
-    assert!(crate::DebugDrawFlags::SPACE.bits() == config::DebugDrawFlags::Space as u32);
-    assert!(crate::DebugDrawFlags::RESTIR.bits() == config::DebugDrawFlags::Restir as u32);
-    assert!(crate::DebugTextureFlags::ALBEDO.bits() == config::DebugTextureFlags::Albedo as u32);
-    assert!(
-        crate::DebugTextureFlags::EMISSIVE.bits() == config::DebugTextureFlags::Emissive as u32
-    );
-    assert!(crate::MAX_LOCAL_LIGHTS as u32 == config::MAX_LOCAL_LIGHTS);
-    assert!(crate::MAX_JOINTS_PER_DRAW as u32 == config::MAX_JOINTS_PER_DRAW);
-};

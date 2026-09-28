@@ -72,6 +72,7 @@ allowed_external_types = [
     "epaint::*",
     "mint::*",
     "strum::*",
+    "synaga_shader::*",
 ]
 
 [lints.rust]
