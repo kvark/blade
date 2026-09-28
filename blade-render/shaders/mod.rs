@@ -2,17 +2,8 @@
 //!
 //! `rustc` type-checks these against `synaga-shader`. `build.rs` reads the
 //! same files and serializes a Naga module for each one.
-#![allow(
-    non_camel_case_types,
-    non_snake_case,
-    non_upper_case_globals,
-    dead_code,
-    unused_assignments,
-    unused_imports,
-    unused_variables,
-    unused_mut,
-    clippy::all
-)]
+// Resources are named after the fields of the `ShaderData` that binds them.
+#![allow(non_upper_case_globals)]
 
 pub mod a_trous;
 pub mod brdf;

@@ -10,7 +10,7 @@ pub struct Vertex {
 }
 
 pub fn decode_normal(raw: u32) -> Vec3 {
-    return unpack4x8snorm(raw).xyz();
+    unpack4x8snorm(raw).xyz()
 }
 
 pub fn tangent_basis(
@@ -19,7 +19,7 @@ pub fn tangent_basis(
     bitangent_sign: f32,
     linear_sign: f32,
 ) -> Mat3 {
-    let t = normalize(transformed_tangent - n * dot(n, transformed_tangent));
-    let b = normalize(cross(n, t)) * bitangent_sign * linear_sign;
-    return mat3(t, b, n);
+    let t = (transformed_tangent - n * n.dot(transformed_tangent)).normalize();
+    let b = n.cross(t).normalize() * bitangent_sign * linear_sign;
+    mat3(t, b, n)
 }

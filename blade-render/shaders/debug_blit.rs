@@ -20,17 +20,16 @@ static input: Texture2D<f32> = binding();
 static samp: Sampler = binding();
 
 #[entry_point(vertex)]
-fn blit_vs(#[builtin(vertex_index)] vi: u32) -> VertexOutput {
-    let tc = Vec2::from(vec2::<u32>(vi & 1u32, (vi & 2u32) >> 1u32));
+fn blit_vs(vertex_index: u32) -> VertexOutput {
+    let tc = vec2(vertex_index & 1, (vertex_index & 2) >> 1).cast::<f32>();
     let transformed = params.target_offset + params.target_size * vec2(tc.x, 1.0 - tc.y);
-    let mut vo = VertexOutput::default();
-    vo.tc = tc;
-    vo.clip_pos = ((2.0 * transformed - 1.0).extend(0.0)).extend(1.0);
-    return vo;
+    VertexOutput {
+        tc,
+        clip_pos: (2.0 * transformed - 1.0).extend(0.0).extend(1.0),
+    }
 }
 
 #[entry_point(fragment)]
-#[output(location(0))]
 fn blit_fs(vo: VertexOutput) -> Vec4 {
-    return input.sample_level(&samp, vo.tc, params.mip_level);
+    input.sample_level(&samp, vo.tc, params.mip_level)
 }

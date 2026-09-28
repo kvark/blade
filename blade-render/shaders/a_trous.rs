@@ -1,18 +1,12 @@
 use super::camera::{CameraParams, get_projected_pixel_float, get_ray_direction};
-
 use super::gbuf::{MOTION_SCALE, USE_MOTION_VECTORS};
-
 use super::surface::{Surface, compare_depths, compare_flat_normals};
 use synaga_shader::*;
 
 const LUMA: Vec3 = vec3(0.2126, 0.7152, 0.0722);
-
 const MIN_WEIGHT: f32 = 0.01;
-
 const GAUSSIAN_WEIGHTS: Vec2 = vec2(0.44198, 0.27901);
-
 const SIGMA_L: f32 = 4.0;
-
 const EPSILON: f32 = 0.001;
 
 #[derive(Clone, Copy, Default)]
@@ -35,56 +29,58 @@ static input: Texture2D<f32> = binding();
 static output: TextureStorage2D<Rgba16Float, ReadWrite> = binding();
 
 fn read_surface(pixel: Vec2<i32>) -> Surface {
-    let mut surface = Surface::default();
-    surface.flat_normal = normalize(t_flat_normal.load(pixel, 0).xyz());
-    surface.depth = t_depth.load(pixel, 0).x;
-    return surface;
+    Surface {
+        flat_normal: t_flat_normal.load(pixel, 0).xyz().normalize(),
+        depth: t_depth.load(pixel, 0).x,
+        ..Default::default()
+    }
 }
 
 fn read_prev_surface(pixel: Vec2<i32>) -> Surface {
-    let mut surface = Surface::default();
-    surface.flat_normal = normalize(t_prev_flat_normal.load(pixel, 0).xyz());
-    surface.depth = t_prev_depth.load(pixel, 0).x;
-    return surface;
+    Surface {
+        flat_normal: t_prev_flat_normal.load(pixel, 0).xyz().normalize(),
+        depth: t_prev_depth.load(pixel, 0).x,
+        ..Default::default()
+    }
 }
 
 fn get_prev_pixel(pixel: Vec2<i32>, pos_world: Vec3) -> Vec2 {
-    if USE_MOTION_VECTORS && params.use_motion_vectors != 0u32 {
+    if USE_MOTION_VECTORS && params.use_motion_vectors != 0 {
         let motion = t_motion.load(pixel, 0).xy() / MOTION_SCALE;
-        return Vec2::from(pixel) + 0.5 + motion;
+        Vec2::from(pixel) + 0.5 + motion
     } else {
-        return get_projected_pixel_float(*prev_camera, pos_world);
+        get_projected_pixel_float(*prev_camera, pos_world)
     }
 }
 
 fn compare_luminance(a_lum: f32, b_lum: f32, variance: f32) -> f32 {
-    return exp(-abs(a_lum - b_lum) / (SIGMA_L * variance + EPSILON));
+    (-(a_lum - b_lum).abs() / (SIGMA_L * variance + EPSILON)).exp()
 }
 
 fn w4(w: f32) -> Vec4 {
-    return (Vec3::splat(w)).extend(w * w);
+    Vec3::splat(w).extend(w * w)
 }
 
 #[entry_point(compute, threads(8, 8))]
-fn temporal_accum(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
-    let pixel = Vec2::<i32>::from(global_id.xy());
-    if any(pixel.cmpge(params.extent)) {
+fn temporal_accum(global_invocation_id: Vec3<u32>) {
+    let pixel = global_invocation_id.xy().cast::<i32>();
+    if pixel.cmpge(params.extent).any() {
         return;
     }
 
     let surface = read_surface(pixel);
     let pos_world = camera.position + surface.depth * get_ray_direction(*camera, pixel);
     // considering all samples in 2x2 quad, to help with edges
-    let mut center_pixel = get_prev_pixel(pixel, pos_world);
-    let mut prev_pixels = [
-        Vec2::<i32>::from(vec2(center_pixel.x - 0.5, center_pixel.y - 0.5)),
-        Vec2::<i32>::from(vec2(center_pixel.x + 0.5, center_pixel.y - 0.5)),
-        Vec2::<i32>::from(vec2(center_pixel.x + 0.5, center_pixel.y + 0.5)),
-        Vec2::<i32>::from(vec2(center_pixel.x - 0.5, center_pixel.y + 0.5)),
+    let center_pixel = get_prev_pixel(pixel, pos_world);
+    let prev_pixels = [
+        vec2(center_pixel.x - 0.5, center_pixel.y - 0.5).cast::<i32>(),
+        vec2(center_pixel.x + 0.5, center_pixel.y - 0.5).cast::<i32>(),
+        vec2(center_pixel.x + 0.5, center_pixel.y + 0.5).cast::<i32>(),
+        vec2(center_pixel.x - 0.5, center_pixel.y + 0.5).cast::<i32>(),
     ];
     //Note: careful about the pixel center when there is a perfect match
     let w_bot_right = fract(center_pixel + Vec2::splat(0.5));
-    let mut prev_weights = vec4(
+    let prev_weights = vec4(
         (1.0 - w_bot_right.x) * (1.0 - w_bot_right.y),
         w_bot_right.x * (1.0 - w_bot_right.y),
         w_bot_right.x * w_bot_right.y,
@@ -95,33 +91,32 @@ fn temporal_accum(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
     let mut sum_ilm = Vec4::splat(0.0);
     if params.temporal_weight != 1.0 {
         //TODO: optimize depth load with a gather operation
-        for i in (0)..(4) {
-            let prev_pixel = prev_pixels[(i) as usize];
-            if all(prev_pixel.cmpge(Vec2::<i32>::splat(0))) && all(prev_pixel.cmplt(params.extent))
-            {
+        for i in 0..4 {
+            let prev_pixel = prev_pixels[i as usize];
+            if prev_pixel.cmpge(Vec2::splat(0)).all() && prev_pixel.cmplt(params.extent).all() {
                 let prev_surface = read_prev_surface(prev_pixel);
                 if compare_flat_normals(surface.flat_normal, prev_surface.flat_normal) < 0.5 {
                     continue;
                 }
-                let projected_distance = length(pos_world - prev_camera.position);
+                let projected_distance = (pos_world - prev_camera.position).length();
                 if compare_depths(prev_surface.depth, projected_distance) < 0.5 {
                     continue;
                 }
-                let w = prev_weights[(i) as usize];
+                let w = prev_weights[i as usize];
                 sum_weight += w;
                 let illumination = w * input.load(prev_pixel, 0).xyz();
-                let luminocity = dot(illumination, LUMA);
-                sum_ilm += (illumination).extend(luminocity * luminocity);
+                let luminocity = illumination.dot(LUMA);
+                sum_ilm += illumination.extend(luminocity * luminocity);
             }
         }
     }
 
     let cur_illumination = output.load(pixel).xyz();
-    let cur_luminocity = dot(cur_illumination, LUMA);
-    let mut mixed_ilm = (cur_illumination).extend(cur_luminocity * cur_luminocity);
+    let cur_luminocity = cur_illumination.dot(LUMA);
+    let mut mixed_ilm = cur_illumination.extend(cur_luminocity * cur_luminocity);
     if sum_weight > MIN_WEIGHT {
         let prev_ilm =
-            sum_ilm / (Vec3::splat(sum_weight)).extend(max(0.001, sum_weight * sum_weight));
+            sum_ilm / Vec3::splat(sum_weight).extend((sum_weight * sum_weight).max(0.001));
         mixed_ilm = mix(
             mixed_ilm,
             prev_ilm,
@@ -133,31 +128,31 @@ fn temporal_accum(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
 }
 
 #[entry_point(compute, threads(8, 8))]
-fn atrous_filter(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
-    let center = Vec2::<i32>::from(global_id.xy());
-    if any(center.cmpge(params.extent)) {
+fn atrous_filter(global_invocation_id: Vec3<u32>) {
+    let center = global_invocation_id.xy().cast::<i32>();
+    if center.cmpge(params.extent).any() {
         return;
     }
 
     let center_ilm = input.load(center, 0);
-    let center_luma = dot(center_ilm.xyz(), LUMA);
+    let center_luma = center_ilm.xyz().dot(LUMA);
     let center_suf = read_surface(center);
     let mut filtered_ilm = center_ilm;
 
-    for yy in -1i32..=1i32 {
-        for xx in -1i32..=1i32 {
-            let p = center + vec2::<i32>(xx, yy) * (1i32 << params.iteration);
-            if all(p.cmpeq(center))
-                || any(p.cmplt(Vec2::<i32>::splat(0)))
-                || any(p.cmpge(params.extent))
+    for yy in -1i32..=1 {
+        for xx in -1i32..=1 {
+            let p = center + vec2(xx, yy) * (1 << params.iteration);
+            if p.cmpeq(center).all()
+                || p.cmplt(Vec2::splat(0)).any()
+                || p.cmpge(params.extent).any()
             {
                 continue;
             }
 
             //TODO: store in group-shared memory
             let surface = read_surface(p);
-            let mut weight =
-                GAUSSIAN_WEIGHTS[(abs(xx)) as usize] * GAUSSIAN_WEIGHTS[(abs(yy)) as usize];
+            let mut weight = GAUSSIAN_WEIGHTS[xx.unsigned_abs() as usize]
+                * GAUSSIAN_WEIGHTS[yy.unsigned_abs() as usize];
             //TODO: make it stricter on higher iterations
             weight *= compare_flat_normals(surface.flat_normal, center_suf.flat_normal);
             //Note: should we use a projected depth instead of the surface one?
@@ -170,8 +165,8 @@ fn atrous_filter(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
             // The variance channel is a second moment, but the convex update
             // below can drive it negative. sqrt of a negative is undefined and
             // lavapipe LLVM 22 returns NaN, which then blanks the frame.
-            let variance = sqrt(max(max(center_ilm.w, other_ilm.w), 0.0));
-            weight *= compare_luminance(center_luma, dot(other_ilm.xyz(), LUMA), variance);
+            let variance = center_ilm.w.max(other_ilm.w).max(0.0).sqrt();
+            weight *= compare_luminance(center_luma, other_ilm.xyz().dot(LUMA), variance);
 
             // Rejected neighbour weight stays on the centre instead of
             // renormalising the surviving neighbours. Every pair then applies
@@ -186,5 +181,5 @@ fn atrous_filter(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
         }
     }
 
-    output.store(global_id.xy(), filtered_ilm);
+    output.store(global_invocation_id.xy(), filtered_ilm);
 }
