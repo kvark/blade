@@ -34,38 +34,34 @@ pub struct HitEntry {
 }
 
 pub static vertex_buffers: Storage<BindingArray<VertexBuffer>> = binding();
-
 static index_buffers: Storage<BindingArray<IndexBuffer>> = binding();
-
 pub static hit_entries: Storage<[HitEntry]> = binding();
-
 static textures: BindingArray<Texture2D<f32>> = binding();
-
 pub static sampler_linear: Sampler = binding();
 
 fn affine_linear(transform: Mat4x3) -> Mat3 {
-    return mat3(transform[0].xyz(), transform[1].xyz(), transform[2].xyz());
+    mat3(transform[0].xyz(), transform[1].xyz(), transform[2].xyz())
 }
 
 pub fn hit_winding(entry: HitEntry) -> f32 {
-    return select(1.0, -1.0, (entry.flags & 1u32) != 0u32);
+    select(1.0, -1.0, (entry.flags & 1) != 0)
 }
 
 pub fn fetch_triangle_indices(entry: HitEntry, primitive_index: u32) -> Vec3<u32> {
-    let mut indices = primitive_index * 3u32 + vec3::<u32>(0u32, 1u32, 2u32);
-    if entry.index_buf != !0u32 {
-        indices = vec3::<u32>(
-            (index_buffers[(entry.index_buf) as usize].data)[(indices.x) as usize],
-            (index_buffers[(entry.index_buf) as usize].data)[(indices.y) as usize],
-            (index_buffers[(entry.index_buf) as usize].data)[(indices.z) as usize],
+    let mut indices = primitive_index * 3 + vec3(0, 1, 2);
+    if entry.index_buf != u32::MAX {
+        indices = vec3(
+            index_buffers[entry.index_buf as usize].data[indices.x as usize],
+            index_buffers[entry.index_buf as usize].data[indices.y as usize],
+            index_buffers[entry.index_buf as usize].data[indices.z as usize],
         );
     }
-    return indices;
+    indices
 }
 
 pub fn make_barycentrics(uv: Vec2) -> Vec3 {
     let w = 1.0 - uv.x - uv.y;
-    return vec3(w, uv.x, uv.y);
+    vec3(w, uv.x, uv.y)
 }
 
 pub fn sample_hit_material(
@@ -75,16 +71,16 @@ pub fn sample_hit_material(
     ignore_textures: u32,
 ) -> Material {
     let mut base_color = unpack4x8unorm(entry.base_color_factor).xyz();
-    if (ignore_textures & DebugTextureFlags::Albedo as u32) == 0u32 {
-        base_color *= textures[(entry.base_color_texture) as usize]
+    if (ignore_textures & DebugTextureFlags::Albedo as u32) == 0 {
+        base_color *= textures[entry.base_color_texture as usize]
             .sample_level(&sampler_linear, tex_coords, lod)
             .xyz();
     }
 
     let mut metalness = entry.metalness;
     let mut roughness = entry.roughness;
-    if (ignore_textures & DebugTextureFlags::MetallicRoughness as u32) == 0u32 {
-        let mr = textures[(entry.metallic_roughness_texture) as usize].sample_level(
+    if (ignore_textures & DebugTextureFlags::MetallicRoughness as u32) == 0 {
+        let mr = textures[entry.metallic_roughness_texture as usize].sample_level(
             &sampler_linear,
             tex_coords,
             lod,
@@ -93,7 +89,7 @@ pub fn sample_hit_material(
         metalness *= mr.z;
     }
 
-    return material_from_metallic_roughness(base_color, metalness, roughness);
+    material_from_metallic_roughness(base_color, metalness, roughness)
 }
 
 pub fn sample_hit_emissive(
@@ -103,12 +99,12 @@ pub fn sample_hit_emissive(
     ignore_textures: u32,
 ) -> Vec3 {
     let mut emissive = entry.emissive_factor.xyz();
-    if (ignore_textures & DebugTextureFlags::Emissive as u32) == 0u32 {
-        emissive *= textures[(entry.emissive_texture) as usize]
+    if (ignore_textures & DebugTextureFlags::Emissive as u32) == 0 {
+        emissive *= textures[entry.emissive_texture as usize]
             .sample_level(&sampler_linear, tex_coords, lod)
             .xyz();
     }
-    return emissive;
+    emissive
 }
 
 pub fn sample_hit_normal_map(
@@ -117,21 +113,21 @@ pub fn sample_hit_normal_map(
     lod: f32,
     ignore_textures: u32,
 ) -> Vec3 {
-    if (ignore_textures & DebugTextureFlags::Normal as u32) != 0u32 {
+    if (ignore_textures & DebugTextureFlags::Normal as u32) != 0 {
         return vec3(0.0, 0.0, 1.0);
     }
-    let raw_unorm = textures[(entry.normal_texture) as usize]
+    let raw_unorm = textures[entry.normal_texture as usize]
         .sample_level(&sampler_linear, tex_coords, lod)
         .xy();
     let n_xy = entry.normal_scale * (2.0 * raw_unorm - 1.0);
-    return (n_xy).extend(sqrt(max(0.0, 1.0 - dot(n_xy, n_xy))));
+    n_xy.extend((1.0 - n_xy.dot(n_xy)).max(0.0).sqrt())
 }
 
 pub fn hit_normal(entry: HitEntry, object_to_world: Mat4x3, normal: Vec3) -> Vec3 {
     // Skinning assumes uniform scale, so the linear part acts on normals
     // like a rotation after normalization.
     let linear = affine_linear(object_to_world) * affine_linear(entry.geometry_to_object);
-    return normalize(linear * normal);
+    (linear * normal).normalize()
 }
 
 pub fn hit_tangent_space(
@@ -143,10 +139,10 @@ pub fn hit_tangent_space(
 ) -> Mat3 {
     let linear = affine_linear(object_to_world) * affine_linear(entry.geometry_to_object);
     let n = hit_normal(entry, object_to_world, normal);
-    return tangent_basis(
+    tangent_basis(
         n,
         linear * tangent,
         bitangent_sign,
         sign(determinant(linear)),
-    );
+    )
 }

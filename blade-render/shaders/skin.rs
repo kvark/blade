@@ -16,15 +16,15 @@ static skin_source: Storage<[SkinVertex]> = binding();
 static destination: StorageMut<[Vertex]> = binding();
 
 fn encode_normal(n: Vec3) -> u32 {
-    return pack4x8snorm((n).extend(0.0));
+    pack4x8snorm(n.extend(0.0))
 }
 
 fn normalize_or_zero(v: Vec3) -> Vec3 {
-    let len2 = dot(v, v);
+    let len2 = v.dot(v);
     if len2 < 1.0e-20 {
         return Vec3::splat(0.0);
     }
-    return v * inverse_sqrt(len2);
+    v * inverse_sqrt(len2)
 }
 
 fn skin_stored_vertex(input: Vertex, skin: SkinVertex) -> Vertex {
@@ -38,17 +38,15 @@ fn skin_stored_vertex(input: Vertex, skin: SkinVertex) -> Vertex {
     out.normal = encode_normal(normalize_or_zero(linear * decode_normal(input.normal)));
     out.tangent = encode_normal(normalize_or_zero(linear * decode_normal(input.tangent)));
     out.bitangent_sign *= sign(determinant(linear));
-    return out;
+    out
 }
 
 #[entry_point(compute, threads(64, 1, 1))]
-fn skin(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
-    let i = global_id.x;
+fn skin(global_invocation_id: Vec3<u32>) {
+    let i = global_invocation_id.x;
     if i >= skin_dispatch.vertex_count {
         return;
     }
-    unsafe {
-        destination.get_mut()[(i) as usize] =
-            skin_stored_vertex(source[(i) as usize], skin_source[(i) as usize]);
-    }
+    destination.get_mut()[i as usize] =
+        skin_stored_vertex(source[i as usize], skin_source[i as usize]);
 }

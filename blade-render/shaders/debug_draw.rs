@@ -1,5 +1,5 @@
 use super::camera::CameraParams;
-use super::debug::{DebugBuffer, DebugLine, debug_buf};
+use super::debug::{DebugLine, debug_buf};
 use super::quaternion::{qinv, qrot};
 use synaga_shader::*;
 
@@ -22,46 +22,37 @@ static depth: Texture2D<f32> = binding();
 /// size that buffer.
 #[entry_point(compute, threads(1))]
 fn debug_buffer_layout() {
-    unsafe {
-        debug_buf.get_mut().open = debug_buf.open;
-    }
+    debug_buf.get_mut().open = debug_buf.open;
 }
 
 #[entry_point(vertex)]
-fn debug_vs(
-    #[builtin(vertex_index)] vertex_id: u32,
-    #[builtin(instance_index)] instance_id: u32,
-) -> DebugVarying {
-    let line = debug_lines[(instance_id) as usize];
+fn debug_vs(vertex_index: u32, instance_index: u32) -> DebugVarying {
+    let line = debug_lines[instance_index as usize];
     let mut point = line.a;
-    if vertex_id != 0u32 {
+    if vertex_index != 0 {
         point = line.b;
     }
 
     let world_dir = point.pos - camera.position;
     let local_dir = qrot(qinv(camera.orientation), world_dir);
-    let ndc = local_dir.xy() / tan(0.5 * camera.fov);
+    let ndc = local_dir.xy() / (0.5 * camera.fov).tan();
 
-    let mut out = DebugVarying::default();
-    out.pos = ((ndc).extend(0.0)).extend(-local_dir.z);
-    out.color = unpack4x8unorm(point.color);
-    out.dir = world_dir;
-    return out;
+    DebugVarying {
+        pos: ndc.extend(0.0).extend(-local_dir.z),
+        color: unpack4x8unorm(point.color),
+        dir: world_dir,
+    }
 }
 
 #[entry_point(fragment)]
-#[output(location(0))]
 fn debug_fs(input: DebugVarying) -> Vec4 {
     let geo_dim = depth.dimensions();
-    let depth_itc = vec2::<i32>(
-        (input.pos.x) as i32,
-        (geo_dim.y) as i32 - (input.pos.y) as i32,
-    );
+    let depth_itc = vec2(input.pos.x as i32, geo_dim.y as i32 - input.pos.y as i32);
     let stored = depth.load(depth_itc, 0).x;
     let alpha = select(
         0.8,
         0.2,
-        stored != 0.0 && dot(input.dir, input.dir) > stored * stored,
+        stored != 0.0 && input.dir.dot(input.dir) > stored * stored,
     );
-    return (input.color.xyz()).extend(alpha);
+    input.color.xyz().extend(alpha)
 }

@@ -1,6 +1,5 @@
-use super::color::{encode_srgb, encode_surface_color};
+use super::color::encode_surface_color;
 use super::config::DebugMode;
-
 use super::debug_param::DebugParams;
 use synaga_shader::*;
 
@@ -40,54 +39,52 @@ static post_proc_params: Uniform<PostProcParams> = binding();
 static debug_params: Uniform<DebugParams> = binding();
 
 #[entry_point(vertex)]
-fn postfx_vs(#[builtin(vertex_index)] vi: u32) -> VertexOutput {
-    let mut vo = VertexOutput::default();
-    vo.clip_pos = vec4(
-        (vi & 1u32) as f32 * 4.0 - 1.0,
-        (vi & 2u32) as f32 * 2.0 - 1.0,
-        0.0,
-        1.0,
-    );
-    vo.input_size = light_diffuse.level_dimensions(0);
-    return vo;
+fn postfx_vs(vertex_index: u32) -> VertexOutput {
+    VertexOutput {
+        clip_pos: vec4(
+            (vertex_index & 1) as f32 * 4.0 - 1.0,
+            (vertex_index & 2) as f32 * 2.0 - 1.0,
+            0.0,
+            1.0,
+        ),
+        input_size: light_diffuse.level_dimensions(0),
+    }
 }
 
 #[entry_point(fragment)]
-#[output(location(0))]
 fn postfx_fs(vo: VertexOutput) -> Vec4 {
-    let tc = vec2::<i32>((vo.clip_pos.x) as i32, (vo.clip_pos.y) as i32);
+    let tc = vo.clip_pos.xy().cast::<i32>();
     let illumination = light_diffuse.load(tc, 0);
     if debug_params.view_mode == DebugMode::Final as u32 {
-        let mut color = Vec3::default();
-        if post_proc_params.external_input != 0u32 {
-            color = t_external.load(tc, 0).xyz();
-        } else if post_proc_params.accumulated != 0u32 {
+        let color = if post_proc_params.external_input != 0 {
+            t_external.load(tc, 0).xyz()
+        } else if post_proc_params.accumulated != 0 {
             // The canonical renderer produces the final radiance directly.
             let total = t_accumulation.load(tc, 0);
-            color = total.xyz() / max(total.w, 1.0);
+            total.xyz() / total.w.max(1.0)
         } else {
             // The diffuse light is demodulated by the albedo, while the specular
             // one is not, since it's tinted by the Fresnel reflectance.
             let diffuse_albedo = t_diffuse_albedo.load(tc, 0).xyz();
             let specular = light_specular.load(tc, 0).xyz();
             let emissive = t_emissive.load(tc, 0).xyz();
-            color = diffuse_albedo * illumination.xyz() + specular + emissive;
-        }
-        if post_proc_params.tone_map_enabled == 0u32 {
+            diffuse_albedo * illumination.xyz() + specular + emissive
+        };
+        if post_proc_params.tone_map_enabled == 0 {
             // Hand back the composed radiance untouched. A display transfer
             // function is only defined over the display range, so a value
             // that was never brought into it doesn't get encoded.
-            return (color).extend(1.0);
+            return color.extend(1.0);
         }
         // Following https://blog.en.uwa4d.com/2022/07/19/physically-based-renderingg-hdr-tone-mapping/
         let l_adjusted = post_proc_params.key_value / post_proc_params.average_lum * color;
         let l_white = post_proc_params.white_level;
         let mapped = l_adjusted * (1.0 + l_adjusted / (l_white * l_white)) / (1.0 + l_adjusted);
-        let encode = post_proc_params.encode_srgb != 0u32;
-        return (encode_surface_color(mapped, encode)).extend(1.0);
+        let encode = post_proc_params.encode_srgb != 0;
+        encode_surface_color(mapped, encode).extend(1.0)
     } else if debug_params.view_mode == DebugMode::Variance as u32 {
-        return Vec4::splat(illumination.w);
+        Vec4::splat(illumination.w)
     } else {
-        return t_debug.load(tc, 0);
+        t_debug.load(tc, 0)
     }
 }

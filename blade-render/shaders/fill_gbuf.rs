@@ -41,21 +41,21 @@ fn debug_raw_normal(
 }
 
 #[entry_point(compute, threads(8, 4))]
-fn main(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
-    if any(global_id.xy().cmpge(camera.target_size)) {
+fn main(global_invocation_id: Vec3<u32>) {
+    if global_invocation_id.xy().cmpge(camera.target_size).any() {
         return;
     }
     if WRITE_DEBUG_IMAGE && debug.view_mode != DebugMode::Final as u32 {
-        out_debug.store(global_id.xy(), Vec4::splat(0.0));
+        out_debug.store(global_invocation_id.xy(), Vec4::splat(0.0));
     }
 
     let mut rq = RayQuery::default();
-    let ray_dir = get_ray_direction(*camera, Vec2::<i32>::from(global_id.xy()));
+    let ray_dir = get_ray_direction(*camera, global_invocation_id.xy().cast::<i32>());
     rq.initialize(
         &acc_struct,
         RayDesc {
             flags: RAY_FLAG_CULL_NO_OPAQUE,
-            cull_mask: 0xFFu32,
+            cull_mask: 0xFF,
             tmin: 0.0,
             tmax: camera.depth,
             origin: camera.position,
@@ -77,7 +77,7 @@ fn main(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
     };
     let mut emissive = Vec3::splat(0.0);
     let mut motion = Vec2::splat(0.0);
-    let enable_debug = all(global_id.xy().cmpeq(debug.mouse_pos));
+    let enable_debug = global_invocation_id.xy().cmpeq(debug.mouse_pos).all();
 
     if intersection.kind != RAY_QUERY_INTERSECTION_NONE {
         let entry =
@@ -87,40 +87,39 @@ fn main(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
         let indices = fetch_triangle_indices(entry, intersection.primitive_index);
 
         let vertices = [
-            (vertex_buffers[(entry.vertex_buf) as usize].data)[(indices.x) as usize],
-            (vertex_buffers[(entry.vertex_buf) as usize].data)[(indices.y) as usize],
-            (vertex_buffers[(entry.vertex_buf) as usize].data)[(indices.z) as usize],
+            vertex_buffers[entry.vertex_buf as usize].data[indices.x as usize],
+            vertex_buffers[entry.vertex_buf as usize].data[indices.y as usize],
+            vertex_buffers[entry.vertex_buf as usize].data[indices.z as usize],
         ];
 
         let prev_vertices = [
-            (vertex_buffers[(entry.prev_vertex_buf) as usize].data)[(indices.x) as usize],
-            (vertex_buffers[(entry.prev_vertex_buf) as usize].data)[(indices.y) as usize],
-            (vertex_buffers[(entry.prev_vertex_buf) as usize].data)[(indices.z) as usize],
+            vertex_buffers[entry.prev_vertex_buf as usize].data[indices.x as usize],
+            vertex_buffers[entry.prev_vertex_buf as usize].data[indices.y as usize],
+            vertex_buffers[entry.prev_vertex_buf as usize].data[indices.z as usize],
         ];
 
         let positions_object = entry.geometry_to_object
             * mat3x4(
-                (vertices[0].position).extend(1.0),
-                (vertices[1].position).extend(1.0),
-                (vertices[2].position).extend(1.0),
+                vertices[0].position.extend(1.0),
+                vertices[1].position.extend(1.0),
+                vertices[2].position.extend(1.0),
             );
         let prev_positions_object = entry.prev_geometry_to_object
             * mat3x4(
-                (prev_vertices[0].position).extend(1.0),
-                (prev_vertices[1].position).extend(1.0),
-                (prev_vertices[2].position).extend(1.0),
+                prev_vertices[0].position.extend(1.0),
+                prev_vertices[1].position.extend(1.0),
+                prev_vertices[2].position.extend(1.0),
             );
         let positions = intersection.object_to_world
             * mat3x4(
-                (positions_object[0]).extend(1.0),
-                (positions_object[1]).extend(1.0),
-                (positions_object[2]).extend(1.0),
+                positions_object[0].extend(1.0),
+                positions_object[1].extend(1.0),
+                positions_object[2].extend(1.0),
             );
         flat_normal = hit_winding(entry)
-            * normalize(cross(
-                positions[1].xyz() - positions[0].xyz(),
-                positions[2].xyz() - positions[0].xyz(),
-            ));
+            * (positions[1].xyz() - positions[0].xyz())
+                .cross(positions[2].xyz() - positions[0].xyz())
+                .normalize();
 
         let barycentrics = make_barycentrics(intersection.barycentrics);
         let position_object = (positions_object * barycentrics).extend(1.0);
@@ -129,20 +128,18 @@ fn main(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
             vertices[1].tex_coords,
             vertices[2].tex_coords,
         ) * barycentrics;
-        let normal_geo = normalize(
-            mat3(
-                decode_normal(vertices[0].normal),
-                decode_normal(vertices[1].normal),
-                decode_normal(vertices[2].normal),
-            ) * barycentrics,
-        );
-        let tangent_geo = normalize(
-            mat3(
-                decode_normal(vertices[0].tangent),
-                decode_normal(vertices[1].tangent),
-                decode_normal(vertices[2].tangent),
-            ) * barycentrics,
-        );
+        let normal_geo = (mat3(
+            decode_normal(vertices[0].normal),
+            decode_normal(vertices[1].normal),
+            decode_normal(vertices[2].normal),
+        ) * barycentrics)
+            .normalize();
+        let tangent_geo = (mat3(
+            decode_normal(vertices[0].tangent),
+            decode_normal(vertices[1].tangent),
+            decode_normal(vertices[2].tangent),
+        ) * barycentrics)
+            .normalize();
         let lod = 0.0; //TODO: this is actually complicated
 
         let tangent_space_world = hit_tangent_space(
@@ -153,47 +150,45 @@ fn main(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
             vertices[0].bitangent_sign,
         );
         let normal_local = sample_hit_normal_map(entry, tex_coords, lod, debug.texture_flags);
-        let mut normal = tangent_space_world * normal_local;
-        basis = shortest_arc_quat(vec3(0.0, 0.0, 1.0), normalize(normal));
+        let normal = tangent_space_world * normal_local;
+        basis = shortest_arc_quat(vec3(0.0, 0.0, 1.0), normal.normalize());
 
         let hit_position = camera.position + intersection.t * ray_dir;
         if enable_debug {
-            unsafe {
-                debug_buf.get_mut().entry.custom_index = intersection.instance_custom_data;
-                debug_buf.get_mut().entry.depth = intersection.t;
-                debug_buf.get_mut().entry.tex_coords = tex_coords;
-                debug_buf.get_mut().entry.base_color_texture = entry.base_color_texture;
-                debug_buf.get_mut().entry.normal_texture = entry.normal_texture;
-                debug_buf.get_mut().entry.position = hit_position;
-                debug_buf.get_mut().entry.flat_normal = flat_normal;
-            }
+            debug_buf.get_mut().entry.custom_index = intersection.instance_custom_data;
+            debug_buf.get_mut().entry.depth = intersection.t;
+            debug_buf.get_mut().entry.tex_coords = tex_coords;
+            debug_buf.get_mut().entry.base_color_texture = entry.base_color_texture;
+            debug_buf.get_mut().entry.normal_texture = entry.normal_texture;
+            debug_buf.get_mut().entry.position = hit_position;
+            debug_buf.get_mut().entry.flat_normal = flat_normal;
         }
-        if enable_debug && (debug.draw_flags & DebugDrawFlags::Space as u32) != 0u32 {
+        if enable_debug && (debug.draw_flags & DebugDrawFlags::Space as u32) != 0 {
             let normal_w = 0.15 * intersection.t * tangent_space_world[2];
             let tangent_w = 0.05 * intersection.t * tangent_space_world[0];
             let bitangent_w = 0.05 * intersection.t * tangent_space_world[1];
-            debug_line(hit_position, hit_position + normal_w, 0xFF8000u32);
+            debug_line(hit_position, hit_position + normal_w, 0xFF8000);
             debug_line(
                 hit_position - 0.5 * tangent_w,
                 hit_position + tangent_w,
-                0x8080FFu32,
+                0x8080FF,
             );
             debug_line(
                 hit_position - 0.5 * bitangent_w,
                 hit_position + bitangent_w,
-                0x80FF80u32,
+                0x80FF80,
             );
         }
-        if enable_debug && (debug.draw_flags & DebugDrawFlags::Geometry as u32) != 0u32 {
+        if enable_debug && (debug.draw_flags & DebugDrawFlags::Geometry as u32) != 0 {
             let debug_len = intersection.t * 0.2;
-            debug_line(positions[0].xyz(), positions[1].xyz(), 0x00FFFFu32);
-            debug_line(positions[1].xyz(), positions[2].xyz(), 0x00FFFFu32);
-            debug_line(positions[2].xyz(), positions[0].xyz(), 0x00FFFFu32);
+            debug_line(positions[0].xyz(), positions[1].xyz(), 0x00FFFF);
+            debug_line(positions[1].xyz(), positions[2].xyz(), 0x00FFFF);
+            debug_line(positions[2].xyz(), positions[0].xyz(), 0x00FFFF);
             let poly_center = (positions[0].xyz() + positions[1].xyz() + positions[2].xyz()) / 3.0;
             debug_line(
                 poly_center,
                 poly_center + 0.2 * debug_len * flat_normal,
-                0xFF00FFu32,
+                0xFF00FF,
             );
             // note: dynamic indexing into positions isn't allowed by WGSL yet
             debug_raw_normal(
@@ -202,7 +197,7 @@ fn main(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
                 entry,
                 intersection.object_to_world,
                 0.5 * debug_len,
-                0xFFFF00u32,
+                0xFFFF00,
             );
             debug_raw_normal(
                 positions[1].xyz(),
@@ -210,7 +205,7 @@ fn main(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
                 entry,
                 intersection.object_to_world,
                 0.5 * debug_len,
-                0xFFFF00u32,
+                0xFFFF00,
             );
             debug_raw_normal(
                 positions[2].xyz(),
@@ -218,23 +213,23 @@ fn main(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
                 entry,
                 intersection.object_to_world,
                 0.5 * debug_len,
-                0xFFFF00u32,
+                0xFFFF00,
             );
             // draw tangent space
             debug_line(
                 hit_position,
                 hit_position + debug_len * qrot(basis, vec3(1.0, 0.0, 0.0)),
-                0x0000FFu32,
+                0x0000FF,
             );
             debug_line(
                 hit_position,
                 hit_position + debug_len * qrot(basis, vec3(0.0, 1.0, 0.0)),
-                0x00FF00u32,
+                0x00FF00,
             );
             debug_line(
                 hit_position,
                 hit_position + debug_len * qrot(basis, vec3(0.0, 0.0, 1.0)),
-                0xFF0000u32,
+                0xFF0000,
             );
         }
 
@@ -243,45 +238,51 @@ fn main(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
 
         if WRITE_DEBUG_IMAGE {
             if debug.view_mode == DebugMode::DiffuseAlbedoTexture as u32 {
-                out_debug.store(global_id.xy(), (material.diffuse_albedo).extend(0.0));
+                out_debug.store(
+                    global_invocation_id.xy(),
+                    material.diffuse_albedo.extend(0.0),
+                );
             }
             if debug.view_mode == DebugMode::DiffuseAlbedoFactor as u32 {
-                out_debug.store(global_id.xy(), unpack4x8unorm(entry.base_color_factor));
+                out_debug.store(
+                    global_invocation_id.xy(),
+                    unpack4x8unorm(entry.base_color_factor),
+                );
             }
             if debug.view_mode == DebugMode::NormalTexture as u32 {
-                out_debug.store(global_id.xy(), (normal_local).extend(0.0));
+                out_debug.store(global_invocation_id.xy(), normal_local.extend(0.0));
             }
             if debug.view_mode == DebugMode::NormalScale as u32 {
-                out_debug.store(global_id.xy(), Vec4::splat(entry.normal_scale));
+                out_debug.store(global_invocation_id.xy(), Vec4::splat(entry.normal_scale));
             }
             if debug.view_mode == DebugMode::Roughness as u32 {
-                out_debug.store(global_id.xy(), Vec4::splat(material.roughness));
+                out_debug.store(global_invocation_id.xy(), Vec4::splat(material.roughness));
             }
             if debug.view_mode == DebugMode::SpecularF0 as u32 {
-                out_debug.store(global_id.xy(), (material.specular_f0).extend(0.0));
+                out_debug.store(global_invocation_id.xy(), material.specular_f0.extend(0.0));
             }
             if debug.view_mode == DebugMode::Emissive as u32 {
-                out_debug.store(global_id.xy(), (emissive).extend(0.0));
+                out_debug.store(global_invocation_id.xy(), emissive.extend(0.0));
             }
             if debug.view_mode == DebugMode::GeometryNormal as u32 {
-                out_debug.store(global_id.xy(), (normal_geo).extend(0.0));
+                out_debug.store(global_invocation_id.xy(), normal_geo.extend(0.0));
             }
             if debug.view_mode == DebugMode::ShadingNormal as u32 {
-                out_debug.store(global_id.xy(), (normal).extend(0.0));
+                out_debug.store(global_invocation_id.xy(), normal.extend(0.0));
             }
             if debug.view_mode == DebugMode::HitConsistency as u32 {
                 let reprojected = get_projected_pixel(*camera, hit_position);
                 let barycentrics_pos_diff =
                     (intersection.object_to_world * position_object).xyz() - hit_position;
                 let camera_projection_diff =
-                    Vec2::<f32>::from(global_id.xy()) - Vec2::<f32>::from(reprojected);
+                    global_invocation_id.xy().cast::<f32>() - reprojected.cast::<f32>();
                 let consistency = vec4(
-                    length(barycentrics_pos_diff),
-                    length(camera_projection_diff),
+                    barycentrics_pos_diff.length(),
+                    camera_projection_diff.length(),
                     0.0,
                     0.0,
                 );
-                out_debug.store(global_id.xy(), consistency);
+                out_debug.store(global_invocation_id.xy(), consistency);
             }
         }
 
@@ -290,33 +291,36 @@ fn main(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
         let prev_screen = get_projected_pixel_float(*prev_camera, prev_position);
         //TODO: consider just storing integers here?
         //TODO: technically this "0.5" is just a waste compute on both packing and unpacking
-        motion = prev_screen - Vec2::from(global_id.xy()) - 0.5;
+        motion = prev_screen - Vec2::from(global_invocation_id.xy()) - 0.5;
         if WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode::Motion as u32 {
             out_debug.store(
-                global_id.xy(),
-                ((motion * MOTION_SCALE + Vec2::splat(0.5)).extend(0.0)).extend(1.0),
+                global_invocation_id.xy(),
+                (motion * MOTION_SCALE + Vec2::splat(0.5))
+                    .extend(0.0)
+                    .extend(1.0),
             );
         }
     } else {
         if enable_debug {
-            unsafe {
-                debug_buf.get_mut().entry = DebugEntry::default();
-            }
+            debug_buf.get_mut().entry = DebugEntry::default();
         }
     }
 
     // TODO: option to avoid writing data for the sky
-    out_depth.store(global_id.xy(), vec4(depth, 0.0, 0.0, 0.0));
-    out_basis.store(global_id.xy(), basis);
-    out_flat_normal.store(global_id.xy(), (flat_normal).extend(0.0));
-    out_diffuse_albedo.store(global_id.xy(), (material.diffuse_albedo).extend(0.0));
-    out_specular_f0.store(
-        global_id.xy(),
-        (material.specular_f0).extend(material.roughness),
+    out_depth.store(global_invocation_id.xy(), vec4(depth, 0.0, 0.0, 0.0));
+    out_basis.store(global_invocation_id.xy(), basis);
+    out_flat_normal.store(global_invocation_id.xy(), flat_normal.extend(0.0));
+    out_diffuse_albedo.store(
+        global_invocation_id.xy(),
+        material.diffuse_albedo.extend(0.0),
     );
-    out_emissive.store(global_id.xy(), (emissive).extend(0.0));
+    out_specular_f0.store(
+        global_invocation_id.xy(),
+        material.specular_f0.extend(material.roughness),
+    );
+    out_emissive.store(global_invocation_id.xy(), emissive.extend(0.0));
     out_motion.store(
-        global_id.xy(),
-        ((motion * MOTION_SCALE).extend(0.0)).extend(0.0),
+        global_invocation_id.xy(),
+        (motion * MOTION_SCALE).extend(0.0).extend(0.0),
     );
 }
