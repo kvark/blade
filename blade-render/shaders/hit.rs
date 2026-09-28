@@ -1,13 +1,13 @@
-use super::brdf::*;
-use super::config::*;
-use super::vertex::*;
+use super::brdf::{Material, material_from_metallic_roughness};
+use super::config::DebugTextureFlags;
+use super::vertex::{Vertex, tangent_basis};
 use synaga_shader::*;
 
 pub struct VertexBuffer {
     pub data: [Vertex],
 }
 
-pub struct IndexBuffer {
+struct IndexBuffer {
     pub data: [u32],
 }
 
@@ -35,15 +35,15 @@ pub struct HitEntry {
 
 pub static vertex_buffers: Storage<binding_array<VertexBuffer>> = binding();
 
-pub static index_buffers: Storage<binding_array<IndexBuffer>> = binding();
+static index_buffers: Storage<binding_array<IndexBuffer>> = binding();
 
 pub static hit_entries: Storage<[HitEntry]> = binding();
 
-pub static textures: binding_array<texture_2d<f32>> = binding();
+static textures: binding_array<texture_2d<f32>> = binding();
 
 pub static sampler_linear: sampler = binding();
 
-pub fn affine_linear(transform: mat4x3) -> mat3x3 {
+fn affine_linear(transform: mat4x3) -> mat3x3 {
     return mat3x3(transform[0].xyz(), transform[1].xyz(), transform[2].xyz());
 }
 
@@ -53,7 +53,7 @@ pub fn hit_winding(entry: HitEntry) -> f32 {
 
 pub fn fetch_triangle_indices(entry: HitEntry, primitive_index: u32) -> vec3u {
     let mut indices = primitive_index * 3u32 + vec3u(0u32, 1u32, 2u32);
-    if (entry.index_buf != !0u32) {
+    if entry.index_buf != !0u32 {
         indices = vec3u(
             (index_buffers[(entry.index_buf) as usize].data)[(indices.x) as usize],
             (index_buffers[(entry.index_buf) as usize].data)[(indices.y) as usize],
@@ -75,7 +75,7 @@ pub fn sample_hit_material(
     ignore_textures: u32,
 ) -> Material {
     let mut base_color = unpack4x8unorm(entry.base_color_factor).xyz();
-    if ((ignore_textures & DebugTextureFlags_ALBEDO) == 0u32) {
+    if (ignore_textures & DebugTextureFlags::Albedo as u32) == 0u32 {
         base_color *= textures[(entry.base_color_texture) as usize]
             .sample_level(&sampler_linear, tex_coords, lod)
             .xyz();
@@ -83,7 +83,7 @@ pub fn sample_hit_material(
 
     let mut metalness = entry.metalness;
     let mut roughness = entry.roughness;
-    if ((ignore_textures & DebugTextureFlags_METALLIC_ROUGHNESS) == 0u32) {
+    if (ignore_textures & DebugTextureFlags::MetallicRoughness as u32) == 0u32 {
         let mr = textures[(entry.metallic_roughness_texture) as usize].sample_level(
             &sampler_linear,
             tex_coords,
@@ -103,7 +103,7 @@ pub fn sample_hit_emissive(
     ignore_textures: u32,
 ) -> vec3 {
     let mut emissive = entry.emissive_factor.xyz();
-    if ((ignore_textures & DebugTextureFlags_EMISSIVE) == 0u32) {
+    if (ignore_textures & DebugTextureFlags::Emissive as u32) == 0u32 {
         emissive *= textures[(entry.emissive_texture) as usize]
             .sample_level(&sampler_linear, tex_coords, lod)
             .xyz();
@@ -117,7 +117,7 @@ pub fn sample_hit_normal_map(
     lod: f32,
     ignore_textures: u32,
 ) -> vec3 {
-    if ((ignore_textures & DebugTextureFlags_NORMAL) != 0u32) {
+    if (ignore_textures & DebugTextureFlags::Normal as u32) != 0u32 {
         return vec3(0.0, 0.0, 1.0);
     }
     let raw_unorm = textures[(entry.normal_texture) as usize]

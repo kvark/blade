@@ -35,13 +35,13 @@ glam = { version = "0.33", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
-# `deserialize` loads Naga IR that synaga serializes. `wgsl-in` stays for shaders that are still text.
+# `deserialize` lets bincode read the module into this copy of Naga.
+# `wgsl-in` stays for shaders that are still text.
 naga = { version = "30", git = "https://github.com/gfx-rs/wgpu", rev = "323acfb729a00c3030e362faa27252afe6368792", features = ["wgsl-in", "termcolor", "deserialize"] }
 # Synaga is not published. This revision is what CI builds. A local checkout
 # can replace these with path = "../synaga" and path = "../synaga/crates/shader".
-synaga = { git = "https://github.com/kvark/synaga", rev = "172251abfdfe4e87c6629eaa7b582ecf4f312ecd" }
-synaga-shader = { git = "https://github.com/kvark/synaga", rev = "172251abfdfe4e87c6629eaa7b582ecf4f312ecd" }
-serde_json = "1"
+synaga = { git = "https://github.com/kvark/synaga", rev = "f3c4a867bd579a7af99d6c72105fccd234cc0da0" }
+synaga-shader = { git = "https://github.com/kvark/synaga", rev = "f3c4a867bd579a7af99d6c72105fccd234cc0da0" }
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.28", features = ["derive"] }
@@ -99,7 +99,6 @@ png = "0.18"
 profiling = { workspace = true }
 ron = "0.12"
 serde = { version = "1", features = ["serde_derive"] }
-serde_json = { workspace = true }
 strum = { workspace = true }
 winit = { workspace = true }
 

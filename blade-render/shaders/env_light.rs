@@ -1,7 +1,9 @@
-use super::brdf::*;
-use super::env_importance::*;
-use super::hit::*;
-use super::random::*;
+use super::brdf::PI;
+use super::env_importance::{
+    compute_environment_sample_pdf, compute_latitude_area_bounds, generate_environment_sample,
+};
+use super::hit::sampler_linear;
+use super::random::{RandomState, random_gen};
 use super::sampling::sample_circle_uniform;
 use synaga_shader::*;
 
@@ -13,24 +15,23 @@ pub struct LightSample {
     pub uv: vec2,
 }
 
-pub static env_map: texture_2d<f32> = binding();
-
-pub static sampler_nearest: sampler = binding();
+static env_map: texture_2d<f32> = binding();
+static sampler_nearest: sampler = binding();
 
 pub fn map_equirect_dir_to_uv(dir: vec3) -> vec2 {
     //Note: Y axis is up
-    let yaw = asin(dir.y);
-    let pitch = atan2(dir.x, dir.z);
+    let yaw = dir.y.asin();
+    let pitch = dir.x.atan2(dir.z);
     return vec2(pitch + PI, -2.0 * yaw + PI) / (2.0 * PI);
 }
 
 pub fn map_equirect_uv_to_dir(uv: vec2) -> vec3 {
     let yaw = PI * (0.5 - uv.y);
     let pitch = 2.0 * PI * (uv.x - 0.5);
-    return vec3(cos(yaw) * sin(pitch), sin(yaw), cos(yaw) * cos(pitch));
+    return vec3(yaw.cos() * pitch.sin(), yaw.sin(), yaw.cos() * pitch.cos());
 }
 
-pub fn sample_light_from_environment(rng: &mut RandomState) -> LightSample {
+fn sample_light_from_environment(rng: &mut RandomState) -> LightSample {
     let dim = env_map.level_dimensions(0);
     let es = generate_environment_sample(rng, dim);
     let mut ls = LightSample::default();
@@ -41,13 +42,13 @@ pub fn sample_light_from_environment(rng: &mut RandomState) -> LightSample {
     // this offset has to be uniformly distributed across the surface of the texel
     let u = ((es.pixel.x) as f32 + random_gen(rng)) / (dim.x) as f32;
     let bounds = compute_latitude_area_bounds(es.pixel.y, dim.y);
-    let v = acos(mix(bounds.x, bounds.y, random_gen(rng))) / PI;
+    let v = mix(bounds.x, bounds.y, random_gen(rng)).acos() / PI;
     ls.uv = vec2(u, v);
     return ls;
 }
 
 pub fn compute_light_pdf(uv: vec2, importance: bool) -> f32 {
-    if (!importance) {
+    if !importance {
         return 1.0 / (4.0 * PI);
     }
     let dim = env_map.level_dimensions(0);
@@ -69,7 +70,7 @@ pub fn evaluate_environment_background(dir: vec3) -> vec3 {
     return env_map.sample_level(&sampler_linear, uv, 0.0).xyz();
 }
 
-pub fn sample_light_from_sphere(rng: &mut RandomState) -> LightSample {
+fn sample_light_from_sphere(rng: &mut RandomState) -> LightSample {
     let a = random_gen(rng);
     let h = 1.0 - 2.0 * random_gen(rng); // make sure to allow h==1
     let tangential = sqrt(max(0.0, 1.0 - h * h)) * sample_circle_uniform(a);
@@ -82,7 +83,7 @@ pub fn sample_light_from_sphere(rng: &mut RandomState) -> LightSample {
 }
 
 pub fn sample_light(importance: bool, rng: &mut RandomState) -> LightSample {
-    if (importance) {
+    if importance {
         return sample_light_from_environment(rng);
     } else {
         return sample_light_from_sphere(rng);

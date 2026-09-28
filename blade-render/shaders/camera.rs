@@ -1,7 +1,7 @@
-use super::quaternion::*;
+use super::quaternion::{qinv, qrot};
 use synaga_shader::*;
 
-pub const VFLIP: vec2 = vec2(1.0, -1.0);
+const VFLIP: vec2 = vec2(1.0, -1.0);
 
 #[derive(Clone, Copy, Default)]
 pub struct CameraParams {

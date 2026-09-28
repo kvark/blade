@@ -1,39 +1,34 @@
-use super::brdf::*;
-use super::camera::*;
-use super::config::*;
-use super::debug::*;
-use super::debug_param::*;
-use super::gbuf::*;
-use super::hit::*;
-use super::quaternion::*;
-use super::vertex::*;
+use super::brdf::Material;
+use super::camera::{
+    CameraParams, get_projected_pixel, get_projected_pixel_float, get_ray_direction,
+};
+use super::config::{DebugDrawFlags, DebugMode};
+use super::debug::{DebugEntry, debug_buf, debug_line};
+use super::debug_param::DebugParams;
+use super::gbuf::{MOTION_SCALE, WRITE_DEBUG_IMAGE};
+use super::hit::{
+    HitEntry, fetch_triangle_indices, hit_entries, hit_normal, hit_tangent_space, hit_winding,
+    make_barycentrics, sample_hit_emissive, sample_hit_material, sample_hit_normal_map,
+    vertex_buffers,
+};
+use super::quaternion::{qrot, shortest_arc_quat};
+use super::vertex::decode_normal;
 use synaga_shader::*;
 
-pub static camera: Uniform<CameraParams> = binding();
+static camera: Uniform<CameraParams> = binding();
+static prev_camera: Uniform<CameraParams> = binding();
+static debug: Uniform<DebugParams> = binding();
+static acc_struct: acceleration_structure = binding();
+static out_depth: texture_storage_2d<R32Float, Write> = binding();
+static out_flat_normal: texture_storage_2d<Rgba8Snorm, Write> = binding();
+static out_basis: texture_storage_2d<Rgba8Snorm, Write> = binding();
+static out_diffuse_albedo: texture_storage_2d<Rgba8Unorm, Write> = binding();
+static out_specular_f0: texture_storage_2d<Rgba8Unorm, Write> = binding();
+static out_emissive: texture_storage_2d<Rgba16Float, Write> = binding();
+static out_motion: texture_storage_2d<Rg16Float, Write> = binding();
+static out_debug: texture_storage_2d<Rgba8Unorm, Write> = binding();
 
-pub static prev_camera: Uniform<CameraParams> = binding();
-
-pub static debug: Uniform<DebugParams> = binding();
-
-pub static acc_struct: acceleration_structure = binding();
-
-pub static out_depth: texture_storage_2d<R32Float, Write> = binding();
-
-pub static out_flat_normal: texture_storage_2d<Rgba8Snorm, Write> = binding();
-
-pub static out_basis: texture_storage_2d<Rgba8Snorm, Write> = binding();
-
-pub static out_diffuse_albedo: texture_storage_2d<Rgba8Unorm, Write> = binding();
-
-pub static out_specular_f0: texture_storage_2d<Rgba8Unorm, Write> = binding();
-
-pub static out_emissive: texture_storage_2d<Rgba16Float, Write> = binding();
-
-pub static out_motion: texture_storage_2d<Rg16Float, Write> = binding();
-
-pub static out_debug: texture_storage_2d<Rgba8Unorm, Write> = binding();
-
-pub fn debug_raw_normal(
+fn debug_raw_normal(
     pos: vec3,
     normal_raw: u32,
     entry: HitEntry,
@@ -46,11 +41,11 @@ pub fn debug_raw_normal(
 }
 
 #[entry_point(compute, threads(8, 4))]
-pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
-    if (any(global_id.xy().cmpge(camera.target_size))) {
+fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
+    if any(global_id.xy().cmpge(camera.target_size)) {
         return;
     }
-    if (WRITE_DEBUG_IMAGE && debug.view_mode != DebugMode_Final) {
+    if WRITE_DEBUG_IMAGE && debug.view_mode != DebugMode::Final as u32 {
         out_debug.store(global_id.xy(), vec4::splat(0.0));
     }
 
@@ -84,7 +79,7 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
     let mut motion = vec2::splat(0.0);
     let enable_debug = all(global_id.xy().cmpeq(debug.mouse_pos));
 
-    if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
+    if intersection.kind != RAY_QUERY_INTERSECTION_NONE {
         let entry =
             hit_entries[(intersection.instance_custom_data + intersection.geometry_index) as usize];
         depth = intersection.t;
@@ -162,7 +157,7 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
         basis = shortest_arc_quat(vec3(0.0, 0.0, 1.0), normalize(normal));
 
         let hit_position = camera.position + intersection.t * ray_dir;
-        if (enable_debug) {
+        if enable_debug {
             unsafe {
                 debug_buf.get_mut().entry.custom_index = intersection.instance_custom_data;
                 debug_buf.get_mut().entry.depth = intersection.t;
@@ -173,7 +168,7 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
                 debug_buf.get_mut().entry.flat_normal = flat_normal;
             }
         }
-        if (enable_debug && (debug.draw_flags & DebugDrawFlags_SPACE) != 0u32) {
+        if enable_debug && (debug.draw_flags & DebugDrawFlags::Space as u32) != 0u32 {
             let normal_w = 0.15 * intersection.t * tangent_space_world[2];
             let tangent_w = 0.05 * intersection.t * tangent_space_world[0];
             let bitangent_w = 0.05 * intersection.t * tangent_space_world[1];
@@ -189,7 +184,7 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
                 0x80FF80u32,
             );
         }
-        if (enable_debug && (debug.draw_flags & DebugDrawFlags_GEOMETRY) != 0u32) {
+        if enable_debug && (debug.draw_flags & DebugDrawFlags::Geometry as u32) != 0u32 {
             let debug_len = intersection.t * 0.2;
             debug_line(positions[0].xyz(), positions[1].xyz(), 0x00FFFFu32);
             debug_line(positions[1].xyz(), positions[2].xyz(), 0x00FFFFu32);
@@ -246,35 +241,35 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
         material = sample_hit_material(entry, tex_coords, lod, debug.texture_flags);
         emissive = sample_hit_emissive(entry, tex_coords, lod, debug.texture_flags);
 
-        if (WRITE_DEBUG_IMAGE) {
-            if (debug.view_mode == DebugMode_DiffuseAlbedoTexture) {
+        if WRITE_DEBUG_IMAGE {
+            if debug.view_mode == DebugMode::DiffuseAlbedoTexture as u32 {
                 out_debug.store(global_id.xy(), (material.diffuse_albedo).extend(0.0));
             }
-            if (debug.view_mode == DebugMode_DiffuseAlbedoFactor) {
+            if debug.view_mode == DebugMode::DiffuseAlbedoFactor as u32 {
                 out_debug.store(global_id.xy(), unpack4x8unorm(entry.base_color_factor));
             }
-            if (debug.view_mode == DebugMode_NormalTexture) {
+            if debug.view_mode == DebugMode::NormalTexture as u32 {
                 out_debug.store(global_id.xy(), (normal_local).extend(0.0));
             }
-            if (debug.view_mode == DebugMode_NormalScale) {
+            if debug.view_mode == DebugMode::NormalScale as u32 {
                 out_debug.store(global_id.xy(), vec4::splat(entry.normal_scale));
             }
-            if (debug.view_mode == DebugMode_Roughness) {
+            if debug.view_mode == DebugMode::Roughness as u32 {
                 out_debug.store(global_id.xy(), vec4::splat(material.roughness));
             }
-            if (debug.view_mode == DebugMode_SpecularF0) {
+            if debug.view_mode == DebugMode::SpecularF0 as u32 {
                 out_debug.store(global_id.xy(), (material.specular_f0).extend(0.0));
             }
-            if (debug.view_mode == DebugMode_Emissive) {
+            if debug.view_mode == DebugMode::Emissive as u32 {
                 out_debug.store(global_id.xy(), (emissive).extend(0.0));
             }
-            if (debug.view_mode == DebugMode_GeometryNormal) {
+            if debug.view_mode == DebugMode::GeometryNormal as u32 {
                 out_debug.store(global_id.xy(), (normal_geo).extend(0.0));
             }
-            if (debug.view_mode == DebugMode_ShadingNormal) {
+            if debug.view_mode == DebugMode::ShadingNormal as u32 {
                 out_debug.store(global_id.xy(), (normal).extend(0.0));
             }
-            if (debug.view_mode == DebugMode_HitConsistency) {
+            if debug.view_mode == DebugMode::HitConsistency as u32 {
                 let reprojected = get_projected_pixel(*camera, hit_position);
                 let barycentrics_pos_diff =
                     (intersection.object_to_world * position_object).xyz() - hit_position;
@@ -295,14 +290,14 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
         //TODO: consider just storing integers here?
         //TODO: technically this "0.5" is just a waste compute on both packing and unpacking
         motion = prev_screen - vec2::from(global_id.xy()) - 0.5;
-        if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Motion) {
+        if WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode::Motion as u32 {
             out_debug.store(
                 global_id.xy(),
                 ((motion * MOTION_SCALE + vec2::splat(0.5)).extend(0.0)).extend(1.0),
             );
         }
     } else {
-        if (enable_debug) {
+        if enable_debug {
             unsafe {
                 debug_buf.get_mut().entry = DebugEntry::default();
             }

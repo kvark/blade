@@ -1,37 +1,33 @@
-use super::config::*;
-use super::skin_inc::*;
-use super::vertex::*;
+use super::skin_inc::{SkinVertex, apply_affine, skin_blend, skin_linear, skinning_params};
+use super::vertex::{Vertex, decode_normal};
 use synaga_shader::*;
 
 #[derive(Clone, Copy, Default)]
-pub struct SkinDispatch {
+struct SkinDispatch {
     pub vertex_count: u32,
     pub _pad0: u32,
     pub _pad1: u32,
     pub _pad2: u32,
 }
 
-pub static skin_dispatch: Uniform<SkinDispatch> = binding();
+static skin_dispatch: Uniform<SkinDispatch> = binding();
+static source: Storage<[Vertex]> = binding();
+static skin_source: Storage<[SkinVertex]> = binding();
+static destination: StorageMut<[Vertex]> = binding();
 
-pub static source: Storage<[Vertex]> = binding();
-
-pub static skin_source: Storage<[SkinVertex]> = binding();
-
-pub static destination: StorageMut<[Vertex]> = binding();
-
-pub fn encode_normal(n: vec3) -> u32 {
+fn encode_normal(n: vec3) -> u32 {
     return pack4x8snorm((n).extend(0.0));
 }
 
-pub fn normalize_or_zero(v: vec3) -> vec3 {
+fn normalize_or_zero(v: vec3) -> vec3 {
     let len2 = dot(v, v);
-    if (len2 < 1.0e-20) {
+    if len2 < 1.0e-20 {
         return vec3::splat(0.0);
     }
     return v * inverseSqrt(len2);
 }
 
-pub fn skin_stored_vertex(input: Vertex, skin: SkinVertex) -> Vertex {
+fn skin_stored_vertex(input: Vertex, skin: SkinVertex) -> Vertex {
     let mut out = input;
     let blended = skin_blend(skin);
     let skinned_position = apply_affine(blended, input.position);
@@ -46,9 +42,9 @@ pub fn skin_stored_vertex(input: Vertex, skin: SkinVertex) -> Vertex {
 }
 
 #[entry_point(compute, threads(64, 1, 1))]
-pub fn skin(#[builtin(global_invocation_id)] global_id: vec3u) {
+fn skin(#[builtin(global_invocation_id)] global_id: vec3u) {
     let i = global_id.x;
-    if (i >= skin_dispatch.vertex_count) {
+    if i >= skin_dispatch.vertex_count {
         return;
     }
     unsafe {

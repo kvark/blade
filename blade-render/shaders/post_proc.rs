@@ -1,11 +1,11 @@
-use super::color::*;
-use super::config::*;
-use super::debug::*;
-use super::debug_param::*;
+use super::color::{encode_srgb, encode_surface_color};
+use super::config::DebugMode;
+
+use super::debug_param::DebugParams;
 use synaga_shader::*;
 
 #[derive(Clone, Copy, Default)]
-pub struct PostProcParams {
+struct PostProcParams {
     pub tone_map_enabled: u32,
     pub average_lum: f32,
     pub key_value: f32,
@@ -21,7 +21,7 @@ pub struct PostProcParams {
 }
 
 #[derive(Clone, Copy, Debug, Default, Io)]
-pub struct VertexOutput {
+struct VertexOutput {
     #[builtin(position)]
     clip_pos: vec4,
     #[location(0)]
@@ -29,26 +29,18 @@ pub struct VertexOutput {
     input_size: vec2u,
 }
 
-pub static t_diffuse_albedo: texture_2d<f32> = binding();
-
-pub static t_emissive: texture_2d<f32> = binding();
-
-pub static light_diffuse: texture_2d<f32> = binding();
-
-pub static light_specular: texture_2d<f32> = binding();
-
-pub static t_accumulation: texture_2d<f32> = binding();
-
-pub static t_debug: texture_2d<f32> = binding();
-
-pub static t_external: texture_2d<f32> = binding();
-
-pub static post_proc_params: Uniform<PostProcParams> = binding();
-
-pub static debug_params: Uniform<DebugParams> = binding();
+static t_diffuse_albedo: texture_2d<f32> = binding();
+static t_emissive: texture_2d<f32> = binding();
+static light_diffuse: texture_2d<f32> = binding();
+static light_specular: texture_2d<f32> = binding();
+static t_accumulation: texture_2d<f32> = binding();
+static t_debug: texture_2d<f32> = binding();
+static t_external: texture_2d<f32> = binding();
+static post_proc_params: Uniform<PostProcParams> = binding();
+static debug_params: Uniform<DebugParams> = binding();
 
 #[entry_point(vertex)]
-pub fn postfx_vs(#[builtin(vertex_index)] vi: u32) -> VertexOutput {
+fn postfx_vs(#[builtin(vertex_index)] vi: u32) -> VertexOutput {
     let mut vo = VertexOutput::default();
     vo.clip_pos = vec4(
         (vi & 1u32) as f32 * 4.0 - 1.0,
@@ -62,14 +54,14 @@ pub fn postfx_vs(#[builtin(vertex_index)] vi: u32) -> VertexOutput {
 
 #[entry_point(fragment)]
 #[output(location(0))]
-pub fn postfx_fs(vo: VertexOutput) -> vec4 {
+fn postfx_fs(vo: VertexOutput) -> vec4 {
     let tc = vec2i((vo.clip_pos.x) as i32, (vo.clip_pos.y) as i32);
     let illumination = light_diffuse.load(tc, 0);
-    if (debug_params.view_mode == DebugMode_Final) {
+    if debug_params.view_mode == DebugMode::Final as u32 {
         let mut color = vec3::default();
-        if (post_proc_params.external_input != 0u32) {
+        if post_proc_params.external_input != 0u32 {
             color = t_external.load(tc, 0).xyz();
-        } else if (post_proc_params.accumulated != 0u32) {
+        } else if post_proc_params.accumulated != 0u32 {
             // The canonical renderer produces the final radiance directly.
             let total = t_accumulation.load(tc, 0);
             color = total.xyz() / max(total.w, 1.0);
@@ -81,7 +73,7 @@ pub fn postfx_fs(vo: VertexOutput) -> vec4 {
             let emissive = t_emissive.load(tc, 0).xyz();
             color = diffuse_albedo * illumination.xyz() + specular + emissive;
         }
-        if (post_proc_params.tone_map_enabled == 0u32) {
+        if post_proc_params.tone_map_enabled == 0u32 {
             // Hand back the composed radiance untouched. A display transfer
             // function is only defined over the display range, so a value
             // that was never brought into it doesn't get encoded.
@@ -93,7 +85,7 @@ pub fn postfx_fs(vo: VertexOutput) -> vec4 {
         let mapped = l_adjusted * (1.0 + l_adjusted / (l_white * l_white)) / (1.0 + l_adjusted);
         let encode = post_proc_params.encode_srgb != 0u32;
         return (encode_surface_color(mapped, encode)).extend(1.0);
-    } else if (debug_params.view_mode == DebugMode_Variance) {
+    } else if debug_params.view_mode == DebugMode::Variance as u32 {
         return vec4::splat(illumination.w);
     } else {
         return t_debug.load(tc, 0);

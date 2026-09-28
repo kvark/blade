@@ -1,64 +1,55 @@
-use super::camera::*;
-use super::config::*;
-use super::gbuf::*;
-use super::quaternion::*;
-use super::surface::*;
+use super::camera::{CameraParams, get_projected_pixel_float, get_ray_direction};
+
+use super::gbuf::{MOTION_SCALE, USE_MOTION_VECTORS};
+
+use super::surface::{Surface, compare_depths, compare_flat_normals};
 use synaga_shader::*;
 
-pub const LUMA: vec3 = vec3(0.2126, 0.7152, 0.0722);
+const LUMA: vec3 = vec3(0.2126, 0.7152, 0.0722);
 
-pub const MIN_WEIGHT: f32 = 0.01;
+const MIN_WEIGHT: f32 = 0.01;
 
-pub const GAUSSIAN_WEIGHTS: vec2 = vec2(0.44198, 0.27901);
+const GAUSSIAN_WEIGHTS: vec2 = vec2(0.44198, 0.27901);
 
-pub const SIGMA_L: f32 = 4.0;
+const SIGMA_L: f32 = 4.0;
 
-pub const EPSILON: f32 = 0.001;
+const EPSILON: f32 = 0.001;
 
 #[derive(Clone, Copy, Default)]
-pub struct Params {
+struct Params {
     pub extent: vec2i,
     pub temporal_weight: f32,
     pub iteration: u32,
     pub use_motion_vectors: u32,
 }
 
-pub static camera: Uniform<CameraParams> = binding();
+static camera: Uniform<CameraParams> = binding();
+static prev_camera: Uniform<CameraParams> = binding();
+static params: Uniform<Params> = binding();
+static t_depth: texture_2d<f32> = binding();
+static t_prev_depth: texture_2d<f32> = binding();
+static t_flat_normal: texture_2d<f32> = binding();
+static t_prev_flat_normal: texture_2d<f32> = binding();
+static t_motion: texture_2d<f32> = binding();
+static input: texture_2d<f32> = binding();
+static output: texture_storage_2d<Rgba16Float, ReadWrite> = binding();
 
-pub static prev_camera: Uniform<CameraParams> = binding();
-
-pub static params: Uniform<Params> = binding();
-
-pub static t_depth: texture_2d<f32> = binding();
-
-pub static t_prev_depth: texture_2d<f32> = binding();
-
-pub static t_flat_normal: texture_2d<f32> = binding();
-
-pub static t_prev_flat_normal: texture_2d<f32> = binding();
-
-pub static t_motion: texture_2d<f32> = binding();
-
-pub static input: texture_2d<f32> = binding();
-
-pub static output: texture_storage_2d<Rgba16Float, ReadWrite> = binding();
-
-pub fn read_surface(pixel: vec2i) -> Surface {
+fn read_surface(pixel: vec2i) -> Surface {
     let mut surface = Surface::default();
     surface.flat_normal = normalize(t_flat_normal.load(pixel, 0).xyz());
     surface.depth = t_depth.load(pixel, 0).x;
     return surface;
 }
 
-pub fn read_prev_surface(pixel: vec2i) -> Surface {
+fn read_prev_surface(pixel: vec2i) -> Surface {
     let mut surface = Surface::default();
     surface.flat_normal = normalize(t_prev_flat_normal.load(pixel, 0).xyz());
     surface.depth = t_prev_depth.load(pixel, 0).x;
     return surface;
 }
 
-pub fn get_prev_pixel(pixel: vec2i, pos_world: vec3) -> vec2 {
-    if (USE_MOTION_VECTORS && params.use_motion_vectors != 0u32) {
+fn get_prev_pixel(pixel: vec2i, pos_world: vec3) -> vec2 {
+    if USE_MOTION_VECTORS && params.use_motion_vectors != 0u32 {
         let motion = t_motion.load(pixel, 0).xy() / MOTION_SCALE;
         return vec2::from(pixel) + 0.5 + motion;
     } else {
@@ -66,18 +57,18 @@ pub fn get_prev_pixel(pixel: vec2i, pos_world: vec3) -> vec2 {
     }
 }
 
-pub fn compare_luminance(a_lum: f32, b_lum: f32, variance: f32) -> f32 {
+fn compare_luminance(a_lum: f32, b_lum: f32, variance: f32) -> f32 {
     return exp(-abs(a_lum - b_lum) / (SIGMA_L * variance + EPSILON));
 }
 
-pub fn w4(w: f32) -> vec4 {
+fn w4(w: f32) -> vec4 {
     return (vec3::splat(w)).extend(w * w);
 }
 
 #[entry_point(compute, threads(8, 8))]
-pub fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
+fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
     let pixel = vec2i::from(global_id.xy());
-    if (any(pixel.cmpge(params.extent))) {
+    if any(pixel.cmpge(params.extent)) {
         return;
     }
 
@@ -102,17 +93,17 @@ pub fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
 
     let mut sum_weight = 0.0;
     let mut sum_ilm = vec4::splat(0.0);
-    if (params.temporal_weight != 1.0) {
+    if params.temporal_weight != 1.0 {
         //TODO: optimize depth load with a gather operation
         for i in (0)..(4) {
             let prev_pixel = prev_pixels[(i) as usize];
-            if (all(prev_pixel.cmpge(vec2i::splat(0))) && all(prev_pixel.cmplt(params.extent))) {
+            if all(prev_pixel.cmpge(vec2i::splat(0))) && all(prev_pixel.cmplt(params.extent)) {
                 let prev_surface = read_prev_surface(prev_pixel);
-                if (compare_flat_normals(surface.flat_normal, prev_surface.flat_normal) < 0.5) {
+                if compare_flat_normals(surface.flat_normal, prev_surface.flat_normal) < 0.5 {
                     continue;
                 }
                 let projected_distance = length(pos_world - prev_camera.position);
-                if (compare_depths(prev_surface.depth, projected_distance) < 0.5) {
+                if compare_depths(prev_surface.depth, projected_distance) < 0.5 {
                     continue;
                 }
                 let w = prev_weights[(i) as usize];
@@ -127,7 +118,7 @@ pub fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
     let cur_illumination = output.load(pixel).xyz();
     let cur_luminocity = dot(cur_illumination, LUMA);
     let mut mixed_ilm = (cur_illumination).extend(cur_luminocity * cur_luminocity);
-    if (sum_weight > MIN_WEIGHT) {
+    if sum_weight > MIN_WEIGHT {
         let prev_ilm =
             sum_ilm / (vec3::splat(sum_weight)).extend(max(0.001, sum_weight * sum_weight));
         mixed_ilm = mix(
@@ -141,9 +132,9 @@ pub fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
 }
 
 #[entry_point(compute, threads(8, 8))]
-pub fn atrous_filter(#[builtin(global_invocation_id)] global_id: vec3u) {
+fn atrous_filter(#[builtin(global_invocation_id)] global_id: vec3u) {
     let center = vec2i::from(global_id.xy());
-    if (any(center.cmpge(params.extent))) {
+    if any(center.cmpge(params.extent)) {
         return;
     }
 
@@ -155,9 +146,7 @@ pub fn atrous_filter(#[builtin(global_invocation_id)] global_id: vec3u) {
     for yy in -1i32..=1i32 {
         for xx in -1i32..=1i32 {
             let p = center + vec2i(xx, yy) * (1i32 << params.iteration);
-            if (all(p.cmpeq(center))
-                || any(p.cmplt(vec2i::splat(0)))
-                || any(p.cmpge(params.extent)))
+            if all(p.cmpeq(center)) || any(p.cmplt(vec2i::splat(0))) || any(p.cmpge(params.extent))
             {
                 continue;
             }
@@ -188,7 +177,7 @@ pub fn atrous_filter(#[builtin(global_invocation_id)] global_id: vec3u) {
             // sum to less than one, keeping this a convex update.
             // 0 * NaN is NaN. A non-positive weight adds nothing and must
             // not be multiplied through, or one neighbour blanks later passes.
-            if (weight > 0.0) {
+            if weight > 0.0 {
                 filtered_ilm += w4(weight) * (other_ilm - center_ilm);
             }
         }

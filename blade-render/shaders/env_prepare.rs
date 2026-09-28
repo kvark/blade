@@ -1,30 +1,28 @@
 use synaga_shader::*;
 
-pub const PI: f32 = 3.1415926;
+const PI: f32 = 3.1415926;
 
-pub const LUMA: vec3 = vec3(0.299, 0.587, 0.114);
+const LUMA: vec3 = vec3(0.299, 0.587, 0.114);
 
-pub const MAX_FP16: f32 = 65504.0;
+const MAX_FP16: f32 = 65504.0;
 
-pub const SUM: vec4 = vec4(0.25, 0.25, 0.25, 0.25);
+const SUM: vec4 = vec4(0.25, 0.25, 0.25, 0.25);
 
 #[derive(Clone, Copy, Default)]
-pub struct EnvPreprocParams {
+struct EnvPreprocParams {
     pub target_level: u32,
 }
 
-pub static source: texture_2d<f32> = binding();
+static source: texture_2d<f32> = binding();
+static destination: texture_storage_2d<Rgba16Float, Write> = binding();
+static params: Uniform<EnvPreprocParams> = binding();
 
-pub static destination: texture_storage_2d<Rgba16Float, Write> = binding();
-
-pub static params: Uniform<EnvPreprocParams> = binding();
-
-pub fn get_pixel_weight(pixel: vec2u, src_size: vec2u) -> f32 {
-    if (any(pixel.cmpge(src_size))) {
+fn get_pixel_weight(pixel: vec2u, src_size: vec2u) -> f32 {
+    if any(pixel.cmpge(src_size)) {
         return 0.0;
     }
     let color = source.load(vec2i::from(pixel), 0);
-    if (params.target_level == 0u32) {
+    if params.target_level == 0u32 {
         let luma = max(0.0, dot(LUMA, color.xyz()));
         let elevation = (((pixel.y) as f32 + 0.5) / (src_size.y) as f32 - 0.5) * PI;
         let relative_solid_angle = cos(elevation);
@@ -35,9 +33,9 @@ pub fn get_pixel_weight(pixel: vec2u, src_size: vec2u) -> f32 {
 }
 
 #[entry_point(compute, threads(8, 8))]
-pub fn downsample(#[builtin(global_invocation_id)] global_id: vec3u) {
+fn downsample(#[builtin(global_invocation_id)] global_id: vec3u) {
     let dst_size = destination.dimensions();
-    if (any(global_id.xy().cmpge(dst_size))) {
+    if any(global_id.xy().cmpge(dst_size)) {
         return;
     }
 

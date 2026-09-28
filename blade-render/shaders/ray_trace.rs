@@ -1,27 +1,34 @@
-use super::brdf::*;
-use super::camera::*;
-use super::config::*;
-use super::debug::*;
-use super::debug_param::*;
-use super::env_importance::*;
-use super::env_light::*;
-use super::gbuf::*;
-use super::hit::*;
-use super::quaternion::*;
-use super::random::*;
-use super::sampling::*;
-use super::surface::*;
-use super::vertex::*;
+use super::brdf::{
+    BrdfLobes, Material, compute_luminocity, evaluate_brdf, is_brdf_black, zero_brdf,
+};
+use super::camera::{CameraParams, get_projected_pixel_float, get_ray_direction};
+use super::config::{DEBUG_MODE, DebugDrawFlags, DebugMode};
+use super::debug::{debug_buf, debug_line};
+use super::debug_param::DebugParams;
+
+use super::env_light::{
+    LightSample, compute_light_pdf, evaluate_environment, evaluate_environment_background,
+    map_equirect_dir_to_uv, map_equirect_uv_to_dir, sample_light,
+};
+use super::gbuf::{MOTION_SCALE, USE_MOTION_VECTORS, WRITE_DEBUG_IMAGE};
+use super::hit::{
+    fetch_triangle_indices, hit_entries, make_barycentrics, sample_hit_emissive, vertex_buffers,
+};
+use super::quaternion::qrot;
+use super::random::{RandomState, random_gen, random_init};
+use super::sampling::{compute_bsdf_pdf, sample_bsdf, sample_circle_uniform};
+use super::surface::{Surface, compare_surfaces};
+
 use synaga_shader::*;
 
-pub const MAX_RESERVOIRS: u32 = 4u32;
+const MAX_RESERVOIRS: u32 = 4u32;
 
-pub const DECOUPLED_SHADING: bool = false;
+const DECOUPLED_SHADING: bool = false;
 
-pub const FACTOR_CANDIDATES: u32 = 3u32;
+const FACTOR_CANDIDATES: u32 = 3u32;
 
 #[derive(Clone, Copy, Default)]
-pub struct MainParams {
+struct MainParams {
     pub frame_index: u32,
     pub num_environment_samples: u32,
     pub num_brdf_samples: u32,
@@ -37,7 +44,7 @@ pub struct MainParams {
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct StoredReservoir {
+struct StoredReservoir {
     pub light_uv: vec2,
     pub light_index: u32,
     pub target_score: f32,
@@ -46,13 +53,13 @@ pub struct StoredReservoir {
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct Radiance {
+struct Radiance {
     pub diffuse: vec3,
     pub specular: vec3,
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct LiveReservoir {
+struct LiveReservoir {
     pub selected_uv: vec2,
     pub selected_light_index: u32,
     pub selected_target_score: f32,
@@ -62,126 +69,104 @@ pub struct LiveReservoir {
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct TargetScore {
+struct TargetScore {
     pub radiance: Radiance,
     pub score: f32,
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct RestirOutput {
+struct RestirOutput {
     pub radiance: Radiance,
 }
 
-pub static camera: Uniform<CameraParams> = binding();
+static camera: Uniform<CameraParams> = binding();
+static prev_camera: Uniform<CameraParams> = binding();
+static parameters: Uniform<MainParams> = binding();
+static debug: Uniform<DebugParams> = binding();
+static acc_struct: acceleration_structure = binding();
+static prev_acc_struct: acceleration_structure = binding();
+static reservoirs: StorageMut<[StoredReservoir]> = binding();
+static prev_reservoirs: Storage<[StoredReservoir]> = binding();
+static t_depth: texture_2d<f32> = binding();
+static t_prev_depth: texture_2d<f32> = binding();
+static t_basis: texture_2d<f32> = binding();
+static t_prev_basis: texture_2d<f32> = binding();
+static t_flat_normal: texture_2d<f32> = binding();
+static t_prev_flat_normal: texture_2d<f32> = binding();
+static t_diffuse_albedo: texture_2d<f32> = binding();
+static t_prev_diffuse_albedo: texture_2d<f32> = binding();
+static t_specular_f0: texture_2d<f32> = binding();
+static t_prev_specular_f0: texture_2d<f32> = binding();
+static t_motion: texture_2d<f32> = binding();
+static out_diffuse: texture_storage_2d<Rgba16Float, Write> = binding();
+static out_specular: texture_storage_2d<Rgba16Float, Write> = binding();
+static out_debug: texture_storage_2d<Rgba8Unorm, Write> = binding();
+static debug_len: Private<f32> = binding();
 
-pub static prev_camera: Uniform<CameraParams> = binding();
-
-pub static parameters: Uniform<MainParams> = binding();
-
-pub static debug: Uniform<DebugParams> = binding();
-
-pub static acc_struct: acceleration_structure = binding();
-
-pub static prev_acc_struct: acceleration_structure = binding();
-
-pub static reservoirs: StorageMut<[StoredReservoir]> = binding();
-
-pub static prev_reservoirs: Storage<[StoredReservoir]> = binding();
-
-pub static t_depth: texture_2d<f32> = binding();
-
-pub static t_prev_depth: texture_2d<f32> = binding();
-
-pub static t_basis: texture_2d<f32> = binding();
-
-pub static t_prev_basis: texture_2d<f32> = binding();
-
-pub static t_flat_normal: texture_2d<f32> = binding();
-
-pub static t_prev_flat_normal: texture_2d<f32> = binding();
-
-pub static t_diffuse_albedo: texture_2d<f32> = binding();
-
-pub static t_prev_diffuse_albedo: texture_2d<f32> = binding();
-
-pub static t_specular_f0: texture_2d<f32> = binding();
-
-pub static t_prev_specular_f0: texture_2d<f32> = binding();
-
-pub static t_motion: texture_2d<f32> = binding();
-
-pub static out_diffuse: texture_storage_2d<Rgba16Float, Write> = binding();
-
-pub static out_specular: texture_storage_2d<Rgba16Float, Write> = binding();
-
-pub static out_debug: texture_storage_2d<Rgba8Unorm, Write> = binding();
-
-pub static debug_len: Private<f32> = binding();
-
-pub fn divide_if_positive(numer: f32, denom: f32) -> f32 {
-    if (denom > 0.0) {
+fn divide_if_positive(numer: f32, denom: f32) -> f32 {
+    if denom > 0.0 {
         return numer / denom;
     } else {
         return 0.0;
     }
 }
 
-pub fn normalize_nonzero(v: vec4) -> vec4 {
-    if (dot(v, v) > 0.0) {
+fn normalize_nonzero(v: vec4) -> vec4 {
+    if dot(v, v) > 0.0 {
         return normalize(v);
     } else {
         return vec4::splat(0.0);
     }
 }
 
-pub fn normalize_nonzero3(v: vec3) -> vec3 {
-    if (dot(v, v) > 0.0) {
+fn normalize_nonzero3(v: vec3) -> vec3 {
+    if dot(v, v) > 0.0 {
         return normalize(v);
     } else {
         return vec3::splat(0.0);
     }
 }
 
-pub fn zero_radiance() -> Radiance {
+fn zero_radiance() -> Radiance {
     return Radiance {
         diffuse: vec3::splat(0.0),
         specular: vec3::splat(0.0),
     };
 }
 
-pub fn reflect_light(brdf: BrdfLobes, light: vec3) -> Radiance {
+fn reflect_light(brdf: BrdfLobes, light: vec3) -> Radiance {
     return Radiance {
         diffuse: brdf.diffuse * light,
         specular: brdf.specular * light,
     };
 }
 
-pub fn compute_target_score(radiance: Radiance, diffuse_albedo: vec3) -> f32 {
+fn compute_target_score(radiance: Radiance, diffuse_albedo: vec3) -> f32 {
     return compute_luminocity(diffuse_albedo * radiance.diffuse + radiance.specular);
 }
 
-pub fn get_reservoir_index(pixel: vec2i, cam: CameraParams) -> i32 {
-    if (all(vec2u::from(pixel).cmplt(cam.target_size))) {
+fn get_reservoir_index(pixel: vec2i, cam: CameraParams) -> i32 {
+    if all(vec2u::from(pixel).cmplt(cam.target_size)) {
         return pixel.y * (cam.target_size.x) as i32 + pixel.x;
     } else {
         return -1;
     }
 }
 
-pub fn get_pixel_from_reservoir_index(index: i32, cam: CameraParams) -> vec2i {
+fn get_pixel_from_reservoir_index(index: i32, cam: CameraParams) -> vec2i {
     let y = index / (cam.target_size.x) as i32;
     let x = index - y * (cam.target_size.x) as i32;
     return vec2i(x, y);
 }
 
-pub fn bump_reservoir(r: &mut LiveReservoir, history: f32) {
+fn bump_reservoir(r: &mut LiveReservoir, history: f32) {
     r.history += history;
 }
 
-pub fn merge_reservoir(r: &mut LiveReservoir, other: LiveReservoir, random: f32) -> bool {
+fn merge_reservoir(r: &mut LiveReservoir, other: LiveReservoir, random: f32) -> bool {
     r.weight_sum += other.weight_sum;
     r.history += other.history;
-    if (r.weight_sum * random < other.weight_sum) {
+    if r.weight_sum * random < other.weight_sum {
         r.selected_light_index = other.selected_light_index;
         r.selected_uv = other.selected_uv;
         r.selected_target_score = other.selected_target_score;
@@ -192,19 +177,15 @@ pub fn merge_reservoir(r: &mut LiveReservoir, other: LiveReservoir, random: f32)
     }
 }
 
-pub fn normalize_reservoir(r: &mut LiveReservoir, history: f32) {
+fn normalize_reservoir(r: &mut LiveReservoir, history: f32) {
     let h = r.history;
-    if (h > 0.0) {
+    if h > 0.0 {
         r.weight_sum *= history / h;
         r.history = history;
     }
 }
 
-pub fn unpack_reservoir(
-    f: StoredReservoir,
-    max_confidence: f32,
-    radiance: Radiance,
-) -> LiveReservoir {
+fn unpack_reservoir(f: StoredReservoir, max_confidence: f32, radiance: Radiance) -> LiveReservoir {
     let mut r = LiveReservoir::default();
     r.selected_light_index = f.light_index;
     r.selected_uv = f.light_uv;
@@ -216,7 +197,7 @@ pub fn unpack_reservoir(
     return r;
 }
 
-pub fn pack_reservoir_detail(r: LiveReservoir, denom_factor: f32) -> StoredReservoir {
+fn pack_reservoir_detail(r: LiveReservoir, denom_factor: f32) -> StoredReservoir {
     let mut f = StoredReservoir::default();
     f.light_index = r.selected_light_index;
     f.light_uv = r.selected_uv;
@@ -229,7 +210,7 @@ pub fn pack_reservoir_detail(r: LiveReservoir, denom_factor: f32) -> StoredReser
     return f;
 }
 
-pub fn read_surface(pixel: vec2i) -> Surface {
+fn read_surface(pixel: vec2i) -> Surface {
     let mut surface = Surface::default();
     surface.basis = normalize_nonzero(t_basis.load(pixel, 0));
     surface.flat_normal = normalize_nonzero3(t_flat_normal.load(pixel, 0).xyz());
@@ -242,7 +223,7 @@ pub fn read_surface(pixel: vec2i) -> Surface {
     return surface;
 }
 
-pub fn read_prev_surface(pixel: vec2i) -> Surface {
+fn read_prev_surface(pixel: vec2i) -> Surface {
     let mut surface = Surface::default();
     surface.basis = normalize_nonzero(t_prev_basis.load(pixel, 0));
     surface.flat_normal = normalize_nonzero3(t_prev_flat_normal.load(pixel, 0).xyz());
@@ -255,11 +236,11 @@ pub fn read_prev_surface(pixel: vec2i) -> Surface {
     return surface;
 }
 
-pub fn surface_normal(surface: Surface) -> vec3 {
+fn surface_normal(surface: Surface) -> vec3 {
     return qrot(surface.basis, vec3(0.0, 0.0, 1.0));
 }
 
-pub fn surface_material(surface: Surface) -> Material {
+fn surface_material(surface: Surface) -> Material {
     return Material {
         diffuse_albedo: surface.diffuse_albedo,
         specular_f0: surface.specular_f0,
@@ -267,7 +248,7 @@ pub fn surface_material(surface: Surface) -> Material {
     };
 }
 
-pub fn evaluate_incoming_radiance(
+fn evaluate_incoming_radiance(
     acs: acceleration_structure,
     position: vec3,
     direction: vec3,
@@ -289,13 +270,13 @@ pub fn evaluate_incoming_radiance(
     rq.proceed();
     let intersection = rq.committed_intersection();
 
-    if (DEBUG_MODE && ray_len > 0.0) {
+    if DEBUG_MODE && ray_len > 0.0 {
         let hit = intersection.kind != RAY_QUERY_INTERSECTION_NONE;
         let color = select(0xFFFFFFu32, 0x808080u32, hit) & debug_color;
         debug_line(position, position + ray_len * direction, color);
     }
 
-    if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
+    if intersection.kind == RAY_QUERY_INTERSECTION_NONE {
         return evaluate_environment(direction);
     }
 
@@ -312,8 +293,8 @@ pub fn evaluate_incoming_radiance(
     return sample_hit_emissive(entry, tex_coords, 0.0, 0u32);
 }
 
-pub fn get_prev_pixel(pixel: vec2i, pos_world: vec3) -> vec2 {
-    if (USE_MOTION_VECTORS && parameters.use_motion_vectors != 0u32) {
+fn get_prev_pixel(pixel: vec2i, pos_world: vec3) -> vec2 {
+    if USE_MOTION_VECTORS && parameters.use_motion_vectors != 0u32 {
         let motion = t_motion.load(pixel, 0).xy() / MOTION_SCALE;
         return vec2::from(pixel) + 0.5 + motion;
     } else {
@@ -321,18 +302,18 @@ pub fn get_prev_pixel(pixel: vec2i, pos_world: vec3) -> vec2 {
     }
 }
 
-pub fn ratio(a: f32, b: f32) -> f32 {
+fn ratio(a: f32, b: f32) -> f32 {
     return divide_if_positive(a, a + b);
 }
 
-pub fn zero_target_score() -> TargetScore {
+fn zero_target_score() -> TargetScore {
     return TargetScore {
         radiance: zero_radiance(),
         score: 0.0,
     };
 }
 
-pub fn make_reservoir(
+fn make_reservoir(
     ls: LightSample,
     light_index: u32,
     brdf: BrdfLobes,
@@ -348,18 +329,18 @@ pub fn make_reservoir(
     return r;
 }
 
-pub fn make_target_score(radiance: Radiance, diffuse_albedo: vec3) -> TargetScore {
+fn make_target_score(radiance: Radiance, diffuse_albedo: vec3) -> TargetScore {
     return TargetScore {
         radiance: radiance,
         score: compute_target_score(radiance, diffuse_albedo),
     };
 }
 
-pub fn pack_reservoir(r: LiveReservoir) -> StoredReservoir {
+fn pack_reservoir(r: LiveReservoir) -> StoredReservoir {
     return pack_reservoir_detail(r, r.history);
 }
 
-pub fn evaluate_surface_brdf(surface: Surface, dir: vec3) -> BrdfLobes {
+fn evaluate_surface_brdf(surface: Surface, dir: vec3) -> BrdfLobes {
     return evaluate_brdf(
         surface_material(surface),
         surface_normal(surface),
@@ -368,17 +349,13 @@ pub fn evaluate_surface_brdf(surface: Surface, dir: vec3) -> BrdfLobes {
     );
 }
 
-pub fn sample_incoming_light(
-    surface: Surface,
-    from_light: bool,
-    rng: &mut RandomState,
-) -> LightSample {
+fn sample_incoming_light(surface: Surface, from_light: bool, rng: &mut RandomState) -> LightSample {
     let importance = parameters.environment_importance_sampling != 0u32;
     let mat = surface_material(surface);
     let normal = surface_normal(surface);
 
     let mut ls = LightSample::default();
-    if (from_light) {
+    if from_light {
         ls = sample_light(importance, rng);
     } else {
         let bs = sample_bsdf(mat, normal, surface.view_dir, rng);
@@ -395,7 +372,7 @@ pub fn sample_incoming_light(
     return ls;
 }
 
-pub fn estimate_target_score_with_occlusion(
+fn estimate_target_score_with_occlusion(
     surface: Surface,
     position: vec3,
     light_index: u32,
@@ -404,15 +381,15 @@ pub fn estimate_target_score_with_occlusion(
     ray_len: f32,
     debug_color: u32,
 ) -> TargetScore {
-    if (light_index != 0u32) {
+    if light_index != 0u32 {
         return zero_target_score();
     }
     let direction = map_equirect_uv_to_dir(light_uv);
-    if (dot(direction, surface.flat_normal) <= 0.0) {
+    if dot(direction, surface.flat_normal) <= 0.0 {
         return zero_target_score();
     }
     let brdf = evaluate_surface_brdf(surface, direction);
-    if (is_brdf_black(brdf)) {
+    if is_brdf_black(brdf) {
         return zero_target_score();
     }
 
@@ -420,7 +397,7 @@ pub fn estimate_target_score_with_occlusion(
     return make_target_score(reflect_light(brdf, radiance), surface.diffuse_albedo);
 }
 
-pub fn evaluate_sample(
+fn evaluate_sample(
     ls: &mut LightSample,
     surface: Surface,
     start_pos: vec3,
@@ -428,12 +405,12 @@ pub fn evaluate_sample(
     debug_color: u32,
 ) -> BrdfLobes {
     let dir = map_equirect_uv_to_dir(ls.uv);
-    if (dot(dir, surface.flat_normal) <= 0.0) {
+    if dot(dir, surface.flat_normal) <= 0.0 {
         return zero_brdf();
     }
 
     let brdf = evaluate_surface_brdf(surface, dir);
-    if (is_brdf_black(brdf)) {
+    if is_brdf_black(brdf) {
         return zero_brdf();
     }
 
@@ -441,14 +418,14 @@ pub fn evaluate_sample(
     // geometry, this deliberately avoids the old absolute contribution
     // cutoff, which biased dim surfaces toward black.
     ls.radiance = evaluate_incoming_radiance(acc_struct, start_pos, dir, ray_len, debug_color);
-    if (all(ls.radiance.cmple(vec3::splat(0.0)))) {
+    if all(ls.radiance.cmple(vec3::splat(0.0))) {
         return zero_brdf();
     }
 
     return brdf;
 }
 
-pub fn compute_restir(
+fn compute_restir(
     surface: Surface,
     pixel: vec2i,
     rng: &mut RandomState,
@@ -456,7 +433,7 @@ pub fn compute_restir(
 ) -> RestirOutput {
     let ray_dir = get_ray_direction(*camera, pixel);
     let pixel_index = get_reservoir_index(pixel, *camera);
-    if (surface.depth == 0.0) {
+    if surface.depth == 0.0 {
         unsafe {
             reservoirs.get_mut()[(pixel_index) as usize] = StoredReservoir::default();
         }
@@ -471,7 +448,7 @@ pub fn compute_restir(
         };
     }
 
-    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_Depth) {
+    if WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode::Depth as u32 {
         out_debug.store(pixel, vec4::splat(1.0 / surface.depth));
     }
     let position = camera.position + surface.depth * ray_dir;
@@ -482,7 +459,7 @@ pub fn compute_restir(
     for i in (0u32)..(num_initial) {
         let mut ls = sample_incoming_light(surface, i < parameters.num_environment_samples, rng);
         let brdf = evaluate_sample(&mut ls, surface, position, ray_len, 0x00FF00u32);
-        if (is_brdf_black(brdf)) {
+        if is_brdf_black(brdf) {
             bump_reservoir(&mut canonical, 1.0);
         } else {
             let other = make_reservoir(ls, 0u32, brdf, surface.diffuse_albedo);
@@ -499,7 +476,7 @@ pub fn compute_restir(
     let num_candidates = max_samples * FACTOR_CANDIDATES;
 
     for tap in (0u32)..(num_candidates) {
-        if (accepted_count >= max_samples) {
+        if accepted_count >= max_samples {
             break;
         }
         let radius = parameters.tap_radius * random_gen(rng);
@@ -507,16 +484,16 @@ pub fn compute_restir(
         let other_pixel = vec2i::from(center_coord + offset);
 
         let other_index = get_reservoir_index(other_pixel, *prev_camera);
-        if (other_index < 0) {
+        if other_index < 0 {
             continue;
         }
-        if (prev_reservoirs[(other_index) as usize].confidence == 0.0) {
+        if prev_reservoirs[(other_index) as usize].confidence == 0.0 {
             continue;
         }
 
         let other_surface = read_prev_surface(other_pixel);
         let compatibility = compare_surfaces(surface, other_surface);
-        if (compatibility < 0.1) {
+        if compatibility < 0.1 {
             // if the surfaces are too different, there is no trust in this sample
             continue;
         }
@@ -525,7 +502,7 @@ pub fn compute_restir(
         accepted_count += 1u32;
     }
 
-    if (WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode_SampleReuse) {
+    if WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode::SampleReuse as u32 {
         let mut color = vec4::splat(0.0);
         for i in (0u32)..(min(3u32, accepted_count)) {
             color[(i) as usize] = 1.0;
@@ -546,7 +523,7 @@ pub fn compute_restir(
     // No accepted neighbors means this factor is unused. Dividing by zero
     // here still produces an infinity that LLVM 22 folds into later results.
     let mut inv_count = 0.0;
-    if (accepted_count != 0u32) {
+    if accepted_count != 0u32 {
         inv_count = 1.0 / (accepted_count) as f32;
     }
 
@@ -562,7 +539,7 @@ pub fn compute_restir(
             length(offset) / parameters.tap_radius,
         );
         let mut other = LiveReservoir::default();
-        if (parameters.use_pairwise_mis != 0u32) {
+        if parameters.use_pairwise_mis != 0u32 {
             let neighbor_history = min(neighbor.confidence, max_confidence);
             {
                 // scoping this to hint the register allocation
@@ -634,13 +611,13 @@ pub fn compute_restir(
             other.history = history;
         }
 
-        if (DECOUPLED_SHADING) {
+        if DECOUPLED_SHADING {
             let scale = other.weight_sum * neighbor.contribution_weight;
             shaded.diffuse += scale * other.selected_radiance.diffuse;
             shaded.specular += scale * other.selected_radiance.specular;
             shaded_weight += other.weight_sum;
         }
-        if (other.weight_sum <= 0.0) {
+        if other.weight_sum <= 0.0 {
             bump_reservoir(&mut reservoir, other.history);
         } else {
             merge_reservoir(&mut reservoir, other, random_gen(rng));
@@ -648,10 +625,10 @@ pub fn compute_restir(
     }
 
     // Finally, merge in the canonical sample
-    if (parameters.use_pairwise_mis != 0u32) {
+    if parameters.use_pairwise_mis != 0u32 {
         normalize_reservoir(&mut canonical, mis_canonical);
     }
-    if (DECOUPLED_SHADING) {
+    if DECOUPLED_SHADING {
         let cw = canonical.weight_sum / max(canonical.selected_target_score, 0.1);
         let scale = canonical.weight_sum * cw;
         shaded.diffuse += scale * canonical.selected_radiance.diffuse;
@@ -666,7 +643,7 @@ pub fn compute_restir(
         reservoirs.get_mut()[(pixel_index) as usize] = stored;
     }
     let mut ro = RestirOutput::default();
-    if (DECOUPLED_SHADING) {
+    if DECOUPLED_SHADING {
         let denom = max(shaded_weight, 0.001);
         ro.radiance = Radiance {
             diffuse: shaded.diffuse / denom,
@@ -683,8 +660,8 @@ pub fn compute_restir(
 }
 
 #[entry_point(compute, threads(8, 4))]
-pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
-    if (any(global_id.xy().cmpge(camera.target_size))) {
+fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
+    if any(global_id.xy().cmpge(camera.target_size)) {
         return;
     }
 
@@ -693,7 +670,8 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
 
     let surface = read_surface(vec2i::from(global_id.xy()));
     let enable_debug = DEBUG_MODE && all(global_id.xy().cmpeq(debug.mouse_pos));
-    let enable_restir_debug = (debug.draw_flags & DebugDrawFlags_RESTIR) != 0u32 && enable_debug;
+    let enable_restir_debug =
+        (debug.draw_flags & DebugDrawFlags::Restir as u32) != 0u32 && enable_debug;
     let ro = compute_restir(
         surface,
         vec2i::from(global_id.xy()),
@@ -701,7 +679,7 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
         enable_restir_debug,
     );
 
-    if (enable_debug) {
+    if enable_debug {
         // Note: the variance is tracked on the fully modulated color
         let color = surface.diffuse_albedo * ro.radiance.diffuse + ro.radiance.specular;
         unsafe {

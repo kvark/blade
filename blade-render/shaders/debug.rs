@@ -46,9 +46,9 @@ pub struct DebugBuffer {
 pub static debug_buf: StorageMut<DebugBuffer> = binding();
 
 pub fn debug_line(a: vec3, b: vec3, color: u32) {
-    if (debug_buf.open != 0u32) {
+    if debug_buf.open != 0u32 {
         let index = debug_buf.instance_count.fetch_add(1u32);
-        if (index < debug_buf.capacity) {
+        if index < debug_buf.capacity {
             unsafe {
                 debug_buf.get_mut().lines[(index) as usize] = DebugLine {
                     a: DebugPoint {

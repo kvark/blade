@@ -1,6 +1,6 @@
 use synaga_shader::*;
 
-pub const SIGMA_N: f32 = 4.0;
+const SIGMA_N: f32 = 4.0;
 
 #[derive(Clone, Copy, Default)]
 pub struct Surface {

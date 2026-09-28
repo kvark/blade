@@ -2,11 +2,11 @@ use synaga_shader::*;
 
 pub const PI: f32 = 3.1415926;
 
-pub const DIELECTRIC_F0: f32 = 0.04;
+const DIELECTRIC_F0: f32 = 0.04;
 
-pub const MIN_ROUGHNESS: f32 = 0.05;
+const MIN_ROUGHNESS: f32 = 0.05;
 
-pub const LUMINOCITY_WEIGHTS: vec3 = vec3(0.3, 0.4, 0.3);
+const LUMINOCITY_WEIGHTS: vec3 = vec3(0.3, 0.4, 0.3);
 
 #[derive(Clone, Copy, Default)]
 pub struct Material {
@@ -45,11 +45,11 @@ pub fn material_alpha(mat: Material) -> f32 {
     return r * r;
 }
 
-pub fn fresnel_schlick(cos_theta: f32, f0: vec3) -> vec3 {
+fn fresnel_schlick(cos_theta: f32, f0: vec3) -> vec3 {
     return f0 + (vec3::splat(1.0) - f0) * pow(1.0 - cos_theta, 5.0);
 }
 
-pub fn fresnel_schlick_scalar(cos_theta: f32, f0: f32) -> f32 {
+fn fresnel_schlick_scalar(cos_theta: f32, f0: f32) -> f32 {
     return f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
 }
 
@@ -59,7 +59,7 @@ pub fn distribution_ggx(n_dot_h: f32, alpha: f32) -> f32 {
     return a2 / max(PI * denom * denom, 1e-7);
 }
 
-pub fn visibility_smith(n_dot_v: f32, n_dot_l: f32, alpha: f32) -> f32 {
+fn visibility_smith(n_dot_v: f32, n_dot_l: f32, alpha: f32) -> f32 {
     let a2 = alpha * alpha;
     let lambda_v = n_dot_l * sqrt(n_dot_v * n_dot_v * (1.0 - a2) + a2);
     let lambda_l = n_dot_v * sqrt(n_dot_l * n_dot_l * (1.0 - a2) + a2);
@@ -90,7 +90,7 @@ pub fn specular_sampling_ratio(mat: Material) -> f32 {
 pub fn evaluate_brdf(mat: Material, normal: vec3, view_dir: vec3, light_dir: vec3) -> BrdfLobes {
     let n_dot_l = dot(normal, light_dir);
     let n_dot_v = dot(normal, view_dir);
-    if (n_dot_l <= 0.0 || n_dot_v <= 0.0) {
+    if n_dot_l <= 0.0 || n_dot_v <= 0.0 {
         return zero_brdf();
     }
 
