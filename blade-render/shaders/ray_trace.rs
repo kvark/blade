@@ -252,7 +252,7 @@ fn evaluate_incoming_radiance(
 
     if DEBUG_MODE && ray_len > 0.0 {
         let hit = intersection.kind != RAY_QUERY_INTERSECTION_NONE;
-        let color = select(0xFFFFFFu32, 0x808080u32, hit) & debug_color;
+        let color = select(0xFFFFFFu32, 0x808080, hit) & debug_color;
         debug_line(position, position + ray_len * direction, color);
     }
 
@@ -430,7 +430,7 @@ fn compute_restir(
 
     let mut canonical = LiveReservoir::default();
     let num_initial = parameters.num_environment_samples + parameters.num_brdf_samples;
-    for i in 0u32..num_initial {
+    for i in 0..num_initial {
         let mut ls = sample_incoming_light(surface, i < parameters.num_environment_samples, rng);
         let brdf = evaluate_sample(&mut ls, surface, position, ray_len, 0x00FF00);
         if is_brdf_black(brdf) {
@@ -444,7 +444,7 @@ fn compute_restir(
     let center_coord = get_prev_pixel(pixel, position);
 
     // First, gather the list of reservoirs to merge with
-    let mut accepted_reservoir_indices = [0i32, 0i32, 0i32, 0i32];
+    let mut accepted_reservoir_indices = [0i32, 0, 0, 0];
     let mut accepted_count = 0u32;
     let max_samples = MAX_RESERVOIRS.min(parameters.tap_count);
     let num_candidates = max_samples * FACTOR_CANDIDATES;
@@ -478,7 +478,7 @@ fn compute_restir(
 
     if WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode::SampleReuse as u32 {
         let mut color = Vec4::splat(0.0);
-        for i in 0u32..accepted_count.min(3) {
+        for i in 0..accepted_count.min(3) {
             color[i as usize] = 1.0;
         }
         out_debug.store(pixel, color);
@@ -501,7 +501,7 @@ fn compute_restir(
         inv_count = 1.0 / accepted_count as f32;
     }
 
-    for rid in 0u32..accepted_count {
+    for rid in 0..accepted_count {
         let neighbor_index = accepted_reservoir_indices[rid as usize];
         let neighbor = prev_reservoirs[neighbor_index as usize];
         let neighbor_pixel = get_pixel_from_reservoir_index(neighbor_index, *prev_camera);

@@ -199,7 +199,7 @@ fn trace_path(start_dir: Vec3, rng: &mut RandomState) -> PathRadiance {
     let mut bsdf_pdf = -1.0;
     let mut t_min = 0.0;
 
-    for bounce in 0u32..=parameters.max_bounces {
+    for bounce in 0..=parameters.max_bounces {
         let intersection = trace_ray(position, direction, t_min);
         if intersection.kind == RAY_QUERY_INTERSECTION_NONE {
             if bsdf_pdf < 0.0 {
