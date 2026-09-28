@@ -16,7 +16,7 @@
 mod shaders;
 
 mod shader_ir {
-    include!(concat!(env!("OUT_DIR"), "/shaders.rs"));
+    synaga_shader::include_ir!();
 }
 
 use blade_util::{BufferBelt, BufferBeltDescriptor};

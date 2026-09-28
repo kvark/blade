@@ -1,4 +1,3 @@
-use super::config::*;
 use synaga_shader::*;
 
 #[derive(Clone, Copy, Default)]

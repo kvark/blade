@@ -1,4 +1,4 @@
-use super::config::*;
+use super::config::DEBUG_MODE;
 use synaga_shader::*;
 
 pub const MOTION_SCALE: f32 = 0.02;

@@ -1,7 +1,7 @@
 use synaga_shader::*;
 
 #[derive(Clone, Copy, Debug, Default, Io)]
-pub struct VertexOutput {
+struct VertexOutput {
     #[location(0)]
     tex_coord: vec2,
     #[location(1)]
@@ -11,26 +11,24 @@ pub struct VertexOutput {
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct Uniforms {
+struct Uniforms {
     pub screen_size: vec2,
     pub convert_to_linear: f32,
     pub padding: f32,
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct Vertex {
+struct Vertex {
     pub pos: vec2,
     pub uv: vec2,
     pub color: u32,
 }
 
-pub static r_uniforms: Uniform<Uniforms> = binding();
+static r_uniforms: Uniform<Uniforms> = binding();
+static r_texture: texture_2d<f32> = binding();
+static r_sampler: sampler = binding();
 
-pub static r_texture: texture_2d<f32> = binding();
-
-pub static r_sampler: sampler = binding();
-
-pub fn linear_from_gamma(srgb: vec3) -> vec3 {
+fn linear_from_gamma(srgb: vec3) -> vec3 {
     let cutoff = srgb.cmplt(vec3::splat(0.04045));
     let lower = srgb / vec3::splat(12.92);
     let higher = pow(
@@ -41,7 +39,7 @@ pub fn linear_from_gamma(srgb: vec3) -> vec3 {
 }
 
 #[entry_point(vertex)]
-pub fn vs_main(input: Vertex) -> VertexOutput {
+fn vs_main(input: Vertex) -> VertexOutput {
     let mut out = VertexOutput::default();
     out.tex_coord = input.uv;
     out.color = unpack4x8unorm(input.color);
@@ -56,7 +54,7 @@ pub fn vs_main(input: Vertex) -> VertexOutput {
 
 #[entry_point(fragment)]
 #[output(location(0))]
-pub fn fs_main(input: VertexOutput) -> vec4 {
+fn fs_main(input: VertexOutput) -> vec4 {
     //Note: we always assume rendering to linear color space,
     // but Egui wants to blend in gamma space, see
     // https://github.com/emilk/egui/pull/2071

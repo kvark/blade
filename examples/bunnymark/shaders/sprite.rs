@@ -1,25 +1,25 @@
 use synaga_shader::*;
 
 #[derive(Clone, Copy, Default)]
-pub struct Globals {
+struct Globals {
     pub mvp_transform: mat4x4,
     pub sprite_size: vec2,
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct Locals {
+struct Locals {
     pub position: vec2,
     pub velocity: vec2,
     pub color: u32,
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct Vertex {
+struct Vertex {
     pub pos: vec2,
 }
 
 #[derive(Clone, Copy, Debug, Default, Io)]
-pub struct VertexOutput {
+struct VertexOutput {
     #[builtin(position)]
     position: vec4,
     #[location(0)]
@@ -28,15 +28,12 @@ pub struct VertexOutput {
     color: vec4,
 }
 
-pub static globals: Uniform<Globals> = binding();
+static globals: Uniform<Globals> = binding();
+static locals: Uniform<Locals> = binding();
+static sprite_texture: texture_2d<f32> = binding();
+static sprite_sampler: sampler = binding();
 
-pub static locals: Uniform<Locals> = binding();
-
-pub static sprite_texture: texture_2d<f32> = binding();
-
-pub static sprite_sampler: sampler = binding();
-
-pub fn unpack_color(raw: u32) -> vec4 {
+fn unpack_color(raw: u32) -> vec4 {
     //TODO: https://github.com/gfx-rs/naga/issues/2188
     //return unpack4x8unorm(raw);
     return vec4::from(
@@ -46,12 +43,12 @@ pub fn unpack_color(raw: u32) -> vec4 {
 
 #[entry_point(fragment)]
 #[output(location(0))]
-pub fn fs_main(vertex: VertexOutput) -> vec4 {
+fn fs_main(vertex: VertexOutput) -> vec4 {
     return vertex.color * sprite_texture.sample_level(&sprite_sampler, vertex.tex_coords, 0.0);
 }
 
 #[entry_point(vertex)]
-pub fn vs_main(vertex: Vertex) -> VertexOutput {
+fn vs_main(vertex: Vertex) -> VertexOutput {
     let tc = vertex.pos;
     let offset = tc * globals.sprite_size;
     let pos = globals.mvp_transform * ((locals.position + offset).extend(0.0)).extend(1.0);

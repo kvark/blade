@@ -27,7 +27,7 @@ mod shaders;
 mod system;
 
 mod shader_ir {
-    include!(concat!(env!("OUT_DIR"), "/shaders.rs"));
+    synaga_shader::include_ir!();
 }
 
 pub use system::{ParticlePipeline, ParticleSystem, PipelineDesc};

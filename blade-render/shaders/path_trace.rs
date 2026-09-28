@@ -1,22 +1,26 @@
-use super::brdf::*;
-use super::camera::*;
-use super::config::*;
-use super::debug_param::*;
-use super::env_importance::*;
-use super::env_light::*;
-use super::hit::*;
-use super::quaternion::*;
-use super::random::*;
-use super::sampling::*;
-use super::vertex::*;
+use super::brdf::{Material, compute_luminocity, evaluate_brdf, is_brdf_black};
+use super::camera::{CameraParams, get_ray_direction_at};
+
+use super::env_light::{
+    compute_light_pdf, evaluate_environment, evaluate_environment_background,
+    map_equirect_dir_to_uv, map_equirect_uv_to_dir, sample_light,
+};
+use super::hit::{
+    fetch_triangle_indices, hit_entries, hit_tangent_space, hit_winding, make_barycentrics,
+    sample_hit_emissive, sample_hit_material, sample_hit_normal_map, vertex_buffers,
+};
+
+use super::random::{RandomState, random_gen, random_init};
+use super::sampling::{compute_bsdf_pdf, sample_bsdf};
+use super::vertex::decode_normal;
 use synaga_shader::*;
 
-pub const ROULETTE_START: u32 = 4u32;
+const ROULETTE_START: u32 = 4u32;
 
-pub const MAX_RADIANCE: f32 = 1.0e6;
+const MAX_RADIANCE: f32 = 1.0e6;
 
 #[derive(Clone, Copy, Default)]
-pub struct PathTraceParams {
+struct PathTraceParams {
     pub frame_index: u32,
     // light samples taken at every vertex of a path
     pub num_environment_samples: u32,
@@ -36,7 +40,7 @@ pub struct PathTraceParams {
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct PathVertex {
+struct PathVertex {
     pub position: vec3,
     // Normal of the triangle, pointing outwards.
     pub flat_normal: vec3,
@@ -47,28 +51,22 @@ pub struct PathVertex {
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct PathRadiance {
+struct PathRadiance {
     pub total: vec3,
     pub diffuse: vec3,
     pub specular: vec3,
     pub emissive: vec3,
 }
 
-pub static camera: Uniform<CameraParams> = binding();
+static camera: Uniform<CameraParams> = binding();
+static parameters: Uniform<PathTraceParams> = binding();
+static acc_struct: acceleration_structure = binding();
+static accumulator: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
+static accumulator_diffuse: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
+static accumulator_specular: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
+static accumulator_emissive: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
 
-pub static parameters: Uniform<PathTraceParams> = binding();
-
-pub static acc_struct: acceleration_structure = binding();
-
-pub static accumulator: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
-
-pub static accumulator_diffuse: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
-
-pub static accumulator_specular: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
-
-pub static accumulator_emissive: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
-
-pub fn trace_ray(position: vec3, direction: vec3, t_min: f32) -> RayIntersection {
+fn trace_ray(position: vec3, direction: vec3, t_min: f32) -> RayIntersection {
     let mut rq = ray_query::default();
     rq.initialize(
         &acc_struct,
@@ -85,7 +83,7 @@ pub fn trace_ray(position: vec3, direction: vec3, t_min: f32) -> RayIntersection
     return rq.committed_intersection();
 }
 
-pub fn is_occluded(position: vec3, direction: vec3) -> bool {
+fn is_occluded(position: vec3, direction: vec3) -> bool {
     let mut rq = ray_query::default();
     let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
     rq.initialize(
@@ -103,7 +101,7 @@ pub fn is_occluded(position: vec3, direction: vec3) -> bool {
     return rq.committed_intersection().kind != RAY_QUERY_INTERSECTION_NONE;
 }
 
-pub fn resolve_hit(intersection: RayIntersection) -> PathVertex {
+fn resolve_hit(intersection: RayIntersection) -> PathVertex {
     let entry =
         hit_entries[(intersection.instance_custom_data + intersection.geometry_index) as usize];
     let indices = fetch_triangle_indices(entry, intersection.primitive_index);
@@ -170,18 +168,18 @@ pub fn resolve_hit(intersection: RayIntersection) -> PathVertex {
     return vertex;
 }
 
-pub fn mis_weight(count: f32, pdf: f32, other_count: f32, other_pdf: f32) -> f32 {
+fn mis_weight(count: f32, pdf: f32, other_count: f32, other_pdf: f32) -> f32 {
     let total = count * pdf + other_count * other_pdf;
     // Same reason as `divide_if_positive` in the ReSTIR shader: the unselected
     // arm of a select is still evaluated, and a zero total is 0/0.
-    if (total > 0.0) {
+    if total > 0.0 {
         return count * pdf / total;
     } else {
         return 0.0;
     }
 }
 
-pub fn zero_path_radiance() -> PathRadiance {
+fn zero_path_radiance() -> PathRadiance {
     return PathRadiance {
         total: vec3::splat(0.0),
         diffuse: vec3::splat(0.0),
@@ -190,7 +188,7 @@ pub fn zero_path_radiance() -> PathRadiance {
     };
 }
 
-pub fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
+fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
     let importance = parameters.environment_importance_sampling != 0u32;
     let num_light = (parameters.num_environment_samples) as f32;
     let mut radiance = zero_path_radiance();
@@ -209,8 +207,8 @@ pub fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
 
     for bounce in (0u32)..=(parameters.max_bounces) {
         let intersection = trace_ray(position, direction, t_min);
-        if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
-            if (bsdf_pdf < 0.0) {
+        if intersection.kind == RAY_QUERY_INTERSECTION_NONE {
+            if bsdf_pdf < 0.0 {
                 // The G-buffer represents the sky as a white diffuse surface.
                 radiance.diffuse += evaluate_environment_background(direction);
             } else {
@@ -227,7 +225,7 @@ pub fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
 
         let vertex = resolve_hit(intersection);
         let view_dir = -direction;
-        if (bounce == 0u32) {
+        if bounce == 0u32 {
             primary_albedo = vertex.material.diffuse_albedo;
             radiance.emissive += vertex.emissive;
         } else {
@@ -247,14 +245,14 @@ pub fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
         // Next event estimation: connect to the environment light.
         for i in (0u32)..(parameters.num_environment_samples) {
             let ls = sample_light(importance, rng);
-            if (ls.pdf <= 0.0) {
+            if ls.pdf <= 0.0 {
                 continue;
             }
             let light_dir = map_equirect_uv_to_dir(ls.uv);
             let lobes = evaluate_brdf(vertex.material, vertex.normal, view_dir, light_dir);
-            if (dot(light_dir, vertex.flat_normal) <= 0.0
+            if dot(light_dir, vertex.flat_normal) <= 0.0
                 || is_brdf_black(lobes)
-                || is_occluded(position, light_dir))
+                || is_occluded(position, light_dir)
             {
                 continue;
             }
@@ -262,7 +260,7 @@ pub fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
             let weight =
                 mis_weight(num_light, ls.pdf, bsdf_count, other_pdf) / (num_light * ls.pdf);
             let incoming = ls.radiance * weight;
-            if (bounce == 0u32) {
+            if bounce == 0u32 {
                 radiance.diffuse += lobes.diffuse * incoming;
                 radiance.specular += lobes.specular * incoming;
             } else {
@@ -272,18 +270,18 @@ pub fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
             }
         }
 
-        if (!will_extend) {
+        if !will_extend {
             // The next event estimation above was the last thing to do here.
             break;
         }
 
         // Extend the path along a direction drawn from the material.
         let bs = sample_bsdf(vertex.material, vertex.normal, view_dir, rng);
-        if (bs.pdf <= 0.0 || dot(bs.dir, vertex.flat_normal) <= 0.0) {
+        if bs.pdf <= 0.0 || dot(bs.dir, vertex.flat_normal) <= 0.0 {
             break;
         }
         let lobes = evaluate_brdf(vertex.material, vertex.normal, view_dir, bs.dir);
-        if (bounce == 0u32) {
+        if bounce == 0u32 {
             diffuse_throughput = vec3::splat(lobes.diffuse / bs.pdf);
             specular_throughput = lobes.specular / bs.pdf;
         } else {
@@ -295,17 +293,17 @@ pub fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
         direction = bs.dir;
 
         // Russian roulette on the remaining energy.
-        if (bounce >= ROULETTE_START) {
+        if bounce >= ROULETTE_START {
             let throughput = primary_albedo * diffuse_throughput + specular_throughput;
             let probability = clamp(compute_luminocity(throughput), 0.05, 1.0);
-            if (random_gen(rng) >= probability) {
+            if random_gen(rng) >= probability {
                 break;
             }
             diffuse_throughput /= probability;
             specular_throughput /= probability;
         }
         let throughput = primary_albedo * diffuse_throughput + specular_throughput;
-        if (all(throughput.cmple(vec3::splat(0.0)))) {
+        if all(throughput.cmple(vec3::splat(0.0))) {
             break;
         }
     }
@@ -316,7 +314,7 @@ pub fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
         && all(radiance.diffuse.cmpeq(radiance.diffuse))
         && all(radiance.specular.cmpeq(radiance.specular))
         && all(radiance.emissive.cmpeq(radiance.emissive));
-    if (!is_finite) {
+    if !is_finite {
         return zero_path_radiance();
     }
     // Scale the split and total together, preserving exact reconstruction.
@@ -332,8 +330,8 @@ pub fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
 }
 
 #[entry_point(compute, threads(8, 4))]
-pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
-    if (any(global_id.xy().cmpge(camera.target_size))) {
+fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
+    if any(global_id.xy().cmpge(camera.target_size)) {
         return;
     }
 
@@ -341,10 +339,10 @@ pub fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
     let mut total_diffuse = vec4::splat(0.0);
     let mut total_specular = vec4::splat(0.0);
     let mut total_emissive = vec4::splat(0.0);
-    if (parameters.reset_accumulation == 0u32) {
+    if parameters.reset_accumulation == 0u32 {
         total = accumulator.load(global_id.xy());
-        if (parameters.max_accumulated_samples != 0u32
-            && total.w >= (parameters.max_accumulated_samples) as f32)
+        if parameters.max_accumulated_samples != 0u32
+            && total.w >= (parameters.max_accumulated_samples) as f32
         {
             // Converged enough, leave the accumulator alone.
             return;

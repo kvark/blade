@@ -9,7 +9,7 @@ use blade_graphics as gpu;
 mod shaders;
 
 mod shader_ir {
-    include!(concat!(env!("OUT_DIR"), "/bunnymark_shaders.rs"));
+    synaga_shader::include_ir!("bunnymark_shaders.rs");
 }
 use bytemuck::{Pod, Zeroable};
 use std::{mem, ptr};

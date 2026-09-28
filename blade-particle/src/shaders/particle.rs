@@ -1,7 +1,7 @@
 use synaga_shader::*;
 
 #[derive(Clone, Copy, Default)]
-pub struct Particle {
+struct Particle {
     pub pos: vec3,
     pub scale: f32,
     pub color: u32,
@@ -11,13 +11,13 @@ pub struct Particle {
     pub generation: u32,
 }
 
-pub struct FreeList {
+struct FreeList {
     pub count: AtomicI32,
     pub data: [u32],
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct EmitParams {
+struct EmitParams {
     pub origin: vec3,
     pub emitter_radius: f32,
     pub direction: vec3,
@@ -34,19 +34,19 @@ pub struct EmitParams {
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct UpdateParams {
+struct UpdateParams {
     pub time_delta: f32,
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct CameraParams {
+struct CameraParams {
     pub view_proj: mat4x4,
     pub camera_right: vec4,
     pub camera_up: vec4,
 }
 
 #[derive(Clone, Copy, Debug, Default, Io)]
-pub struct VertexOutput {
+struct VertexOutput {
     #[builtin(position)]
     proj_pos: vec4,
     #[location(0)]
@@ -55,22 +55,16 @@ pub struct VertexOutput {
     uv: vec2,
 }
 
-pub static particles: StorageMut<[Particle]> = binding();
-
-pub static free_list: StorageMut<FreeList> = binding();
-
-pub static emit_params: Uniform<EmitParams> = binding();
-
-pub static update_params: Uniform<UpdateParams> = binding();
-
-pub static emit_end: Workgroup<i32> = binding();
-
-pub static draw_particles: Storage<[Particle]> = binding();
-
-pub static camera: Uniform<CameraParams> = binding();
+static particles: StorageMut<[Particle]> = binding();
+static free_list: StorageMut<FreeList> = binding();
+static emit_params: Uniform<EmitParams> = binding();
+static update_params: Uniform<UpdateParams> = binding();
+static emit_end: Workgroup<i32> = binding();
+static draw_particles: Storage<[Particle]> = binding();
+static camera: Uniform<CameraParams> = binding();
 
 #[entry_point(compute, threads(64, 1, 1))]
-pub fn reset(
+fn reset(
     #[builtin(global_invocation_id)] global_id: vec3u,
     #[builtin(num_workgroups)] num_groups: vec3u,
 ) {
@@ -81,12 +75,12 @@ pub fn reset(
         free_list.get_mut().data[(global_id.x) as usize] = total - 1u32 - global_id.x;
         particles.get_mut()[(global_id.x) as usize] = p;
     }
-    if (global_id.x == 0u32) {
+    if global_id.x == 0u32 {
         free_list.count.store((total) as i32);
     }
 }
 
-pub fn hash_u32(x: u32) -> u32 {
+fn hash_u32(x: u32) -> u32 {
     let mut h = x;
     h = h ^ (h >> 16u32);
     h = h * 0x45d9f3bu32;
@@ -96,13 +90,13 @@ pub fn hash_u32(x: u32) -> u32 {
     return h;
 }
 
-pub fn rotate_to(to: vec3, v: vec3) -> vec3 {
+fn rotate_to(to: vec3, v: vec3) -> vec3 {
     // d = dot(+Z, to) = to.z
     let d = to.z;
-    if (d > 0.9999) {
+    if d > 0.9999 {
         return v;
     }
-    if (d < -0.9999) {
+    if d < -0.9999 {
         return vec3(v.x, -v.y, -v.z);
     }
     // cross(+Z, to) = (-to.y, to.x, 0)
@@ -113,13 +107,13 @@ pub fn rotate_to(to: vec3, v: vec3) -> vec3 {
 }
 
 #[entry_point(compute, threads(64, 1, 1))]
-pub fn update(#[builtin(global_invocation_id)] global_id: vec3u) {
-    if ((particles[(global_id.x) as usize]).scale != 0.0) {
+fn update(#[builtin(global_invocation_id)] global_id: vec3u) {
+    if (particles[(global_id.x) as usize]).scale != 0.0 {
         let index = (global_id.x) as usize;
         unsafe {
             particles.get_mut()[index].pos += particles[index].vel * update_params.time_delta;
             particles.get_mut()[index].life -= update_params.time_delta;
-            if (particles[index].life < 0.0) {
+            if particles[index].life < 0.0 {
                 let list_index = free_list.count.fetch_add(1);
                 free_list.get_mut().data[(list_index) as usize] = global_id.x;
                 particles.get_mut()[index].scale = 0.0;
@@ -129,14 +123,14 @@ pub fn update(#[builtin(global_invocation_id)] global_id: vec3u) {
 }
 
 #[entry_point(vertex)]
-pub fn draw_vs(
+fn draw_vs(
     #[builtin(vertex_index)] vertex_index: u32,
     #[builtin(instance_index)] instance_index: u32,
 ) -> VertexOutput {
     let particle = draw_particles[(instance_index) as usize];
     let mut out = VertexOutput::default();
 
-    if (particle.scale == 0.0) {
+    if particle.scale == 0.0 {
         out.proj_pos = vec4(0.0, 0.0, -1.0, 1.0);
         out.color = vec4::splat(0.0);
         out.uv = vec2::splat(0.0);
@@ -165,28 +159,28 @@ pub fn draw_vs(
 
 #[entry_point(fragment)]
 #[output(location(0))]
-pub fn draw_fs(input: VertexOutput) -> vec4 {
+fn draw_fs(input: VertexOutput) -> vec4 {
     // Soft circular particle: smooth falloff from center
     let dist_sq = dot(input.uv, input.uv);
-    if (dist_sq > 1.0) {
+    if dist_sq > 1.0 {
         discard();
     }
     let softness = 1.0 - dist_sq;
     return (input.color.rgb()).extend(input.color.a() * softness);
 }
 
-pub fn rand01(seed: u32) -> f32 {
+fn rand01(seed: u32) -> f32 {
     return (hash_u32(seed) & 0xFFFFu32) as f32 / 65535.0;
 }
 
 #[entry_point(compute, threads(64, 1, 1))]
-pub fn emit(#[builtin(local_invocation_index)] local_index: u32) {
+fn emit(#[builtin(local_invocation_index)] local_index: u32) {
     let count = (emit_params.emit_count) as i32;
-    if (local_index == 0u32) {
+    if local_index == 0u32 {
         unsafe {
             *emit_end.get_mut() = free_list.count.fetch_sub(count);
         }
-        if (*emit_end < count) {
+        if *emit_end < count {
             free_list.count.fetch_add(count - max(0, *emit_end));
         }
     }
@@ -194,7 +188,7 @@ pub fn emit(#[builtin(local_invocation_index)] local_index: u32) {
 
     let my_index = (local_index) as i32;
     let list_index = *emit_end - 1 - my_index;
-    if (my_index >= count || list_index < 0) {
+    if my_index >= count || list_index < 0 {
         return;
     }
 

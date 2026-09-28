@@ -1,5 +1,5 @@
-use super::config::*;
-use super::vertex::*;
+use super::config::MAX_JOINTS_PER_DRAW_LEN;
+
 use synaga_shader::*;
 
 #[derive(Clone, Copy)]
@@ -16,7 +16,7 @@ pub struct SkinVertex {
 
 pub static skinning_params: Uniform<SkinningParams> = binding();
 
-pub fn unpack_joints(raw: u32) -> vec4u {
+fn unpack_joints(raw: u32) -> vec4u {
     return (vec4u::splat(raw) >> vec4u(0u32, 8u32, 16u32, 24u32)) & vec4u::splat(0xFFu32);
 }
 

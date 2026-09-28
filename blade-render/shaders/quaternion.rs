@@ -8,13 +8,13 @@ pub fn qinv(q: vec4) -> vec4 {
     return (-q.xyz()).extend(q.w);
 }
 
-pub fn make_quat(m: mat3x3) -> vec4 {
+fn make_quat(m: mat3x3) -> vec4 {
     let mut q = vec4::default();
-    if (m[2].z < 0.0) {
+    if m[2].z < 0.0 {
         // x^2 + y^2 >= z^2 + w^2
         let dif10 = m[1].y - m[0].x;
         let omm22 = 1.0 - m[2].z;
-        if (dif10 < 0.0) {
+        if dif10 < 0.0 {
             // x^2 >= y^2
             q = vec4(
                 omm22 - dif10,
@@ -35,7 +35,7 @@ pub fn make_quat(m: mat3x3) -> vec4 {
         // z^2 + w^2 >= x^2 + y^2
         let sum10 = m[1].y + m[0].x;
         let opm22 = 1.0 + m[2].z;
-        if (sum10 < 0.0) {
+        if sum10 < 0.0 {
             // z^2 >= w^2
             q = vec4(
                 m[0].z + m[2].x,
@@ -57,7 +57,7 @@ pub fn make_quat(m: mat3x3) -> vec4 {
 }
 
 pub fn shortest_arc_quat(a: vec3, b: vec3) -> vec4 {
-    if (dot(a, b) < -0.99999) {
+    if dot(a, b) < -0.99999 {
         // Choose the axis of rotation that doesn't align with the vectors
         return select(
             vec4(1.0, 0.0, 0.0, 0.0),

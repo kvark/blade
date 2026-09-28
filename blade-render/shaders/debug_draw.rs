@@ -1,10 +1,10 @@
-use super::camera::*;
-use super::debug::*;
-use super::quaternion::*;
+use super::camera::CameraParams;
+use super::debug::{DebugBuffer, DebugLine, debug_buf};
+use super::quaternion::{qinv, qrot};
 use synaga_shader::*;
 
 #[derive(Clone, Copy, Debug, Default, Io)]
-pub struct DebugVarying {
+struct DebugVarying {
     #[builtin(position)]
     pos: vec4,
     #[location(0)]
@@ -13,30 +13,28 @@ pub struct DebugVarying {
     dir: vec3,
 }
 
-pub static camera: Uniform<CameraParams> = binding();
-
-pub static debug_lines: Storage<[DebugLine]> = binding();
-
-pub static depth: texture_2d<f32> = binding();
+static camera: Uniform<CameraParams> = binding();
+static debug_lines: Storage<[DebugLine]> = binding();
+static depth: texture_2d<f32> = binding();
 
 /// The draw entry points only see the line array. This entry point is what
 /// keeps `DebugBuffer` in the module, which is the layout the host uses to
 /// size that buffer.
 #[entry_point(compute, threads(1))]
-pub fn debug_buffer_layout() {
+fn debug_buffer_layout() {
     unsafe {
         debug_buf.get_mut().open = debug_buf.open;
     }
 }
 
 #[entry_point(vertex)]
-pub fn debug_vs(
+fn debug_vs(
     #[builtin(vertex_index)] vertex_id: u32,
     #[builtin(instance_index)] instance_id: u32,
 ) -> DebugVarying {
     let line = debug_lines[(instance_id) as usize];
     let mut point = line.a;
-    if (vertex_id != 0u32) {
+    if vertex_id != 0u32 {
         point = line.b;
     }
 
@@ -53,7 +51,7 @@ pub fn debug_vs(
 
 #[entry_point(fragment)]
 #[output(location(0))]
-pub fn debug_fs(input: DebugVarying) -> vec4 {
+fn debug_fs(input: DebugVarying) -> vec4 {
     let geo_dim = depth.dimensions();
     let depth_itc = vec2i(
         (input.pos.x) as i32,
