@@ -9,108 +9,108 @@ use synaga_shader::*;
 
 #[derive(Clone, Copy, Default)]
 struct LocalLight {
-    pub position_range: vec4,
-    pub intensity: vec4,
-    pub direction: vec4,
+    pub position_range: Vec4,
+    pub intensity: Vec4,
+    pub direction: Vec4,
     // x: inner cosine, y: outer cosine, z: falloff exponent, w: spot flag
-    pub spot: vec4,
+    pub spot: Vec4,
 }
 
 #[derive(Clone, Copy, Default)]
 struct LocalLightParams {
     // x: submitted light count, y: stochastic seed
-    pub count_seed: vec4,
+    pub count_seed: Vec4,
     pub lights: [LocalLight; MAX_LOCAL_LIGHTS_LEN],
 }
 
 #[derive(Clone, Copy, Default)]
 struct RasterFrameParams {
-    pub view_proj: mat4x4,
-    pub inv_view_proj: mat4x4,
-    pub light_view_proj: mat4x4,
-    pub camera_pos: vec4,
+    pub view_proj: Mat4,
+    pub inv_view_proj: Mat4,
+    pub light_view_proj: Mat4,
+    pub camera_pos: Vec4,
     // direction towards the light
-    pub light_dir: vec4,
-    pub light_color: vec4,
+    pub light_dir: Vec4,
+    pub light_color: Vec4,
     // w component is a flag for the procedural space sky
-    pub ambient_color: vec4,
+    pub ambient_color: Vec4,
     // x: environment map enabled, y: the surface needs sRGB encoding
-    pub settings: vec4,
+    pub settings: Vec4,
     // x: enabled, y: strength, z: receiver normal bias, w: light-dir bias
-    pub shadow_params: vec4,
+    pub shadow_params: Vec4,
 }
 
 #[derive(Clone, Copy, Default)]
 struct RasterDrawParams {
-    pub model: mat4x4,
+    pub model: Mat4,
     // Rotation of the object/geometry transform. Skinning assumes uniform
     // scale, so a quaternion is sufficient for normals.
-    pub normal_quat: vec4,
-    pub base_color_factor: vec4,
-    pub emissive_factor: vec4,
+    pub normal_quat: Vec4,
+    pub base_color_factor: Vec4,
+    pub emissive_factor: Vec4,
     // x: normal scale, y: metalness, z: roughness
-    pub material: vec4,
+    pub material: Vec4,
 }
 
 #[derive(Clone, Copy, Default)]
 struct ShadowFrameParams {
-    pub light_view_proj: mat4x4,
+    pub light_view_proj: Mat4,
 }
 
 #[derive(Clone, Copy, Default)]
 struct ShadowDrawParams {
-    pub model: mat4x4,
+    pub model: Mat4,
 }
 
 #[derive(Clone, Copy, Debug, Default, Io)]
 struct VertexOutput {
     #[builtin(position)]
-    clip_pos: vec4,
+    clip_pos: Vec4,
     #[location(0)]
-    world_pos: vec3,
+    world_pos: Vec3,
     #[location(1)]
-    normal: vec3,
+    normal: Vec3,
     #[location(2)]
-    tangent: vec3,
+    tangent: Vec3,
     #[location(3)]
-    bitangent: vec3,
+    bitangent: Vec3,
     #[location(4)]
-    uv: vec2,
+    uv: Vec2,
 }
 
 #[derive(Clone, Copy, Debug, Default, Io)]
 struct SkyOutput {
     #[builtin(position)]
-    clip_pos: vec4,
+    clip_pos: Vec4,
     #[location(0)]
-    ndc: vec2,
+    ndc: Vec2,
 }
 
 static frame_params: Uniform<RasterFrameParams> = binding();
 static light_params: Uniform<LocalLightParams> = binding();
 static draw_params: Uniform<RasterDrawParams> = binding();
-static samp: sampler = binding();
-static base_color_tex: texture_2d<f32> = binding();
-static normal_tex: texture_2d<f32> = binding();
-static metallic_roughness_tex: texture_2d<f32> = binding();
-static emissive_tex: texture_2d<f32> = binding();
-static shadow_samp: sampler_comparison = binding();
-static shadow_tex: texture_depth_2d = binding();
+static samp: Sampler = binding();
+static base_color_tex: Texture2D<f32> = binding();
+static normal_tex: Texture2D<f32> = binding();
+static metallic_roughness_tex: Texture2D<f32> = binding();
+static emissive_tex: Texture2D<f32> = binding();
+static shadow_samp: SamplerComparison = binding();
+static shadow_tex: TextureDepth2D = binding();
 static shadow_frame_params: Uniform<ShadowFrameParams> = binding();
 static shadow_draw_params: Uniform<ShadowDrawParams> = binding();
 static sky_params: Uniform<RasterFrameParams> = binding();
-static env_map: texture_2d<f32> = binding();
+static env_map: Texture2D<f32> = binding();
 
 #[entry_point(vertex)]
 #[output(builtin(position))]
-fn raster_shadow_vs(input: Vertex) -> vec4 {
+fn raster_shadow_vs(input: Vertex) -> Vec4 {
     let world = shadow_draw_params.model * (input.position).extend(1.0);
     return shadow_frame_params.light_view_proj * world;
 }
 
 #[entry_point(vertex)]
 #[output(builtin(position))]
-fn raster_shadow_skinned_vs(input: Vertex, skin_input: SkinVertex) -> vec4 {
+fn raster_shadow_skinned_vs(input: Vertex, skin_input: SkinVertex) -> Vec4 {
     let skinned = apply_affine(skin_blend(skin_input), input.position);
     let world = shadow_draw_params.model * (skinned).extend(1.0);
     return shadow_frame_params.light_view_proj * world;
@@ -119,17 +119,17 @@ fn raster_shadow_skinned_vs(input: Vertex, skin_input: SkinVertex) -> vec4 {
 #[entry_point(fragment)]
 fn raster_shadow_fs() {}
 
-fn quat_rotate(q: vec4, v: vec3) -> vec3 {
+fn quat_rotate(q: Vec4, v: Vec3) -> Vec3 {
     return v + 2.0 * cross(q.xyz(), cross(q.xyz(), v) + q.w * v);
 }
 
-fn map_equirect_dir_to_uv(dir: vec3) -> vec2 {
+fn map_equirect_dir_to_uv(dir: Vec3) -> Vec2 {
     let yaw = atan2(dir.x, dir.z);
     let pitch = asin(clamp(dir.y, -1.0, 1.0));
     return vec2((yaw / PI + 1.0) * 0.5, pitch / PI + 0.5);
 }
 
-fn directional_shadow(world_pos: vec3, n: vec3) -> f32 {
+fn directional_shadow(world_pos: Vec3, n: Vec3) -> f32 {
     if frame_params.shadow_params.x < 0.5 {
         return 1.0;
     }
@@ -146,8 +146,8 @@ fn directional_shadow(world_pos: vec3, n: vec3) -> f32 {
     let uv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     if ndc.z <= 0.0
         || ndc.z >= 1.0
-        || any(uv.cmplt(vec2::splat(0.0)))
-        || any(uv.cmpgt(vec2::splat(1.0)))
+        || any(uv.cmplt(Vec2::splat(0.0)))
+        || any(uv.cmpgt(Vec2::splat(1.0)))
     {
         return 1.0;
     }
@@ -167,11 +167,11 @@ fn directional_shadow(world_pos: vec3, n: vec3) -> f32 {
     return mix(1.0, visibility, frame_params.shadow_params.y);
 }
 
-fn hash31(p: vec3) -> f32 {
+fn hash31(p: Vec3) -> f32 {
     return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
 }
 
-fn angular_attenuation(light: LocalLight, direction_to_light: vec3) -> f32 {
+fn angular_attenuation(light: LocalLight, direction_to_light: Vec3) -> f32 {
     if light.spot.w < 0.5 {
         return 1.0;
     }
@@ -196,9 +196,9 @@ fn raster_sky_vs(#[builtin(vertex_index)] vertex_id: u32) -> SkyOutput {
 
 fn raster_vertex(
     input: Vertex,
-    position: vec3,
-    normal: vec3,
-    tangent: vec3,
+    position: Vec3,
+    normal: Vec3,
+    tangent: Vec3,
     bitangent_sign: f32,
 ) -> VertexOutput {
     let mut out = VertexOutput::default();
@@ -220,7 +220,7 @@ fn raster_vertex(
 
 #[entry_point(fragment)]
 #[output(location(0))]
-fn raster_sky_fs(input: SkyOutput) -> vec4 {
+fn raster_sky_fs(input: SkyOutput) -> Vec4 {
     // Use z=0 (near plane) instead of z=1 (far plane) to avoid precision
     // issues: with far=1e9, inv_view_proj produces w≈1e-9 at z=1, causing
     // inf/NaN after perspective divide on mobile GPUs.
@@ -229,7 +229,7 @@ fn raster_sky_fs(input: SkyOutput) -> vec4 {
     let world_pos = world.xyz() / world.w;
     let dir = normalize(world_pos - sky_params.camera_pos.xyz());
     let env_enabled = sky_params.settings.x > 0.5;
-    let mut color = vec3::splat(0.0);
+    let mut color = Vec3::splat(0.0);
     if env_enabled {
         let uv = map_equirect_dir_to_uv(dir);
         color = env_map.sample_level(&samp, uv, 0.0).xyz();
@@ -244,9 +244,9 @@ fn raster_sky_fs(input: SkyOutput) -> vec4 {
             {
                 let uv = vec2(theta, v) * 50.0;
                 let cell = floor(uv);
-                let local = fract(uv) - vec2::splat(0.5);
+                let local = fract(uv) - Vec2::splat(0.5);
                 let mut p3 = fract(vec3(cell.x, cell.y, cell.x) * vec3(0.1031, 0.1030, 0.0973));
-                p3 = p3 + vec3::splat(dot(p3, vec3(p3.y + 33.33, p3.z + 33.33, p3.x + 33.33)));
+                p3 = p3 + Vec3::splat(dot(p3, vec3(p3.y + 33.33, p3.z + 33.33, p3.x + 33.33)));
                 let h = fract((p3.x + p3.y) * p3.z);
                 let h2 = fract((p3.y + p3.z) * p3.x);
                 let h3 = fract((p3.z + p3.x) * p3.y);
@@ -269,9 +269,9 @@ fn raster_sky_fs(input: SkyOutput) -> vec4 {
             {
                 let uv2 = vec2(theta, v) * 150.0;
                 let cell2 = floor(uv2);
-                let local2 = fract(uv2) - vec2::splat(0.5);
+                let local2 = fract(uv2) - Vec2::splat(0.5);
                 let mut q3 = fract(vec3(cell2.x, cell2.y, cell2.x) * vec3(0.1031, 0.1030, 0.0973));
-                q3 = q3 + vec3::splat(dot(q3, vec3(q3.y + 33.33, q3.z + 33.33, q3.x + 33.33)));
+                q3 = q3 + Vec3::splat(dot(q3, vec3(q3.y + 33.33, q3.z + 33.33, q3.x + 33.33)));
                 let g = fract((q3.x + q3.y) * q3.z);
                 let g2 = fract((q3.y + q3.z) * q3.x);
                 let g3 = fract((q3.z + q3.x) * q3.y);
@@ -290,11 +290,11 @@ fn raster_sky_fs(input: SkyOutput) -> vec4 {
             color = mix(horizon, zenith, t);
         }
     }
-    let mapped = color / (color + vec3::splat(1.0));
+    let mapped = color / (color + Vec3::splat(1.0));
     return (encode_surface_color(mapped, sky_params.settings.y > 0.5)).extend(1.0);
 }
 
-fn local_light_score(light: LocalLight, world_pos: vec3, n: vec3) -> f32 {
+fn local_light_score(light: LocalLight, world_pos: Vec3, n: Vec3) -> f32 {
     let delta = light.position_range.xyz() - world_pos;
     let dist2 = max(dot(delta, delta), 0.04);
     let dist = sqrt(dist2);
@@ -330,10 +330,10 @@ fn raster_skinned_vs(input: Vertex, skin_input: SkinVertex) -> VertexOutput {
     );
 }
 
-fn shade_local_light(mat: Material, n: vec3, v: vec3, world_pos: vec3) -> vec3 {
+fn shade_local_light(mat: Material, n: Vec3, v: Vec3, world_pos: Vec3) -> Vec3 {
     let count = min((light_params.count_seed.x) as u32, MAX_LOCAL_LIGHTS);
     if count == 0u32 {
-        return vec3::splat(0.0);
+        return Vec3::splat(0.0);
     }
 
     // Weighted reservoir over the submitted lights. Each fragment independently
@@ -358,7 +358,7 @@ fn shade_local_light(mat: Material, n: vec3, v: vec3, world_pos: vec3) -> vec3 {
         }
     }
     if weight_sum <= 0.0 {
-        return vec3::splat(0.0);
+        return Vec3::splat(0.0);
     }
 
     let light = light_params.lights[(chosen) as usize];
@@ -381,7 +381,7 @@ fn shade_local_light(mat: Material, n: vec3, v: vec3, world_pos: vec3) -> vec3 {
 
 #[entry_point(fragment)]
 #[output(location(0))]
-fn raster_fs(input: VertexOutput) -> vec4 {
+fn raster_fs(input: VertexOutput) -> Vec4 {
     let mr_sample = metallic_roughness_tex.sample(&samp, input.uv);
     let base_color =
         base_color_tex.sample(&samp, input.uv).rgb() * draw_params.base_color_factor.rgb();
@@ -398,7 +398,7 @@ fn raster_fs(input: VertexOutput) -> vec4 {
         let n_xy = normal_scale * (2.0 * raw_unorm - 1.0);
         let n_z = sqrt(max(0.0, 1.0 - dot(n_xy, n_xy)));
         let n_tangent = normalize((n_xy).extend(n_z));
-        let tbn = mat3x3(normalize(input.tangent), normalize(input.bitangent), n);
+        let tbn = mat3(normalize(input.tangent), normalize(input.bitangent), n);
         n = normalize(tbn * n_tangent);
     }
 
@@ -415,6 +415,6 @@ fn raster_fs(input: VertexOutput) -> vec4 {
     let local = shade_local_light(mat, n, v, input.world_pos);
     let color = ambient + light + local + emissive;
 
-    let mapped = color / (color + vec3::splat(1.0));
+    let mapped = color / (color + Vec3::splat(1.0));
     return (encode_surface_color(mapped, frame_params.settings.y > 0.5)).extend(1.0);
 }

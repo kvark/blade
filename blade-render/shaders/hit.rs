@@ -17,9 +17,9 @@ pub struct HitEntry {
     pub vertex_buf: u32,
     pub prev_vertex_buf: u32,
     pub flags: u32,
-    pub geometry_to_object: mat4x3,
-    pub prev_geometry_to_object: mat4x3,
-    pub prev_object_to_world: mat4x3,
+    pub geometry_to_object: Mat4x3,
+    pub prev_geometry_to_object: Mat4x3,
+    pub prev_object_to_world: Mat4x3,
     pub base_color_texture: u32,
     // packed color factor
     pub base_color_factor: u32,
@@ -30,31 +30,31 @@ pub struct HitEntry {
     pub metalness: f32,
     pub roughness: f32,
     pub emissive_texture: u32,
-    pub emissive_factor: vec4,
+    pub emissive_factor: Vec4,
 }
 
-pub static vertex_buffers: Storage<binding_array<VertexBuffer>> = binding();
+pub static vertex_buffers: Storage<BindingArray<VertexBuffer>> = binding();
 
-static index_buffers: Storage<binding_array<IndexBuffer>> = binding();
+static index_buffers: Storage<BindingArray<IndexBuffer>> = binding();
 
 pub static hit_entries: Storage<[HitEntry]> = binding();
 
-static textures: binding_array<texture_2d<f32>> = binding();
+static textures: BindingArray<Texture2D<f32>> = binding();
 
-pub static sampler_linear: sampler = binding();
+pub static sampler_linear: Sampler = binding();
 
-fn affine_linear(transform: mat4x3) -> mat3x3 {
-    return mat3x3(transform[0].xyz(), transform[1].xyz(), transform[2].xyz());
+fn affine_linear(transform: Mat4x3) -> Mat3 {
+    return mat3(transform[0].xyz(), transform[1].xyz(), transform[2].xyz());
 }
 
 pub fn hit_winding(entry: HitEntry) -> f32 {
     return select(1.0, -1.0, (entry.flags & 1u32) != 0u32);
 }
 
-pub fn fetch_triangle_indices(entry: HitEntry, primitive_index: u32) -> vec3u {
-    let mut indices = primitive_index * 3u32 + vec3u(0u32, 1u32, 2u32);
+pub fn fetch_triangle_indices(entry: HitEntry, primitive_index: u32) -> Vec3<u32> {
+    let mut indices = primitive_index * 3u32 + vec3::<u32>(0u32, 1u32, 2u32);
     if entry.index_buf != !0u32 {
-        indices = vec3u(
+        indices = vec3::<u32>(
             (index_buffers[(entry.index_buf) as usize].data)[(indices.x) as usize],
             (index_buffers[(entry.index_buf) as usize].data)[(indices.y) as usize],
             (index_buffers[(entry.index_buf) as usize].data)[(indices.z) as usize],
@@ -63,14 +63,14 @@ pub fn fetch_triangle_indices(entry: HitEntry, primitive_index: u32) -> vec3u {
     return indices;
 }
 
-pub fn make_barycentrics(uv: vec2) -> vec3 {
+pub fn make_barycentrics(uv: Vec2) -> Vec3 {
     let w = 1.0 - uv.x - uv.y;
     return vec3(w, uv.x, uv.y);
 }
 
 pub fn sample_hit_material(
     entry: HitEntry,
-    tex_coords: vec2,
+    tex_coords: Vec2,
     lod: f32,
     ignore_textures: u32,
 ) -> Material {
@@ -98,10 +98,10 @@ pub fn sample_hit_material(
 
 pub fn sample_hit_emissive(
     entry: HitEntry,
-    tex_coords: vec2,
+    tex_coords: Vec2,
     lod: f32,
     ignore_textures: u32,
-) -> vec3 {
+) -> Vec3 {
     let mut emissive = entry.emissive_factor.xyz();
     if (ignore_textures & DebugTextureFlags::Emissive as u32) == 0u32 {
         emissive *= textures[(entry.emissive_texture) as usize]
@@ -113,10 +113,10 @@ pub fn sample_hit_emissive(
 
 pub fn sample_hit_normal_map(
     entry: HitEntry,
-    tex_coords: vec2,
+    tex_coords: Vec2,
     lod: f32,
     ignore_textures: u32,
-) -> vec3 {
+) -> Vec3 {
     if (ignore_textures & DebugTextureFlags::Normal as u32) != 0u32 {
         return vec3(0.0, 0.0, 1.0);
     }
@@ -127,7 +127,7 @@ pub fn sample_hit_normal_map(
     return (n_xy).extend(sqrt(max(0.0, 1.0 - dot(n_xy, n_xy))));
 }
 
-pub fn hit_normal(entry: HitEntry, object_to_world: mat4x3, normal: vec3) -> vec3 {
+pub fn hit_normal(entry: HitEntry, object_to_world: Mat4x3, normal: Vec3) -> Vec3 {
     // Skinning assumes uniform scale, so the linear part acts on normals
     // like a rotation after normalization.
     let linear = affine_linear(object_to_world) * affine_linear(entry.geometry_to_object);
@@ -136,11 +136,11 @@ pub fn hit_normal(entry: HitEntry, object_to_world: mat4x3, normal: vec3) -> vec
 
 pub fn hit_tangent_space(
     entry: HitEntry,
-    object_to_world: mat4x3,
-    normal: vec3,
-    tangent: vec3,
+    object_to_world: Mat4x3,
+    normal: Vec3,
+    tangent: Vec3,
     bitangent_sign: f32,
-) -> mat3x3 {
+) -> Mat3 {
     let linear = affine_linear(object_to_world) * affine_linear(entry.geometry_to_object);
     let n = hit_normal(entry, object_to_world, normal);
     return tangent_basis(

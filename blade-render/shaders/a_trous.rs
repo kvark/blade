@@ -5,11 +5,11 @@ use super::gbuf::{MOTION_SCALE, USE_MOTION_VECTORS};
 use super::surface::{Surface, compare_depths, compare_flat_normals};
 use synaga_shader::*;
 
-const LUMA: vec3 = vec3(0.2126, 0.7152, 0.0722);
+const LUMA: Vec3 = vec3(0.2126, 0.7152, 0.0722);
 
 const MIN_WEIGHT: f32 = 0.01;
 
-const GAUSSIAN_WEIGHTS: vec2 = vec2(0.44198, 0.27901);
+const GAUSSIAN_WEIGHTS: Vec2 = vec2(0.44198, 0.27901);
 
 const SIGMA_L: f32 = 4.0;
 
@@ -17,7 +17,7 @@ const EPSILON: f32 = 0.001;
 
 #[derive(Clone, Copy, Default)]
 struct Params {
-    pub extent: vec2i,
+    pub extent: Vec2<i32>,
     pub temporal_weight: f32,
     pub iteration: u32,
     pub use_motion_vectors: u32,
@@ -26,32 +26,32 @@ struct Params {
 static camera: Uniform<CameraParams> = binding();
 static prev_camera: Uniform<CameraParams> = binding();
 static params: Uniform<Params> = binding();
-static t_depth: texture_2d<f32> = binding();
-static t_prev_depth: texture_2d<f32> = binding();
-static t_flat_normal: texture_2d<f32> = binding();
-static t_prev_flat_normal: texture_2d<f32> = binding();
-static t_motion: texture_2d<f32> = binding();
-static input: texture_2d<f32> = binding();
-static output: texture_storage_2d<Rgba16Float, ReadWrite> = binding();
+static t_depth: Texture2D<f32> = binding();
+static t_prev_depth: Texture2D<f32> = binding();
+static t_flat_normal: Texture2D<f32> = binding();
+static t_prev_flat_normal: Texture2D<f32> = binding();
+static t_motion: Texture2D<f32> = binding();
+static input: Texture2D<f32> = binding();
+static output: TextureStorage2D<Rgba16Float, ReadWrite> = binding();
 
-fn read_surface(pixel: vec2i) -> Surface {
+fn read_surface(pixel: Vec2<i32>) -> Surface {
     let mut surface = Surface::default();
     surface.flat_normal = normalize(t_flat_normal.load(pixel, 0).xyz());
     surface.depth = t_depth.load(pixel, 0).x;
     return surface;
 }
 
-fn read_prev_surface(pixel: vec2i) -> Surface {
+fn read_prev_surface(pixel: Vec2<i32>) -> Surface {
     let mut surface = Surface::default();
     surface.flat_normal = normalize(t_prev_flat_normal.load(pixel, 0).xyz());
     surface.depth = t_prev_depth.load(pixel, 0).x;
     return surface;
 }
 
-fn get_prev_pixel(pixel: vec2i, pos_world: vec3) -> vec2 {
+fn get_prev_pixel(pixel: Vec2<i32>, pos_world: Vec3) -> Vec2 {
     if USE_MOTION_VECTORS && params.use_motion_vectors != 0u32 {
         let motion = t_motion.load(pixel, 0).xy() / MOTION_SCALE;
-        return vec2::from(pixel) + 0.5 + motion;
+        return Vec2::from(pixel) + 0.5 + motion;
     } else {
         return get_projected_pixel_float(*prev_camera, pos_world);
     }
@@ -61,13 +61,13 @@ fn compare_luminance(a_lum: f32, b_lum: f32, variance: f32) -> f32 {
     return exp(-abs(a_lum - b_lum) / (SIGMA_L * variance + EPSILON));
 }
 
-fn w4(w: f32) -> vec4 {
-    return (vec3::splat(w)).extend(w * w);
+fn w4(w: f32) -> Vec4 {
+    return (Vec3::splat(w)).extend(w * w);
 }
 
 #[entry_point(compute, threads(8, 8))]
-fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
-    let pixel = vec2i::from(global_id.xy());
+fn temporal_accum(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
+    let pixel = Vec2::<i32>::from(global_id.xy());
     if any(pixel.cmpge(params.extent)) {
         return;
     }
@@ -77,13 +77,13 @@ fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
     // considering all samples in 2x2 quad, to help with edges
     let mut center_pixel = get_prev_pixel(pixel, pos_world);
     let mut prev_pixels = [
-        vec2i::from(vec2(center_pixel.x - 0.5, center_pixel.y - 0.5)),
-        vec2i::from(vec2(center_pixel.x + 0.5, center_pixel.y - 0.5)),
-        vec2i::from(vec2(center_pixel.x + 0.5, center_pixel.y + 0.5)),
-        vec2i::from(vec2(center_pixel.x - 0.5, center_pixel.y + 0.5)),
+        Vec2::<i32>::from(vec2(center_pixel.x - 0.5, center_pixel.y - 0.5)),
+        Vec2::<i32>::from(vec2(center_pixel.x + 0.5, center_pixel.y - 0.5)),
+        Vec2::<i32>::from(vec2(center_pixel.x + 0.5, center_pixel.y + 0.5)),
+        Vec2::<i32>::from(vec2(center_pixel.x - 0.5, center_pixel.y + 0.5)),
     ];
     //Note: careful about the pixel center when there is a perfect match
-    let w_bot_right = fract(center_pixel + vec2::splat(0.5));
+    let w_bot_right = fract(center_pixel + Vec2::splat(0.5));
     let mut prev_weights = vec4(
         (1.0 - w_bot_right.x) * (1.0 - w_bot_right.y),
         w_bot_right.x * (1.0 - w_bot_right.y),
@@ -92,12 +92,13 @@ fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
     );
 
     let mut sum_weight = 0.0;
-    let mut sum_ilm = vec4::splat(0.0);
+    let mut sum_ilm = Vec4::splat(0.0);
     if params.temporal_weight != 1.0 {
         //TODO: optimize depth load with a gather operation
         for i in (0)..(4) {
             let prev_pixel = prev_pixels[(i) as usize];
-            if all(prev_pixel.cmpge(vec2i::splat(0))) && all(prev_pixel.cmplt(params.extent)) {
+            if all(prev_pixel.cmpge(Vec2::<i32>::splat(0))) && all(prev_pixel.cmplt(params.extent))
+            {
                 let prev_surface = read_prev_surface(prev_pixel);
                 if compare_flat_normals(surface.flat_normal, prev_surface.flat_normal) < 0.5 {
                     continue;
@@ -120,7 +121,7 @@ fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
     let mut mixed_ilm = (cur_illumination).extend(cur_luminocity * cur_luminocity);
     if sum_weight > MIN_WEIGHT {
         let prev_ilm =
-            sum_ilm / (vec3::splat(sum_weight)).extend(max(0.001, sum_weight * sum_weight));
+            sum_ilm / (Vec3::splat(sum_weight)).extend(max(0.001, sum_weight * sum_weight));
         mixed_ilm = mix(
             mixed_ilm,
             prev_ilm,
@@ -132,8 +133,8 @@ fn temporal_accum(#[builtin(global_invocation_id)] global_id: vec3u) {
 }
 
 #[entry_point(compute, threads(8, 8))]
-fn atrous_filter(#[builtin(global_invocation_id)] global_id: vec3u) {
-    let center = vec2i::from(global_id.xy());
+fn atrous_filter(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
+    let center = Vec2::<i32>::from(global_id.xy());
     if any(center.cmpge(params.extent)) {
         return;
     }
@@ -145,8 +146,10 @@ fn atrous_filter(#[builtin(global_invocation_id)] global_id: vec3u) {
 
     for yy in -1i32..=1i32 {
         for xx in -1i32..=1i32 {
-            let p = center + vec2i(xx, yy) * (1i32 << params.iteration);
-            if all(p.cmpeq(center)) || any(p.cmplt(vec2i::splat(0))) || any(p.cmpge(params.extent))
+            let p = center + vec2::<i32>(xx, yy) * (1i32 << params.iteration);
+            if all(p.cmpeq(center))
+                || any(p.cmplt(Vec2::<i32>::splat(0)))
+                || any(p.cmpge(params.extent))
             {
                 continue;
             }

@@ -6,16 +6,16 @@ use synaga_shader::*;
 #[derive(Clone, Copy, Debug, Default, Io)]
 struct DebugVarying {
     #[builtin(position)]
-    pos: vec4,
+    pos: Vec4,
     #[location(0)]
-    color: vec4,
+    color: Vec4,
     #[location(1)]
-    dir: vec3,
+    dir: Vec3,
 }
 
 static camera: Uniform<CameraParams> = binding();
 static debug_lines: Storage<[DebugLine]> = binding();
-static depth: texture_2d<f32> = binding();
+static depth: Texture2D<f32> = binding();
 
 /// The draw entry points only see the line array. This entry point is what
 /// keeps `DebugBuffer` in the module, which is the layout the host uses to
@@ -51,9 +51,9 @@ fn debug_vs(
 
 #[entry_point(fragment)]
 #[output(location(0))]
-fn debug_fs(input: DebugVarying) -> vec4 {
+fn debug_fs(input: DebugVarying) -> Vec4 {
     let geo_dim = depth.dimensions();
-    let depth_itc = vec2i(
+    let depth_itc = vec2::<i32>(
         (input.pos.x) as i32,
         (geo_dim.y) as i32 - (input.pos.y) as i32,
     );

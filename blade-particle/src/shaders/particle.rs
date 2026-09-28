@@ -2,10 +2,10 @@ use synaga_shader::*;
 
 #[derive(Clone, Copy, Default)]
 struct Particle {
-    pub pos: vec3,
+    pub pos: Vec3,
     pub scale: f32,
     pub color: u32,
-    pub vel: vec3,
+    pub vel: Vec3,
     pub life: f32,
     pub max_life: f32,
     pub generation: u32,
@@ -18,11 +18,11 @@ struct FreeList {
 
 #[derive(Clone, Copy, Default)]
 struct EmitParams {
-    pub origin: vec3,
+    pub origin: Vec3,
     pub emitter_radius: f32,
-    pub direction: vec3,
+    pub direction: Vec3,
     pub cone_half_angle_cos: f32,
-    pub colors: vec4u,
+    pub colors: Vec4<u32>,
     pub color_count: u32,
     pub emit_count: u32,
     pub life_min: f32,
@@ -40,19 +40,19 @@ struct UpdateParams {
 
 #[derive(Clone, Copy, Default)]
 struct CameraParams {
-    pub view_proj: mat4x4,
-    pub camera_right: vec4,
-    pub camera_up: vec4,
+    pub view_proj: Mat4,
+    pub camera_right: Vec4,
+    pub camera_up: Vec4,
 }
 
 #[derive(Clone, Copy, Debug, Default, Io)]
 struct VertexOutput {
     #[builtin(position)]
-    proj_pos: vec4,
+    proj_pos: Vec4,
     #[location(0)]
-    color: vec4,
+    color: Vec4,
     #[location(1)]
-    uv: vec2,
+    uv: Vec2,
 }
 
 static particles: StorageMut<[Particle]> = binding();
@@ -65,8 +65,8 @@ static camera: Uniform<CameraParams> = binding();
 
 #[entry_point(compute, threads(64, 1, 1))]
 fn reset(
-    #[builtin(global_invocation_id)] global_id: vec3u,
-    #[builtin(num_workgroups)] num_groups: vec3u,
+    #[builtin(global_invocation_id)] global_id: Vec3<u32>,
+    #[builtin(num_workgroups)] num_groups: Vec3<u32>,
 ) {
     let total = num_groups.x * 64u32;
     // reversing the order because it works like a stack
@@ -90,7 +90,7 @@ fn hash_u32(x: u32) -> u32 {
     return h;
 }
 
-fn rotate_to(to: vec3, v: vec3) -> vec3 {
+fn rotate_to(to: Vec3, v: Vec3) -> Vec3 {
     // d = dot(+Z, to) = to.z
     let d = to.z;
     if d > 0.9999 {
@@ -107,7 +107,7 @@ fn rotate_to(to: vec3, v: vec3) -> vec3 {
 }
 
 #[entry_point(compute, threads(64, 1, 1))]
-fn update(#[builtin(global_invocation_id)] global_id: vec3u) {
+fn update(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
     if (particles[(global_id.x) as usize]).scale != 0.0 {
         let index = (global_id.x) as usize;
         unsafe {
@@ -132,14 +132,14 @@ fn draw_vs(
 
     if particle.scale == 0.0 {
         out.proj_pos = vec4(0.0, 0.0, -1.0, 1.0);
-        out.color = vec4::splat(0.0);
-        out.uv = vec2::splat(0.0);
+        out.color = Vec4::splat(0.0);
+        out.uv = Vec2::splat(0.0);
         return out;
     }
 
     // Billboard: offset particle position in world space along camera axes
-    let zero_one = vec2::from(vec2u(vertex_index & 1u32, vertex_index >> 1u32));
-    let offset = 2.0 * zero_one - vec2::splat(1.0);
+    let zero_one = Vec2::from(vec2::<u32>(vertex_index & 1u32, vertex_index >> 1u32));
+    let offset = 2.0 * zero_one - Vec2::splat(1.0);
     let world_pos = particle.pos
         + camera.camera_right.xyz() * (offset.x * particle.scale)
         + camera.camera_up.xyz() * (offset.y * particle.scale);
@@ -153,13 +153,13 @@ fn draw_vs(
     // Fade out alpha over lifetime
     let alpha = base_color.a() * (1.0 - age * age);
     out.color = (base_color.rgb()).extend(alpha);
-    out.uv = 2.0 * zero_one - vec2::splat(1.0);
+    out.uv = 2.0 * zero_one - Vec2::splat(1.0);
     return out;
 }
 
 #[entry_point(fragment)]
 #[output(location(0))]
-fn draw_fs(input: VertexOutput) -> vec4 {
+fn draw_fs(input: VertexOutput) -> Vec4 {
     // Soft circular particle: smooth falloff from center
     let dist_sq = dot(input.uv, input.uv);
     if dist_sq > 1.0 {

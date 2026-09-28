@@ -23,19 +23,19 @@ struct PostProcParams {
 #[derive(Clone, Copy, Debug, Default, Io)]
 struct VertexOutput {
     #[builtin(position)]
-    clip_pos: vec4,
+    clip_pos: Vec4,
     #[location(0)]
     #[flat]
-    input_size: vec2u,
+    input_size: Vec2<u32>,
 }
 
-static t_diffuse_albedo: texture_2d<f32> = binding();
-static t_emissive: texture_2d<f32> = binding();
-static light_diffuse: texture_2d<f32> = binding();
-static light_specular: texture_2d<f32> = binding();
-static t_accumulation: texture_2d<f32> = binding();
-static t_debug: texture_2d<f32> = binding();
-static t_external: texture_2d<f32> = binding();
+static t_diffuse_albedo: Texture2D<f32> = binding();
+static t_emissive: Texture2D<f32> = binding();
+static light_diffuse: Texture2D<f32> = binding();
+static light_specular: Texture2D<f32> = binding();
+static t_accumulation: Texture2D<f32> = binding();
+static t_debug: Texture2D<f32> = binding();
+static t_external: Texture2D<f32> = binding();
 static post_proc_params: Uniform<PostProcParams> = binding();
 static debug_params: Uniform<DebugParams> = binding();
 
@@ -54,11 +54,11 @@ fn postfx_vs(#[builtin(vertex_index)] vi: u32) -> VertexOutput {
 
 #[entry_point(fragment)]
 #[output(location(0))]
-fn postfx_fs(vo: VertexOutput) -> vec4 {
-    let tc = vec2i((vo.clip_pos.x) as i32, (vo.clip_pos.y) as i32);
+fn postfx_fs(vo: VertexOutput) -> Vec4 {
+    let tc = vec2::<i32>((vo.clip_pos.x) as i32, (vo.clip_pos.y) as i32);
     let illumination = light_diffuse.load(tc, 0);
     if debug_params.view_mode == DebugMode::Final as u32 {
-        let mut color = vec3::default();
+        let mut color = Vec3::default();
         if post_proc_params.external_input != 0u32 {
             color = t_external.load(tc, 0).xyz();
         } else if post_proc_params.accumulated != 0u32 {
@@ -86,7 +86,7 @@ fn postfx_fs(vo: VertexOutput) -> vec4 {
         let encode = post_proc_params.encode_srgb != 0u32;
         return (encode_surface_color(mapped, encode)).extend(1.0);
     } else if debug_params.view_mode == DebugMode::Variance as u32 {
-        return vec4::splat(illumination.w);
+        return Vec4::splat(illumination.w);
     } else {
         return t_debug.load(tc, 0);
     }

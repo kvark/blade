@@ -18,21 +18,21 @@ use synaga_shader::*;
 static camera: Uniform<CameraParams> = binding();
 static prev_camera: Uniform<CameraParams> = binding();
 static debug: Uniform<DebugParams> = binding();
-static acc_struct: acceleration_structure = binding();
-static out_depth: texture_storage_2d<R32Float, Write> = binding();
-static out_flat_normal: texture_storage_2d<Rgba8Snorm, Write> = binding();
-static out_basis: texture_storage_2d<Rgba8Snorm, Write> = binding();
-static out_diffuse_albedo: texture_storage_2d<Rgba8Unorm, Write> = binding();
-static out_specular_f0: texture_storage_2d<Rgba8Unorm, Write> = binding();
-static out_emissive: texture_storage_2d<Rgba16Float, Write> = binding();
-static out_motion: texture_storage_2d<Rg16Float, Write> = binding();
-static out_debug: texture_storage_2d<Rgba8Unorm, Write> = binding();
+static acc_struct: AccelerationStructure = binding();
+static out_depth: TextureStorage2D<R32Float, Write> = binding();
+static out_flat_normal: TextureStorage2D<Rgba8Snorm, Write> = binding();
+static out_basis: TextureStorage2D<Rgba8Snorm, Write> = binding();
+static out_diffuse_albedo: TextureStorage2D<Rgba8Unorm, Write> = binding();
+static out_specular_f0: TextureStorage2D<Rgba8Unorm, Write> = binding();
+static out_emissive: TextureStorage2D<Rgba16Float, Write> = binding();
+static out_motion: TextureStorage2D<Rg16Float, Write> = binding();
+static out_debug: TextureStorage2D<Rgba8Unorm, Write> = binding();
 
 fn debug_raw_normal(
-    pos: vec3,
+    pos: Vec3,
     normal_raw: u32,
     entry: HitEntry,
-    object_to_world: mat4x3,
+    object_to_world: Mat4x3,
     debug_len: f32,
     color: u32,
 ) {
@@ -41,16 +41,16 @@ fn debug_raw_normal(
 }
 
 #[entry_point(compute, threads(8, 4))]
-fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
+fn main(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
     if any(global_id.xy().cmpge(camera.target_size)) {
         return;
     }
     if WRITE_DEBUG_IMAGE && debug.view_mode != DebugMode::Final as u32 {
-        out_debug.store(global_id.xy(), vec4::splat(0.0));
+        out_debug.store(global_id.xy(), Vec4::splat(0.0));
     }
 
-    let mut rq = ray_query::default();
-    let ray_dir = get_ray_direction(*camera, vec2i::from(global_id.xy()));
+    let mut rq = RayQuery::default();
+    let ray_dir = get_ray_direction(*camera, Vec2::<i32>::from(global_id.xy()));
     rq.initialize(
         &acc_struct,
         RayDesc {
@@ -66,17 +66,17 @@ fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
     let intersection = rq.committed_intersection();
 
     let mut depth = 0.0;
-    let mut basis = vec4::splat(0.0);
-    let mut flat_normal = vec3::splat(0.0);
+    let mut basis = Vec4::splat(0.0);
+    let mut flat_normal = Vec3::splat(0.0);
     // Note: the sky is fully diffuse and white, so that the environment
     // survives the modulation in the post-processing.
     let mut material = Material {
-        diffuse_albedo: vec3::splat(1.0),
-        specular_f0: vec3::splat(0.0),
+        diffuse_albedo: Vec3::splat(1.0),
+        specular_f0: Vec3::splat(0.0),
         roughness: 0.0,
     };
-    let mut emissive = vec3::splat(0.0);
-    let mut motion = vec2::splat(0.0);
+    let mut emissive = Vec3::splat(0.0);
+    let mut motion = Vec2::splat(0.0);
     let enable_debug = all(global_id.xy().cmpeq(debug.mouse_pos));
 
     if intersection.kind != RAY_QUERY_INTERSECTION_NONE {
@@ -130,14 +130,14 @@ fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
             vertices[2].tex_coords,
         ) * barycentrics;
         let normal_geo = normalize(
-            mat3x3(
+            mat3(
                 decode_normal(vertices[0].normal),
                 decode_normal(vertices[1].normal),
                 decode_normal(vertices[2].normal),
             ) * barycentrics,
         );
         let tangent_geo = normalize(
-            mat3x3(
+            mat3(
                 decode_normal(vertices[0].tangent),
                 decode_normal(vertices[1].tangent),
                 decode_normal(vertices[2].tangent),
@@ -252,10 +252,10 @@ fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
                 out_debug.store(global_id.xy(), (normal_local).extend(0.0));
             }
             if debug.view_mode == DebugMode::NormalScale as u32 {
-                out_debug.store(global_id.xy(), vec4::splat(entry.normal_scale));
+                out_debug.store(global_id.xy(), Vec4::splat(entry.normal_scale));
             }
             if debug.view_mode == DebugMode::Roughness as u32 {
-                out_debug.store(global_id.xy(), vec4::splat(material.roughness));
+                out_debug.store(global_id.xy(), Vec4::splat(material.roughness));
             }
             if debug.view_mode == DebugMode::SpecularF0 as u32 {
                 out_debug.store(global_id.xy(), (material.specular_f0).extend(0.0));
@@ -273,7 +273,8 @@ fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
                 let reprojected = get_projected_pixel(*camera, hit_position);
                 let barycentrics_pos_diff =
                     (intersection.object_to_world * position_object).xyz() - hit_position;
-                let camera_projection_diff = vec2::from(global_id.xy()) - vec2::from(reprojected);
+                let camera_projection_diff =
+                    Vec2::<f32>::from(global_id.xy()) - Vec2::<f32>::from(reprojected);
                 let consistency = vec4(
                     length(barycentrics_pos_diff),
                     length(camera_projection_diff),
@@ -289,11 +290,11 @@ fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
         let prev_screen = get_projected_pixel_float(*prev_camera, prev_position);
         //TODO: consider just storing integers here?
         //TODO: technically this "0.5" is just a waste compute on both packing and unpacking
-        motion = prev_screen - vec2::from(global_id.xy()) - 0.5;
+        motion = prev_screen - Vec2::from(global_id.xy()) - 0.5;
         if WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode::Motion as u32 {
             out_debug.store(
                 global_id.xy(),
-                ((motion * MOTION_SCALE + vec2::splat(0.5)).extend(0.0)).extend(1.0),
+                ((motion * MOTION_SCALE + Vec2::splat(0.5)).extend(0.0)).extend(1.0),
             );
         }
     } else {
