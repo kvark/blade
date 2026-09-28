@@ -9,23 +9,23 @@ use synaga_shader::*;
 
 #[derive(Clone, Copy, Default)]
 pub struct LightSample {
-    pub radiance: vec3,
+    pub radiance: Vec3,
     // Solid angle density of drawing this sample.
     pub pdf: f32,
-    pub uv: vec2,
+    pub uv: Vec2,
 }
 
-static env_map: texture_2d<f32> = binding();
-static sampler_nearest: sampler = binding();
+static env_map: Texture2D<f32> = binding();
+static sampler_nearest: Sampler = binding();
 
-pub fn map_equirect_dir_to_uv(dir: vec3) -> vec2 {
+pub fn map_equirect_dir_to_uv(dir: Vec3) -> Vec2 {
     //Note: Y axis is up
     let yaw = dir.y.asin();
     let pitch = dir.x.atan2(dir.z);
     return vec2(pitch + PI, -2.0 * yaw + PI) / (2.0 * PI);
 }
 
-pub fn map_equirect_uv_to_dir(uv: vec2) -> vec3 {
+pub fn map_equirect_uv_to_dir(uv: Vec2) -> Vec3 {
     let yaw = PI * (0.5 - uv.y);
     let pitch = 2.0 * PI * (uv.x - 0.5);
     return vec3(yaw.cos() * pitch.sin(), yaw.sin(), yaw.cos() * pitch.cos());
@@ -47,25 +47,25 @@ fn sample_light_from_environment(rng: &mut RandomState) -> LightSample {
     return ls;
 }
 
-pub fn compute_light_pdf(uv: vec2, importance: bool) -> f32 {
+pub fn compute_light_pdf(uv: Vec2, importance: bool) -> f32 {
     if !importance {
         return 1.0 / (4.0 * PI);
     }
     let dim = env_map.level_dimensions(0);
     let pixel = clamp(
-        vec2i::from(uv * vec2::from(dim)),
-        vec2i::splat(0),
-        vec2i::from(dim) - vec2i::splat(1),
+        Vec2::<i32>::from(uv * Vec2::from(dim)),
+        Vec2::<i32>::splat(0),
+        Vec2::<i32>::from(dim) - Vec2::<i32>::splat(1),
     );
     return compute_environment_sample_pdf(pixel, dim);
 }
 
-pub fn evaluate_environment(dir: vec3) -> vec3 {
+pub fn evaluate_environment(dir: Vec3) -> Vec3 {
     let uv = map_equirect_dir_to_uv(dir);
     return env_map.sample_level(&sampler_nearest, uv, 0.0).xyz();
 }
 
-pub fn evaluate_environment_background(dir: vec3) -> vec3 {
+pub fn evaluate_environment_background(dir: Vec3) -> Vec3 {
     let uv = map_equirect_dir_to_uv(dir);
     return env_map.sample_level(&sampler_linear, uv, 0.0).xyz();
 }

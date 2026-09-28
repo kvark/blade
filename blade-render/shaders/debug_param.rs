@@ -6,5 +6,5 @@ pub struct DebugParams {
     pub draw_flags: u32,
     pub texture_flags: u32,
     pub pad: u32,
-    pub mouse_pos: vec2u,
+    pub mouse_pos: Vec2<u32>,
 }

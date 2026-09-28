@@ -41,33 +41,33 @@ struct PathTraceParams {
 
 #[derive(Clone, Copy, Default)]
 struct PathVertex {
-    pub position: vec3,
+    pub position: Vec3,
     // Normal of the triangle, pointing outwards.
-    pub flat_normal: vec3,
+    pub flat_normal: Vec3,
     // Interpolated normal with the normal map applied.
-    pub normal: vec3,
+    pub normal: Vec3,
     pub material: Material,
-    pub emissive: vec3,
+    pub emissive: Vec3,
 }
 
 #[derive(Clone, Copy, Default)]
 struct PathRadiance {
-    pub total: vec3,
-    pub diffuse: vec3,
-    pub specular: vec3,
-    pub emissive: vec3,
+    pub total: Vec3,
+    pub diffuse: Vec3,
+    pub specular: Vec3,
+    pub emissive: Vec3,
 }
 
 static camera: Uniform<CameraParams> = binding();
 static parameters: Uniform<PathTraceParams> = binding();
-static acc_struct: acceleration_structure = binding();
-static accumulator: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
-static accumulator_diffuse: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
-static accumulator_specular: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
-static accumulator_emissive: texture_storage_2d<Rgba32Float, ReadWrite> = binding();
+static acc_struct: AccelerationStructure = binding();
+static accumulator: TextureStorage2D<Rgba32Float, ReadWrite> = binding();
+static accumulator_diffuse: TextureStorage2D<Rgba32Float, ReadWrite> = binding();
+static accumulator_specular: TextureStorage2D<Rgba32Float, ReadWrite> = binding();
+static accumulator_emissive: TextureStorage2D<Rgba32Float, ReadWrite> = binding();
 
-fn trace_ray(position: vec3, direction: vec3, t_min: f32) -> RayIntersection {
-    let mut rq = ray_query::default();
+fn trace_ray(position: Vec3, direction: Vec3, t_min: f32) -> RayIntersection {
+    let mut rq = RayQuery::default();
     rq.initialize(
         &acc_struct,
         RayDesc {
@@ -83,8 +83,8 @@ fn trace_ray(position: vec3, direction: vec3, t_min: f32) -> RayIntersection {
     return rq.committed_intersection();
 }
 
-fn is_occluded(position: vec3, direction: vec3) -> bool {
-    let mut rq = ray_query::default();
+fn is_occluded(position: Vec3, direction: Vec3) -> bool {
+    let mut rq = RayQuery::default();
     let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
     rq.initialize(
         &acc_struct,
@@ -132,14 +132,14 @@ fn resolve_hit(intersection: RayIntersection) -> PathVertex {
         vertices[2].tex_coords,
     ) * barycentrics;
     let normal_geo = normalize(
-        mat3x3(
+        mat3(
             decode_normal(vertices[0].normal),
             decode_normal(vertices[1].normal),
             decode_normal(vertices[2].normal),
         ) * barycentrics,
     );
     let tangent_geo = normalize(
-        mat3x3(
+        mat3(
             decode_normal(vertices[0].tangent),
             decode_normal(vertices[1].tangent),
             decode_normal(vertices[2].tangent),
@@ -181,22 +181,22 @@ fn mis_weight(count: f32, pdf: f32, other_count: f32, other_pdf: f32) -> f32 {
 
 fn zero_path_radiance() -> PathRadiance {
     return PathRadiance {
-        total: vec3::splat(0.0),
-        diffuse: vec3::splat(0.0),
-        specular: vec3::splat(0.0),
-        emissive: vec3::splat(0.0),
+        total: Vec3::splat(0.0),
+        diffuse: Vec3::splat(0.0),
+        specular: Vec3::splat(0.0),
+        emissive: Vec3::splat(0.0),
     };
 }
 
-fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
+fn trace_path(start_dir: Vec3, rng: &mut RandomState) -> PathRadiance {
     let importance = parameters.environment_importance_sampling != 0u32;
     let num_light = (parameters.num_environment_samples) as f32;
     let mut radiance = zero_path_radiance();
-    let mut primary_albedo = vec3::splat(1.0);
+    let mut primary_albedo = Vec3::splat(1.0);
     // Throughput after the primary response, kept as two paths so everything
     // found at later vertices can still be attributed to that first lobe.
-    let mut diffuse_throughput = vec3::splat(0.0);
-    let mut specular_throughput = vec3::splat(0.0);
+    let mut diffuse_throughput = Vec3::splat(0.0);
+    let mut specular_throughput = Vec3::splat(0.0);
     let mut position = camera.position;
     let mut direction = start_dir;
     // Density of the sample that generated the current ray, which is
@@ -282,7 +282,7 @@ fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
         }
         let lobes = evaluate_brdf(vertex.material, vertex.normal, view_dir, bs.dir);
         if bounce == 0u32 {
-            diffuse_throughput = vec3::splat(lobes.diffuse / bs.pdf);
+            diffuse_throughput = Vec3::splat(lobes.diffuse / bs.pdf);
             specular_throughput = lobes.specular / bs.pdf;
         } else {
             let bsdf = vertex.material.diffuse_albedo * lobes.diffuse + lobes.specular;
@@ -303,7 +303,7 @@ fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
             specular_throughput /= probability;
         }
         let throughput = primary_albedo * diffuse_throughput + specular_throughput;
-        if all(throughput.cmple(vec3::splat(0.0))) {
+        if all(throughput.cmple(Vec3::splat(0.0))) {
             break;
         }
     }
@@ -319,8 +319,8 @@ fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
     }
     // Scale the split and total together, preserving exact reconstruction.
     let scale = min(
-        vec3::splat(1.0),
-        vec3::splat(MAX_RADIANCE) / max(radiance.total, vec3::splat(1.0e-20)),
+        Vec3::splat(1.0),
+        Vec3::splat(MAX_RADIANCE) / max(radiance.total, Vec3::splat(1.0e-20)),
     );
     radiance.total *= scale;
     radiance.diffuse *= scale;
@@ -330,15 +330,15 @@ fn trace_path(start_dir: vec3, rng: &mut RandomState) -> PathRadiance {
 }
 
 #[entry_point(compute, threads(8, 4))]
-fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
+fn main(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
     if any(global_id.xy().cmpge(camera.target_size)) {
         return;
     }
 
-    let mut total = vec4::splat(0.0);
-    let mut total_diffuse = vec4::splat(0.0);
-    let mut total_specular = vec4::splat(0.0);
-    let mut total_emissive = vec4::splat(0.0);
+    let mut total = Vec4::splat(0.0);
+    let mut total_diffuse = Vec4::splat(0.0);
+    let mut total_specular = Vec4::splat(0.0);
+    let mut total_emissive = Vec4::splat(0.0);
     if parameters.reset_accumulation == 0u32 {
         total = accumulator.load(global_id.xy());
         if parameters.max_accumulated_samples != 0u32
@@ -363,11 +363,11 @@ fn main(#[builtin(global_invocation_id)] global_id: vec3u) {
         // rasterized center-sampled G-buffer. References retain stochastic
         // subpixel coverage for antialiasing.
         let jitter = select(
-            vec2::splat(0.5),
+            Vec2::splat(0.5),
             vec2(random_gen(&mut rng), random_gen(&mut rng)),
             parameters.jitter_primary_rays != 0u32,
         );
-        let ray_dir = get_ray_direction_at(*camera, vec2::from(global_id.xy()) + jitter);
+        let ray_dir = get_ray_direction_at(*camera, Vec2::from(global_id.xy()) + jitter);
         let sample = trace_path(ray_dir, &mut rng);
         sum.total += sample.total;
         sum.diffuse += sample.diffuse;

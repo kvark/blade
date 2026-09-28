@@ -15,16 +15,16 @@ static source: Storage<[Vertex]> = binding();
 static skin_source: Storage<[SkinVertex]> = binding();
 static destination: StorageMut<[Vertex]> = binding();
 
-fn encode_normal(n: vec3) -> u32 {
+fn encode_normal(n: Vec3) -> u32 {
     return pack4x8snorm((n).extend(0.0));
 }
 
-fn normalize_or_zero(v: vec3) -> vec3 {
+fn normalize_or_zero(v: Vec3) -> Vec3 {
     let len2 = dot(v, v);
     if len2 < 1.0e-20 {
-        return vec3::splat(0.0);
+        return Vec3::splat(0.0);
     }
-    return v * inverseSqrt(len2);
+    return v * inverse_sqrt(len2);
 }
 
 fn skin_stored_vertex(input: Vertex, skin: SkinVertex) -> Vertex {
@@ -42,7 +42,7 @@ fn skin_stored_vertex(input: Vertex, skin: SkinVertex) -> Vertex {
 }
 
 #[entry_point(compute, threads(64, 1, 1))]
-fn skin(#[builtin(global_invocation_id)] global_id: vec3u) {
+fn skin(#[builtin(global_invocation_id)] global_id: Vec3<u32>) {
     let i = global_id.x;
     if i >= skin_dispatch.vertex_count {
         return;
