@@ -58,6 +58,6 @@ fn murmur3(rng: &mut RandomState) -> u32 {
 pub fn random_gen(rng: &mut RandomState) -> f32 {
     let v = murmur3(rng);
     let one = 1.0f32.to_bits();
-    let mask = (1u32 << 23u32) - 1;
+    let mask = (1u32 << 23) - 1;
     f32::from_bits((mask & v) | one) - 1.0
 }
