@@ -3,3 +3,6 @@
 #![allow(non_upper_case_globals)]
 
 pub mod particle;
+
+// `rustc`'s layout of the particle structs, asserted to be the shaders'.
+synaga_shader::check_layout!();

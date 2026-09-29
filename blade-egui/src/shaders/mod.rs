@@ -3,3 +3,6 @@
 #![allow(non_upper_case_globals)]
 
 pub mod egui;
+
+// `rustc`'s layout of `Uniforms` and `Vertex`, asserted to be the shader's.
+synaga_shader::check_layout!();
