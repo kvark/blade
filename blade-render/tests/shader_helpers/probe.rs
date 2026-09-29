@@ -58,9 +58,12 @@ pub struct Output {
     pub ray: Vec4,
     /// Lanes cast from floats to integers.
     pub cast: Vec4<i32>,
-    /// Control flow, and packing: see `lazy_calls`, `count_to_max` and
-    /// `binding_is_a_copy`; then `a` packed as signed bytes.
+    /// Control flow, and packing: see `lazy_calls` and `binding_is_a_copy`;
+    /// then `a` packed as signed bytes.
     pub control: Vec4<u32>,
+    /// Inclusive ranges: see `count_to_max`, `count_to_signed_max`,
+    /// `count_empty` and `skip_the_last`.
+    pub ranges: Vec4<u32>,
 }
 
 pub static inputs: Storage<[Input]> = binding();
@@ -133,9 +136,15 @@ pub fn probe(input: Input) -> Output {
         cast: (input.c * 1000.0).cast::<i32>(),
         control: vec4(
             lazy_calls((input.bits.x & 1) == 1),
-            count_to_max(input.bits.y & 3),
             binding_is_a_copy(input.bits.z & 7),
             packed,
+            0,
+        ),
+        ranges: vec4(
+            count_to_max(input.bits.y & 3),
+            count_to_signed_max((input.bits.y >> 2) & 3),
+            count_empty(input.bits.w & 7),
+            skip_the_last((input.bits.w >> 3) & 3),
         ),
     }
 }
@@ -164,6 +173,37 @@ fn bump(calls: &mut u32) -> bool {
 fn count_to_max(below: u32) -> u32 {
     let mut count = 0u32;
     for _ in (u32::MAX - below)..=u32::MAX {
+        count += 1;
+    }
+    count
+}
+
+/// `below + 1`, for the largest `i32`.
+fn count_to_signed_max(below: u32) -> u32 {
+    let mut count = 0u32;
+    for _ in (i32::MAX - below as i32)..=i32::MAX {
+        count += 1;
+    }
+    count
+}
+
+/// Zero: a range whose end is before its start holds nothing.
+fn count_empty(start: u32) -> u32 {
+    let mut count = 0u32;
+    for _ in (start + 1)..=start {
+        count += 1;
+    }
+    count
+}
+
+/// `below`: the last iteration is skipped with `continue`, which still has
+/// to end the loop.
+fn skip_the_last(below: u32) -> u32 {
+    let mut count = 0u32;
+    for i in (u32::MAX - below)..=u32::MAX {
+        if i == u32::MAX {
+            continue;
+        }
         count += 1;
     }
     count

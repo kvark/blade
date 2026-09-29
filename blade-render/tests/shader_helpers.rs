@@ -73,8 +73,11 @@ fn the_helpers_run_on_the_cpu() {
         // shader that computes it.
         let flag = input.bits.x & 1 == 1;
         assert_eq!(out.control.x, if flag { 111 } else { 101 });
-        assert_eq!(out.control.y, (input.bits.y & 3) + 1);
-        assert_eq!(out.control.z, 10 * (0..input.bits.z & 7).sum::<u32>());
+        assert_eq!(out.control.y, 10 * (0..input.bits.z & 7).sum::<u32>());
+        assert_eq!(out.ranges.x, (input.bits.y & 3) + 1);
+        assert_eq!(out.ranges.y, ((input.bits.y >> 2) & 3) + 1);
+        assert_eq!(out.ranges.z, 0);
+        assert_eq!(out.ranges.w, (input.bits.w >> 3) & 3);
         let restored = out.restored.xyz() - input.c.xyz();
         assert!(restored.length() < 1e-5, "{restored:?}");
         for draw in [out.random.y, out.random.z, out.random.w] {
@@ -214,6 +217,7 @@ fn the_helpers_agree_on_the_cpu_and_the_gpu() {
         let exact = [
             ("random", cpu.random, gpu.random),
             ("control", cpu.control, gpu.control),
+            ("ranges", cpu.ranges, gpu.ranges),
         ];
         for (name, cpu, gpu) in exact {
             if cpu != gpu {
