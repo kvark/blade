@@ -209,6 +209,18 @@ jobs:
         if: matrix.name != 'Linux'
         run: cargo test --test gpu_examples -- --ignored --nocapture --test-threads=1
 
+      # The shader helpers run on the CPU in the CPU jobs; this runs the same
+      # source on the GPU and compares the two.
+      - name: Compare shader helpers on the CPU and GPU (Linux)
+        if: matrix.name == 'Linux'
+        run: cargo test -p blade-render --test shader_helpers -- --ignored --nocapture
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
+
+      - name: Compare shader helpers on the CPU and GPU
+        if: matrix.name != 'Linux'
+        run: cargo test -p blade-render --test shader_helpers -- --ignored --nocapture
+
       - name: Install EGL/GLES (Linux)
         if: matrix.name == 'Linux'
         run: sudo apt-get install -y libegl1-mesa-dev libgles2-mesa-dev
