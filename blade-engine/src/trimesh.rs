@@ -2,7 +2,7 @@ use std::{path::Path, unimplemented};
 
 #[derive(Default)]
 pub struct TriMesh {
-    pub points: Vec<nalgebra::Point3<f32>>,
+    pub points: Vec<glam::Vec3>,
     pub triangles: Vec<[u32; 3]>,
 }
 
@@ -10,11 +10,12 @@ impl TriMesh {
     fn populate_from_gltf(
         &mut self,
         g_node: gltf::Node,
-        parent_transform: nalgebra::Matrix4<f32>,
+        parent_transform: glam::Mat4,
         data_buffers: &[Vec<u8>],
     ) {
         let name = g_node.name().unwrap_or("");
-        let transform = parent_transform * nalgebra::Matrix4::from(g_node.transform().matrix());
+        let transform =
+            parent_transform * glam::Mat4::from_cols_array_2d(&g_node.transform().matrix());
 
         for child in g_node.children() {
             self.populate_from_gltf(child, transform, data_buffers);
@@ -61,8 +62,7 @@ impl TriMesh {
             }
 
             for pos in reader.read_positions().unwrap() {
-                let point = transform.transform_point(&pos.into());
-                self.points.push(point);
+                self.points.push(transform.transform_point3(pos.into()));
             }
         }
     }
@@ -100,7 +100,7 @@ pub fn load(path: &str) -> TriMesh {
     let scene = document.scenes().next().expect("Document has no scenes?");
     let mut trimesh = TriMesh::default();
     for g_node in scene.nodes() {
-        trimesh.populate_from_gltf(g_node, nalgebra::Matrix4::identity(), &data_buffers);
+        trimesh.populate_from_gltf(g_node, glam::Mat4::IDENTITY, &data_buffers);
     }
     trimesh
 }

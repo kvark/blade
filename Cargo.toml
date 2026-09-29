@@ -31,7 +31,7 @@ bitflags = "2"
 bytemuck = { version = "1", features = ["derive"] }
 choir = "0.7"
 egui = "0.34"
-glam = { version = "0.32", features = ["mint"] }
+glam = { version = "0.33", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
@@ -90,9 +90,6 @@ profiling = { workspace = true }
 ron = "0.12"
 serde = { version = "1", features = ["serde_derive"] }
 strum = { workspace = true }
-# not following semver :(
-del-msh-core = "=0.1.33"
-del-geo = "=0.1.29"
 winit = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

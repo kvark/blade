@@ -6,6 +6,55 @@ use std::{mem, ptr};
 const TORUS_RADIUS: f32 = 3.0;
 const TARGET_FORMAT: gpu::TextureFormat = gpu::TextureFormat::Rgba16Float;
 
+/// Triangle mesh of a torus whose major circle lies in the XY plane.
+///
+/// The ray-query shader rebuilds hit normals from that circle, so the tube
+/// offset stays along Z.
+fn torus_mesh(
+    major_radius: f32,
+    minor_radius: f32,
+    major_segments: usize,
+    minor_segments: usize,
+) -> (Vec<u16>, Vec<f32>) {
+    assert!(major_segments * minor_segments <= u16::MAX as usize);
+    let major_step = std::f32::consts::TAU / major_segments as f32;
+    let minor_step = std::f32::consts::TAU / minor_segments as f32;
+    let mut vertices = vec![0.0; major_segments * minor_segments * 3];
+    for major in 0..major_segments {
+        for minor in 0..minor_segments {
+            let major_angle = major as f32 * major_step;
+            let minor_angle = minor as f32 * minor_step;
+            let ring = major_radius + minor_radius * minor_angle.cos();
+            let index = (major * minor_segments + minor) * 3;
+            vertices[index] = ring * major_angle.sin();
+            vertices[index + 1] = ring * major_angle.cos();
+            vertices[index + 2] = minor_radius * minor_angle.sin();
+        }
+    }
+
+    let mut indices = Vec::with_capacity(major_segments * minor_segments * 6);
+    for major in 0..major_segments {
+        for minor in 0..minor_segments {
+            let next_major = if major + 1 == major_segments {
+                0
+            } else {
+                major + 1
+            };
+            let next_minor = if minor + 1 == minor_segments {
+                0
+            } else {
+                minor + 1
+            };
+            let i00 = (major * minor_segments + minor) as u16;
+            let i10 = (next_major * minor_segments + minor) as u16;
+            let i11 = (next_major * minor_segments + next_minor) as u16;
+            let i01 = (major * minor_segments + next_minor) as u16;
+            indices.extend([i00, i11, i10, i00, i01, i11]);
+        }
+    }
+    (indices, vertices)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct Parameters {
@@ -93,8 +142,7 @@ impl Example {
             multisample_state: Default::default(),
         });
 
-        let (indices, vertex_values) =
-            del_msh_core::trimesh3_primitive::torus_yup::<u16, f32>(TORUS_RADIUS, 1.0, 100, 20);
+        let (indices, vertex_values) = torus_mesh(TORUS_RADIUS, 1.0, 100, 20);
         let vertex_buf = context.create_buffer(gpu::BufferDesc {
             name: "vertices",
             size: (vertex_values.len() * mem::size_of::<f32>()) as u64,

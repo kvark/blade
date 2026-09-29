@@ -59,19 +59,14 @@ impl Default for Transform {
     }
 }
 impl Transform {
-    fn from_isometry(isometry: nalgebra::Isometry3<f32>) -> Self {
+    fn from_pose(pose: rapier3d::math::Pose) -> Self {
         Self {
-            position: isometry.translation.vector.into(),
-            orientation: isometry.rotation.into(),
+            position: pose.translation.into(),
+            orientation: pose.rotation.into(),
         }
     }
-    fn into_isometry(self) -> nalgebra::Isometry3<f32> {
-        nalgebra::Isometry3 {
-            translation: nalgebra::Translation {
-                vector: self.position.into(),
-            },
-            rotation: nalgebra::Unit::new_unchecked(self.orientation.into()),
-        }
+    fn into_pose(self) -> rapier3d::math::Pose {
+        rapier3d::math::Pose::from_parts(self.position.into(), self.orientation.into())
     }
 }
 
@@ -221,21 +216,28 @@ pub struct ObjectHandle(usize);
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
 pub struct LightHandle(usize);
 
-fn make_quaternion(degrees: mint::Vector3<f32>) -> nalgebra::geometry::UnitQuaternion<f32> {
-    nalgebra::geometry::UnitQuaternion::from_euler_angles(
-        degrees.x.to_radians(),
-        degrees.y.to_radians(),
+fn make_quaternion(degrees: mint::Vector3<f32>) -> glam::Quat {
+    // Degrees are roll (x), pitch (y), yaw (z).
+    glam::Quat::from_euler(
+        glam::EulerRot::ZYX,
         degrees.z.to_radians(),
+        degrees.y.to_radians(),
+        degrees.x.to_radians(),
     )
 }
 
-fn make_render_transform(matrix: nalgebra::Matrix4<f32>) -> gpu::Transform {
-    let matrix = matrix.transpose();
-    gpu::Transform {
-        x: matrix.column(0).into(),
-        y: matrix.column(1).into(),
-        z: matrix.column(2).into(),
-    }
+fn make_render_transform(matrix: glam::Mat4) -> gpu::Transform {
+    let columns = mint::ColumnMatrix3x4 {
+        x: matrix.x_axis.truncate().into(),
+        y: matrix.y_axis.truncate().into(),
+        z: matrix.z_axis.truncate().into(),
+        w: matrix.w_axis.truncate().into(),
+    };
+    mint::RowMatrix3x4::from(columns)
+}
+
+fn render_transform(pose: &rapier3d::math::Pose, similarity: glam::Affine3A) -> gpu::Transform {
+    make_render_transform(pose.to_mat4() * glam::Mat4::from(similarity))
 }
 
 fn static_trimesh_flags() -> rapier3d::geometry::TriMeshFlags {
@@ -246,10 +248,10 @@ fn static_trimesh_flags() -> rapier3d::geometry::TriMeshFlags {
 
 trait UiValue {
     fn value(&mut self, v: f32);
-    fn value_vec3(&mut self, v3: &nalgebra::Vector3<f32>) {
-        for &v in v3.as_slice() {
-            self.value(v);
-        }
+    fn value_vec3(&mut self, v3: glam::Vec3) {
+        self.value(v3.x);
+        self.value(v3.y);
+        self.value(v3.z);
     }
 }
 impl UiValue for egui::Ui {
@@ -267,8 +269,8 @@ impl rapier3d::pipeline::DebugRenderBackend for DebugPhysicsRender {
     fn draw_line(
         &mut self,
         _object: rapier3d::pipeline::DebugRenderObject,
-        a: nalgebra::Point3<f32>,
-        b: nalgebra::Point3<f32>,
+        a: rapier3d::math::Vector,
+        b: rapier3d::math::Vector,
         color: [f32; 4],
     ) {
         // Looks like everybody encodes HSL(A) differently...
@@ -290,11 +292,11 @@ impl rapier3d::pipeline::DebugRenderBackend for DebugPhysicsRender {
         .fold(0u32, |u, &c| (u << 8) | c as u32);
         self.lines.push(blade_render::DebugLine {
             a: blade_render::DebugPoint {
-                pos: a.into(),
+                pos: a.to_array(),
                 color,
             },
             b: blade_render::DebugPoint {
-                pos: b.into(),
+                pos: b.to_array(),
                 color,
             },
         });
@@ -309,10 +311,11 @@ struct Physics {
     impulse_joints: rapier3d::dynamics::ImpulseJointSet,
     multibody_joints: rapier3d::dynamics::MultibodyJointSet,
     solver: rapier3d::dynamics::CCDSolver,
+    soft_bodies: rapier3d::dynamics::SoftBodySet,
     colliders: rapier3d::geometry::ColliderSet,
     broad_phase: rapier3d::geometry::DefaultBroadPhase,
     narrow_phase: rapier3d::geometry::NarrowPhase,
-    gravity: rapier3d::math::Vector<f32>,
+    gravity: rapier3d::math::Vector,
     pipeline: rapier3d::pipeline::PhysicsPipeline,
     debug_pipeline: rapier3d::pipeline::DebugRenderPipeline,
     last_time: f32,
@@ -320,11 +323,10 @@ struct Physics {
 
 impl Physics {
     fn step(&mut self) {
-        let query_pipeline = None;
         let physics_hooks = ();
         let event_handler = ();
         self.pipeline.step(
-            &self.gravity,
+            self.gravity,
             &self.integration_params,
             &mut self.island_manager,
             &mut self.broad_phase,
@@ -333,8 +335,8 @@ impl Physics {
             &mut self.colliders,
             &mut self.impulse_joints,
             &mut self.multibody_joints,
+            &mut self.soft_bodies,
             &mut self.solver,
-            query_pipeline,
             &physics_hooks,
             &event_handler,
         );
@@ -350,6 +352,7 @@ impl Physics {
             &self.impulse_joints,
             &self.multibody_joints,
             &self.narrow_phase,
+            &self.soft_bodies,
         );
         backend.lines
     }
@@ -383,7 +386,7 @@ impl ops::IndexMut<JointHandle> for Physics {
 struct Visual {
     model: blade_asset::Handle<blade_render::Model>,
     animation_model: Option<blade_asset::Handle<AnimationModel>>,
-    similarity: nalgebra::geometry::Similarity3<f32>,
+    similarity: glam::Affine3A,
 }
 
 struct Object {
@@ -583,7 +586,7 @@ impl Engine {
     ) {
         let mut render_objects = render_objects.iter_mut();
         for (_, object) in objects {
-            let isometry = physics
+            let pose = physics
                 .rigid_bodies
                 .get(object.rigid_body)
                 .unwrap()
@@ -617,8 +620,7 @@ impl Engine {
                     return;
                 };
                 render_object.model = visual.model;
-                render_object.transform =
-                    make_render_transform((isometry * visual.similarity).to_homogeneous());
+                render_object.transform = render_transform(&pose, visual.similarity);
                 render_object.color_tint = object.color_tint;
                 render_object.pose = current_pose;
             }
@@ -644,11 +646,10 @@ impl Engine {
     ) {
         let range = Self::render_object_range(objects, object_index);
         let object = &objects[object_index];
-        let isometry = physics.rigid_bodies[object.rigid_body].position();
+        let pose = physics.rigid_bodies[object.rigid_body].position();
         let additions = object.visuals.iter().map(|visual| {
             let mut render_object = blade_render::Object::from(visual.model);
-            render_object.transform =
-                make_render_transform((isometry * visual.similarity).to_homogeneous());
+            render_object.transform = render_transform(pose, visual.similarity);
             render_object.prev_transform = render_object.transform;
             render_object.color_tint = object.color_tint;
             render_object
@@ -953,7 +954,7 @@ impl Engine {
         // Collect contact events from the narrow phase
         self.contact_events.clear();
         for pair in self.physics.narrow_phase.contact_pairs() {
-            if !pair.has_any_active_contact {
+            if !pair.has_any_active_contact() {
                 continue;
             }
             // Map collider → rigid body → ObjectHandle via user_data
@@ -974,16 +975,15 @@ impl Engine {
             // Average contact point position in world space.
             // local_p1 is in collider1's rigid body local frame.
             let rb_pos_a = *rb_a.position();
-            let mut avg_pos = nalgebra::Vector3::zeros();
+            let mut avg_pos = glam::Vec3::ZERO;
             let mut count = 0u32;
-            for manifold in pair.manifolds.iter() {
+            for manifold in pair.manifolds() {
                 for pt in manifold.contacts() {
-                    let local_pt = match manifold.subshape_pos1 {
-                        Some(iso) => iso.transform_point(&pt.local_p1),
-                        None => pt.local_p1,
-                    };
-                    let world_pt = rb_pos_a.transform_point(&local_pt);
-                    avg_pos += world_pt.coords;
+                    let local_pt = manifold
+                        .subshape_pos1()
+                        .map(|pose| pose.transform_point(pt.local_p1))
+                        .unwrap_or(pt.local_p1);
+                    avg_pos += rb_pos_a.transform_point(local_pt);
                     count += 1;
                 }
             }
@@ -994,11 +994,7 @@ impl Engine {
             self.contact_events.push(ContactEvent {
                 object_a,
                 object_b,
-                position: mint::Vector3 {
-                    x: avg_pos.x,
-                    y: avg_pos.y,
-                    z: avg_pos.z,
-                },
+                position: avg_pos.into(),
             });
         }
     }
@@ -1203,9 +1199,9 @@ impl Engine {
             let object = &self.objects[handle.0];
             let rb = self.physics.rigid_bodies.get(object.rigid_body).unwrap();
             for (_, joint) in self.physics.impulse_joints.iter() {
-                let local_frame = if joint.body1 == object.rigid_body {
+                let local_frame = if joint.body1() == object.rigid_body {
                     joint.data.local_frame1
-                } else if joint.body2 == object.rigid_body {
+                } else if joint.body2() == object.rigid_body {
                     joint.data.local_frame2
                 } else {
                     continue;
@@ -1213,33 +1209,27 @@ impl Engine {
                 let position = rb.position() * local_frame;
                 let length = 1.0;
                 let base = blade_render::DebugPoint {
-                    pos: position.translation.into(),
+                    pos: position.translation.to_array(),
                     color: 0xFFFFFF,
                 };
                 debug_lines.push(blade_render::DebugLine {
                     a: base,
                     b: blade_render::DebugPoint {
-                        pos: position
-                            .transform_point(&nalgebra::Point3::new(length, 0.0, 0.0))
-                            .into(),
+                        pos: position.transform_point(glam::Vec3::X * length).to_array(),
                         color: 0x0000FF,
                     },
                 });
                 debug_lines.push(blade_render::DebugLine {
                     a: base,
                     b: blade_render::DebugPoint {
-                        pos: position
-                            .transform_point(&nalgebra::Point3::new(0.0, length, 0.0))
-                            .into(),
+                        pos: position.transform_point(glam::Vec3::Y * length).to_array(),
                         color: 0x00FF00,
                     },
                 });
                 debug_lines.push(blade_render::DebugLine {
                     a: base,
                     b: blade_render::DebugPoint {
-                        pos: position
-                            .transform_point(&nalgebra::Point3::new(0.0, 0.0, length))
-                            .into(),
+                        pos: position.transform_point(glam::Vec3::Z * length).to_array(),
                         color: 0xFF0000,
                     },
                 });
@@ -1718,7 +1708,7 @@ impl Engine {
             )
         } else {
             let aspect = target_size.width as f32 / target_size.height.max(1) as f32;
-            glam::Mat4::perspective_rh(camera.fov_y, aspect, near, far)
+            glam::camera::rh::proj::directx::perspective(camera.fov_y, aspect, near, far)
         };
         let view_proj = proj * view;
         // Camera right and up in world space for billboarding
@@ -2032,10 +2022,10 @@ impl Engine {
                 model,
                 // Loaded lazily by `set_animation`.
                 animation_model: None,
-                similarity: nalgebra::geometry::Similarity3::from_parts(
-                    nalgebra::Vector3::from(visual.pos).into(),
+                similarity: glam::Affine3A::from_scale_rotation_translation(
+                    glam::Vec3::splat(visual.scale),
                     make_quaternion(visual.rot),
-                    visual.scale,
+                    visual.pos.into(),
                 ),
             });
             self.load_tasks.push(task.clone());
@@ -2058,19 +2048,16 @@ impl Engine {
             None => Default::default(),
         };
 
-        let isometry = transform.into_isometry();
+        let pose = transform.into_pose();
         let rigid_body = rapier3d::dynamics::RigidBodyBuilder::new(dynamic_input.into_rapier())
-            .position(isometry)
+            .pose(pose)
             .additional_mass_properties(add_mass_properties)
             .build();
         let rb_handle = self.physics.rigid_bodies.insert(rigid_body);
 
         let mut colliders = Vec::new();
         for cc in config.colliders.iter() {
-            let isometry = nalgebra::geometry::Isometry3::from_parts(
-                nalgebra::Vector3::from(cc.pos).into(),
-                make_quaternion(cc.rot),
-            );
+            let pose = rapier3d::math::Pose::from_parts(cc.pos.into(), make_quaternion(cc.rot));
             let builder = match cc.shape {
                 config::Shape::Ball { radius } => ColliderBuilder::ball(radius),
                 config::Shape::Cylinder {
@@ -2084,7 +2071,7 @@ impl Engine {
                 } => {
                     let pv = points
                         .iter()
-                        .map(|p| nalgebra::Vector3::from(*p).into())
+                        .map(|p| glam::Vec3::from(*p))
                         .collect::<Vec<_>>();
                     let result = if border_radius != 0.0 {
                         ColliderBuilder::round_convex_hull(&pv, border_radius)
@@ -2128,7 +2115,7 @@ impl Engine {
                 .density(cc.density)
                 .friction(cc.friction)
                 .restitution(cc.restitution)
-                .position(isometry)
+                .position(pose)
                 .build();
             let c_handle = self.physics.colliders.insert_with_parent(
                 collider,
@@ -2181,12 +2168,12 @@ impl Engine {
         let visual = Visual {
             model,
             animation_model: None,
-            similarity: nalgebra::geometry::Similarity3::identity(),
+            similarity: glam::Affine3A::IDENTITY,
         };
 
-        let isometry = transform.into_isometry();
+        let pose = transform.into_pose();
         let rigid_body = rapier3d::dynamics::RigidBodyBuilder::new(dynamic_input.into_rapier())
-            .position(isometry)
+            .pose(pose)
             .build();
         let rb_handle = self.physics.rigid_bodies.insert(rigid_body);
 
@@ -2232,11 +2219,8 @@ impl Engine {
         points: &[[f32; 3]],
         restitution: f32,
     ) {
-        let na_points: Vec<_> = points
-            .iter()
-            .map(|p| nalgebra::Point3::new(p[0], p[1], p[2]))
-            .collect();
-        let collider = rapier3d::geometry::ColliderBuilder::convex_hull(&na_points)
+        let hull_points: Vec<_> = points.iter().map(|p| glam::Vec3::from(*p)).collect();
+        let collider = rapier3d::geometry::ColliderBuilder::convex_hull(&hull_points)
             .unwrap_or_else(|| rapier3d::geometry::ColliderBuilder::ball(1.0))
             .restitution(restitution)
             .density(1.0)
@@ -2271,14 +2255,14 @@ impl Engine {
     pub fn get_velocity(&self, handle: ObjectHandle) -> (mint::Vector3<f32>, mint::Vector3<f32>) {
         let object = &self.objects[handle.0];
         let body = &self.physics.rigid_bodies[object.rigid_body];
-        ((*body.linvel()).into(), (*body.angvel()).into())
+        (body.linvel().into(), body.angvel().into())
     }
 
     /// Get the position of an object.
     pub fn get_object_position(&self, handle: ObjectHandle) -> mint::Vector3<f32> {
         let object = &self.objects[handle.0];
         let body = &self.physics.rigid_bodies[object.rigid_body];
-        body.position().translation.vector.into()
+        body.position().translation.into()
     }
 
     /// Remove an object and its physics state.
@@ -2299,6 +2283,7 @@ impl Engine {
                 collider,
                 &mut self.physics.island_manager,
                 &mut self.physics.rigid_bodies,
+                &mut self.physics.soft_bodies,
                 false,
             );
         }
@@ -2308,6 +2293,7 @@ impl Engine {
             &mut self.physics.colliders,
             &mut self.physics.impulse_joints,
             &mut self.physics.multibody_joints,
+            &mut self.physics.soft_bodies,
             true,
         );
     }
@@ -2336,8 +2322,8 @@ impl Engine {
             ];
             let mut joint_builder =
                 rapier3d::dynamics::GenericJointBuilder::new(Default::default())
-                    .local_frame1(desc.parent_anchor.into_isometry())
-                    .local_frame2(desc.child_anchor.into_isometry())
+                    .local_frame1(desc.parent_anchor.into_pose())
+                    .local_frame2(desc.child_anchor.into_pose())
                     .contacts_enabled(desc.allow_contacts);
             for &(axis, maybe_freedom) in freedoms.iter() {
                 let rapier_axis = axis.into_rapier();
@@ -2384,14 +2370,14 @@ impl Engine {
     pub fn get_object_transform(&self, handle: ObjectHandle, prediction: Prediction) -> Transform {
         let object = &self.objects[handle.0];
         let body = &self.physics.rigid_bodies[object.rigid_body];
-        let isometry = match prediction {
+        let pose = match prediction {
             Prediction::LastKnown => *body.position(),
             Prediction::IntegrateVelocity => unimplemented!(),
             Prediction::IntegrateVelocityAndForces => {
                 body.predict_position_using_velocity_and_forces(self.time_ahead)
             }
         };
-        Transform::from_isometry(isometry)
+        Transform::from_pose(pose)
     }
 
     pub fn get_object_bounds(&self, handle: ObjectHandle) -> BoundingBox {
@@ -2402,8 +2388,7 @@ impl Engine {
             rapier3d::geometry::BoundingVolume::merge(&mut aabb, &collider.compute_aabb());
         }
         BoundingBox {
-            //TODO: proper Point3 -> Mint conversion?
-            center: (aabb.center() - nalgebra::Point3::default()).into(),
+            center: aabb.center().into(),
             half: aabb.half_extents().into(),
         }
     }
@@ -2425,7 +2410,7 @@ impl Engine {
         let body = &mut self.physics.rigid_bodies[object.rigid_body];
         body.set_linvel(Default::default(), false);
         body.set_angvel(Default::default(), false);
-        body.set_position(transform.into_isometry(), true);
+        body.set_position(transform.into_pose(), true);
     }
 
     /// Enable swept collision detection for a fast-moving physics object.
