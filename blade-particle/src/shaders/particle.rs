@@ -84,12 +84,14 @@ fn reset(global_invocation_id: Vec3<u32>, num_workgroups: Vec3<u32>) {
     }
 }
 
+// Wraps on overflow by design, as the GPU's `*` does and Rust's does not
+// under overflow checks.
 fn hash_u32(x: u32) -> u32 {
     let mut h = x;
     h ^= h >> 16;
-    h *= 0x45d9f3b;
+    h = h.wrapping_mul(0x45d9f3b);
     h ^= h >> 16;
-    h *= 0x45d9f3b;
+    h = h.wrapping_mul(0x45d9f3b);
     h ^= h >> 16;
     h
 }

@@ -32,3 +32,7 @@ pub mod skin;
 pub mod skin_inc;
 pub mod surface;
 pub mod vertex;
+
+// `rustc`'s layout of every struct a buffer shares with the host, asserted to
+// be the one the shaders read.
+synaga_shader::check_layout!("shader_ir_layout.rs");
