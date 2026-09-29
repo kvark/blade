@@ -78,7 +78,7 @@ impl super::PipelineContext<'_> {
     }
 }
 
-impl<T: bytemuck::Pod> crate::ShaderBindable for T {
+impl<T: bytemuck::NoUninit> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         if ctx.inline_uniform_mask & (1 << index) != 0 {
             // Inline uniform block mode: write raw data directly

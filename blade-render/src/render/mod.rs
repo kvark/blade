@@ -4,7 +4,6 @@ use crate::{
     CameraParams, DebugLine, DummyResources, EnvironmentMap, RenderConfig, Shaders,
     shader_sources::{
         a_trous::BlurParams,
-        config,
         debug::{DebugEntry, DebugVariance},
         debug_param::DebugParams,
         hit::HitEntry,
@@ -18,7 +17,7 @@ use crate::{
 pub use debug::DebugBlit;
 pub(crate) use debug::DebugRender;
 
-use std::{collections::HashMap, mem, num::NonZeroU32, ptr};
+use std::{collections::HashMap, fmt, mem, num::NonZeroU32, ptr};
 
 const MAX_RESOURCES: u32 = 8192;
 const RADIANCE_FORMAT: blade_graphics::TextureFormat = blade_graphics::TextureFormat::Rgba16Float;
@@ -28,27 +27,30 @@ struct Samplers {
     linear: blade_graphics::Sampler,
 }
 
-pub use crate::shader_sources::config::DebugMode;
+pub use crate::shader_sources::config::{DebugDrawFlags, DebugMode, DebugTextureFlags};
 
-// The sets of flags a debug view combines. Each bit is the one the shaders
-// test, named by their enum.
-bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq, PartialOrd)]
-    pub struct DebugDrawFlags: u32 {
-        const SPACE = config::DebugDrawFlags::Space as u32;
-        const GEOMETRY = config::DebugDrawFlags::Geometry as u32;
-        const RESTIR = config::DebugDrawFlags::Restir as u32;
+// A set declared on its own newtype gets its flags from `bitflags!`, but not a
+// `Debug` that names them.
+impl fmt::Debug for DebugDrawFlags {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        debug_flags("DebugDrawFlags", self, f)
     }
 }
 
-bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq, PartialOrd)]
-    pub struct DebugTextureFlags: u32 {
-        const ALBEDO = config::DebugTextureFlags::Albedo as u32;
-        const NORMAL = config::DebugTextureFlags::Normal as u32;
-        const METALLIC_ROUGHNESS = config::DebugTextureFlags::MetallicRoughness as u32;
-        const EMISSIVE = config::DebugTextureFlags::Emissive as u32;
+impl fmt::Debug for DebugTextureFlags {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        debug_flags("DebugTextureFlags", self, f)
     }
+}
+
+fn debug_flags<F: bitflags::Flags<Bits = u32>>(
+    name: &str,
+    flags: &F,
+    f: &mut fmt::Formatter,
+) -> fmt::Result {
+    write!(f, "{name}(")?;
+    bitflags::parser::to_writer(flags, &mut *f)?;
+    f.write_str(")")
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1536,9 +1538,9 @@ impl RayTracer {
 
     fn make_debug_params(&self, config: &DebugConfig) -> DebugParams {
         DebugParams {
-            view_mode: config.view_mode as u32,
-            draw_flags: config.draw_flags.bits(),
-            texture_flags: config.texture_flags.bits(),
+            view_mode: config.view_mode,
+            draw_flags: config.draw_flags,
+            texture_flags: config.texture_flags,
             _pad: 0,
             // Off screen is out of any image, as the shader compares it.
             mouse_pos: config.mouse_pos.unwrap_or([-1; 2]).map(|c| c as u32).into(),

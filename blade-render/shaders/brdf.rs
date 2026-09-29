@@ -43,7 +43,7 @@ pub fn material_alpha(mat: Material) -> f32 {
 }
 
 fn fresnel_schlick(cos_theta: f32, f0: Vec3) -> Vec3 {
-    f0 + (Vec3::splat(1.0) - f0) * (1.0 - cos_theta).powf(5.0)
+    f0 + (1.0 - f0) * (1.0 - cos_theta).powf(5.0)
 }
 
 fn fresnel_schlick_scalar(cos_theta: f32, f0: f32) -> f32 {
@@ -66,16 +66,16 @@ fn visibility_smith(n_dot_v: f32, n_dot_l: f32, alpha: f32) -> f32 {
 pub fn zero_brdf() -> BrdfLobes {
     BrdfLobes {
         diffuse: 0.0,
-        specular: Vec3::splat(0.0),
+        specular: Vec3::ZERO,
     }
 }
 
 pub fn is_brdf_black(lobes: BrdfLobes) -> bool {
-    lobes.diffuse <= 0.0 && lobes.specular.cmple(Vec3::splat(0.0)).all()
+    lobes.diffuse <= 0.0 && lobes.specular.cmple(Vec3::ZERO).all()
 }
 
 pub fn evaluate_ambient(mat: Material) -> Vec3 {
-    mat.diffuse_albedo * (Vec3::splat(1.0) - mat.specular_f0) + mat.specular_f0
+    mat.diffuse_albedo * (1.0 - mat.specular_f0) + mat.specular_f0
 }
 
 pub fn specular_sampling_ratio(mat: Material) -> f32 {

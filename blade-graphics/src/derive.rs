@@ -5,7 +5,7 @@ use super::{ResourceIndex, ShaderBinding, VertexFormat};
 pub trait HasShaderBinding {
     const TYPE: ShaderBinding;
 }
-impl<T: bytemuck::Pod> HasShaderBinding for T {
+impl<T: bytemuck::NoUninit> HasShaderBinding for T {
     const TYPE: ShaderBinding = ShaderBinding::Plain {
         size: mem::size_of::<T>() as u32,
     };

@@ -47,7 +47,7 @@ const COLOR_ATTACHMENTS: &[u32] = &[
     glow::COLOR_ATTACHMENT3,
 ];
 
-impl<T: bytemuck::Pod> crate::ShaderBindable for T {
+impl<T: bytemuck::NoUninit> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let self_slice = bytemuck::bytes_of(self);
         let alignment = ctx.limits.uniform_buffer_alignment as usize;

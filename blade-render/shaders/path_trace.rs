@@ -1,5 +1,6 @@
 use super::brdf::{Material, compute_luminocity, evaluate_brdf, is_brdf_black};
 use super::camera::{CameraParams, get_ray_direction_at};
+use super::config::DebugTextureFlags;
 use super::env_light::{
     compute_light_pdf, evaluate_environment, evaluate_environment_background,
     map_equirect_dir_to_uv, map_equirect_uv_to_dir, sample_light,
@@ -152,13 +153,13 @@ fn resolve_hit(intersection: RayIntersection) -> PathVertex {
     let lod = 0.0; //TODO: ray differentials
     let edge1 = positions[1].xyz() - positions[0].xyz();
     let edge2 = positions[2].xyz() - positions[0].xyz();
-    let normal_local = sample_hit_normal_map(entry, tex_coords, lod, 0);
+    let normal_local = sample_hit_normal_map(entry, tex_coords, lod, DebugTextureFlags::empty());
     PathVertex {
         position: positions * barycentrics,
         flat_normal: hit_winding(entry) * edge1.cross(edge2).normalize(),
         normal: (tangent_space_world * normal_local).normalize(),
-        material: sample_hit_material(entry, tex_coords, lod, 0),
-        emissive: sample_hit_emissive(entry, tex_coords, lod, 0),
+        material: sample_hit_material(entry, tex_coords, lod, DebugTextureFlags::empty()),
+        emissive: sample_hit_emissive(entry, tex_coords, lod, DebugTextureFlags::empty()),
     }
 }
 
@@ -175,10 +176,10 @@ fn mis_weight(count: f32, pdf: f32, other_count: f32, other_pdf: f32) -> f32 {
 
 fn zero_path_radiance() -> PathRadiance {
     PathRadiance {
-        total: Vec3::splat(0.0),
-        diffuse: Vec3::splat(0.0),
-        specular: Vec3::splat(0.0),
-        emissive: Vec3::splat(0.0),
+        total: Vec3::ZERO,
+        diffuse: Vec3::ZERO,
+        specular: Vec3::ZERO,
+        emissive: Vec3::ZERO,
     }
 }
 
@@ -186,11 +187,11 @@ fn trace_path(start_dir: Vec3, rng: &mut RandomState) -> PathRadiance {
     let importance = parameters.environment_importance_sampling != 0;
     let num_light = parameters.num_environment_samples as f32;
     let mut radiance = zero_path_radiance();
-    let mut primary_albedo = Vec3::splat(1.0);
+    let mut primary_albedo = Vec3::ONE;
     // Throughput after the primary response, kept as two paths so everything
     // found at later vertices can still be attributed to that first lobe.
-    let mut diffuse_throughput = Vec3::splat(0.0);
-    let mut specular_throughput = Vec3::splat(0.0);
+    let mut diffuse_throughput = Vec3::ZERO;
+    let mut specular_throughput = Vec3::ZERO;
     let mut position = camera.position;
     let mut direction = start_dir;
     // Density of the sample that generated the current ray, which is
@@ -297,7 +298,7 @@ fn trace_path(start_dir: Vec3, rng: &mut RandomState) -> PathRadiance {
             specular_throughput /= probability;
         }
         let throughput = primary_albedo * diffuse_throughput + specular_throughput;
-        if throughput.cmple(Vec3::splat(0.0)).all() {
+        if throughput.cmple(Vec3::ZERO).all() {
             break;
         }
     }
@@ -312,8 +313,7 @@ fn trace_path(start_dir: Vec3, rng: &mut RandomState) -> PathRadiance {
         return zero_path_radiance();
     }
     // Scale the split and total together, preserving exact reconstruction.
-    let scale =
-        Vec3::splat(1.0).min(Vec3::splat(MAX_RADIANCE) / radiance.total.max(Vec3::splat(1.0e-20)));
+    let scale = (MAX_RADIANCE / radiance.total.max(Vec3::splat(1.0e-20))).min(Vec3::ONE);
     radiance.total *= scale;
     radiance.diffuse *= scale;
     radiance.specular *= scale;
@@ -327,10 +327,10 @@ fn main(global_invocation_id: Vec3<u32>) {
         return;
     }
 
-    let mut total = Vec4::splat(0.0);
-    let mut total_diffuse = Vec4::splat(0.0);
-    let mut total_specular = Vec4::splat(0.0);
-    let mut total_emissive = Vec4::splat(0.0);
+    let mut total = Vec4::ZERO;
+    let mut total_diffuse = Vec4::ZERO;
+    let mut total_specular = Vec4::ZERO;
+    let mut total_emissive = Vec4::ZERO;
     if parameters.reset_accumulation == 0 {
         total = accumulator.load(global_invocation_id.xy());
         if parameters.max_accumulated_samples != 0

@@ -41,7 +41,7 @@ static sprite_sampler: Sampler = binding();
 fn unpack_color(raw: u32) -> Vec4 {
     //TODO: https://github.com/gfx-rs/naga/issues/2188
     //return unpack4x8unorm(raw);
-    ((Vec4::splat(raw) >> vec4(0, 8, 16, 24)) & Vec4::splat(0xFF)).cast::<f32>() / 255.0
+    ((Vec4::splat(raw) >> vec4(0, 8, 16, 24)) & 0xFF).cast::<f32>() / 255.0
 }
 
 #[entry_point(fragment)]

@@ -2,7 +2,7 @@ use super::brdf::{
     BrdfLobes, Material, compute_luminocity, evaluate_brdf, is_brdf_black, zero_brdf,
 };
 use super::camera::{CameraParams, get_projected_pixel_float, get_ray_direction};
-use super::config::{DEBUG_MODE, DebugDrawFlags, DebugMode};
+use super::config::{DEBUG_MODE, DebugDrawFlags, DebugMode, DebugTextureFlags};
 use super::debug::{debug_buf, debug_line};
 use super::debug_param::DebugParams;
 use super::env_light::{
@@ -107,7 +107,7 @@ fn normalize_nonzero(v: Vec4) -> Vec4 {
     if v.dot(v) > 0.0 {
         v.normalize()
     } else {
-        Vec4::splat(0.0)
+        Vec4::ZERO
     }
 }
 
@@ -115,14 +115,14 @@ fn normalize_nonzero3(v: Vec3) -> Vec3 {
     if v.dot(v) > 0.0 {
         v.normalize()
     } else {
-        Vec3::splat(0.0)
+        Vec3::ZERO
     }
 }
 
 fn zero_radiance() -> Radiance {
     Radiance {
-        diffuse: Vec3::splat(0.0),
-        specular: Vec3::splat(0.0),
+        diffuse: Vec3::ZERO,
+        specular: Vec3::ZERO,
     }
 }
 
@@ -270,7 +270,7 @@ fn evaluate_incoming_radiance(
         vertex_buffers[entry.vertex_buf as usize].data[indices.y as usize].tex_coords,
         vertex_buffers[entry.vertex_buf as usize].data[indices.z as usize].tex_coords,
     ) * barycentrics;
-    sample_hit_emissive(entry, tex_coords, 0.0, 0)
+    sample_hit_emissive(entry, tex_coords, 0.0, DebugTextureFlags::empty())
 }
 
 fn get_prev_pixel(pixel: Vec2<i32>, pos_world: Vec3) -> Vec2 {
@@ -394,7 +394,7 @@ fn evaluate_sample(
     // geometry, this deliberately avoids the old absolute contribution
     // cutoff, which biased dim surfaces toward black.
     ls.radiance = evaluate_incoming_radiance(acc_struct, start_pos, dir, ray_len, debug_color);
-    if ls.radiance.cmple(Vec3::splat(0.0)).all() {
+    if ls.radiance.cmple(Vec3::ZERO).all() {
         return zero_brdf();
     }
 
@@ -417,12 +417,12 @@ fn compute_restir(
         return RestirOutput {
             radiance: Radiance {
                 diffuse: env,
-                specular: Vec3::splat(0.0),
+                specular: Vec3::ZERO,
             },
         };
     }
 
-    if WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode::Depth as u32 {
+    if WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode::Depth {
         out_debug.store(pixel, Vec4::splat(1.0 / surface.depth));
     }
     let position = camera.position + surface.depth * ray_dir;
@@ -476,8 +476,8 @@ fn compute_restir(
         accepted_count += 1;
     }
 
-    if WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode::SampleReuse as u32 {
-        let mut color = Vec4::splat(0.0);
+    if WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode::SampleReuse {
+        let mut color = Vec4::ZERO;
         for i in 0..accepted_count.min(3) {
             color[i as usize] = 1.0;
         }
@@ -642,8 +642,7 @@ fn main(global_invocation_id: Vec3<u32>) {
 
     let surface = read_surface(global_invocation_id.xy().cast::<i32>());
     let enable_debug = DEBUG_MODE && global_invocation_id.xy().cmpeq(debug.mouse_pos).all();
-    let enable_restir_debug =
-        (debug.draw_flags & DebugDrawFlags::Restir as u32) != 0 && enable_debug;
+    let enable_restir_debug = debug.draw_flags.contains(DebugDrawFlags::RESTIR) && enable_debug;
     let ro = compute_restir(
         surface,
         global_invocation_id.xy().cast::<i32>(),

@@ -1,13 +1,13 @@
-//! Constants and discriminants shared by the shader modules.
+//! Constants, the debug view's mode and its flags, shared by the shader
+//! modules and the host.
 //!
 //! `DEBUG_MODE` is `cfg!(debug_assertions)`. The build script reads the same
 //! predicate from Cargo, so a debug build and a release build disagree here
 //! the way `rustc` does.
 //!
-//! The host reads these too: `blade_render::DebugMode` is the enum here, the
-//! host's flag sets take each bit from the flag enums, and its limits are the
-//! ones here. A shader compares or masks with `Variant as u32` because the
-//! uniform itself is a plain integer.
+//! The host uses these as they are: `blade_render::DebugMode`,
+//! `DebugDrawFlags` and `DebugTextureFlags` are the types here, and its limits
+//! are the ones here.
 
 pub const DEBUG_MODE: bool = cfg!(debug_assertions);
 pub const MAX_LOCAL_LIGHTS: usize = 8;
@@ -24,40 +24,55 @@ pub const MAX_JOINTS_PER_DRAW: usize = 64;
     Eq,
     PartialOrd,
     blade_macros::AsPrimitive,
+    bytemuck::NoUninit,
     strum::EnumIter,
 )]
 pub enum DebugMode {
     #[default]
-    Final = 0,
-    Depth = 1,
-    DiffuseAlbedoTexture = 2,
-    DiffuseAlbedoFactor = 3,
-    NormalTexture = 4,
-    NormalScale = 5,
-    GeometryNormal = 6,
-    ShadingNormal = 7,
-    Motion = 8,
-    HitConsistency = 9,
-    SampleReuse = 10,
-    Roughness = 11,
-    SpecularF0 = 12,
-    Emissive = 13,
-    Variance = 15,
+    Final,
+    Depth,
+    DiffuseAlbedoTexture,
+    DiffuseAlbedoFactor,
+    NormalTexture,
+    NormalScale,
+    GeometryNormal,
+    ShadingNormal,
+    Motion,
+    HitConsistency,
+    SampleReuse,
+    Roughness,
+    SpecularF0,
+    Emissive,
+    Variance,
 }
 
-#[repr(u32)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum DebugDrawFlags {
-    Space = 1,
-    Geometry = 2,
-    Restir = 4,
+/// What the debug view draws over the frame.
+#[repr(transparent)]
+#[derive(
+    Clone, Copy, Default, Hash, PartialEq, Eq, PartialOrd, bytemuck::Zeroable, bytemuck::Pod,
+)]
+pub struct DebugDrawFlags(u32);
+
+bitflags::bitflags! {
+    impl DebugDrawFlags: u32 {
+        const SPACE = 1;
+        const GEOMETRY = 1 << 1;
+        const RESTIR = 1 << 2;
+    }
 }
 
-#[repr(u32)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum DebugTextureFlags {
-    Albedo = 1,
-    Normal = 2,
-    MetallicRoughness = 4,
-    Emissive = 8,
+/// The material textures the debug view leaves out.
+#[repr(transparent)]
+#[derive(
+    Clone, Copy, Default, Hash, PartialEq, Eq, PartialOrd, bytemuck::Zeroable, bytemuck::Pod,
+)]
+pub struct DebugTextureFlags(u32);
+
+bitflags::bitflags! {
+    impl DebugTextureFlags: u32 {
+        const ALBEDO = 1;
+        const NORMAL = 1 << 1;
+        const METALLIC_ROUGHNESS = 1 << 2;
+        const EMISSIVE = 1 << 3;
+    }
 }

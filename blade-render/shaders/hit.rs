@@ -69,10 +69,10 @@ pub fn sample_hit_material(
     entry: HitEntry,
     tex_coords: Vec2,
     lod: f32,
-    ignore_textures: u32,
+    ignore_textures: DebugTextureFlags,
 ) -> Material {
     let mut base_color = unpack4x8unorm(entry.base_color_factor).xyz();
-    if (ignore_textures & DebugTextureFlags::Albedo as u32) == 0 {
+    if !ignore_textures.contains(DebugTextureFlags::ALBEDO) {
         base_color *= textures[entry.base_color_texture as usize]
             .sample_level(&sampler_linear, tex_coords, lod)
             .xyz();
@@ -80,7 +80,7 @@ pub fn sample_hit_material(
 
     let mut metalness = entry.metalness;
     let mut roughness = entry.roughness;
-    if (ignore_textures & DebugTextureFlags::MetallicRoughness as u32) == 0 {
+    if !ignore_textures.contains(DebugTextureFlags::METALLIC_ROUGHNESS) {
         let mr = textures[entry.metallic_roughness_texture as usize].sample_level(
             &sampler_linear,
             tex_coords,
@@ -97,10 +97,10 @@ pub fn sample_hit_emissive(
     entry: HitEntry,
     tex_coords: Vec2,
     lod: f32,
-    ignore_textures: u32,
+    ignore_textures: DebugTextureFlags,
 ) -> Vec3 {
     let mut emissive = entry.emissive_factor.xyz();
-    if (ignore_textures & DebugTextureFlags::Emissive as u32) == 0 {
+    if !ignore_textures.contains(DebugTextureFlags::EMISSIVE) {
         emissive *= textures[entry.emissive_texture as usize]
             .sample_level(&sampler_linear, tex_coords, lod)
             .xyz();
@@ -112,9 +112,9 @@ pub fn sample_hit_normal_map(
     entry: HitEntry,
     tex_coords: Vec2,
     lod: f32,
-    ignore_textures: u32,
+    ignore_textures: DebugTextureFlags,
 ) -> Vec3 {
-    if (ignore_textures & DebugTextureFlags::Normal as u32) != 0 {
+    if ignore_textures.contains(DebugTextureFlags::NORMAL) {
         return vec3(0.0, 0.0, 1.0);
     }
     let raw_unorm = textures[entry.normal_texture as usize]
