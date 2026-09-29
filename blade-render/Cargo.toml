@@ -81,5 +81,9 @@ unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }
 [build-dependencies]
 synaga.workspace = true
 
+[dev-dependencies]
+# `tests/shader_helpers.rs` compiles helpers for the GPU as the build does.
+synaga.workspace = true
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
