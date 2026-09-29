@@ -45,8 +45,8 @@ fn main(global_invocation_id: Vec3<u32>) {
     if global_invocation_id.xy().cmpge(camera.target_size).any() {
         return;
     }
-    if WRITE_DEBUG_IMAGE && debug.view_mode != DebugMode::Final as u32 {
-        out_debug.store(global_invocation_id.xy(), Vec4::splat(0.0));
+    if WRITE_DEBUG_IMAGE && debug.view_mode != DebugMode::Final {
+        out_debug.store(global_invocation_id.xy(), Vec4::ZERO);
     }
 
     let mut rq = RayQuery::default();
@@ -66,17 +66,17 @@ fn main(global_invocation_id: Vec3<u32>) {
     let intersection = rq.committed_intersection();
 
     let mut depth = 0.0;
-    let mut basis = Vec4::splat(0.0);
-    let mut flat_normal = Vec3::splat(0.0);
+    let mut basis = Vec4::ZERO;
+    let mut flat_normal = Vec3::ZERO;
     // Note: the sky is fully diffuse and white, so that the environment
     // survives the modulation in the post-processing.
     let mut material = Material {
-        diffuse_albedo: Vec3::splat(1.0),
-        specular_f0: Vec3::splat(0.0),
+        diffuse_albedo: Vec3::ONE,
+        specular_f0: Vec3::ZERO,
         roughness: 0.0,
     };
-    let mut emissive = Vec3::splat(0.0);
-    let mut motion = Vec2::splat(0.0);
+    let mut emissive = Vec3::ZERO;
+    let mut motion = Vec2::ZERO;
     let enable_debug = global_invocation_id.xy().cmpeq(debug.mouse_pos).all();
 
     if intersection.kind != RAY_QUERY_INTERSECTION_NONE {
@@ -163,7 +163,7 @@ fn main(global_invocation_id: Vec3<u32>) {
             debug_buf.get_mut().entry.position = hit_position;
             debug_buf.get_mut().entry.flat_normal = flat_normal;
         }
-        if enable_debug && (debug.draw_flags & DebugDrawFlags::Space as u32) != 0 {
+        if enable_debug && debug.draw_flags.contains(DebugDrawFlags::SPACE) {
             let normal_w = 0.15 * intersection.t * tangent_space_world[2];
             let tangent_w = 0.05 * intersection.t * tangent_space_world[0];
             let bitangent_w = 0.05 * intersection.t * tangent_space_world[1];
@@ -179,7 +179,7 @@ fn main(global_invocation_id: Vec3<u32>) {
                 0x80FF80,
             );
         }
-        if enable_debug && (debug.draw_flags & DebugDrawFlags::Geometry as u32) != 0 {
+        if enable_debug && debug.draw_flags.contains(DebugDrawFlags::GEOMETRY) {
             let debug_len = intersection.t * 0.2;
             debug_line(positions[0].xyz(), positions[1].xyz(), 0x00FFFF);
             debug_line(positions[1].xyz(), positions[2].xyz(), 0x00FFFF);
@@ -237,40 +237,40 @@ fn main(global_invocation_id: Vec3<u32>) {
         emissive = sample_hit_emissive(entry, tex_coords, lod, debug.texture_flags);
 
         if WRITE_DEBUG_IMAGE {
-            if debug.view_mode == DebugMode::DiffuseAlbedoTexture as u32 {
+            if debug.view_mode == DebugMode::DiffuseAlbedoTexture {
                 out_debug.store(
                     global_invocation_id.xy(),
                     material.diffuse_albedo.extend(0.0),
                 );
             }
-            if debug.view_mode == DebugMode::DiffuseAlbedoFactor as u32 {
+            if debug.view_mode == DebugMode::DiffuseAlbedoFactor {
                 out_debug.store(
                     global_invocation_id.xy(),
                     unpack4x8unorm(entry.base_color_factor),
                 );
             }
-            if debug.view_mode == DebugMode::NormalTexture as u32 {
+            if debug.view_mode == DebugMode::NormalTexture {
                 out_debug.store(global_invocation_id.xy(), normal_local.extend(0.0));
             }
-            if debug.view_mode == DebugMode::NormalScale as u32 {
+            if debug.view_mode == DebugMode::NormalScale {
                 out_debug.store(global_invocation_id.xy(), Vec4::splat(entry.normal_scale));
             }
-            if debug.view_mode == DebugMode::Roughness as u32 {
+            if debug.view_mode == DebugMode::Roughness {
                 out_debug.store(global_invocation_id.xy(), Vec4::splat(material.roughness));
             }
-            if debug.view_mode == DebugMode::SpecularF0 as u32 {
+            if debug.view_mode == DebugMode::SpecularF0 {
                 out_debug.store(global_invocation_id.xy(), material.specular_f0.extend(0.0));
             }
-            if debug.view_mode == DebugMode::Emissive as u32 {
+            if debug.view_mode == DebugMode::Emissive {
                 out_debug.store(global_invocation_id.xy(), emissive.extend(0.0));
             }
-            if debug.view_mode == DebugMode::GeometryNormal as u32 {
+            if debug.view_mode == DebugMode::GeometryNormal {
                 out_debug.store(global_invocation_id.xy(), normal_geo.extend(0.0));
             }
-            if debug.view_mode == DebugMode::ShadingNormal as u32 {
+            if debug.view_mode == DebugMode::ShadingNormal {
                 out_debug.store(global_invocation_id.xy(), normal.extend(0.0));
             }
-            if debug.view_mode == DebugMode::HitConsistency as u32 {
+            if debug.view_mode == DebugMode::HitConsistency {
                 let reprojected = get_projected_pixel(*camera, hit_position);
                 let barycentrics_pos_diff =
                     (intersection.object_to_world * position_object).xyz() - hit_position;
@@ -292,12 +292,10 @@ fn main(global_invocation_id: Vec3<u32>) {
         //TODO: consider just storing integers here?
         //TODO: technically this "0.5" is just a waste compute on both packing and unpacking
         motion = prev_screen - Vec2::from(global_invocation_id.xy()) - 0.5;
-        if WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode::Motion as u32 {
+        if WRITE_DEBUG_IMAGE && debug.view_mode == DebugMode::Motion {
             out_debug.store(
                 global_invocation_id.xy(),
-                (motion * MOTION_SCALE + Vec2::splat(0.5))
-                    .extend(0.0)
-                    .extend(1.0),
+                (motion * MOTION_SCALE + 0.5).extend(0.0).extend(1.0),
             );
         }
     } else {

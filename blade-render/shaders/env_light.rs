@@ -54,7 +54,7 @@ pub fn compute_light_pdf(uv: Vec2, importance: bool) -> f32 {
     let dim = env_map.level_dimensions(0);
     let pixel = (uv * dim.cast::<f32>())
         .cast::<i32>()
-        .clamp(Vec2::splat(0), dim.cast::<i32>() - Vec2::splat(1));
+        .clamp(Vec2::splat(0), dim.cast::<i32>() - 1);
     compute_environment_sample_pdf(pixel, dim)
 }
 

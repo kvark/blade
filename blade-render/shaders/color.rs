@@ -2,7 +2,7 @@ use synaga_shader::*;
 
 pub fn encode_srgb(linear: Vec3) -> Vec3 {
     let low = 12.92 * linear;
-    let high = 1.055 * linear.max(Vec3::splat(0.0)).powf(1.0 / 2.4) - 0.055;
+    let high = 1.055 * linear.max(Vec3::ZERO).powf(1.0 / 2.4) - 0.055;
     select(high, low, linear.cmple(Vec3::splat(0.0031308)))
 }
 

@@ -31,11 +31,11 @@ pub fn get_projected_pixel_float(cp: CameraParams, point: Vec3) -> Vec2 {
     let slope = local_dir.xy() / -local_dir.z;
     let ndc = VFLIP * (slope - cp.film_offset) / (0.5 * cp.fov).tan();
     let half_size = 0.5 * Vec2::from(cp.target_size);
-    (ndc + Vec2::splat(1.0)) * half_size
+    (ndc + 1.0) * half_size
 }
 
 pub fn get_ray_direction(cp: CameraParams, pixel: Vec2<i32>) -> Vec3 {
-    get_ray_direction_at(cp, Vec2::from(pixel) + Vec2::splat(0.5))
+    get_ray_direction_at(cp, Vec2::from(pixel) + 0.5)
 }
 
 pub fn get_projected_pixel(cp: CameraParams, point: Vec3) -> Vec2<i32> {

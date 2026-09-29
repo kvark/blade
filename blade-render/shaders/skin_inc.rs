@@ -25,7 +25,7 @@ pub struct SkinVertex {
 pub static skinning_params: Uniform<SkinningParams> = binding();
 
 fn unpack_joints(raw: u32) -> Vec4<u32> {
-    (Vec4::splat(raw) >> vec4(0, 8, 16, 24)) & Vec4::splat(0xFF)
+    (Vec4::splat(raw) >> vec4(0, 8, 16, 24)) & 0xFF
 }
 
 pub fn apply_affine(m: Mat3x4, p: Vec3) -> Vec3 {

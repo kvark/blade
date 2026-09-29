@@ -23,7 +23,7 @@ fn encode_normal(n: Vec3) -> u32 {
 fn normalize_or_zero(v: Vec3) -> Vec3 {
     let len2 = v.dot(v);
     if len2 < 1.0e-20 {
-        return Vec3::splat(0.0);
+        return Vec3::ZERO;
     }
     v * inverse_sqrt(len2)
 }

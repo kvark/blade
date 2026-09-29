@@ -147,11 +147,7 @@ fn directional_shadow(world_pos: Vec3, n: Vec3) -> f32 {
     let clip = frame_params.light_view_proj * receiver.extend(1.0);
     let ndc = clip.xyz() / clip.w;
     let uv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    if ndc.z <= 0.0
-        || ndc.z >= 1.0
-        || uv.cmplt(Vec2::splat(0.0)).any()
-        || uv.cmpgt(Vec2::splat(1.0)).any()
-    {
+    if ndc.z <= 0.0 || ndc.z >= 1.0 || uv.cmplt(Vec2::ZERO).any() || uv.cmpgt(Vec2::ONE).any() {
         return 1.0;
     }
 
@@ -231,7 +227,7 @@ fn raster_sky_fs(input: SkyOutput) -> Vec4 {
     let world_pos = world.xyz() / world.w;
     let dir = (world_pos - sky_params.camera_pos.xyz()).normalize();
     let env_enabled = sky_params.settings.x > 0.5;
-    let mut color = Vec3::splat(0.0);
+    let mut color = Vec3::ZERO;
     if env_enabled {
         let uv = map_equirect_dir_to_uv(dir);
         color = env_map.sample_level(&samp, uv, 0.0).xyz();
@@ -246,9 +242,9 @@ fn raster_sky_fs(input: SkyOutput) -> Vec4 {
             {
                 let uv = vec2(theta, v) * 50.0;
                 let cell = uv.floor();
-                let local = fract(uv) - Vec2::splat(0.5);
+                let local = fract(uv) - 0.5;
                 let mut p3 = fract(vec3(cell.x, cell.y, cell.x) * vec3(0.1031, 0.1030, 0.0973));
-                p3 = p3 + Vec3::splat(p3.dot(vec3(p3.y + 33.33, p3.z + 33.33, p3.x + 33.33)));
+                p3 += p3.dot(vec3(p3.y + 33.33, p3.z + 33.33, p3.x + 33.33));
                 let h = fract((p3.x + p3.y) * p3.z);
                 let h2 = fract((p3.y + p3.z) * p3.x);
                 let h3 = fract((p3.z + p3.x) * p3.y);
@@ -271,9 +267,9 @@ fn raster_sky_fs(input: SkyOutput) -> Vec4 {
             {
                 let uv2 = vec2(theta, v) * 150.0;
                 let cell2 = uv2.floor();
-                let local2 = fract(uv2) - Vec2::splat(0.5);
+                let local2 = fract(uv2) - 0.5;
                 let mut q3 = fract(vec3(cell2.x, cell2.y, cell2.x) * vec3(0.1031, 0.1030, 0.0973));
-                q3 = q3 + Vec3::splat(q3.dot(vec3(q3.y + 33.33, q3.z + 33.33, q3.x + 33.33)));
+                q3 += q3.dot(vec3(q3.y + 33.33, q3.z + 33.33, q3.x + 33.33));
                 let g = fract((q3.x + q3.y) * q3.z);
                 let g2 = fract((q3.y + q3.z) * q3.x);
                 let g3 = fract((q3.z + q3.x) * q3.y);
@@ -292,7 +288,7 @@ fn raster_sky_fs(input: SkyOutput) -> Vec4 {
             color = mix(horizon, zenith, t);
         }
     }
-    let mapped = color / (color + Vec3::splat(1.0));
+    let mapped = color / (color + 1.0);
     encode_surface_color(mapped, sky_params.settings.y > 0.5).extend(1.0)
 }
 
@@ -338,7 +334,7 @@ fn raster_skinned_vs(input: Vertex, skin_input: SkinVertex) -> VertexOutput {
 fn shade_local_light(mat: Material, n: Vec3, v: Vec3, world_pos: Vec3) -> Vec3 {
     let count = (light_params.count_seed.x as u32).min(MAX_LOCAL_LIGHTS as u32);
     if count == 0 {
-        return Vec3::splat(0.0);
+        return Vec3::ZERO;
     }
 
     // Weighted reservoir over the submitted lights. Each fragment independently
@@ -363,7 +359,7 @@ fn shade_local_light(mat: Material, n: Vec3, v: Vec3, world_pos: Vec3) -> Vec3 {
         }
     }
     if weight_sum <= 0.0 {
-        return Vec3::splat(0.0);
+        return Vec3::ZERO;
     }
 
     let light = light_params.lights[chosen as usize];
@@ -419,6 +415,6 @@ fn raster_fs(input: VertexOutput) -> Vec4 {
     let local = shade_local_light(mat, n, v, input.world_pos);
     let color = ambient + light + local + emissive;
 
-    let mapped = color / (color + Vec3::splat(1.0));
+    let mapped = color / (color + 1.0);
     encode_surface_color(mapped, frame_params.settings.y > 0.5).extend(1.0)
 }

@@ -81,7 +81,7 @@ fn temporal_accum(global_invocation_id: Vec3<u32>) {
         vec2(center_pixel.x - 0.5, center_pixel.y + 0.5).cast::<i32>(),
     ];
     //Note: careful about the pixel center when there is a perfect match
-    let w_bot_right = fract(center_pixel + Vec2::splat(0.5));
+    let w_bot_right = fract(center_pixel + 0.5);
     let prev_weights = vec4(
         (1.0 - w_bot_right.x) * (1.0 - w_bot_right.y),
         w_bot_right.x * (1.0 - w_bot_right.y),
@@ -90,7 +90,7 @@ fn temporal_accum(global_invocation_id: Vec3<u32>) {
     );
 
     let mut sum_weight = 0.0;
-    let mut sum_ilm = Vec4::splat(0.0);
+    let mut sum_ilm = Vec4::ZERO;
     if params.temporal_weight != 1.0 {
         //TODO: optimize depth load with a gather operation
         for i in 0..4 {

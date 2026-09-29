@@ -56,7 +56,7 @@ fn postfx_vs(vertex_index: u32) -> VertexOutput {
 fn postfx_fs(vo: VertexOutput) -> Vec4 {
     let tc = vo.clip_pos.xy().cast::<i32>();
     let illumination = light_diffuse.load(tc, 0);
-    if debug_params.view_mode == DebugMode::Final as u32 {
+    if debug_params.view_mode == DebugMode::Final {
         let color = if post_proc_params.external_input != 0 {
             t_external.load(tc, 0).xyz()
         } else if post_proc_params.accumulated != 0 {
@@ -83,7 +83,7 @@ fn postfx_fs(vo: VertexOutput) -> Vec4 {
         let mapped = l_adjusted * (1.0 + l_adjusted / (l_white * l_white)) / (1.0 + l_adjusted);
         let encode = post_proc_params.encode_srgb != 0;
         encode_surface_color(mapped, encode).extend(1.0)
-    } else if debug_params.view_mode == DebugMode::Variance as u32 {
+    } else if debug_params.view_mode == DebugMode::Variance {
         Vec4::splat(illumination.w)
     } else {
         t_debug.load(tc, 0)

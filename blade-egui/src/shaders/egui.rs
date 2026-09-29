@@ -30,8 +30,8 @@ static r_sampler: Sampler = binding();
 
 fn linear_from_gamma(srgb: Vec3) -> Vec3 {
     let cutoff = srgb.cmplt(Vec3::splat(0.04045));
-    let lower = srgb / Vec3::splat(12.92);
-    let higher = ((srgb + Vec3::splat(0.055)) / Vec3::splat(1.055)).powf(2.4);
+    let lower = srgb / 12.92;
+    let higher = ((srgb + 0.055) / 1.055).powf(2.4);
     select(higher, lower, cutoff)
 }
 

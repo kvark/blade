@@ -112,14 +112,14 @@ fn rotate_to(to: Vec3, v: Vec3) -> Vec3 {
 
 #[entry_point(compute, threads(64, 1, 1))]
 fn update(global_invocation_id: Vec3<u32>) {
-    if particles[global_invocation_id.x as usize].scale != 0.0 {
-        let index = global_invocation_id.x as usize;
-        particles.get_mut()[index].pos += particles[index].vel * update_params.time_delta;
-        particles.get_mut()[index].life -= update_params.time_delta;
-        if particles[index].life < 0.0 {
+    let p = &mut particles.get_mut()[global_invocation_id.x as usize];
+    if p.scale != 0.0 {
+        p.pos += p.vel * update_params.time_delta;
+        p.life -= update_params.time_delta;
+        if p.life < 0.0 {
             let list_index = free_list.count.fetch_add(1);
             free_list.get_mut().data[list_index as usize] = global_invocation_id.x;
-            particles.get_mut()[index].scale = 0.0;
+            p.scale = 0.0;
         }
     }
 }
@@ -127,33 +127,31 @@ fn update(global_invocation_id: Vec3<u32>) {
 #[entry_point(vertex)]
 fn draw_vs(vertex_index: u32, instance_index: u32) -> VertexOutput {
     let particle = draw_particles[instance_index as usize];
-    let mut out = VertexOutput::default();
-
     if particle.scale == 0.0 {
-        out.proj_pos = vec4(0.0, 0.0, -1.0, 1.0);
-        out.color = Vec4::splat(0.0);
-        out.uv = Vec2::splat(0.0);
-        return out;
+        // A dead particle is outside the clip volume, so it draws nothing.
+        return VertexOutput {
+            proj_pos: vec4(0.0, 0.0, -1.0, 1.0),
+            ..Default::default()
+        };
     }
 
     // Billboard: offset particle position in world space along camera axes
     let zero_one = vec2(vertex_index & 1, vertex_index >> 1).cast::<f32>();
-    let offset = 2.0 * zero_one - Vec2::splat(1.0);
+    let offset = 2.0 * zero_one - 1.0;
     let world_pos = particle.pos
         + camera.camera_right.xyz() * (offset.x * particle.scale)
         + camera.camera_up.xyz() * (offset.y * particle.scale);
-
-    // Project to clip space
-    out.proj_pos = camera.view_proj * world_pos.extend(1.0);
 
     // Unpack base color and apply lifetime fade
     let base_color = unpack4x8unorm(particle.color);
     let age = 1.0 - particle.life / particle.max_life;
     // Fade out alpha over lifetime
     let alpha = base_color.a() * (1.0 - age * age);
-    out.color = base_color.rgb().extend(alpha);
-    out.uv = 2.0 * zero_one - Vec2::splat(1.0);
-    out
+    VertexOutput {
+        proj_pos: camera.view_proj * world_pos.extend(1.0),
+        color: base_color.rgb().extend(alpha),
+        uv: offset,
+    }
 }
 
 #[entry_point(fragment)]

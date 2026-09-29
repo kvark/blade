@@ -33,7 +33,7 @@ pub fn generate_environment_sample(rng: &mut RandomState, dim: Vec2<u32>) -> Env
     while mip != 0 {
         mip -= 1;
         let weights = env_weights.load(itc, mip);
-        let sum = Vec4::splat(1.0).dot(weights);
+        let sum = weights.element_sum();
         let r = random_gen(rng) * sum;
         itc *= 2;
         let weight = if r >= weights.x + weights.y {
@@ -64,10 +64,10 @@ pub fn compute_environment_sample_pdf(pixel: Vec2<i32>, dim: Vec2<u32>) -> f32 {
     let mut pdf = 1.0 / compute_texel_solid_angle(itc, dim);
     let mip_count = env_weights.num_levels() as i32;
     for mip in 0..mip_count {
-        let rem = itc & Vec2::splat(1);
+        let rem = itc & 1;
         itc >>= 1;
         let weights = env_weights.load(itc, mip);
-        let sum = Vec4::splat(1.0).dot(weights);
+        let sum = weights.element_sum();
         let w2 = select(weights.xy(), weights.zw(), rem.y != 0);
         let weight = select(w2.x, w2.y, rem.x != 0);
         pdf *= weight / sum;
