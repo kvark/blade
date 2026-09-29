@@ -1139,7 +1139,7 @@ impl Rasterizer {
             )
         } else {
             let aspect = self.surface_size.width as f32 / self.surface_size.height.max(1) as f32;
-            glam::Mat4::perspective_rh(camera.fov_y, aspect, near, far)
+            glam::camera::rh::proj::directx::perspective(camera.fov_y, aspect, near, far)
         };
         let view_proj = proj * view;
         let inv_view_proj = view_proj.inverse();
@@ -1267,8 +1267,9 @@ fn make_light_view_proj(
     } else {
         glam::Vec3::Z
     };
-    let view = glam::Mat4::look_at_rh(eye, center, up);
-    let projection = glam::Mat4::orthographic_rh(-extent, extent, -extent, extent, 0.1, depth);
+    let view = glam::camera::rh::view::look_at_mat4(eye, center, up);
+    let projection =
+        glam::camera::rh::proj::directx::orthographic(-extent, extent, -extent, extent, 0.1, depth);
     projection * view
 }
 

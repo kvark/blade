@@ -234,8 +234,8 @@ impl Example {
         let near = 0.01_f32;
         let far = distance * 2.0;
         let pos = glam::Vec3::new(0.0, 0.0, distance);
-        let view = glam::Mat4::look_at_rh(pos, glam::Vec3::ZERO, glam::Vec3::Y);
-        let proj = glam::Mat4::perspective_rh(fov_y, aspect, near, far);
+        let view = glam::camera::rh::view::look_at_mat4(pos, glam::Vec3::ZERO, glam::Vec3::Y);
+        let proj = glam::camera::rh::proj::directx::perspective(fov_y, aspect, near, far);
         let view_proj = proj * view;
         // Camera looks along -Z, so right=+X, up=+Y (identity orientation)
         blade_particle::CameraParams {

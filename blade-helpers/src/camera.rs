@@ -40,7 +40,12 @@ impl ControlledCamera {
     }
 
     pub fn get_projection_matrix(&self, aspect: f32) -> glam::Mat4 {
-        glam::Mat4::perspective_rh(self.inner.fov_y, aspect, 1.0, self.inner.depth)
+        glam::camera::rh::proj::directx::perspective(
+            self.inner.fov_y,
+            aspect,
+            1.0,
+            self.inner.depth,
+        )
     }
 
     pub fn move_by(&mut self, offset: glam::Vec3) {

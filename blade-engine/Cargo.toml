@@ -23,10 +23,9 @@ glam = { workspace = true }
 gltf = { workspace = true }
 log = { workspace = true }
 mint = { workspace = true, features = ["serde"] }
-nalgebra = { version = "0.33", features = ["mint"] }
 num_cpus = { workspace = true }
 profiling = { workspace = true }
-rapier3d = { version = "0.23", features = ["debug-render"] }
+rapier3d = { version = "0.36", features = ["debug-render"] }
 serde = { version = "1", features = ["serde_derive"] }
 slab = { workspace = true }
 

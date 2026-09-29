@@ -1,3 +1,8 @@
+// nanorand calls RtlGenRandom (`SystemFunction036`) and does not link advapi32.
+#[cfg(windows)]
+#[link(name = "advapi32")]
+unsafe extern "C" {}
+
 use blade_graphics as gpu;
 use bytemuck::{Pod, Zeroable};
 use std::{mem, ptr};

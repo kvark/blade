@@ -1,11 +1,5 @@
 #![allow(irrefutable_let_patterns, clippy::chunks_exact_to_as_chunks)]
 
-// nanorand uses RtlGenRandom but doesn't link advapi32 itself.
-// On Vulkan builds, other deps pull it in transitively; on GLES builds we must link it explicitly.
-#[cfg(all(gles, windows))]
-#[link(name = "advapi32")]
-unsafe extern "C" {}
-
 use blade_graphics as gpu;
 use blade_graphics::ShaderData;
 use std::slice;
@@ -674,8 +668,8 @@ fn snapshot_particle() {
         let near = 0.01_f32;
         let far = distance * 2.0;
         let pos = glam::Vec3::new(0.0, 0.0, distance);
-        let view = glam::Mat4::look_at_rh(pos, glam::Vec3::ZERO, glam::Vec3::Y);
-        let proj = glam::Mat4::perspective_rh(fov_y, aspect, near, far);
+        let view = glam::camera::rh::view::look_at_mat4(pos, glam::Vec3::ZERO, glam::Vec3::Y);
+        let proj = glam::camera::rh::proj::directx::perspective(fov_y, aspect, near, far);
         let view_proj = proj * view;
         blade_particle::CameraParams {
             view_proj: view_proj.to_cols_array(),
@@ -784,7 +778,7 @@ fn snapshot_space_sky() {
     let fov_y: f32 = 1.0; // ~57 degrees
     let near = 0.01f32;
     let far = 100.0f32;
-    let proj = glam::Mat4::perspective_rh(fov_y, aspect, near, far);
+    let proj = glam::camera::rh::proj::directx::perspective(fov_y, aspect, near, far);
     let view = glam::Mat4::IDENTITY; // camera at origin, looking along -Z in RH
     let view_proj = proj * view;
     let inv_view_proj = view_proj.inverse();
