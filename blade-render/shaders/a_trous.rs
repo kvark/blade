@@ -1,5 +1,5 @@
-use super::camera::{CameraParams, get_projected_pixel_float, get_ray_direction};
-use super::gbuf::{MOTION_SCALE, USE_MOTION_VECTORS};
+use super::camera::{CameraParams, get_ray_direction};
+use super::gbuf::{get_prev_pixel, prev_camera};
 use super::surface::{Surface, compare_depths, compare_flat_normals};
 use synaga_shader::*;
 
@@ -10,7 +10,7 @@ const SIGMA_L: f32 = 4.0;
 const EPSILON: f32 = 0.001;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct BlurParams {
     pub extent: Vec2<i32>,
     pub temporal_weight: f32,
@@ -20,13 +20,11 @@ pub struct BlurParams {
 }
 
 static camera: Uniform<CameraParams> = binding();
-static prev_camera: Uniform<CameraParams> = binding();
 static params: Uniform<BlurParams> = binding();
 static t_depth: Texture2D<f32> = binding();
 static t_prev_depth: Texture2D<f32> = binding();
 static t_flat_normal: Texture2D<f32> = binding();
 static t_prev_flat_normal: Texture2D<f32> = binding();
-static t_motion: Texture2D<f32> = binding();
 static input: Texture2D<f32> = binding();
 static output: TextureStorage2D<Rgba16Float, ReadWrite> = binding();
 
@@ -43,15 +41,6 @@ fn read_prev_surface(pixel: Vec2<i32>) -> Surface {
         flat_normal: t_prev_flat_normal.load(pixel, 0).xyz().normalize(),
         depth: t_prev_depth.load(pixel, 0).x,
         ..Default::default()
-    }
-}
-
-fn get_prev_pixel(pixel: Vec2<i32>, pos_world: Vec3) -> Vec2 {
-    if USE_MOTION_VECTORS && params.use_motion_vectors != 0 {
-        let motion = t_motion.load(pixel, 0).xy() / MOTION_SCALE;
-        Vec2::from(pixel) + 0.5 + motion
-    } else {
-        get_projected_pixel_float(*prev_camera, pos_world)
     }
 }
 
@@ -73,7 +62,7 @@ fn temporal_accum(global_invocation_id: Vec3<u32>) {
     let surface = read_surface(pixel);
     let pos_world = camera.position + surface.depth * get_ray_direction(*camera, pixel);
     // considering all samples in 2x2 quad, to help with edges
-    let center_pixel = get_prev_pixel(pixel, pos_world);
+    let center_pixel = get_prev_pixel(pixel, pos_world, params.use_motion_vectors != 0);
     let prev_pixels = [
         vec2(center_pixel.x - 0.5, center_pixel.y - 0.5).cast::<i32>(),
         vec2(center_pixel.x + 0.5, center_pixel.y - 0.5).cast::<i32>(),
@@ -95,7 +84,7 @@ fn temporal_accum(global_invocation_id: Vec3<u32>) {
         //TODO: optimize depth load with a gather operation
         for i in 0..4 {
             let prev_pixel = prev_pixels[i as usize];
-            if prev_pixel.cmpge(Vec2::splat(0)).all() && prev_pixel.cmplt(params.extent).all() {
+            if prev_pixel >= Vec2::ZERO && prev_pixel < params.extent {
                 let prev_surface = read_prev_surface(prev_pixel);
                 if compare_flat_normals(surface.flat_normal, prev_surface.flat_normal) < 0.5 {
                     continue;
@@ -144,10 +133,8 @@ fn atrous_filter(global_invocation_id: Vec3<u32>) {
     for yy in -1i32..=1 {
         for xx in -1i32..=1 {
             let p = center + vec2(xx, yy) * (1 << params.iteration);
-            if p.cmpeq(center).all()
-                || p.cmplt(Vec2::splat(0)).any()
-                || p.cmpge(params.extent).any()
-            {
+            let inside = p >= Vec2::ZERO && p < params.extent;
+            if p == center || !inside {
                 continue;
             }
 

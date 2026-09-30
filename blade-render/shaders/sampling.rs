@@ -1,4 +1,4 @@
-use super::brdf::{Material, distribution_ggx, material_alpha, specular_sampling_ratio};
+use super::brdf::{Material, distribution_ggx};
 use super::random::{RandomState, random_gen};
 use core::f32::consts::PI;
 use synaga_shader::*;
@@ -35,9 +35,9 @@ pub fn compute_bsdf_pdf(mat: Material, normal: Vec3, view_dir: Vec3, light_dir: 
     let half_dir = (view_dir + light_dir).normalize();
     let n_dot_h = normal.dot(half_dir).max(0.0);
     let v_dot_h = view_dir.dot(half_dir).max(1.0e-5);
-    let specular_pdf = distribution_ggx(n_dot_h, material_alpha(mat)) * n_dot_h / (4.0 * v_dot_h);
+    let specular_pdf = distribution_ggx(n_dot_h, mat.alpha()) * n_dot_h / (4.0 * v_dot_h);
     let diffuse_pdf = n_dot_l / PI;
-    mix(diffuse_pdf, specular_pdf, specular_sampling_ratio(mat))
+    mix(diffuse_pdf, specular_pdf, mat.specular_sampling_ratio())
 }
 
 fn sample_hemisphere_cosine(rng: &mut RandomState) -> Vec3 {
@@ -61,8 +61,8 @@ pub fn sample_bsdf(
     rng: &mut RandomState,
 ) -> BsdfSample {
     let frame = make_tangent_frame(normal);
-    let dir = if random_gen(rng) < specular_sampling_ratio(mat) {
-        let half_dir = frame * sample_ggx_half_dir(material_alpha(mat), rng);
+    let dir = if random_gen(rng) < mat.specular_sampling_ratio() {
+        let half_dir = frame * sample_ggx_half_dir(mat.alpha(), rng);
         2.0 * view_dir.dot(half_dir) * half_dir - view_dir
     } else {
         frame * sample_hemisphere_cosine(rng)

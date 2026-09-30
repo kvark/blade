@@ -3,7 +3,7 @@ use super::vertex::{Vertex, decode_normal};
 use synaga_shader::*;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct SkinDispatch {
     pub vertex_count: u32,
     pub _pad0: u32,

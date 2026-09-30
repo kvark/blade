@@ -1,10 +1,10 @@
-use super::quaternion::{qinv, qrot};
+use super::quaternion::Quaternion;
 use synaga_shader::*;
 
 const VFLIP: Vec2 = vec2(1.0, -1.0);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(PartialEq, Shared)]
 pub struct CameraParams {
     pub position: Vec3,
     pub depth: f32,
@@ -20,11 +20,11 @@ pub fn get_ray_direction_at(cp: CameraParams, film_pos: Vec2) -> Vec3 {
     let ndc = (film_pos - half_size) / half_size;
     // Right-handed coordinate system with X=right, Y=up, and Z=towards the camera
     let local_dir = (cp.film_offset + VFLIP * ndc * (0.5 * cp.fov).tan()).extend(-1.0);
-    qrot(cp.orientation, local_dir).normalize()
+    cp.orientation.rotate(local_dir).normalize()
 }
 
 pub fn get_projected_pixel_float(cp: CameraParams, point: Vec3) -> Vec2 {
-    let local_dir = qrot(qinv(cp.orientation), point - cp.position);
+    let local_dir = cp.orientation.inv().rotate(point - cp.position);
     if local_dir.z >= 0.0 {
         return Vec2::splat(-1.0);
     }

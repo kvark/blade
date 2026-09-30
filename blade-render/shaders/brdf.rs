@@ -15,31 +15,72 @@ pub struct Material {
     pub roughness: f32,
 }
 
+impl Material {
+    pub fn from_metallic_roughness(base_color: Vec3, metalness: f32, roughness: f32) -> Self {
+        Self {
+            diffuse_albedo: base_color * (1.0 - metalness),
+            specular_f0: mix(Vec3::splat(DIELECTRIC_F0), base_color, metalness),
+            roughness,
+        }
+    }
+
+    /// The GGX `alpha`, which is the roughness squared, kept off zero.
+    pub fn alpha(self) -> f32 {
+        let r = self.roughness.clamp(MIN_ROUGHNESS, 1.0);
+        r * r
+    }
+
+    pub fn ambient(self) -> Vec3 {
+        self.diffuse_albedo * (1.0 - self.specular_f0) + self.specular_f0
+    }
+
+    /// How often to sample the specular lobe rather than the diffuse one.
+    pub fn specular_sampling_ratio(self) -> f32 {
+        let diffuse = compute_luminocity(self.diffuse_albedo);
+        let specular = compute_luminocity(self.specular_f0);
+        (specular / (diffuse + specular).max(1.0e-5)).clamp(0.1, 0.9)
+    }
+
+    pub fn evaluate_brdf(self, normal: Vec3, view_dir: Vec3, light_dir: Vec3) -> BrdfLobes {
+        let n_dot_l = normal.dot(light_dir);
+        let n_dot_v = normal.dot(view_dir);
+        if n_dot_l <= 0.0 || n_dot_v <= 0.0 {
+            return BrdfLobes::default();
+        }
+
+        let half_dir = (view_dir + light_dir).normalize();
+        let n_dot_h = normal.dot(half_dir).max(0.0);
+        let v_dot_h = view_dir.dot(half_dir).max(0.0);
+        let alpha = self.alpha();
+
+        let fresnel = fresnel_schlick(v_dot_h, self.specular_f0);
+        let specular =
+            distribution_ggx(n_dot_h, alpha) * visibility_smith(n_dot_v, n_dot_l, alpha) * fresnel;
+
+        // Whatever isn't reflected by the specular lobe is available to the diffuse one.
+        let k_diffuse = 1.0 - fresnel_schlick_scalar(v_dot_h, DIELECTRIC_F0);
+
+        BrdfLobes {
+            diffuse: k_diffuse * n_dot_l / PI,
+            specular: specular * n_dot_l,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct BrdfLobes {
     pub diffuse: f32,
     pub specular: Vec3,
 }
 
-pub fn compute_luminocity(color: Vec3) -> f32 {
-    color.dot(LUMINOCITY_WEIGHTS)
-}
-
-pub fn material_from_metallic_roughness(
-    base_color: Vec3,
-    metalness: f32,
-    roughness: f32,
-) -> Material {
-    Material {
-        diffuse_albedo: base_color * (1.0 - metalness),
-        specular_f0: mix(Vec3::splat(DIELECTRIC_F0), base_color, metalness),
-        roughness,
+impl BrdfLobes {
+    pub fn is_black(self) -> bool {
+        self.diffuse <= 0.0 && self.specular <= Vec3::ZERO
     }
 }
 
-pub fn material_alpha(mat: Material) -> f32 {
-    let r = mat.roughness.clamp(MIN_ROUGHNESS, 1.0);
-    r * r
+pub fn compute_luminocity(color: Vec3) -> f32 {
+    color.dot(LUMINOCITY_WEIGHTS)
 }
 
 fn fresnel_schlick(cos_theta: f32, f0: Vec3) -> Vec3 {
@@ -61,50 +102,4 @@ fn visibility_smith(n_dot_v: f32, n_dot_l: f32, alpha: f32) -> f32 {
     let lambda_v = n_dot_l * (n_dot_v * n_dot_v * (1.0 - a2) + a2).sqrt();
     let lambda_l = n_dot_v * (n_dot_l * n_dot_l * (1.0 - a2) + a2).sqrt();
     0.5 / (lambda_v + lambda_l).max(1e-7)
-}
-
-pub fn zero_brdf() -> BrdfLobes {
-    BrdfLobes {
-        diffuse: 0.0,
-        specular: Vec3::ZERO,
-    }
-}
-
-pub fn is_brdf_black(lobes: BrdfLobes) -> bool {
-    lobes.diffuse <= 0.0 && lobes.specular.cmple(Vec3::ZERO).all()
-}
-
-pub fn evaluate_ambient(mat: Material) -> Vec3 {
-    mat.diffuse_albedo * (1.0 - mat.specular_f0) + mat.specular_f0
-}
-
-pub fn specular_sampling_ratio(mat: Material) -> f32 {
-    let diffuse = compute_luminocity(mat.diffuse_albedo);
-    let specular = compute_luminocity(mat.specular_f0);
-    (specular / (diffuse + specular).max(1.0e-5)).clamp(0.1, 0.9)
-}
-
-pub fn evaluate_brdf(mat: Material, normal: Vec3, view_dir: Vec3, light_dir: Vec3) -> BrdfLobes {
-    let n_dot_l = normal.dot(light_dir);
-    let n_dot_v = normal.dot(view_dir);
-    if n_dot_l <= 0.0 || n_dot_v <= 0.0 {
-        return zero_brdf();
-    }
-
-    let half_dir = (view_dir + light_dir).normalize();
-    let n_dot_h = normal.dot(half_dir).max(0.0);
-    let v_dot_h = view_dir.dot(half_dir).max(0.0);
-    let alpha = material_alpha(mat);
-
-    let fresnel = fresnel_schlick(v_dot_h, mat.specular_f0);
-    let specular =
-        distribution_ggx(n_dot_h, alpha) * visibility_smith(n_dot_v, n_dot_l, alpha) * fresnel;
-
-    // Whatever isn't reflected by the specular lobe is available to the diffuse one.
-    let k_diffuse = 1.0 - fresnel_schlick_scalar(v_dot_h, DIELECTRIC_F0);
-
-    BrdfLobes {
-        diffuse: k_diffuse * n_dot_l / PI,
-        specular: specular * n_dot_l,
-    }
 }

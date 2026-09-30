@@ -1,7 +1,9 @@
 use synaga_shader::*;
 
+/// A vertex as the host uploads it, and as the vertex shaders and the ray
+/// tracer read it. Its layout for a pipeline is derived from the fields.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Debug, Shared, blade_macros::Vertex)]
 pub struct Vertex {
     pub position: Vec3,
     pub bitangent_sign: f32,

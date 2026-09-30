@@ -1,13 +1,14 @@
-use super::brdf::{Material, evaluate_ambient, evaluate_brdf, material_from_metallic_roughness};
+use super::brdf::Material;
 use super::color::encode_surface_color;
 use super::config::MAX_LOCAL_LIGHTS;
+use super::quaternion::Quaternion;
 use super::skin_inc::{SkinVertex, apply_affine, skin_blend, skin_linear};
 use super::vertex::{Vertex, decode_normal};
 use core::f32::consts::PI;
 use synaga_shader::*;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct LocalLight {
     pub position_range: Vec4,
     pub intensity: Vec4,
@@ -17,7 +18,7 @@ pub struct LocalLight {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct LocalLightParams {
     // x: submitted light count, y: stochastic seed
     pub count_seed: Vec4,
@@ -25,7 +26,7 @@ pub struct LocalLightParams {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct RasterFrameParams {
     pub view_proj: Mat4,
     pub inv_view_proj: Mat4,
@@ -43,7 +44,7 @@ pub struct RasterFrameParams {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct RasterDrawParams {
     pub model: Mat4,
     // Rotation of the object/geometry transform. Skinning assumes uniform
@@ -56,13 +57,13 @@ pub struct RasterDrawParams {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct ShadowFrameParams {
     pub light_view_proj: Mat4,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct ShadowDrawParams {
     pub model: Mat4,
 }
@@ -122,10 +123,6 @@ fn raster_shadow_skinned_vs(input: Vertex, skin_input: SkinVertex) -> Vec4 {
 #[entry_point(fragment)]
 fn raster_shadow_fs() {}
 
-fn quat_rotate(q: Vec4, v: Vec3) -> Vec3 {
-    v + 2.0 * q.xyz().cross(q.xyz().cross(v) + q.w * v)
-}
-
 fn map_equirect_dir_to_uv(dir: Vec3) -> Vec2 {
     let yaw = dir.x.atan2(dir.z);
     let pitch = dir.y.clamp(-1.0, 1.0).asin();
@@ -147,7 +144,8 @@ fn directional_shadow(world_pos: Vec3, n: Vec3) -> f32 {
     let clip = frame_params.light_view_proj * receiver.extend(1.0);
     let ndc = clip.xyz() / clip.w;
     let uv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    if ndc.z <= 0.0 || ndc.z >= 1.0 || uv.cmplt(Vec2::ZERO).any() || uv.cmpgt(Vec2::ONE).any() {
+    let inside = uv >= Vec2::ZERO && uv <= Vec2::ONE;
+    if ndc.z <= 0.0 || ndc.z >= 1.0 || !inside {
         return 1.0;
     }
 
@@ -207,8 +205,8 @@ fn raster_vertex(
     // GLES 3.00 requires matching uniform blocks in vs+fs. The multiply is
     // zero, so lighting does not leak into the vertex stage.
     out.world_pos.x += light_params.count_seed.x * 0.0;
-    let n = quat_rotate(draw_params.normal_quat, normal).normalize();
-    let t = quat_rotate(draw_params.normal_quat, tangent).normalize();
+    let n = draw_params.normal_quat.rotate(normal).normalize();
+    let t = draw_params.normal_quat.rotate(tangent).normalize();
     let b = n.cross(t).normalize() * bitangent_sign;
     out.normal = n;
     out.tangent = t;
@@ -369,7 +367,7 @@ fn shade_local_light(mat: Material, n: Vec3, v: Vec3, world_pos: Vec3) -> Vec3 {
     let range = light.position_range.w.max(0.01);
     let falloff = (1.0 - dist / range).max(0.0);
     let ldir = delta / dist;
-    let brdf = evaluate_brdf(mat, n, v, ldir);
+    let brdf = mat.evaluate_brdf(n, v, ldir);
     let atten = angular_attenuation(light, ldir) * falloff * falloff / dist2;
     // Divide by the reservoir selection probability so the result estimates
     // the sum of all local lights rather than their weighted average.
@@ -385,7 +383,7 @@ fn raster_fs(input: VertexOutput) -> Vec4 {
     let mr_sample = metallic_roughness_tex.sample(&samp, input.uv);
     let base_color =
         base_color_tex.sample(&samp, input.uv).rgb() * draw_params.base_color_factor.rgb();
-    let mat = material_from_metallic_roughness(
+    let mat = Material::from_metallic_roughness(
         base_color,
         (draw_params.material.y * mr_sample.z).clamp(0.0, 1.0),
         (draw_params.material.z * mr_sample.y).clamp(0.0, 1.0),
@@ -405,12 +403,12 @@ fn raster_fs(input: VertexOutput) -> Vec4 {
     let v = (frame_params.camera_pos.xyz() - input.world_pos).normalize();
     let l = frame_params.light_dir.xyz().normalize();
 
-    let brdf = evaluate_brdf(mat, n, v, l);
+    let brdf = mat.evaluate_brdf(n, v, l);
     let visibility = directional_shadow(input.world_pos, n);
     let light = (mat.diffuse_albedo * brdf.diffuse + brdf.specular)
         * frame_params.light_color.xyz()
         * visibility;
-    let ambient = evaluate_ambient(mat) * frame_params.ambient_color.xyz();
+    let ambient = mat.ambient() * frame_params.ambient_color.xyz();
     let emissive = draw_params.emissive_factor.rgb() * emissive_tex.sample(&samp, input.uv).rgb();
     let local = shade_local_light(mat, n, v, input.world_pos);
     let color = ambient + light + local + emissive;

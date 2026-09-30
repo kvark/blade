@@ -31,8 +31,6 @@ fn create_draw_pipeline(
     format: blade_graphics::TextureFormat,
     gpu: &blade_graphics::Context,
 ) -> blade_graphics::RenderPipeline {
-    shader.check_struct_size::<crate::DebugPoint>();
-    shader.check_struct_size::<crate::DebugLine>();
     let layout = <DebugDrawData as blade_graphics::ShaderData>::layout();
     gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
         name: "debug-draw",
@@ -59,7 +57,6 @@ fn create_blit_pipeline(
     format: blade_graphics::TextureFormat,
     gpu: &blade_graphics::Context,
 ) -> blade_graphics::RenderPipeline {
-    shader.check_struct_size::<DebugBlitParams>();
     let layout = <DebugBlitData as blade_graphics::ShaderData>::layout();
     gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
         name: "debug-blit",

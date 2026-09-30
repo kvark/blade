@@ -1,11 +1,22 @@
 use synaga_shader::*;
 
-pub fn qrot(q: Vec4, v: Vec3) -> Vec3 {
-    v + 2.0 * q.xyz().cross(q.xyz().cross(v) + q.w * v)
+/// A rotation kept as a unit quaternion in a `Vec4`: the vector part in
+/// `xyz`, and the scalar in `w`.
+pub trait Quaternion {
+    /// `v` rotated.
+    fn rotate(self, v: Vec3) -> Vec3;
+    /// The rotation back.
+    fn inv(self) -> Self;
 }
 
-pub fn qinv(q: Vec4) -> Vec4 {
-    (-q.xyz()).extend(q.w)
+impl Quaternion for Vec4 {
+    fn rotate(self, v: Vec3) -> Vec3 {
+        v + 2.0 * self.xyz().cross(self.xyz().cross(v) + self.w * v)
+    }
+
+    fn inv(self) -> Self {
+        (-self.xyz()).extend(self.w)
+    }
 }
 
 pub fn shortest_arc_quat(a: Vec3, b: Vec3) -> Vec4 {

@@ -5,18 +5,17 @@ use super::camera::{
 use super::config::{DebugDrawFlags, DebugMode};
 use super::debug::{DebugEntry, debug_buf, debug_line};
 use super::debug_param::DebugParams;
-use super::gbuf::{MOTION_SCALE, WRITE_DEBUG_IMAGE};
+use super::gbuf::{MOTION_SCALE, WRITE_DEBUG_IMAGE, prev_camera};
 use super::hit::{
     HitEntry, fetch_triangle_indices, hit_entries, hit_normal, hit_tangent_space, hit_winding,
     make_barycentrics, sample_hit_emissive, sample_hit_material, sample_hit_normal_map,
     vertex_buffers,
 };
-use super::quaternion::{qrot, shortest_arc_quat};
+use super::quaternion::{Quaternion, shortest_arc_quat};
 use super::vertex::decode_normal;
 use synaga_shader::*;
 
 static camera: Uniform<CameraParams> = binding();
-static prev_camera: Uniform<CameraParams> = binding();
 static debug: Uniform<DebugParams> = binding();
 static acc_struct: AccelerationStructure = binding();
 static out_depth: TextureStorage2D<R32Float, Write> = binding();
@@ -54,7 +53,7 @@ fn main(global_invocation_id: Vec3<u32>) {
     rq.initialize(
         &acc_struct,
         RayDesc {
-            flags: RAY_FLAG_CULL_NO_OPAQUE,
+            flags: RayFlag::CULL_NO_OPAQUE,
             cull_mask: 0xFF,
             tmin: 0.0,
             tmax: camera.depth,
@@ -77,9 +76,9 @@ fn main(global_invocation_id: Vec3<u32>) {
     };
     let mut emissive = Vec3::ZERO;
     let mut motion = Vec2::ZERO;
-    let enable_debug = global_invocation_id.xy().cmpeq(debug.mouse_pos).all();
+    let enable_debug = global_invocation_id.xy() == debug.mouse_pos;
 
-    if intersection.kind != RAY_QUERY_INTERSECTION_NONE {
+    if intersection.kind != RayQueryIntersection::None {
         let entry =
             hit_entries[(intersection.instance_custom_data + intersection.geometry_index) as usize];
         depth = intersection.t;
@@ -155,13 +154,16 @@ fn main(global_invocation_id: Vec3<u32>) {
 
         let hit_position = camera.position + intersection.t * ray_dir;
         if enable_debug {
-            debug_buf.get_mut().entry.custom_index = intersection.instance_custom_data;
-            debug_buf.get_mut().entry.depth = intersection.t;
-            debug_buf.get_mut().entry.tex_coords = tex_coords;
-            debug_buf.get_mut().entry.base_color_texture = entry.base_color_texture;
-            debug_buf.get_mut().entry.normal_texture = entry.normal_texture;
-            debug_buf.get_mut().entry.position = hit_position;
-            debug_buf.get_mut().entry.flat_normal = flat_normal;
+            debug_buf.get_mut().entry = DebugEntry {
+                custom_index: intersection.instance_custom_data,
+                depth: intersection.t,
+                tex_coords,
+                base_color_texture: entry.base_color_texture,
+                normal_texture: entry.normal_texture,
+                position: hit_position,
+                flat_normal,
+                ..Default::default()
+            };
         }
         if enable_debug && debug.draw_flags.contains(DebugDrawFlags::SPACE) {
             let normal_w = 0.15 * intersection.t * tangent_space_world[2];
@@ -218,17 +220,17 @@ fn main(global_invocation_id: Vec3<u32>) {
             // draw tangent space
             debug_line(
                 hit_position,
-                hit_position + debug_len * qrot(basis, vec3(1.0, 0.0, 0.0)),
+                hit_position + debug_len * basis.rotate(vec3(1.0, 0.0, 0.0)),
                 0x0000FF,
             );
             debug_line(
                 hit_position,
-                hit_position + debug_len * qrot(basis, vec3(0.0, 1.0, 0.0)),
+                hit_position + debug_len * basis.rotate(vec3(0.0, 1.0, 0.0)),
                 0x00FF00,
             );
             debug_line(
                 hit_position,
-                hit_position + debug_len * qrot(basis, vec3(0.0, 0.0, 1.0)),
+                hit_position + debug_len * basis.rotate(vec3(0.0, 0.0, 1.0)),
                 0xFF0000,
             );
         }
@@ -237,52 +239,35 @@ fn main(global_invocation_id: Vec3<u32>) {
         emissive = sample_hit_emissive(entry, tex_coords, lod, debug.texture_flags);
 
         if WRITE_DEBUG_IMAGE {
-            if debug.view_mode == DebugMode::DiffuseAlbedoTexture {
-                out_debug.store(
-                    global_invocation_id.xy(),
-                    material.diffuse_albedo.extend(0.0),
-                );
-            }
-            if debug.view_mode == DebugMode::DiffuseAlbedoFactor {
-                out_debug.store(
-                    global_invocation_id.xy(),
-                    unpack4x8unorm(entry.base_color_factor),
-                );
-            }
-            if debug.view_mode == DebugMode::NormalTexture {
-                out_debug.store(global_invocation_id.xy(), normal_local.extend(0.0));
-            }
-            if debug.view_mode == DebugMode::NormalScale {
-                out_debug.store(global_invocation_id.xy(), Vec4::splat(entry.normal_scale));
-            }
-            if debug.view_mode == DebugMode::Roughness {
-                out_debug.store(global_invocation_id.xy(), Vec4::splat(material.roughness));
-            }
-            if debug.view_mode == DebugMode::SpecularF0 {
-                out_debug.store(global_invocation_id.xy(), material.specular_f0.extend(0.0));
-            }
-            if debug.view_mode == DebugMode::Emissive {
-                out_debug.store(global_invocation_id.xy(), emissive.extend(0.0));
-            }
-            if debug.view_mode == DebugMode::GeometryNormal {
-                out_debug.store(global_invocation_id.xy(), normal_geo.extend(0.0));
-            }
-            if debug.view_mode == DebugMode::ShadingNormal {
-                out_debug.store(global_invocation_id.xy(), normal.extend(0.0));
-            }
-            if debug.view_mode == DebugMode::HitConsistency {
-                let reprojected = get_projected_pixel(*camera, hit_position);
-                let barycentrics_pos_diff =
-                    (intersection.object_to_world * position_object).xyz() - hit_position;
-                let camera_projection_diff =
-                    global_invocation_id.xy().cast::<f32>() - reprojected.cast::<f32>();
-                let consistency = vec4(
-                    barycentrics_pos_diff.length(),
-                    camera_projection_diff.length(),
-                    0.0,
-                    0.0,
-                );
-                out_debug.store(global_invocation_id.xy(), consistency);
+            let pixel = global_invocation_id.xy();
+            match debug.view_mode {
+                DebugMode::DiffuseAlbedoTexture => {
+                    out_debug.store(pixel, material.diffuse_albedo.extend(0.0))
+                }
+                DebugMode::DiffuseAlbedoFactor => {
+                    out_debug.store(pixel, unpack4x8unorm(entry.base_color_factor))
+                }
+                DebugMode::NormalTexture => out_debug.store(pixel, normal_local.extend(0.0)),
+                DebugMode::NormalScale => out_debug.store(pixel, Vec4::splat(entry.normal_scale)),
+                DebugMode::Roughness => out_debug.store(pixel, Vec4::splat(material.roughness)),
+                DebugMode::SpecularF0 => out_debug.store(pixel, material.specular_f0.extend(0.0)),
+                DebugMode::Emissive => out_debug.store(pixel, emissive.extend(0.0)),
+                DebugMode::GeometryNormal => out_debug.store(pixel, normal_geo.extend(0.0)),
+                DebugMode::ShadingNormal => out_debug.store(pixel, normal.extend(0.0)),
+                DebugMode::HitConsistency => {
+                    let reprojected = get_projected_pixel(*camera, hit_position);
+                    let barycentrics_pos_diff =
+                        (intersection.object_to_world * position_object).xyz() - hit_position;
+                    let camera_projection_diff = pixel.cast::<f32>() - reprojected.cast::<f32>();
+                    let consistency = vec4(
+                        barycentrics_pos_diff.length(),
+                        camera_projection_diff.length(),
+                        0.0,
+                        0.0,
+                    );
+                    out_debug.store(pixel, consistency);
+                }
+                _ => {}
             }
         }
 

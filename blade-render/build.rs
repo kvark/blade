@@ -8,7 +8,6 @@ fn main() {
         .dir("shaders")
         .bindings(synaga::build::Bindings::Host)
         .capabilities(blade_caps())
-        .module_name("shader_ir.rs")
         .run();
 }
 

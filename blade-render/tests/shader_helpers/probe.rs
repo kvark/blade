@@ -2,10 +2,10 @@
 //! the CPU, and `main` runs it on the GPU, from the module synaga makes of
 //! this file and the helpers beside it.
 
-use super::brdf::{evaluate_brdf, material_from_metallic_roughness, specular_sampling_ratio};
+use super::brdf::Material;
 use super::camera::{CameraParams, get_ray_direction};
 use super::color::encode_srgb;
-use super::quaternion::{qinv, qrot, shortest_arc_quat};
+use super::quaternion::{Quaternion, shortest_arc_quat};
 use super::random::{random_gen, random_init};
 use super::sampling::{compute_bsdf_pdf, sample_bsdf};
 use super::skin_inc::{apply_affine, skin_linear};
@@ -31,7 +31,7 @@ pub struct Output {
     pub random: Vec4<u32>,
     /// The specular F0 of a material, and how often it samples specular.
     pub material: Vec4,
-    /// `evaluate_brdf`: the specular lobe, then the diffuse one.
+    /// `Material::evaluate_brdf`: the specular lobe, then the diffuse one.
     pub brdf: Vec4,
     /// `sample_bsdf`'s direction and density, for a material at least 0.3
     /// rough. A sharper lobe draws half vectors so near its peak that an ulp
@@ -64,6 +64,9 @@ pub struct Output {
     /// Inclusive ranges: see `count_to_max`, `count_to_signed_max`,
     /// `count_empty` and `skip_the_last`.
     pub ranges: Vec4<u32>,
+    /// `match`, vector comparisons and methods: see `first_arm`,
+    /// `break_from_a_match`, `every_lane` and `count_up`.
+    pub features: Vec4<u32>,
 }
 
 pub static inputs: Storage<[Input]> = binding();
@@ -91,15 +94,15 @@ pub fn probe(input: Input) -> Output {
     // Seen from above the surface, as a BRDF is.
     let view = select(-b, b, b.dot(a) > 0.0);
     let light = select(-c, c, c.dot(a) > 0.0);
-    let mat = material_from_metallic_roughness(c.abs(), input.a.w, input.b.w);
-    let lobes = evaluate_brdf(mat, a, view, light);
-    let rough = material_from_metallic_roughness(c.abs(), input.a.w, 0.3 + 0.7 * input.b.w);
+    let mat = Material::from_metallic_roughness(c.abs(), input.a.w, input.b.w);
+    let lobes = mat.evaluate_brdf(a, view, light);
+    let rough = Material::from_metallic_roughness(c.abs(), input.a.w, 0.3 + 0.7 * input.b.w);
     let sample = sample_bsdf(rough, a, view, &mut rng);
     let pdf = compute_bsdf_pdf(mat, a, view, light);
 
     let arc = shortest_arc_quat(a, b);
-    let rotated = qrot(arc, c);
-    let restored = qrot(qinv(arc), rotated);
+    let rotated = arc.rotate(c);
+    let restored = arc.inv().rotate(rotated);
 
     let packed = pack4x8snorm(input.a);
     let basis = tangent_basis(a, b, 1.0, -1.0);
@@ -119,7 +122,7 @@ pub fn probe(input: Input) -> Output {
 
     Output {
         random: vec4(seed, first, second, third),
-        material: mat.specular_f0.extend(specular_sampling_ratio(mat)),
+        material: mat.specular_f0.extend(mat.specular_sampling_ratio()),
         brdf: lobes.specular.extend(lobes.diffuse),
         sample: sample.dir.extend(sample.pdf),
         densities: vec4(pdf, compare_flat_normals(a, b), 0.0, 0.0),
@@ -146,7 +149,93 @@ pub fn probe(input: Input) -> Output {
             count_empty(input.bits.w & 7),
             skip_the_last((input.bits.w >> 3) & 3),
         ),
+        features: vec4(
+            first_arm(input.bits.x % 5),
+            break_from_a_match(input.bits.y & 15),
+            every_lane(
+                small_pair(input.bits.x, input.bits.y),
+                small_pair(input.bits.z, input.bits.w),
+            ),
+            count_up(input.bits.z & 7),
+        ),
     }
+}
+
+/// Two lanes in `-1..=2`, from the low bits of each.
+pub fn small_pair(x: u32, y: u32) -> Vec2<i32> {
+    vec2((x & 3) as i32 - 1, (y & 3) as i32 - 1)
+}
+
+/// `match` takes the first arm that matches, which a `switch` would not: 10
+/// for 0 and 1, 20 for 2, 30 for 3, and a hundred times anything else.
+// The second arm's `1` is the first's, which is the point.
+#[allow(unreachable_patterns)]
+fn first_arm(n: u32) -> u32 {
+    match n {
+        0 | 1 => 10,
+        1 | 2 => 20,
+        3 => 30,
+        other => other * 100,
+    }
+}
+
+/// The first multiple of 5 from `start` on. The `break` leaves the loop, as
+/// in Rust, not the `match` it is in, as a `switch`'s would.
+fn break_from_a_match(start: u32) -> u32 {
+    let mut i = start;
+    loop {
+        match i % 5 {
+            0 => break,
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+/// 1 if `a < b` in every lane, 2 if `a >= b` in every lane, 4 if some lane
+/// of `a` is not less, and 8 if they are equal.
+fn every_lane(a: Vec2<i32>, b: Vec2<i32>) -> u32 {
+    let mut found = 0u32;
+    if a < b {
+        found |= 1;
+    }
+    if a >= b {
+        found |= 2;
+    }
+    if a.cmpge(b).any() {
+        found |= 4;
+    }
+    if a == b {
+        found |= 8;
+    }
+    found
+}
+
+#[derive(Clone, Copy, Default)]
+struct Tally {
+    total: u32,
+    steps: u32,
+}
+
+impl Tally {
+    fn add(&mut self, n: u32) {
+        self.total += n;
+        self.steps += 1;
+    }
+
+    fn mean(self) -> u32 {
+        self.total / self.steps.max(1)
+    }
+}
+
+/// A thousand times the mean of `0, 3, 6, ..` up to `n` of them, plus `n`:
+/// a method that takes `&mut self` changes the local it is called on.
+fn count_up(n: u32) -> u32 {
+    let mut tally = Tally::default();
+    for i in 0..n {
+        tally.add(i * 3);
+    }
+    tally.mean() * 1000 + tally.steps
 }
 
 /// `bump` runs for `&&` only when `flag` holds, and for `||` only when it

@@ -9,6 +9,8 @@
 //! `DebugDrawFlags` and `DebugTextureFlags` are the types here, and its limits
 //! are the ones here.
 
+use synaga_shader::Shared;
+
 pub const DEBUG_MODE: bool = cfg!(debug_assertions);
 pub const MAX_LOCAL_LIGHTS: usize = 8;
 pub const MAX_JOINTS_PER_DRAW: usize = 64;
@@ -48,9 +50,7 @@ pub enum DebugMode {
 
 /// What the debug view draws over the frame.
 #[repr(transparent)]
-#[derive(
-    Clone, Copy, Default, Hash, PartialEq, Eq, PartialOrd, bytemuck::Zeroable, bytemuck::Pod,
-)]
+#[derive(Hash, PartialEq, Eq, PartialOrd, Shared)]
 pub struct DebugDrawFlags(u32);
 
 bitflags::bitflags! {
@@ -63,9 +63,7 @@ bitflags::bitflags! {
 
 /// The material textures the debug view leaves out.
 #[repr(transparent)]
-#[derive(
-    Clone, Copy, Default, Hash, PartialEq, Eq, PartialOrd, bytemuck::Zeroable, bytemuck::Pod,
-)]
+#[derive(Hash, PartialEq, Eq, PartialOrd, Shared)]
 pub struct DebugTextureFlags(u32);
 
 bitflags::bitflags! {

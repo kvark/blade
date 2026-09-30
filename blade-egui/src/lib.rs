@@ -20,7 +20,7 @@ mod shader_ir {
 }
 
 use blade_util::{BufferBelt, BufferBeltDescriptor};
-use shaders::egui::Uniforms;
+use shaders::egui::{Uniforms, Vertex};
 use std::collections::hash_map::{Entry, HashMap};
 
 #[derive(blade_macros::ShaderData)]
@@ -34,15 +34,7 @@ struct Locals {
     r_sampler: blade_graphics::Sampler,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod, blade_macros::Vertex)]
-struct GuiVertex {
-    pos: [f32; 2],
-    uv: [f32; 2],
-    color: u32,
-}
-
-const _: () = assert!(size_of::<GuiVertex>() == size_of::<egui::epaint::Vertex>());
+const _: () = assert!(size_of::<Vertex>() == size_of::<egui::epaint::Vertex>());
 
 #[derive(Debug, PartialEq)]
 pub struct ScreenDescriptor {
@@ -181,7 +173,7 @@ impl GuiPainter {
         });
         let globals_layout = <Globals as blade_graphics::ShaderData>::layout();
         let locals_layout = <Locals as blade_graphics::ShaderData>::layout();
-        let vertex_layout = <GuiVertex as blade_graphics::Vertex>::layout();
+        let vertex_layout = <Vertex as blade_graphics::Vertex>::layout();
         let pipeline = context.create_render_pipeline(blade_graphics::RenderPipelineDesc {
             name: "gui",
             data_layouts: &[&globals_layout, &locals_layout],

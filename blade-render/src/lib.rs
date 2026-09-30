@@ -21,7 +21,7 @@ mod shader_sources;
 /// `build.rs` writes one bincode module per shader. The renderer decodes
 /// these bytes and passes the module to blade-graphics.
 pub mod ir {
-    synaga_shader::include_ir!("shader_ir.rs");
+    synaga_shader::include_ir!();
 }
 
 mod dummy;

@@ -9,7 +9,9 @@
 //! a mistake the lowering and its test share; running both can. The probe
 //! also runs what synaga once got wrong: `&&` and `||` that evaluated their
 //! right side regardless, a range to `u32::MAX` that never ended, and a
-//! `for mut` binding that was the loop's counter.
+//! `for mut` binding that was the loop's counter. And what a `switch` would
+//! get wrong about a `match`: which arm takes a value two arms name, and
+//! where a `break` in an arm goes.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -78,6 +80,22 @@ fn the_helpers_run_on_the_cpu() {
         assert_eq!(out.ranges.y, ((input.bits.y >> 2) & 3) + 1);
         assert_eq!(out.ranges.z, 0);
         assert_eq!(out.ranges.w, (input.bits.w >> 3) & 3);
+        let n = input.bits.x % 5;
+        let first = [10, 10, 20, 30][..].get(n as usize).copied();
+        assert_eq!(out.features.x, first.unwrap_or(n * 100));
+        assert_eq!(out.features.y, (input.bits.y & 15).next_multiple_of(5));
+        let a = shaders::probe::small_pair(input.bits.x, input.bits.y);
+        let b = shaders::probe::small_pair(input.bits.z, input.bits.w);
+        let lanes = [(a.x, b.x), (a.y, b.y)];
+        let every = |f: fn(i32, i32) -> bool| lanes.iter().all(|&(a, b)| f(a, b));
+        let expected = u32::from(every(|a, b| a < b))
+            | u32::from(every(|a, b| a >= b)) << 1
+            | u32::from(!every(|a, b| a < b)) << 2
+            | u32::from(every(|a, b| a == b)) << 3;
+        assert_eq!(out.features.z, expected);
+        let steps = input.bits.z & 7;
+        let mean = (0..steps).map(|i| i * 3).sum::<u32>() / steps.max(1);
+        assert_eq!(out.features.w, mean * 1000 + steps);
         let restored = out.restored.xyz() - input.c.xyz();
         assert!(restored.length() < 1e-5, "{restored:?}");
         for draw in [out.random.y, out.random.z, out.random.w] {
@@ -218,6 +236,7 @@ fn the_helpers_agree_on_the_cpu_and_the_gpu() {
             ("random", cpu.random, gpu.random),
             ("control", cpu.control, gpu.control),
             ("ranges", cpu.ranges, gpu.ranges),
+            ("features", cpu.features, gpu.features),
         ];
         for (name, cpu, gpu) in exact {
             if cpu != gpu {
