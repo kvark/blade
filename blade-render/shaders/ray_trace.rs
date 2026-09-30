@@ -1,7 +1,5 @@
-use super::brdf::{
-    BrdfLobes, Material, compute_luminocity, evaluate_brdf, is_brdf_black, zero_brdf,
-};
-use super::camera::{CameraParams, get_projected_pixel_float, get_ray_direction};
+use super::brdf::{BrdfLobes, Material, compute_luminocity};
+use super::camera::{CameraParams, get_ray_direction};
 use super::config::{DEBUG_MODE, DebugDrawFlags, DebugMode, DebugTextureFlags};
 use super::debug::{debug_buf, debug_line};
 use super::debug_param::DebugParams;
@@ -9,11 +7,11 @@ use super::env_light::{
     LightSample, compute_light_pdf, evaluate_environment, evaluate_environment_background,
     map_equirect_dir_to_uv, map_equirect_uv_to_dir, sample_light,
 };
-use super::gbuf::{MOTION_SCALE, USE_MOTION_VECTORS, WRITE_DEBUG_IMAGE};
+use super::gbuf::{WRITE_DEBUG_IMAGE, get_prev_pixel, prev_camera};
 use super::hit::{
     fetch_triangle_indices, hit_entries, make_barycentrics, sample_hit_emissive, vertex_buffers,
 };
-use super::quaternion::qrot;
+use super::quaternion::Quaternion;
 use super::random::{RandomState, random_gen, random_init};
 use super::sampling::{compute_bsdf_pdf, sample_bsdf, sample_circle_uniform};
 use super::surface::{Surface, compare_surfaces};
@@ -24,7 +22,7 @@ const DECOUPLED_SHADING: bool = false;
 const FACTOR_CANDIDATES: u32 = 3;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct MainParams {
     pub frame_index: u32,
     pub num_environment_samples: u32,
@@ -77,7 +75,6 @@ struct RestirOutput {
 }
 
 static camera: Uniform<CameraParams> = binding();
-static prev_camera: Uniform<CameraParams> = binding();
 static parameters: Uniform<MainParams> = binding();
 static debug: Uniform<DebugParams> = binding();
 static acc_struct: AccelerationStructure = binding();
@@ -94,7 +91,6 @@ static t_diffuse_albedo: Texture2D<f32> = binding();
 static t_prev_diffuse_albedo: Texture2D<f32> = binding();
 static t_specular_f0: Texture2D<f32> = binding();
 static t_prev_specular_f0: Texture2D<f32> = binding();
-static t_motion: Texture2D<f32> = binding();
 static out_diffuse: TextureStorage2D<Rgba16Float, Write> = binding();
 static out_specular: TextureStorage2D<Rgba16Float, Write> = binding();
 static out_debug: TextureStorage2D<Rgba8Unorm, Write> = binding();
@@ -138,7 +134,7 @@ fn compute_target_score(radiance: Radiance, diffuse_albedo: Vec3) -> f32 {
 }
 
 fn get_reservoir_index(pixel: Vec2<i32>, cam: CameraParams) -> i32 {
-    if pixel.cast::<u32>().cmplt(cam.target_size).all() {
+    if pixel.cast::<u32>() < cam.target_size {
         pixel.y * cam.target_size.x as i32 + pixel.x
     } else {
         -1
@@ -217,7 +213,7 @@ fn read_prev_surface(pixel: Vec2<i32>) -> Surface {
 }
 
 fn surface_normal(surface: Surface) -> Vec3 {
-    qrot(surface.basis, vec3(0.0, 0.0, 1.0))
+    surface.basis.rotate(vec3(0.0, 0.0, 1.0))
 }
 
 fn surface_material(surface: Surface) -> Material {
@@ -239,7 +235,7 @@ fn evaluate_incoming_radiance(
     rq.initialize(
         &acs,
         RayDesc {
-            flags: RAY_FLAG_CULL_NO_OPAQUE,
+            flags: RayFlag::CULL_NO_OPAQUE,
             cull_mask: 0xFF,
             tmin: parameters.t_start,
             tmax: camera.depth,
@@ -251,12 +247,12 @@ fn evaluate_incoming_radiance(
     let intersection = rq.committed_intersection();
 
     if DEBUG_MODE && ray_len > 0.0 {
-        let hit = intersection.kind != RAY_QUERY_INTERSECTION_NONE;
+        let hit = intersection.kind != RayQueryIntersection::None;
         let color = select(0xFFFFFFu32, 0x808080, hit) & debug_color;
         debug_line(position, position + ray_len * direction, color);
     }
 
-    if intersection.kind == RAY_QUERY_INTERSECTION_NONE {
+    if intersection.kind == RayQueryIntersection::None {
         return evaluate_environment(direction);
     }
 
@@ -271,15 +267,6 @@ fn evaluate_incoming_radiance(
         vertex_buffers[entry.vertex_buf as usize].data[indices.z as usize].tex_coords,
     ) * barycentrics;
     sample_hit_emissive(entry, tex_coords, 0.0, DebugTextureFlags::empty())
-}
-
-fn get_prev_pixel(pixel: Vec2<i32>, pos_world: Vec3) -> Vec2 {
-    if USE_MOTION_VECTORS && parameters.use_motion_vectors != 0 {
-        let motion = t_motion.load(pixel, 0).xy() / MOTION_SCALE;
-        Vec2::from(pixel) + 0.5 + motion
-    } else {
-        get_projected_pixel_float(*prev_camera, pos_world)
-    }
 }
 
 fn ratio(a: f32, b: f32) -> f32 {
@@ -317,12 +304,7 @@ fn make_target_score(radiance: Radiance, diffuse_albedo: Vec3) -> TargetScore {
 }
 
 fn evaluate_surface_brdf(surface: Surface, dir: Vec3) -> BrdfLobes {
-    evaluate_brdf(
-        surface_material(surface),
-        surface_normal(surface),
-        surface.view_dir,
-        dir,
-    )
+    surface_material(surface).evaluate_brdf(surface_normal(surface), surface.view_dir, dir)
 }
 
 fn sample_incoming_light(surface: Surface, from_light: bool, rng: &mut RandomState) -> LightSample {
@@ -365,7 +347,7 @@ fn estimate_target_score_with_occlusion(
         return zero_target_score();
     }
     let brdf = evaluate_surface_brdf(surface, direction);
-    if is_brdf_black(brdf) {
+    if brdf.is_black() {
         return zero_target_score();
     }
 
@@ -382,20 +364,20 @@ fn evaluate_sample(
 ) -> BrdfLobes {
     let dir = map_equirect_uv_to_dir(ls.uv);
     if dir.dot(surface.flat_normal) <= 0.0 {
-        return zero_brdf();
+        return BrdfLobes::default();
     }
 
     let brdf = evaluate_surface_brdf(surface, dir);
-    if is_brdf_black(brdf) {
-        return zero_brdf();
+    if brdf.is_black() {
+        return BrdfLobes::default();
     }
 
     // Evaluate the actual first-hit radiance.  Besides supporting emissive
     // geometry, this deliberately avoids the old absolute contribution
     // cutoff, which biased dim surfaces toward black.
     ls.radiance = evaluate_incoming_radiance(acc_struct, start_pos, dir, ray_len, debug_color);
-    if ls.radiance.cmple(Vec3::ZERO).all() {
-        return zero_brdf();
+    if ls.radiance <= Vec3::ZERO {
+        return BrdfLobes::default();
     }
 
     brdf
@@ -433,7 +415,7 @@ fn compute_restir(
     for i in 0..num_initial {
         let mut ls = sample_incoming_light(surface, i < parameters.num_environment_samples, rng);
         let brdf = evaluate_sample(&mut ls, surface, position, ray_len, 0x00FF00);
-        if is_brdf_black(brdf) {
+        if brdf.is_black() {
             bump_reservoir(&mut canonical, 1.0);
         } else {
             let other = make_reservoir(ls, 0, brdf, surface.diffuse_albedo);
@@ -441,7 +423,7 @@ fn compute_restir(
         }
     }
 
-    let center_coord = get_prev_pixel(pixel, position);
+    let center_coord = get_prev_pixel(pixel, position, parameters.use_motion_vectors != 0);
 
     // First, gather the list of reservoirs to merge with
     let mut accepted_reservoir_indices = [0i32, 0, 0, 0];
@@ -641,7 +623,7 @@ fn main(global_invocation_id: Vec3<u32>) {
     let mut rng = random_init(global_index, parameters.frame_index);
 
     let surface = read_surface(global_invocation_id.xy().cast::<i32>());
-    let enable_debug = DEBUG_MODE && global_invocation_id.xy().cmpeq(debug.mouse_pos).all();
+    let enable_debug = DEBUG_MODE && global_invocation_id.xy() == debug.mouse_pos;
     let enable_restir_debug = debug.draw_flags.contains(DebugDrawFlags::RESTIR) && enable_debug;
     let ro = compute_restir(
         surface,

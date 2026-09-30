@@ -1,21 +1,21 @@
 use synaga_shader::*;
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Debug, PartialEq, Shared)]
 pub struct DebugPoint {
     pub pos: Vec3,
     pub color: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Debug, PartialEq, Shared)]
 pub struct DebugLine {
     pub a: DebugPoint,
     pub b: DebugPoint,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Debug, Shared)]
 pub struct DebugVariance {
     pub color_sum: Vec3,
     pub _pad: u32,
@@ -24,7 +24,7 @@ pub struct DebugVariance {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Debug, Shared)]
 pub struct DebugEntry {
     pub custom_index: u32,
     pub depth: f32,
@@ -43,7 +43,7 @@ pub struct DebugEntry {
 #[allow(dead_code)]
 pub struct DebugBuffer {
     pub vertex_count: u32,
-    pub instance_count: AtomicU32,
+    pub instance_count: Atomic<u32>,
     pub first_vertex: u32,
     pub first_instance: u32,
     pub capacity: u32,

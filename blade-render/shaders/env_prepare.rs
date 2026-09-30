@@ -6,7 +6,7 @@ const MAX_FP16: f32 = 65504.0;
 const SUM: Vec4 = vec4(0.25, 0.25, 0.25, 0.25);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct EnvPreprocParams {
     pub target_level: u32,
 }

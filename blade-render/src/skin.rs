@@ -1,4 +1,3 @@
-use crate::Vertex;
 use crate::shader_sources::{skin::SkinDispatch, skin_inc::SkinningParams};
 use blade_graphics as gpu;
 use std::mem;
@@ -41,10 +40,6 @@ pub(crate) struct SkinPass {
 
 impl SkinPass {
     fn create_pipeline(shader: &gpu::Shader, gpu: &gpu::Context) -> gpu::ComputePipeline {
-        shader.check_struct_size::<Vertex>();
-        shader.check_struct_size::<crate::SkinVertex>();
-        shader.check_struct_size::<SkinningParams>();
-        shader.check_struct_size::<SkinDispatch>();
         let layout = <SkinData as gpu::ShaderData>::layout();
         gpu.create_compute_pipeline(gpu::ComputePipelineDesc {
             name: "skin",

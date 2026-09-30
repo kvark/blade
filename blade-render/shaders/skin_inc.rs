@@ -2,7 +2,7 @@ use super::config::MAX_JOINTS_PER_DRAW;
 use synaga_shader::*;
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct SkinningParams {
     pub post_transform: Mat3x4,
     pub joint_matrices: [Mat3x4; MAX_JOINTS_PER_DRAW],
@@ -13,7 +13,7 @@ pub struct SkinningParams {
 ///
 /// Its `Default`, in the host, puts all the weight on the first joint.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod, blade_macros::Vertex)]
 pub struct SkinVertex {
     /// Four 8-bit indices into the geometry's compact joint palette, the
     /// first in the lowest byte.

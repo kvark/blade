@@ -1,4 +1,4 @@
-use super::brdf::{Material, material_from_metallic_roughness};
+use super::brdf::Material;
 use super::config::DebugTextureFlags;
 use super::vertex::{Vertex, tangent_basis};
 use synaga_shader::*;
@@ -12,7 +12,7 @@ struct IndexBuffer {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Debug, Shared)]
 pub struct HitEntry {
     pub index_buf: u32,
     pub vertex_buf: u32,
@@ -90,7 +90,7 @@ pub fn sample_hit_material(
         metalness *= mr.z;
     }
 
-    material_from_metallic_roughness(base_color, metalness, roughness)
+    Material::from_metallic_roughness(base_color, metalness, roughness)
 }
 
 pub fn sample_hit_emissive(

@@ -3,13 +3,8 @@ mod debug;
 use crate::{
     CameraParams, DebugLine, DummyResources, EnvironmentMap, RenderConfig, Shaders,
     shader_sources::{
-        a_trous::BlurParams,
-        debug::{DebugEntry, DebugVariance},
-        debug_param::DebugParams,
-        hit::HitEntry,
-        path_trace::PathTraceParams,
-        post_proc::PostProcParams,
-        ray_trace::MainParams,
+        a_trous::BlurParams, debug_param::DebugParams, hit::HitEntry, path_trace::PathTraceParams,
+        post_proc::PostProcParams, ray_trace::MainParams,
     },
     skin::{self, SkinPass},
 };
@@ -174,7 +169,7 @@ pub struct GBufferViews {
     /// `Rgba8Snorm`. The shading tangent frame as a quaternion, which is where
     /// normal mapping ends up. The shading normal is the quaternion applied to
     /// `+Z`: `v + 2 * cross(q.xyz, cross(q.xyz, v) + q.w * v)` for
-    /// `v = (0, 0, 1)`, matching `qrot` in `shaders/quaternion.rs`.
+    /// `v = (0, 0, 1)`, matching `Quaternion::rotate` in `shaders/quaternion.rs`.
     pub basis: blade_graphics::TextureView,
     /// `Rgba8Snorm`. The geometric normal in XYZ, straight from the triangle,
     /// with no normal map applied. Cheaper to consume than [`basis`] when the
@@ -733,8 +728,6 @@ impl ShaderPipelines {
         shader: &blade_graphics::Shader,
         gpu: &blade_graphics::Context,
     ) -> blade_graphics::ComputePipeline {
-        shader.check_struct_size::<crate::Vertex>();
-        shader.check_struct_size::<HitEntry>();
         let layout = <FillData as blade_graphics::ShaderData>::layout();
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "fill-gbuf",
@@ -746,11 +739,6 @@ impl ShaderPipelines {
         shader: &blade_graphics::Shader,
         gpu: &blade_graphics::Context,
     ) -> blade_graphics::ComputePipeline {
-        shader.check_struct_size::<CameraParams>();
-        shader.check_struct_size::<DebugParams>();
-        shader.check_struct_size::<MainParams>();
-        shader.check_struct_size::<DebugVariance>();
-        shader.check_struct_size::<DebugEntry>();
         let layout = <MainData as blade_graphics::ShaderData>::layout();
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "ray-trace",
@@ -763,10 +751,6 @@ impl ShaderPipelines {
         shader: &blade_graphics::Shader,
         gpu: &blade_graphics::Context,
     ) -> blade_graphics::ComputePipeline {
-        shader.check_struct_size::<crate::Vertex>();
-        shader.check_struct_size::<HitEntry>();
-        shader.check_struct_size::<CameraParams>();
-        shader.check_struct_size::<PathTraceParams>();
         let layout = <PathTraceData as blade_graphics::ShaderData>::layout();
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "path-trace",
@@ -2015,15 +1999,5 @@ impl RayTracer {
                 .get(&db_e.normal_texture)
                 .cloned(),
         }
-    }
-}
-
-#[cfg(test)]
-mod layout_tests {
-    #[test]
-    fn animated_hit_entry_matches_shader_layout() {
-        assert_eq!(std::mem::size_of::<super::HitEntry>(), 256);
-        assert_eq!(std::mem::size_of::<crate::Vertex>(), 32);
-        assert_eq!(std::mem::size_of::<crate::SkinVertex>(), 8);
     }
 }

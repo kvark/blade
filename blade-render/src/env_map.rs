@@ -24,7 +24,6 @@ impl EnvironmentMap {
         gpu: &blade_graphics::Context,
     ) -> Result<blade_graphics::ComputePipeline, &'static str> {
         let layout = <EnvPreprocData as blade_graphics::ShaderData>::layout();
-        shader.check_struct_size::<EnvPreprocParams>();
 
         Ok(
             gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {

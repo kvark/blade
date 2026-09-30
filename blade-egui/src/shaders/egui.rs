@@ -11,14 +11,17 @@ struct VertexOutput {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct Uniforms {
     pub screen_size: Vec2,
     pub _pad: Vec2,
 }
 
-#[derive(Clone, Copy, Default)]
-struct Vertex {
+/// What egui draws, as `epaint::Vertex` lays it out, so its vertices upload
+/// as they are.
+#[repr(C)]
+#[derive(Shared, blade_macros::Vertex)]
+pub struct Vertex {
     pub pos: Vec2,
     pub uv: Vec2,
     pub color: u32,

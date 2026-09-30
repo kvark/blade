@@ -1,4 +1,4 @@
-use super::brdf::{Material, compute_luminocity, evaluate_brdf, is_brdf_black};
+use super::brdf::{Material, compute_luminocity};
 use super::camera::{CameraParams, get_ray_direction_at};
 use super::config::DebugTextureFlags;
 use super::env_light::{
@@ -18,7 +18,7 @@ const ROULETTE_START: u32 = 4;
 const MAX_RADIANCE: f32 = 1.0e6;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct PathTraceParams {
     pub frame_index: u32,
     // light samples taken at every vertex of a path
@@ -70,7 +70,7 @@ fn trace_ray(position: Vec3, direction: Vec3, t_min: f32) -> RayIntersection {
     rq.initialize(
         &acc_struct,
         RayDesc {
-            flags: RAY_FLAG_CULL_NO_OPAQUE,
+            flags: RayFlag::CULL_NO_OPAQUE,
             cull_mask: 0xFF,
             tmin: t_min,
             tmax: camera.depth,
@@ -84,7 +84,7 @@ fn trace_ray(position: Vec3, direction: Vec3, t_min: f32) -> RayIntersection {
 
 fn is_occluded(position: Vec3, direction: Vec3) -> bool {
     let mut rq = RayQuery::default();
-    let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
+    let flags = RayFlag::TERMINATE_ON_FIRST_HIT | RayFlag::CULL_NO_OPAQUE;
     rq.initialize(
         &acc_struct,
         RayDesc {
@@ -97,7 +97,7 @@ fn is_occluded(position: Vec3, direction: Vec3) -> bool {
         },
     );
     rq.proceed();
-    rq.committed_intersection().kind != RAY_QUERY_INTERSECTION_NONE
+    rq.committed_intersection().kind != RayQueryIntersection::None
 }
 
 fn resolve_hit(intersection: RayIntersection) -> PathVertex {
@@ -202,7 +202,7 @@ fn trace_path(start_dir: Vec3, rng: &mut RandomState) -> PathRadiance {
 
     for bounce in 0..=parameters.max_bounces {
         let intersection = trace_ray(position, direction, t_min);
-        if intersection.kind == RAY_QUERY_INTERSECTION_NONE {
+        if intersection.kind == RayQueryIntersection::None {
             if bsdf_pdf < 0.0 {
                 // The G-buffer represents the sky as a white diffuse surface.
                 radiance.diffuse += evaluate_environment_background(direction);
@@ -244,9 +244,11 @@ fn trace_path(start_dir: Vec3, rng: &mut RandomState) -> PathRadiance {
                 continue;
             }
             let light_dir = map_equirect_uv_to_dir(ls.uv);
-            let lobes = evaluate_brdf(vertex.material, vertex.normal, view_dir, light_dir);
+            let lobes = vertex
+                .material
+                .evaluate_brdf(vertex.normal, view_dir, light_dir);
             if light_dir.dot(vertex.flat_normal) <= 0.0
-                || is_brdf_black(lobes)
+                || lobes.is_black()
                 || is_occluded(position, light_dir)
             {
                 continue;
@@ -275,7 +277,9 @@ fn trace_path(start_dir: Vec3, rng: &mut RandomState) -> PathRadiance {
         if bs.pdf <= 0.0 || bs.dir.dot(vertex.flat_normal) <= 0.0 {
             break;
         }
-        let lobes = evaluate_brdf(vertex.material, vertex.normal, view_dir, bs.dir);
+        let lobes = vertex
+            .material
+            .evaluate_brdf(vertex.normal, view_dir, bs.dir);
         if bounce == 0 {
             diffuse_throughput = Vec3::splat(lobes.diffuse / bs.pdf);
             specular_throughput = lobes.specular / bs.pdf;
@@ -298,7 +302,7 @@ fn trace_path(start_dir: Vec3, rng: &mut RandomState) -> PathRadiance {
             specular_throughput /= probability;
         }
         let throughput = primary_albedo * diffuse_throughput + specular_throughput;
-        if throughput.cmple(Vec3::ZERO).all() {
+        if throughput <= Vec3::ZERO {
             break;
         }
     }

@@ -1,6 +1,6 @@
 use super::camera::CameraParams;
 use super::debug::{DebugLine, debug_buf};
-use super::quaternion::{qinv, qrot};
+use super::quaternion::Quaternion;
 use synaga_shader::*;
 
 #[derive(Clone, Copy, Debug, Default, Io)]
@@ -34,7 +34,7 @@ fn debug_vs(vertex_index: u32, instance_index: u32) -> DebugVarying {
     }
 
     let world_dir = point.pos - camera.position;
-    let local_dir = qrot(qinv(camera.orientation), world_dir);
+    let local_dir = camera.orientation.inv().rotate(world_dir);
     let ndc = local_dir.xy() / (0.5 * camera.fov).tan();
 
     DebugVarying {

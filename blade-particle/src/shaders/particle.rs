@@ -13,12 +13,12 @@ struct Particle {
 }
 
 struct FreeList {
-    pub count: AtomicI32,
+    pub count: Atomic<i32>,
     pub data: [u32],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct EmitParams {
     pub origin: Vec3,
     pub emitter_radius: f32,
@@ -37,14 +37,14 @@ pub struct EmitParams {
 
 /// Uploaded by the host as is.
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct UpdateParams {
     pub time_delta: f32,
 }
 
 /// Camera parameters for 3D particle projection.
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Shared)]
 pub struct CameraParams {
     /// View-projection matrix.
     pub view_proj: Mat4,
@@ -175,7 +175,7 @@ fn rand01(seed: u32) -> f32 {
 fn emit(local_invocation_index: u32) {
     let count = emit_params.emit_count as i32;
     if local_invocation_index == 0 {
-        *emit_end.get_mut() = free_list.count.fetch_sub(count);
+        emit_end.set(free_list.count.fetch_sub(count));
         if *emit_end < count {
             free_list.count.fetch_add(count - (*emit_end).max(0));
         }

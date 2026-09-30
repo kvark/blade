@@ -216,10 +216,6 @@ impl RasterPipelines {
         gpu: &gpu::Context,
         variant: Variant,
     ) -> gpu::RenderPipeline {
-        shader.check_struct_size::<RasterFrameParams>();
-        shader.check_struct_size::<LocalLightParams>();
-        shader.check_struct_size::<RasterDrawParams>();
-        shader.check_struct_size::<SkinningParams>();
         let main_layout = <RasterMainData as gpu::ShaderData>::layout();
         let skin_layout = <RasterSkinData as gpu::ShaderData>::layout();
         let vertex_layout = <Vertex as gpu::Vertex>::layout();
@@ -277,7 +273,6 @@ impl RasterPipelines {
         info: gpu::SurfaceInfo,
         gpu: &gpu::Context,
     ) -> gpu::RenderPipeline {
-        shader.check_struct_size::<RasterFrameParams>();
         let sky_layout = <RasterSkyData as gpu::ShaderData>::layout();
         gpu.create_render_pipeline(gpu::RenderPipelineDesc {
             name: "raster-sky",
@@ -306,9 +301,6 @@ impl RasterPipelines {
         gpu: &gpu::Context,
         variant: Variant,
     ) -> gpu::RenderPipeline {
-        shader.check_struct_size::<ShadowFrameParams>();
-        shader.check_struct_size::<ShadowDrawParams>();
-        shader.check_struct_size::<SkinningParams>();
         let shadow_layout = <RasterShadowData as gpu::ShaderData>::layout();
         let skin_layout = <RasterSkinData as gpu::ShaderData>::layout();
         let vertex_layout = <Vertex as gpu::Vertex>::layout();
@@ -1220,75 +1212,6 @@ fn make_light_view_proj(
     let projection =
         glam::camera::rh::proj::directx::orthographic(-extent, extent, -extent, extent, 0.1, depth);
     projection * view
-}
-
-impl gpu::Vertex for Vertex {
-    fn layout() -> gpu::VertexLayout {
-        gpu::VertexLayout {
-            attributes: vec![
-                (
-                    "position",
-                    gpu::VertexAttribute {
-                        offset: mem::offset_of!(Self, position) as u32,
-                        format: gpu::VertexFormat::F32Vec3,
-                    },
-                ),
-                (
-                    "bitangent_sign",
-                    gpu::VertexAttribute {
-                        offset: mem::offset_of!(Self, bitangent_sign) as u32,
-                        format: gpu::VertexFormat::F32,
-                    },
-                ),
-                (
-                    "tex_coords",
-                    gpu::VertexAttribute {
-                        offset: mem::offset_of!(Self, tex_coords) as u32,
-                        format: gpu::VertexFormat::F32Vec2,
-                    },
-                ),
-                (
-                    "normal",
-                    gpu::VertexAttribute {
-                        offset: mem::offset_of!(Self, normal) as u32,
-                        format: gpu::VertexFormat::U32,
-                    },
-                ),
-                (
-                    "tangent",
-                    gpu::VertexAttribute {
-                        offset: mem::offset_of!(Self, tangent) as u32,
-                        format: gpu::VertexFormat::U32,
-                    },
-                ),
-            ],
-            stride: mem::size_of::<Self>() as u32,
-        }
-    }
-}
-
-impl gpu::Vertex for crate::SkinVertex {
-    fn layout() -> gpu::VertexLayout {
-        gpu::VertexLayout {
-            attributes: vec![
-                (
-                    "joints",
-                    gpu::VertexAttribute {
-                        offset: mem::offset_of!(Self, joints) as u32,
-                        format: gpu::VertexFormat::U32,
-                    },
-                ),
-                (
-                    "weights",
-                    gpu::VertexAttribute {
-                        offset: mem::offset_of!(Self, weights) as u32,
-                        format: gpu::VertexFormat::U32,
-                    },
-                ),
-            ],
-            stride: mem::size_of::<Self>() as u32,
-        }
-    }
 }
 
 fn mat4_transform(t: &gpu::Transform) -> glam::Mat4 {

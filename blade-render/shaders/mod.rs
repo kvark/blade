@@ -34,5 +34,6 @@ pub mod surface;
 pub mod vertex;
 
 // `rustc`'s layout of every struct a buffer shares with the host, asserted to
-// be the one the shaders read.
-synaga_shader::check_layout!("shader_ir_layout.rs");
+// be the one the shaders read. `build.rs` writes these assertions to
+// `OUT_DIR`, next to the modules `ir` includes.
+synaga_shader::check_layout!();
