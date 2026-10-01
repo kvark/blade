@@ -361,7 +361,19 @@ pub enum Memory {
     External(ExternalMemorySource),
 }
 
-/// If the source contains None it will export it otherwise it will import the value in Some
+/// Allocation metadata accompanying a Vulkan opaque FD. The exporter must supply
+/// the original allocation size and memory type, not the receiving resource's
+/// requirements. Dedicated allocations and device groups are not supported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ExternalMemoryAllocation {
+    pub size: u64,
+    pub offset: u64,
+    pub memory_type_index: u32,
+    pub device_uuid: [u8; 16],
+    pub driver_uuid: [u8; 16],
+}
+
+/// `None` exports a new handle; `Some` imports an existing allocation.
 //TODO add D3D11, D3D12 and metal support
 #[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub enum ExternalMemorySource {
@@ -372,9 +384,15 @@ pub enum ExternalMemorySource {
     Win32KMT(Option<isize>),
 
     #[cfg(not(target_os = "windows"))]
-    Fd(Option<i32>),
+    /// A Vulkan OPAQUE_FD and its allocation metadata. Import borrows the FD
+    /// during resource creation and duplicates it for Vulkan; the caller retains
+    /// ownership of the original. Exported FDs are owned by the caller. Imported
+    /// resources do not expose an external source. Imported buffers cannot be
+    /// used for device-address operations.
+    Fd(Option<(i32, ExternalMemoryAllocation)>),
 
     #[cfg(target_os = "linux")]
+    /// DMA-BUF import borrows and duplicates the FD, as with `Fd`.
     Dma(Option<i32>),
 
     /// Is a pointer cast to usize, reason being it otherwise can't be used as sync and send, you should manage memory access to this yourself
