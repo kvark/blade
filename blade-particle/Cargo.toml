@@ -17,3 +17,6 @@ ron = "0.12"
 
 [build-dependencies]
 synaga.workspace = true
+
+[dev-dependencies]
+naga.workspace = true

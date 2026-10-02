@@ -9,7 +9,7 @@ Changelog for *Blade* project
 - graphics: plain data bound to a shader only has to be `bytemuck::NoUninit`, not `Pod`
 - graphics: `MemoryStats::allocated` is the memory a context's live allocations hold. `usage` is the driver's estimate, which lavapipe takes from the whole system
 - macros: `Vertex` takes a field of any type that converts into a `mint` vector with `mint::IntoMint`, such as glam's and synaga-shader's, so a vertex struct a shader declares derives it
-- render: the shaders' pure helpers run on the CPU too, and a GPU test compares the two; their hashes wrap with `wrapping_*`, and `rustc` asserts the layout of every struct a buffer shares
+- render: the shaders' pure helpers run on the CPU too, and a GPU test compares the two; their hashes wrap with `wrapping_*`, and `rustc` asserts the size and the field offsets of every struct a buffer shares
 - graphics: `CooperativeMatrix` lists `[M, N, K]` shapes in `f32_shapes` and `f16_f32_shapes` instead of square tile sizes, and is no longer `Copy`
 - graphics: `CommandEncoder::present_with_damage` tells the compositor which rectangles changed since the previous present, empty if none did: `VK_KHR_incremental_present` on Vulkan, `EGL_KHR/EXT_swap_buffers_with_damage` on GLES, ignored on Metal and WebGL
 - graphics: `Capabilities` reports the default subgroup size and `max_compute_shared_memory_size`

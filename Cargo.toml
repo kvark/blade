@@ -36,6 +36,14 @@ gltf = { version = "1.1", default-features = false }
 log = "0.4"
 # 0.5.8 added `IntoMint`, which the `Vertex` derive finds a vector's format with.
 mint = "0.5.8"
+# Synaga writes those modules as bincode with its own Naga and this crate reads
+# them with this one. Cargo will not give a git dependency and a registry
+# dependency the same Naga however close their versions are, so this revision
+# and synaga's crates.io `naga` were two packages, and the IR was written by one
+# and read by the other. The `[patch.crates-io]` at the end of this file points
+# synaga's requirement here, which leaves one Naga in the graph and the two
+# halves of that cannot disagree. If this revision moves, the patch moves with
+# it, and so does the one Meganeura shares these types with.
 # `deserialize` lets bincode read the module into this copy of Naga.
 # `wgsl-in` stays for shaders that are still text.
 naga = { version = "30", git = "https://github.com/gfx-rs/wgpu", rev = "323acfb729a00c3030e362faa27252afe6368792", features = ["wgsl-in", "termcolor", "deserialize"] }
@@ -132,3 +140,13 @@ allowed_external_types = [
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(gles)'] }
+
+# Points synaga's `naga` requirement at the revision this crate uses above, so
+# the module synaga serializes and the module this crate deserializes are one
+# Naga's idea of a module. Cargo will not do this on its own: a git source and
+# the registry are different sources, and two packages come of that however
+# compatible their versions. Needs a synaga that compiles against both, which
+# `Validator::validate`'s error being boxed in one Naga and not the other was
+# the last thing standing in the way of.
+[patch.crates-io]
+naga = { git = "https://github.com/gfx-rs/wgpu", rev = "323acfb729a00c3030e362faa27252afe6368792" }

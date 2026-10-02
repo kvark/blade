@@ -13,6 +13,7 @@
 //! get wrong about a `match`: which arm takes a value two arms name, and
 //! where a `break` in an arm goes.
 
+use std::mem::offset_of;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -127,6 +128,14 @@ fn probe_module() -> naga::Module {
                 .dir(&sources)
                 .bindings(synaga::build::Bindings::Host)
                 .cfg(cfg)
+                // The module is compiled while the test runs, so the generated
+                // layout file is written too late for anything to include it.
+                // `the_probe_structs_are_laid_out_the_same_on_the_host_and_the_gpu`
+                // makes the same comparison at run time, against the module
+                // rather than synaga's model of it, which is the stronger of the
+                // two. Said here so the build does not warn about a check that
+                // is made by other means.
+                .layout_checks_included()
                 .emit_to(&dir)
                 .unwrap_or_else(|err| panic!("{err}"));
             let [probe] = &built[..] else {
@@ -142,6 +151,83 @@ fn probe_module() -> naga::Module {
 fn the_helpers_compile_for_the_gpu() {
     let module = probe_module();
     assert!(module.entry_points.iter().any(|ep| ep.name == "main"));
+}
+
+/// `rustc`'s layout of the probe's structs, against the layout the module it
+/// was compiled to has them read with.
+///
+/// Blade's own shaders get this from `check_layout!`, which asserts at compile
+/// time what the build script writes. This module is built while the test
+/// runs, so there was nothing for that to include, and the warning the build
+/// script raised about it was true. The same comparison is made here instead,
+/// against the module rather than against synaga's model of `rustc`, which is
+/// the stronger of the two: this reads the offsets the GPU will read, not what
+/// produced them.
+///
+/// The size and every field's offset are what is compared. The struct's own
+/// alignment is not, because it is not what the GPU uses here: `inputs` and
+/// `outputs` are bound as whole buffers, so where the buffer starts is the
+/// host's decision and no field moves. Naga's own layouter would say `Input`
+/// is aligned 16, since WGSL wants a `vec4<f32>` on 16, and `Bindings::Host`
+/// is the opt-out from exactly that rule which lets a `#[repr(C)]` struct be
+/// read as written. Comparing against it would report the opt-out as a bug.
+///
+/// Every field is named, since `offset_of!` takes the name as a literal and
+/// there is no way to ask `rustc` for the offsets of a struct it was not given
+/// by name.
+macro_rules! assert_laid_out {
+    ($ty:ty { $($field:ident),* $(,)? }) => {{
+        let module = probe_module();
+        let name = stringify!($ty);
+        let (_, ty) = module
+            .types
+            .iter()
+            .find(|&(_, ty)| ty.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("the probe has no struct named '{name}'"));
+        let naga::TypeInner::Struct { span, ref members } = ty.inner else {
+            panic!("'{name}' is not a struct in the probe");
+        };
+        assert_eq!(
+            size_of::<$ty>(),
+            span as usize,
+            "'{name}' is {span} bytes on the GPU and {} on the host",
+            size_of::<$ty>(),
+        );
+        let found: Vec<_> = members.iter().map(|m| m.name.as_deref().unwrap()).collect();
+        let offsets: Vec<usize> = members.iter().map(|m| m.offset as usize).collect();
+        assert_eq!(found, [$(stringify!($field)),*], "the fields of '{name}' differ");
+        assert_eq!(
+            offsets,
+            [$(offset_of!($ty, $field)),*],
+            "the fields of '{name}' are at other offsets on the GPU",
+        );
+    }};
+}
+
+#[test]
+fn the_probe_structs_are_laid_out_the_same_on_the_host_and_the_gpu() {
+    assert_laid_out!(Input { a, b, c, bits });
+    assert_laid_out!(Output {
+        random,
+        material,
+        brdf,
+        sample,
+        densities,
+        arc,
+        rotated,
+        restored,
+        srgb,
+        normal,
+        tangent,
+        bitangent,
+        affine,
+        linear,
+        ray,
+        cast,
+        control,
+        ranges,
+        features,
+    });
 }
 
 #[derive(blade_macros::ShaderData)]
