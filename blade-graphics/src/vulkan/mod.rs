@@ -11,6 +11,8 @@ use std::{
 
 mod command;
 mod descriptor;
+#[cfg(target_os = "linux")]
+mod external;
 mod init;
 mod pipeline;
 mod resource;
@@ -573,6 +575,8 @@ impl PassKinds {
 
 pub struct CommandEncoder {
     pool: vk::CommandPool,
+    #[cfg(target_os = "linux")]
+    queue_family_index: u32,
     buffers: Box<[CommandBuffer]>,
     device: Device,
     update_data: Vec<u8>,
@@ -697,6 +701,8 @@ impl crate::traits::CommandDevice for Context {
 
         CommandEncoder {
             pool,
+            #[cfg(target_os = "linux")]
+            queue_family_index: self.queue_family_index,
             buffers,
             device: self.device.clone(),
             update_data: Vec::new(),
