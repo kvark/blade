@@ -1,22 +1,15 @@
-use crate::Vertex;
+use crate::shader_sources::{skin::SkinDispatch, skin_inc::SkinningParams};
 use blade_graphics as gpu;
 use std::mem;
+use synaga_shader::{Mat3x4, mat3x4, vec4};
 
-const IDENTITY_AFFINE_3X4: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-pub(crate) struct SkinningParams {
-    pub post_transform: [f32; 12],
-    pub joint_matrices: [[f32; 12]; crate::model::MAX_JOINTS_PER_DRAW],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct SkinDispatch {
-    vertex_count: u32,
-    _pad: [u32; 3],
-}
+/// An affine transform's rows, which are the columns of the matrix a row
+/// vector multiplies in `skin_inc.rs`.
+const IDENTITY_AFFINE_3X4: Mat3x4 = mat3x4(
+    vec4(1.0, 0.0, 0.0, 0.0),
+    vec4(0.0, 1.0, 0.0, 0.0),
+    vec4(0.0, 0.0, 1.0, 0.0),
+);
 
 #[derive(blade_macros::ShaderData)]
 struct SkinData {
@@ -47,10 +40,6 @@ pub(crate) struct SkinPass {
 
 impl SkinPass {
     fn create_pipeline(shader: &gpu::Shader, gpu: &gpu::Context) -> gpu::ComputePipeline {
-        shader.check_struct_size::<Vertex>();
-        shader.check_struct_size::<crate::SkinVertex>();
-        shader.check_struct_size::<SkinningParams>();
-        shader.check_struct_size::<SkinDispatch>();
         let layout = <SkinData as gpu::ShaderData>::layout();
         gpu.create_compute_pipeline(gpu::ComputePipelineDesc {
             name: "skin",
@@ -89,7 +78,7 @@ impl SkinPass {
                     skinning_params: job.params,
                     skin_dispatch: SkinDispatch {
                         vertex_count: job.vertex_count,
-                        _pad: [0; 3],
+                        ..Default::default()
                     },
                     source: job.source,
                     skin_source: job.skin_source,
@@ -105,22 +94,9 @@ impl SkinPass {
     }
 }
 
-fn affine_rows(matrix: glam::Mat4) -> [f32; 12] {
+fn affine_rows(matrix: glam::Mat4) -> Mat3x4 {
     let transform = crate::model::mat4_to_transform(matrix);
-    [
-        transform.x.x,
-        transform.x.y,
-        transform.x.z,
-        transform.x.w,
-        transform.y.x,
-        transform.y.y,
-        transform.y.z,
-        transform.y.w,
-        transform.z.x,
-        transform.z.y,
-        transform.z.z,
-        transform.z.w,
-    ]
+    mat3x4(transform.x.into(), transform.y.into(), transform.z.into())
 }
 
 pub(crate) fn make_skinning_params(

@@ -344,9 +344,9 @@ impl FlattenedGeometry {
             .map(|v| {
                 let t = v.tangent;
                 crate::Vertex {
-                    position: v.position,
+                    position: v.position.into(),
                     bitangent_sign: t[3],
-                    tex_coords: v.tex_coords,
+                    tex_coords: v.tex_coords.into(),
                     normal: encode_normal(v.normal),
                     tangent: encode_normal([t[0], t[1], t[2]]),
                 }

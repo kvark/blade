@@ -28,7 +28,6 @@ crate-type = ["cdylib"]
 [package.metadata.android]
 build_targets = ["aarch64-linux-android"]
 runtime_libs = "../libs"
-assets = "../../blade-render/code"
 label = "Blade Asteroids"
 
 [package.metadata.android.sdk]

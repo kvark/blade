@@ -11,12 +11,17 @@ repository = "https://github.com/kvark/blade"
 [lib]
 
 [dependencies]
-blade-graphics = { workspace = true }
+synaga-shader.workspace = true
+blade-graphics = { workspace = true, features = ["synaga"] }
+naga = { workspace = true }
 blade-macros = { workspace = true }
 blade-util = { workspace = true }
 egui = { workspace = true, features = ["bytemuck"] }
 bytemuck = { workspace = true }
 profiling = { workspace = true }
+
+[build-dependencies]
+synaga.workspace = true
 
 [package.metadata.cargo_check_external_types]
 allowed_external_types = ["blade_graphics::*", "epaint::*"]

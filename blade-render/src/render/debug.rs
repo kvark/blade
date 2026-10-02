@@ -1,3 +1,7 @@
+use crate::shader_sources::{
+    debug::{DebugEntry, DebugVariance},
+    debug_blit::DebugBlitParams,
+};
 use std::{cell::Cell, mem, ptr};
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -15,15 +19,6 @@ struct DebugDrawData {
     depth: blade_graphics::TextureView,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct DebugBlitParams {
-    target_offset: [f32; 2],
-    target_size: [f32; 2],
-    mip_level: f32,
-    unused: u32,
-}
-
 #[derive(blade_macros::ShaderData)]
 struct DebugBlitData {
     input: blade_graphics::TextureView,
@@ -31,39 +26,11 @@ struct DebugBlitData {
     params: DebugBlitParams,
 }
 
-// Has to match the shader!
-#[repr(C)]
-#[derive(Debug)]
-pub struct DebugVariance {
-    pub color_sum: [f32; 3],
-    pad: u32,
-    pub color2_sum: [f32; 3],
-    pub count: u32,
-}
-
-// Has to match the shader!
-#[repr(C)]
-#[derive(Debug)]
-pub struct DebugEntry {
-    pub custom_index: u32,
-    pub depth: f32,
-    pub tex_coords: [f32; 2],
-    pub base_color_texture: u32,
-    pub normal_texture: u32,
-    pad: [u32; 2],
-    pub position: [f32; 3],
-    position_w: f32,
-    pub normal: [f32; 3],
-    normal_w: f32,
-}
-
 fn create_draw_pipeline(
     shader: &blade_graphics::Shader,
     format: blade_graphics::TextureFormat,
     gpu: &blade_graphics::Context,
 ) -> blade_graphics::RenderPipeline {
-    shader.check_struct_size::<crate::DebugPoint>();
-    shader.check_struct_size::<crate::DebugLine>();
     let layout = <DebugDrawData as blade_graphics::ShaderData>::layout();
     gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
         name: "debug-draw",
@@ -90,7 +57,6 @@ fn create_blit_pipeline(
     format: blade_graphics::TextureFormat,
     gpu: &blade_graphics::Context,
 ) -> blade_graphics::RenderPipeline {
-    shader.check_struct_size::<DebugBlitParams>();
     let layout = <DebugBlitData as blade_graphics::ShaderData>::layout();
     gpu.create_render_pipeline(blade_graphics::RenderPipelineDesc {
         name: "debug-blit",
@@ -294,16 +260,16 @@ impl DebugRender {
                     input: db.input,
                     samp,
                     params: DebugBlitParams {
-                        target_offset: [
+                        target_offset: synaga_shader::vec2(
                             db.target_offset[0] as f32 / screen_size.width as f32,
                             db.target_offset[1] as f32 / screen_size.height as f32,
-                        ],
-                        target_size: [
+                        ),
+                        target_size: synaga_shader::vec2(
                             db.target_size[0] as f32 / screen_size.width as f32,
                             db.target_size[1] as f32 / screen_size.height as f32,
-                        ],
+                        ),
                         mip_level: db.mip_level as f32,
-                        unused: 0,
+                        _pad: 0,
                     },
                 },
             );

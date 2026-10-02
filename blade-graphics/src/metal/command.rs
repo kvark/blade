@@ -38,7 +38,7 @@ fn map_gpu_ns(
 /// Key for the ObjC associated object that stores BLAS references on a TLAS.
 static ASSOCIATED_BLAS_KEY: u8 = 0;
 
-impl<T: bytemuck::Pod> crate::ShaderBindable for T {
+impl<T: bytemuck::NoUninit> crate::ShaderBindable for T {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let slot = ctx.targets[index as usize] as _;
         let size = mem::size_of::<T>();

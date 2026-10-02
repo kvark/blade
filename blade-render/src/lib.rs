@@ -13,6 +13,17 @@
     clippy::pattern_type_mismatch,
 )]
 
+#[path = "../shaders/mod.rs"]
+mod shader_sources;
+
+/// Stock shaders, serialized as Naga IR.
+///
+/// `build.rs` writes one bincode module per shader. The renderer decodes
+/// these bytes and passes the module to blade-graphics.
+pub mod ir {
+    synaga_shader::include_ir!();
+}
+
 mod dummy;
 mod env_map;
 pub use dummy::DummyResources;
@@ -42,58 +53,11 @@ pub use util::FrameResources;
 
 pub use render::*;
 
-/// Absolute path to the WGSL sources shipped with this crate (`code/`).
-///
-/// Point game `config.shader_path` at this directory so dependents do not need
-/// to copy shaders. Keep game-only overrides in the game repository.
-///
-/// This is `CARGO_MANIFEST_DIR/code`, resolved when **this crate** is compiled.
-/// It works for git, path, and crates.io dependencies during `cargo run` / CI
-/// because Cargo materializes `code/` next to the crate manifest. It is **not**
-/// a portable install path for a shipped native binary — embed the WGSL (as for
-/// WASM) or install `code/` next to the executable. See `blade-render/README.md`
-/// (“Shader sources / shipping”).
-pub fn shader_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("code")
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DebugPoint {
-    pub pos: [f32; 3],
-    pub color: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DebugLine {
-    pub a: DebugPoint,
-    pub b: DebugPoint,
-}
-
-// Has to match the `Vertex` in `code/vertex.inc.wgsl`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct Vertex {
-    pub position: [f32; 3],
-    pub bitangent_sign: f32,
-    pub tex_coords: [f32; 2],
-    pub normal: u32,
-    pub tangent: u32,
-}
-
-/// Per-vertex skinning data, kept in a separate buffer so that the base
-/// vertex layout is identical for skinned and rigid models.
-///
-/// Has to match the `SkinVertex` in `code/skin.inc.wgsl`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct SkinVertex {
-    /// Packed indices into the geometry's compact joint palette.
-    pub joints: [u8; 4],
-    /// Packed unorm8 linear-blend skinning weights corresponding to `joints`.
-    pub weights: [u8; 4],
-}
+pub use shader_sources::{
+    debug::{DebugLine, DebugPoint},
+    skin_inc::SkinVertex,
+    vertex::Vertex,
+};
 
 impl SkinVertex {
     pub fn packed_skin(joints: [u32; 4], weights: [f32; 4]) -> Self {
@@ -108,8 +72,8 @@ impl SkinVertex {
         let sum = weights.iter().sum::<f32>();
         if !sum.is_finite() || sum <= 0.0 {
             return Self {
-                joints,
-                weights: [255, 0, 0, 0],
+                joints: u32::from_le_bytes(joints),
+                ..Self::default()
             };
         }
 
@@ -127,25 +91,27 @@ impl SkinVertex {
             remainder -= 1;
         }
         Self {
-            joints,
-            weights: packed,
+            joints: u32::from_le_bytes(joints),
+            weights: u32::from_le_bytes(packed),
         }
     }
 
     pub fn skin_joints(self) -> [u32; 4] {
-        self.joints.map(u32::from)
+        self.joints.to_le_bytes().map(u32::from)
     }
 
     pub fn skin_weights(self) -> [f32; 4] {
-        self.weights.map(|weight| weight as f32 / 255.0)
+        self.weights
+            .to_le_bytes()
+            .map(|weight| weight as f32 / 255.0)
     }
 }
 
 impl Default for SkinVertex {
     fn default() -> Self {
         Self {
-            joints: [0; 4],
-            weights: [255, 0, 0, 0],
+            joints: 0,
+            weights: u32::from_le_bytes([255, 0, 0, 0]),
         }
     }
 }
@@ -159,23 +125,12 @@ mod vertex_tests {
             assert_eq!(
                 packed
                     .weights
+                    .to_le_bytes()
                     .iter()
                     .map(|&weight| u16::from(weight))
                     .sum::<u16>(),
                 255
             );
-        }
-    }
-}
-
-impl Default for Vertex {
-    fn default() -> Self {
-        Self {
-            position: [0.0; 3],
-            bitangent_sign: 0.0,
-            tex_coords: [0.0; 2],
-            normal: 0,
-            tangent: 0,
         }
     }
 }
@@ -310,17 +265,7 @@ impl Object {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
-struct CameraParams {
-    position: [f32; 3],
-    depth: f32,
-    orientation: [f32; 4],
-    fov: [f32; 2],
-    film_offset: [f32; 2],
-    target_size: [u32; 2],
-    _pad: [u32; 2],
-}
+use shader_sources::camera::CameraParams;
 
 impl CameraParams {
     fn new(camera: &Camera, target_size: [u32; 2]) -> Self {
@@ -355,10 +300,10 @@ impl CameraParams {
             position: camera.pos.into(),
             depth: camera.depth,
             orientation: camera.rot.into(),
-            fov,
-            film_offset,
-            target_size,
-            _pad: [0; 2],
+            fov: fov.into(),
+            film_offset: film_offset.into(),
+            target_size: target_size.into(),
+            _pad: Default::default(),
         }
     }
 }
@@ -380,7 +325,7 @@ mod camera_tests {
     #[test]
     fn symmetric_camera_has_no_film_offset() {
         let params = CameraParams::new(&camera(None), [1600, 900]);
-        assert_eq!(params.film_offset, [0.0; 2]);
+        assert_eq!(<[f32; 2]>::from(params.film_offset), [0.0; 2]);
         assert_eq!(params.fov[1], 0.8);
     }
 

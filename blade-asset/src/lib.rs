@@ -406,9 +406,13 @@ impl<B: Baker> AssetManager<B> {
         let target_path = self.make_target_path(&slot.base_path, file_name, meta);
         let file_name = file_name.to_owned();
         let content = content.map(Vec::from);
+        // Inline bytes have no file mtime to invalidate a cooked file, and the
+        // cache key is only the pretend name. Reusing that file serves a
+        // previous module under the same name. `load_data` cooks every time.
+        let inline = content.is_some();
         let mut hasher = DefaultHasher::new();
         TypeId::of::<B::Data<'static>>().hash(&mut hasher);
-        let cache_enabled = self.cache_enabled;
+        let cache_enabled = self.cache_enabled && !inline;
 
         let cache_status = if cache_enabled {
             check_target_relevancy(&target_path, &slot.base_path, hasher.clone())

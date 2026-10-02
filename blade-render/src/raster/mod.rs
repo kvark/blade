@@ -1,9 +1,17 @@
 use crate::{
     AssetHub, CameraParams, DummyResources, FrameResources, Object, RenderConfig, Shaders, Vertex,
-    skin::{self, SkinPass, SkinningParams},
+    shader_sources::{
+        raster::{
+            LocalLight as LocalLightGpu, LocalLightParams, RasterDrawParams, RasterFrameParams,
+            ShadowDrawParams, ShadowFrameParams,
+        },
+        skin_inc::SkinningParams,
+    },
+    skin::{self, SkinPass},
 };
 use blade_graphics as gpu;
 use std::mem;
+use synaga_shader::{Vec4, vec4};
 
 fn geometry_matrix(
     model: &crate::Model,
@@ -15,7 +23,7 @@ fn geometry_matrix(
 
 /// Maximum local lights the forward pass considers per fragment.
 /// Registered lights beyond this limit are currently ignored.
-pub const MAX_LOCAL_LIGHTS: usize = 8;
+pub const MAX_LOCAL_LIGHTS: usize = crate::shader_sources::config::MAX_LOCAL_LIGHTS;
 
 /// Axisymmetric angular distribution of a local light's emitted energy.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -153,63 +161,6 @@ impl Default for RasterConfig {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct RasterFrameParams {
-    view_proj: [f32; 16],
-    inv_view_proj: [f32; 16],
-    light_view_proj: [f32; 16],
-    camera_pos: [f32; 4],
-    light_dir: [f32; 4],
-    light_color: [f32; 4],
-    ambient_color: [f32; 4],
-    settings: [f32; 4],
-    shadow_params: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct LocalLightGpu {
-    position_range: [f32; 4],
-    intensity: [f32; 4],
-    direction: [f32; 4],
-    // x: inner cosine, y: outer cosine, z: falloff exponent, w: spot flag
-    spot: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct LocalLightParams {
-    count_seed: [f32; 4],
-    lights: [LocalLightGpu; MAX_LOCAL_LIGHTS],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct RasterDrawParams {
-    model: [f32; 16],
-    /// Rotation of the object/geometry transform. Skinning assumes uniform
-    /// scale, so a quaternion is sufficient for normals: models with
-    /// non-uniform scale log a warning at load time and their normals may
-    /// end up slightly skewed.
-    normal_quat: [f32; 4],
-    base_color_factor: [f32; 4],
-    emissive_factor: [f32; 4],
-    material: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct ShadowFrameParams {
-    light_view_proj: [f32; 16],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct ShadowDrawParams {
-    model: [f32; 16],
-}
-
 #[derive(blade_macros::ShaderData)]
 struct RasterMainData {
     frame_params: RasterFrameParams,
@@ -265,10 +216,6 @@ impl RasterPipelines {
         gpu: &gpu::Context,
         variant: Variant,
     ) -> gpu::RenderPipeline {
-        shader.check_struct_size::<RasterFrameParams>();
-        shader.check_struct_size::<LocalLightParams>();
-        shader.check_struct_size::<RasterDrawParams>();
-        shader.check_struct_size::<SkinningParams>();
         let main_layout = <RasterMainData as gpu::ShaderData>::layout();
         let skin_layout = <RasterSkinData as gpu::ShaderData>::layout();
         let vertex_layout = <Vertex as gpu::Vertex>::layout();
@@ -326,7 +273,6 @@ impl RasterPipelines {
         info: gpu::SurfaceInfo,
         gpu: &gpu::Context,
     ) -> gpu::RenderPipeline {
-        shader.check_struct_size::<RasterFrameParams>();
         let sky_layout = <RasterSkyData as gpu::ShaderData>::layout();
         gpu.create_render_pipeline(gpu::RenderPipelineDesc {
             name: "raster-sky",
@@ -355,9 +301,6 @@ impl RasterPipelines {
         gpu: &gpu::Context,
         variant: Variant,
     ) -> gpu::RenderPipeline {
-        shader.check_struct_size::<ShadowFrameParams>();
-        shader.check_struct_size::<ShadowDrawParams>();
-        shader.check_struct_size::<SkinningParams>();
         let shadow_layout = <RasterShadowData as gpu::ShaderData>::layout();
         let skin_layout = <RasterSkinData as gpu::ShaderData>::layout();
         let vertex_layout = <Vertex as gpu::Vertex>::layout();
@@ -816,10 +759,10 @@ impl Rasterizer {
                         0,
                         &RasterShadowData {
                             shadow_frame_params: ShadowFrameParams {
-                                light_view_proj: light_view_proj.to_cols_array(),
+                                light_view_proj: light_view_proj.to_cols_array_2d().into(),
                             },
                             shadow_draw_params: ShadowDrawParams {
-                                model: world_transform.to_cols_array(),
+                                model: world_transform.to_cols_array_2d().into(),
                             },
                         },
                     );
@@ -921,21 +864,24 @@ impl Rasterizer {
                             None => self.dummy.white_view,
                         };
                     let draw_params = RasterDrawParams {
-                        model: world_transform.to_cols_array(),
-                        normal_quat: normal_quat.to_array(),
+                        model: world_transform.to_cols_array_2d().into(),
+                        normal_quat: normal_quat.to_array().into(),
                         base_color_factor: [
                             material.base_color_factor[0] * object.color_tint[0],
                             material.base_color_factor[1] * object.color_tint[1],
                             material.base_color_factor[2] * object.color_tint[2],
                             material.base_color_factor[3] * object.color_tint[3],
-                        ],
+                        ]
+                        .into(),
                         emissive_factor: [
                             material.emissive_factor[0],
                             material.emissive_factor[1],
                             material.emissive_factor[2],
                             0.0,
-                        ],
-                        material: [normal_scale, material.metalness, material.roughness, 0.0],
+                        ]
+                        .into(),
+                        material: [normal_scale, material.metalness, material.roughness, 0.0]
+                            .into(),
                     };
                     pc.bind(
                         0,
@@ -1150,34 +1096,34 @@ impl Rasterizer {
             .unwrap_or(glam::Mat4::IDENTITY);
         let shadow = config.directional_shadows.unwrap_or_default();
         RasterFrameParams {
-            view_proj: view_proj.to_cols_array(),
-            inv_view_proj: inv_view_proj.to_cols_array(),
-            light_view_proj: light_view_proj.to_cols_array(),
-            camera_pos: [pos.x, pos.y, pos.z, 1.0],
-            light_dir: [light_dir.x, light_dir.y, light_dir.z, 0.0],
+            view_proj: view_proj.to_cols_array_2d().into(),
+            inv_view_proj: inv_view_proj.to_cols_array_2d().into(),
+            light_view_proj: light_view_proj.to_cols_array_2d().into(),
+            camera_pos: vec4(pos.x, pos.y, pos.z, 1.0),
+            light_dir: vec4(light_dir.x, light_dir.y, light_dir.z, 0.0),
             light_color: {
                 let c = config.light_color;
-                [c.x, c.y, c.z, 0.0]
+                vec4(c.x, c.y, c.z, 0.0)
             },
             ambient_color: {
                 let c = config.ambient_color;
-                [c.x, c.y, c.z, config.space_sky as u32 as f32]
+                vec4(c.x, c.y, c.z, config.space_sky as u32 as f32)
             },
-            settings: [
+            settings: vec4(
                 env_map_enabled as u32 as f32,
                 // the surface may expect us to encode the values ourselves
                 (self.color_space == gpu::ColorSpace::Srgb) as u32 as f32,
                 0.0,
                 0.0,
-            ],
+            ),
             // x: enabled, y: strength, z: normal bias, w: light-direction bias.
             // Texel size for PCF is read from textureDimensions(shadow_tex).
-            shadow_params: [
+            shadow_params: vec4(
                 config.directional_shadows.is_some() as u32 as f32,
                 shadow.strength.clamp(0.0, 1.0),
                 shadow.normal_bias.max(0.0),
                 shadow.depth_bias.max(0.0),
-            ],
+            ),
         }
     }
 }
@@ -1187,16 +1133,11 @@ fn stochastic_light_seed(camera_pos: glam::Vec3) -> f32 {
 }
 
 fn pack_local_lights(lights_in: &[LocalLight], camera: &crate::Camera) -> LocalLightParams {
-    let mut lights = [LocalLightGpu {
-        position_range: [0.0; 4],
-        intensity: [0.0; 4],
-        direction: [0.0; 4],
-        spot: [0.0; 4],
-    }; MAX_LOCAL_LIGHTS];
+    let mut lights = [LocalLightGpu::default(); MAX_LOCAL_LIGHTS];
     let count = lights_in.len().min(MAX_LOCAL_LIGHTS);
     for (slot, src) in lights.iter_mut().zip(lights_in.iter()).take(count) {
         let (direction, spot) = match src.angular {
-            LightAngularProfile::Omnidirectional => ([0.0; 4], [0.0; 4]),
+            LightAngularProfile::Omnidirectional => (Vec4::ZERO, Vec4::ZERO),
             LightAngularProfile::Spot {
                 direction,
                 inner_angle,
@@ -1207,36 +1148,36 @@ fn pack_local_lights(lights_in: &[LocalLight], camera: &crate::Camera) -> LocalL
                 let inner_angle = inner_angle.clamp(0.0, std::f32::consts::PI);
                 let outer_angle = outer_angle.clamp(inner_angle, std::f32::consts::PI);
                 (
-                    [direction.x, direction.y, direction.z, 0.0],
-                    [inner_angle.cos(), outer_angle.cos(), falloff.max(0.01), 1.0],
+                    vec4(direction.x, direction.y, direction.z, 0.0),
+                    vec4(inner_angle.cos(), outer_angle.cos(), falloff.max(0.01), 1.0),
                 )
             }
         };
         let intensity = src.intensity.max(0.0);
         *slot = LocalLightGpu {
-            position_range: [
+            position_range: vec4(
                 src.position.x,
                 src.position.y,
                 src.position.z,
                 src.range.max(0.01),
-            ],
-            intensity: [
+            ),
+            intensity: vec4(
                 src.color.x.max(0.0) * intensity,
                 src.color.y.max(0.0) * intensity,
                 src.color.z.max(0.0) * intensity,
                 0.0,
-            ],
+            ),
             direction,
             spot,
         };
     }
     LocalLightParams {
-        count_seed: [
+        count_seed: vec4(
             count as f32,
             stochastic_light_seed(glam::Vec3::from(camera.pos)),
             0.0,
             0.0,
-        ],
+        ),
         lights,
     }
 }
@@ -1271,75 +1212,6 @@ fn make_light_view_proj(
     let projection =
         glam::camera::rh::proj::directx::orthographic(-extent, extent, -extent, extent, 0.1, depth);
     projection * view
-}
-
-impl gpu::Vertex for Vertex {
-    fn layout() -> gpu::VertexLayout {
-        gpu::VertexLayout {
-            attributes: vec![
-                (
-                    "position",
-                    gpu::VertexAttribute {
-                        offset: 0,
-                        format: gpu::VertexFormat::F32Vec3,
-                    },
-                ),
-                (
-                    "bitangent_sign",
-                    gpu::VertexAttribute {
-                        offset: 12,
-                        format: gpu::VertexFormat::F32,
-                    },
-                ),
-                (
-                    "tex_coords",
-                    gpu::VertexAttribute {
-                        offset: 16,
-                        format: gpu::VertexFormat::F32Vec2,
-                    },
-                ),
-                (
-                    "normal",
-                    gpu::VertexAttribute {
-                        offset: 24,
-                        format: gpu::VertexFormat::U32,
-                    },
-                ),
-                (
-                    "tangent",
-                    gpu::VertexAttribute {
-                        offset: 28,
-                        format: gpu::VertexFormat::U32,
-                    },
-                ),
-            ],
-            stride: mem::size_of::<Vertex>() as u32,
-        }
-    }
-}
-
-impl gpu::Vertex for crate::SkinVertex {
-    fn layout() -> gpu::VertexLayout {
-        gpu::VertexLayout {
-            attributes: vec![
-                (
-                    "joints",
-                    gpu::VertexAttribute {
-                        offset: 0,
-                        format: gpu::VertexFormat::U32,
-                    },
-                ),
-                (
-                    "weights",
-                    gpu::VertexAttribute {
-                        offset: 4,
-                        format: gpu::VertexFormat::U32,
-                    },
-                ),
-            ],
-            stride: mem::size_of::<crate::SkinVertex>() as u32,
-        }
-    }
 }
 
 fn mat4_transform(t: &gpu::Transform) -> glam::Mat4 {

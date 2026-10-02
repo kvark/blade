@@ -1,0 +1,89 @@
+use super::env_importance::{
+    compute_environment_sample_pdf, compute_latitude_area_bounds, generate_environment_sample,
+};
+use super::hit::sampler_linear;
+use super::random::{RandomState, random_gen};
+use super::sampling::sample_circle_uniform;
+use core::f32::consts::PI;
+use synaga_shader::*;
+
+#[derive(Clone, Copy, Default)]
+pub struct LightSample {
+    pub radiance: Vec3,
+    // Solid angle density of drawing this sample.
+    pub pdf: f32,
+    pub uv: Vec2,
+}
+
+static env_map: Texture2D<f32> = binding();
+static sampler_nearest: Sampler = binding();
+
+pub fn map_equirect_dir_to_uv(dir: Vec3) -> Vec2 {
+    //Note: Y axis is up
+    let yaw = dir.y.asin();
+    let pitch = dir.x.atan2(dir.z);
+    vec2(pitch + PI, -2.0 * yaw + PI) / (2.0 * PI)
+}
+
+pub fn map_equirect_uv_to_dir(uv: Vec2) -> Vec3 {
+    let yaw = PI * (0.5 - uv.y);
+    let pitch = 2.0 * PI * (uv.x - 0.5);
+    vec3(yaw.cos() * pitch.sin(), yaw.sin(), yaw.cos() * pitch.cos())
+}
+
+fn sample_light_from_environment(rng: &mut RandomState) -> LightSample {
+    let dim = env_map.level_dimensions(0);
+    let es = generate_environment_sample(rng, dim);
+    // for determining direction - offset randomly within the texel
+    // this offset has to be uniformly distributed across the surface of the texel
+    let u = (es.pixel.x as f32 + random_gen(rng)) / dim.x as f32;
+    let bounds = compute_latitude_area_bounds(es.pixel.y, dim.y);
+    let v = mix(bounds.x, bounds.y, random_gen(rng)).acos() / PI;
+    LightSample {
+        pdf: es.pdf,
+        // sample the incoming radiance
+        radiance: env_map.load(es.pixel, 0).xyz(),
+        uv: vec2(u, v),
+    }
+}
+
+pub fn compute_light_pdf(uv: Vec2, importance: bool) -> f32 {
+    if !importance {
+        return 1.0 / (4.0 * PI);
+    }
+    let dim = env_map.level_dimensions(0);
+    let pixel = (uv * dim.cast::<f32>())
+        .cast::<i32>()
+        .clamp(Vec2::splat(0), dim.cast::<i32>() - 1);
+    compute_environment_sample_pdf(pixel, dim)
+}
+
+pub fn evaluate_environment(dir: Vec3) -> Vec3 {
+    let uv = map_equirect_dir_to_uv(dir);
+    env_map.sample_level(&sampler_nearest, uv, 0.0).xyz()
+}
+
+pub fn evaluate_environment_background(dir: Vec3) -> Vec3 {
+    let uv = map_equirect_dir_to_uv(dir);
+    env_map.sample_level(&sampler_linear, uv, 0.0).xyz()
+}
+
+fn sample_light_from_sphere(rng: &mut RandomState) -> LightSample {
+    let a = random_gen(rng);
+    let h = 1.0 - 2.0 * random_gen(rng); // make sure to allow h==1
+    let tangential = (1.0 - h * h).max(0.0).sqrt() * sample_circle_uniform(a);
+    let dir = vec3(tangential.x, h, tangential.y);
+    let mut ls = LightSample::default();
+    ls.uv = map_equirect_dir_to_uv(dir);
+    ls.pdf = 1.0 / (4.0 * PI);
+    ls.radiance = env_map.sample_level(&sampler_nearest, ls.uv, 0.0).xyz();
+    ls
+}
+
+pub fn sample_light(importance: bool, rng: &mut RandomState) -> LightSample {
+    if importance {
+        sample_light_from_environment(rng)
+    } else {
+        sample_light_from_sphere(rng)
+    }
+}

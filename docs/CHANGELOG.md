@@ -2,6 +2,13 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- render: stock shaders are serialized Naga IR embedded in the crate. `shader_dir()` and `Engine.shader_path` are gone
+- render: `Vertex`, `SkinVertex`, `DebugPoint` and `DebugLine` are the shaders' own structs, with synaga-shader vectors where they had arrays. `SkinVertex` packs its joints and its weights into a `u32` each
+- particle: `CameraParams` is the shader's struct, with a `Mat4` and `Vec4`s where it had arrays
+- render: `DebugDrawFlags` and `DebugTextureFlags` are the shaders' own flag sets, and `DebugMode` numbers its variants in order, so `Variance` is 14
+- graphics: plain data bound to a shader only has to be `bytemuck::NoUninit`, not `Pod`
+- graphics: the `synaga` feature gives synaga-shader's vectors vertex formats, so a vertex struct a shader declares derives `blade_macros::Vertex`
+- render: the shaders' pure helpers run on the CPU too, and a GPU test compares the two; their hashes wrap with `wrapping_*`, and `rustc` asserts the layout of every struct a buffer shares
 - graphics: `CooperativeMatrix` lists `[M, N, K]` shapes in `f32_shapes` and `f16_f32_shapes` instead of square tile sizes, and is no longer `Copy`
 - graphics: `Capabilities` reports the default subgroup size and `max_compute_shared_memory_size`
 - graphics: a pass-boundary GPU timestamp uses that barrier's source stage, so the sample is the completion that releases the next pass

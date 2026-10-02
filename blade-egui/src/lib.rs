@@ -13,17 +13,15 @@
     clippy::pattern_type_mismatch,
 )]
 
-const SHADER_SOURCE: &str = include_str!("../shader.wgsl");
+mod shaders;
+
+mod shader_ir {
+    synaga_shader::include_ir!();
+}
 
 use blade_util::{BufferBelt, BufferBeltDescriptor};
+use shaders::egui::{Uniforms, Vertex};
 use std::collections::hash_map::{Entry, HashMap};
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct Uniforms {
-    screen_size: [f32; 2],
-    padding: [f32; 2],
-}
 
 #[derive(blade_macros::ShaderData)]
 struct Globals {
@@ -36,15 +34,7 @@ struct Locals {
     r_sampler: blade_graphics::Sampler,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod, blade_macros::Vertex)]
-struct GuiVertex {
-    pos: [f32; 2],
-    uv: [f32; 2],
-    color: u32,
-}
-
-const _: () = assert!(size_of::<GuiVertex>() == size_of::<egui::epaint::Vertex>());
+const _: () = assert!(size_of::<Vertex>() == size_of::<egui::epaint::Vertex>());
 
 #[derive(Debug, PartialEq)]
 pub struct ScreenDescriptor {
@@ -176,13 +166,14 @@ impl GuiPainter {
     /// and this attachment format must be The `output_format`.
     #[profiling::function]
     pub fn new(info: blade_graphics::SurfaceInfo, context: &blade_graphics::Context) -> Self {
+        let module: naga::Module = shader_ir::EGUI.decode().expect("egui shader IR");
         let shader = context.create_shader(blade_graphics::ShaderDesc {
-            source: SHADER_SOURCE,
-            naga_module: None,
+            source: "egui",
+            naga_module: Some(module),
         });
         let globals_layout = <Globals as blade_graphics::ShaderData>::layout();
         let locals_layout = <Locals as blade_graphics::ShaderData>::layout();
-        let vertex_layout = <GuiVertex as blade_graphics::Vertex>::layout();
+        let vertex_layout = <Vertex as blade_graphics::Vertex>::layout();
         let pipeline = context.create_render_pipeline(blade_graphics::RenderPipelineDesc {
             name: "gui",
             data_layouts: &[&globals_layout, &locals_layout],
@@ -349,8 +340,8 @@ impl GuiPainter {
             0,
             &Globals {
                 r_uniforms: Uniforms {
-                    screen_size: [logical_size.0, logical_size.1],
-                    padding: [0.0; 2],
+                    screen_size: synaga_shader::vec2(logical_size.0, logical_size.1),
+                    ..Default::default()
                 },
             },
         );

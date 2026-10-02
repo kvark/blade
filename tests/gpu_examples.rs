@@ -13,9 +13,6 @@ mod pbr_scene;
 mod ray_query_example;
 mod snapshot;
 
-/// Directory with the renderer shaders, needed by the asset hub.
-const SHADER_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/blade-render/code");
-
 // --- Sky snapshot test structs ---
 
 #[repr(C)]
@@ -442,8 +439,12 @@ fn env_map_gpu_test() {
     let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
 
     let shader_prepare = context.create_shader(gpu::ShaderDesc {
-        source: include_str!("../blade-render/code/env-prepare.wgsl"),
-        naga_module: None,
+        source: "env-prepare",
+        naga_module: Some(
+            blade_render::ir::ENV_PREPARE
+                .decode()
+                .expect("env-prepare shader IR"),
+        ),
     });
     let shader_sample = context.create_shader(gpu::ShaderDesc {
         source: include_str!("shaders/env_map_sample.wgsl"),
@@ -672,9 +673,9 @@ fn snapshot_particle() {
         let proj = glam::camera::rh::proj::directx::perspective(fov_y, aspect, near, far);
         let view_proj = proj * view;
         blade_particle::CameraParams {
-            view_proj: view_proj.to_cols_array(),
-            camera_right: [1.0, 0.0, 0.0, 0.0],
-            camera_up: [0.0, 1.0, 0.0, 0.0],
+            view_proj: view_proj.to_cols_array_2d().into(),
+            camera_right: [1.0, 0.0, 0.0, 0.0].into(),
+            camera_up: [0.0, 1.0, 0.0, 0.0].into(),
         }
     };
 
@@ -751,11 +752,10 @@ fn snapshot_space_sky() {
         ..Default::default()
     });
 
-    // Compile the raster shader and create sky pipeline (no depth attachment)
-    let source = snapshot::shader_source("raster.wgsl");
+    // The raster shader is embedded IR. Sky draws with no depth attachment.
     let shader = context.create_shader(gpu::ShaderDesc {
-        source: &source,
-        naga_module: None,
+        source: "raster",
+        naga_module: Some(blade_render::ir::RASTER.decode().expect("raster shader IR")),
     });
     let sky_layout = <SkyTestData as gpu::ShaderData>::layout();
     let mut sky_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
@@ -896,8 +896,7 @@ impl PbrHarness {
             .join("test-assets")
             .join(cache_name);
         let asset_hub = blade_render::AssetHub::new(&cache_path, &choir, &context);
-        let (shaders, shader_task) =
-            blade_render::Shaders::load(SHADER_DIR.as_ref(), &asset_hub, ray_tracing);
+        let (shaders, shader_task) = blade_render::Shaders::load(&asset_hub, ray_tracing);
         if workers.is_empty() {
             shader_task.join_active();
         } else {
@@ -1631,15 +1630,15 @@ fn animated_blas_memory_stays_bounded() {
                 name: "triangle".into(),
                 vertices: vec![
                     blade_render::Vertex {
-                        position: [-0.25, -0.25, 0.0],
+                        position: [-0.25, -0.25, 0.0].into(),
                         ..Default::default()
                     },
                     blade_render::Vertex {
-                        position: [0.25, -0.25, 0.0],
+                        position: [0.25, -0.25, 0.0].into(),
                         ..Default::default()
                     },
                     blade_render::Vertex {
-                        position: [0.0, 0.25, 0.0],
+                        position: [0.0, 0.25, 0.0].into(),
                         ..Default::default()
                     },
                 ],
