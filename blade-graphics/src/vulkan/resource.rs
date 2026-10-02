@@ -58,7 +58,7 @@ impl super::Context {
         memory: crate::Memory,
         name: &str,
         needs_device_address: bool,
-    ) -> Result<Allocation, vk::Result> {
+    ) -> Allocation {
         let mut manager = self.memory.lock().unwrap();
         let alloc_usage = memory_usage_flags(memory, needs_device_address);
         let memory_types = requirements.memory_type_bits & manager.valid_ash_memory_types;
@@ -146,15 +146,18 @@ impl super::Context {
                 };
 
                 #[cfg(not(target_os = "windows"))]
-                let imported_fd = match e {
-                    crate::ExternalMemorySource::Fd(Some(fd)) => Some(fd),
-                    #[cfg(target_os = "linux")]
-                    crate::ExternalMemorySource::Dma(Some(fd)) => Some(fd),
-                    _ => None,
-                }
-                .map(|fd| unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned())
-                .transpose()
-                .map_err(|_| vk::Result::ERROR_INVALID_EXTERNAL_HANDLE)?;
+                let mut imported_fd = None;
+                #[cfg(not(target_os = "windows"))]
+                let mut import_fd = |fd| {
+                    let fd = unsafe { BorrowedFd::borrow_raw(fd) }
+                        .try_clone_to_owned()
+                        .expect("duplicate external memory FD");
+                    let info = vk::ImportMemoryFdInfoKHR::default()
+                        .handle_type(handle_type)
+                        .fd(fd.as_raw_fd());
+                    imported_fd = Some(fd);
+                    info
+                };
 
                 let external_info: &mut dyn vk::ExtendsMemoryAllocateInfo = match e {
                     #[cfg(target_os = "windows")]
@@ -167,17 +170,9 @@ impl super::Context {
                         }
                     }
                     #[cfg(not(target_os = "windows"))]
-                    crate::ExternalMemorySource::Fd(Some(_)) => &mut vk::ImportMemoryFdInfoKHR {
-                        handle_type,
-                        fd: imported_fd.as_ref().unwrap().as_raw_fd(),
-                        ..Default::default()
-                    },
+                    crate::ExternalMemorySource::Fd(Some(fd)) => &mut import_fd(fd),
                     #[cfg(target_os = "linux")]
-                    crate::ExternalMemorySource::Dma(Some(_)) => &mut vk::ImportMemoryFdInfoKHR {
-                        handle_type,
-                        fd: imported_fd.as_ref().unwrap().as_raw_fd(),
-                        ..Default::default()
-                    },
+                    crate::ExternalMemorySource::Dma(Some(fd)) => &mut import_fd(fd),
                     crate::ExternalMemorySource::HostAllocation(ptr) => {
                         &mut vk::ImportMemoryHostPointerInfoEXT {
                             handle_type,
@@ -204,7 +199,12 @@ impl super::Context {
                     allocation_info = allocation_info.push_next(&mut flags_info);
                 }
 
-                let memory = unsafe { self.device.core.allocate_memory(&allocation_info, None)? };
+                let memory = unsafe {
+                    self.device
+                        .core
+                        .allocate_memory(&allocation_info, None)
+                        .unwrap()
+                };
                 #[cfg(not(target_os = "windows"))]
                 if let Some(fd) = imported_fd {
                     let _ = fd.into_raw_fd(); // Vulkan owns the duplicate on success.
@@ -254,13 +254,13 @@ impl super::Context {
                     .as_ptr()
             },
         };
-        Ok(Allocation {
+        Allocation {
             memory: *block.memory(),
             offset: block.offset(),
             data,
             handle: manager.slab.insert((block, name.to_string())),
             memory_type: memory,
-        })
+        }
     }
 
     fn free_memory(&self, handle: usize) {
@@ -495,14 +495,8 @@ impl crate::traits::ResourceDevice for super::Context {
         let raw = unsafe { self.device.core.create_buffer(&vk_info, None).unwrap() };
         let mut requirements = unsafe { self.device.core.get_buffer_memory_requirements(raw) };
         requirements.alignment = requirements.alignment.max(self.min_buffer_alignment);
-        let allocation = self
-            .allocate_memory(requirements, desc.memory, desc.name, needs_device_address)
-            .unwrap_or_else(|error| {
-                unsafe {
-                    self.device.core.destroy_buffer(raw, None);
-                }
-                panic!("buffer memory allocation failed: {error}");
-            });
+        let allocation =
+            self.allocate_memory(requirements, desc.memory, desc.name, needs_device_address);
 
         log::info!(
             "Creating buffer {:?} of size {}, name '{}', handle {:?}",
@@ -593,20 +587,13 @@ impl crate::traits::ResourceDevice for super::Context {
         */
         let raw = unsafe { self.device.core.create_image(&vk_info, None).unwrap() };
         let requirements = unsafe { self.device.core.get_image_memory_requirements(raw) };
-        let allocation = self
-            .allocate_memory(
-                requirements,
-                desc.external
-                    .map_or(crate::Memory::Device, crate::Memory::External),
-                desc.name,
-                false,
-            )
-            .unwrap_or_else(|error| {
-                unsafe {
-                    self.device.core.destroy_image(raw, None);
-                }
-                panic!("texture memory allocation failed: {error}");
-            });
+        let allocation = self.allocate_memory(
+            requirements,
+            desc.external
+                .map_or(crate::Memory::Device, crate::Memory::External),
+            desc.name,
+            false,
+        );
 
         log::info!(
             "Creating texture {:?} of size {} and format {:?}, name '{}', handle {:?}",
@@ -730,14 +717,12 @@ impl crate::traits::ResourceDevice for super::Context {
 
         let buffer = unsafe { self.device.core.create_buffer(&buffer_info, None).unwrap() };
         let requirements = unsafe { self.device.core.get_buffer_memory_requirements(buffer) };
-        let allocation = self
-            .allocate_memory(
-                requirements,
-                crate::Memory::Device,
-                desc.name,
-                self.device.buffer_device_address,
-            )
-            .expect("acceleration structure memory allocation failed");
+        let allocation = self.allocate_memory(
+            requirements,
+            crate::Memory::Device,
+            desc.name,
+            self.device.buffer_device_address,
+        );
 
         unsafe {
             self.device
@@ -1057,22 +1042,16 @@ mod tests {
                 exported.into(),
                 256,
             );
-            unsafe {
-                encoder.release_external_buffer(exported.into(), 256);
-            }
+            encoder.release_external_buffer(exported);
             assert!(gpu.wait_for(&gpu.submit(&mut encoder), !0).unwrap());
             encoder.start();
-            unsafe {
-                encoder.acquire_external_buffer(imported.into(), 256);
-            }
+            encoder.acquire_external_buffer(imported);
             encoder.transfer("read_alias").copy_buffer_to_buffer(
                 imported.into(),
                 download.into(),
                 256,
             );
-            unsafe {
-                encoder.release_external_buffer(imported.into(), 256);
-            }
+            encoder.release_external_buffer(imported);
             assert!(gpu.wait_for(&gpu.submit(&mut encoder), !0).unwrap());
             assert!(
                 unsafe { std::slice::from_raw_parts(download.data(), 256) }

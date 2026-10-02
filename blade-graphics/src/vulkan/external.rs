@@ -3,43 +3,26 @@
 use ash::vk;
 
 impl super::CommandEncoder {
-    /// # Safety
-    /// The external producer has released this range to QUEUE_FAMILY_EXTERNAL,
+    /// Acquire the whole buffer from an external producer.
+    /// The producer must release the whole buffer to QUEUE_FAMILY_EXTERNAL,
     /// and its release is complete before this encoder is submitted. Keep the
     /// producer from reusing it until a matching release below completes.
-    pub unsafe fn acquire_external_buffer(&mut self, piece: crate::BufferPiece, size: u64) {
-        unsafe {
-            self.external_buffer_barrier(piece, size, true);
-        }
+    pub fn acquire_external_buffer(&mut self, buffer: super::Buffer) {
+        self.external_buffer_barrier(buffer, true);
     }
 
-    /// # Safety
-    /// This queue owns the range. Its external consumer may start only after
+    /// Release the whole buffer to an external consumer.
+    /// This queue must own the buffer. Its consumer may start only after
     /// completion of this release (a semaphore or an externally relayed fence).
-    pub unsafe fn release_external_buffer(&mut self, piece: crate::BufferPiece, size: u64) {
-        unsafe {
-            self.external_buffer_barrier(piece, size, false);
-        }
+    pub fn release_external_buffer(&mut self, buffer: super::Buffer) {
+        self.external_buffer_barrier(buffer, false);
     }
 
-    unsafe fn external_buffer_barrier(
-        &mut self,
-        piece: crate::BufferPiece,
-        size: u64,
-        acquire: bool,
-    ) {
-        assert!(
-            size > 0
-                && piece
-                    .offset
-                    .checked_add(size)
-                    .is_some_and(|end| end <= piece.buffer.size)
-        );
+    fn external_buffer_barrier(&mut self, buffer: super::Buffer, acquire: bool) {
         let access = vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE;
         let barrier = vk::BufferMemoryBarrier::default()
-            .buffer(piece.buffer.raw)
-            .offset(piece.offset)
-            .size(size)
+            .buffer(buffer.raw)
+            .size(vk::WHOLE_SIZE)
             .src_queue_family_index(if acquire {
                 vk::QUEUE_FAMILY_EXTERNAL
             } else {
