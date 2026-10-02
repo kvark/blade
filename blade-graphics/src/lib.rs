@@ -361,18 +361,6 @@ pub enum Memory {
     External(ExternalMemorySource),
 }
 
-/// Allocation metadata accompanying a Vulkan opaque FD. The exporter must supply
-/// the original allocation size and memory type, not the receiving resource's
-/// requirements. Dedicated allocations and device groups are not supported.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ExternalMemoryAllocation {
-    pub size: u64,
-    pub offset: u64,
-    pub memory_type_index: u32,
-    pub device_uuid: [u8; 16],
-    pub driver_uuid: [u8; 16],
-}
-
 /// `None` exports a new handle; `Some` imports an existing allocation.
 //TODO add D3D11, D3D12 and metal support
 #[derive(Clone, Copy, Debug, PartialEq, Hash)]
@@ -384,12 +372,25 @@ pub enum ExternalMemorySource {
     Win32KMT(Option<isize>),
 
     #[cfg(not(target_os = "windows"))]
-    /// A Vulkan OPAQUE_FD and its allocation metadata. Import borrows the FD
+    /// A Vulkan OPAQUE_FD. Import borrows the FD
     /// during resource creation and duplicates it for Vulkan; the caller retains
     /// ownership of the original. Exported FDs are owned by the caller. Imported
-    /// resources do not expose an external source. Imported buffers cannot be
-    /// used for device-address operations.
-    Fd(Option<(i32, ExternalMemoryAllocation)>),
+    /// resources do not expose an external source.
+    ///
+    /// The caller must ensure compatible physical devices and drivers, identical
+    /// resource descriptions, and the same allocation recipe on both sides.
+    /// Blade allocates exactly the Vulkan memory requirement size, binds at zero,
+    /// and selects the highest compatible memory type index, excluding unknown
+    /// property flags and non-coherent host-visible types. Dedicated allocations
+    /// and device groups are not supported.
+    ///
+    /// External buffers use exclusive sharing and TRANSFER_SRC, TRANSFER_DST,
+    /// UNIFORM_BUFFER, STORAGE_BUFFER, INDEX_BUFFER, VERTEX_BUFFER and
+    /// INDIRECT_BUFFER usage, without device-address or ray-tracing usage/flags.
+    /// Exporting and importing the same buffer description therefore derives the
+    /// same allocation. Foreign exporters must follow this recipe too; an
+    /// arbitrary opaque FD does not provide enough information to infer it.
+    Fd(Option<i32>),
 
     #[cfg(target_os = "linux")]
     /// DMA-BUF import borrows and duplicates the FD, as with `Fd`.
