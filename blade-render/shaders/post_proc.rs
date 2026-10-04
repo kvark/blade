@@ -20,7 +20,7 @@ pub struct PostProcParams {
     pub _pad: u32,
 }
 
-#[derive(Clone, Copy, Debug, Default, Io)]
+#[derive(Io)]
 struct VertexOutput {
     #[builtin(position)]
     clip_pos: Vec4,

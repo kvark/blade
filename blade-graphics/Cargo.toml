@@ -11,9 +11,6 @@ repository = "https://github.com/kvark/blade"
 [lib]
 
 [features]
-# Vertex formats for synaga's vectors, so a vertex struct a shader declares
-# can derive `blade_macros::Vertex`.
-synaga = ["dep:synaga-shader"]
 
 [dependencies]
 bitflags = { workspace = true }
@@ -25,7 +22,6 @@ mint = { workspace = true }
 naga = { workspace = true }
 raw-window-handle = "0.6"
 once_cell = "1"
-synaga-shader = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 objc2 = "0.6"

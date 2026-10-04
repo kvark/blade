@@ -44,7 +44,8 @@ pub struct ParticlePipeline {
 
 impl ParticlePipeline {
     pub fn new(context: &gpu::Context, desc: PipelineDesc) -> Self {
-        let module: naga::Module = crate::shader_ir::PARTICLE
+        // The IR decodes into whichever `naga::Module` blade-graphics takes.
+        let module = crate::shader_ir::PARTICLE
             .decode()
             .expect("particle shader IR");
         let shader = context.create_shader(gpu::ShaderDesc {

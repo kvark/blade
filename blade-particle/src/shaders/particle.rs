@@ -54,7 +54,8 @@ pub struct CameraParams {
     pub camera_up: Vec4,
 }
 
-#[derive(Clone, Copy, Debug, Default, Io)]
+/// `Default` fills in a dead particle's output.
+#[derive(Default, Io)]
 struct VertexOutput {
     #[builtin(position)]
     proj_pos: Vec4,

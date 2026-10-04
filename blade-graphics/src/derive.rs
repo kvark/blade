@@ -1,4 +1,4 @@
-use std::mem;
+use std::{marker::PhantomData, mem};
 
 use super::{ResourceIndex, ShaderBinding, VertexFormat};
 
@@ -101,30 +101,38 @@ impl HasVertexAttribute for mint::Vector4<i32> {
     const FORMAT: VertexFormat = VertexFormat::I32Vec4;
 }
 
-/// A vector a shader declares with synaga, as a vertex attribute.
-#[cfg(feature = "synaga")]
-mod synaga_vertex {
-    use super::HasVertexAttribute;
-    use crate::VertexFormat;
-    use synaga_shader::{Vec2, Vec3, Vec4};
+/// How the `Vertex` derive finds a field's format. A type has one if it is
+/// `HasVertexAttribute`, or else if the `mint` type it converts into is, as
+/// the vectors of a math library that supports `mint` do.
+///
+/// The derive calls `(&VertexAttributeOf::<T>(PhantomData)).vertex_format()`.
+/// Method lookup tries `DirectVertexAttribute`, which takes the receiver as
+/// it is, before `MintVertexAttribute`, which takes a reference to it. The
+/// two can't be one blanket impl: `mint` might implement `IntoMint` for `f32`
+/// some day, and the impls would then overlap.
+#[doc(hidden)]
+pub struct VertexAttributeOf<T>(pub PhantomData<T>);
 
-    macro_rules! format {
-        ($($ty:ty => $format:ident),* $(,)?) => {
-            $(impl HasVertexAttribute for $ty {
-                const FORMAT: VertexFormat = VertexFormat::$format;
-            })*
-        };
+#[doc(hidden)]
+pub trait DirectVertexAttribute {
+    fn vertex_format(&self) -> VertexFormat;
+}
+impl<T: HasVertexAttribute> DirectVertexAttribute for VertexAttributeOf<T> {
+    fn vertex_format(&self) -> VertexFormat {
+        T::FORMAT
     }
+}
 
-    format! {
-        Vec2<f32> => F32Vec2,
-        Vec3<f32> => F32Vec3,
-        Vec4<f32> => F32Vec4,
-        Vec2<u32> => U32Vec2,
-        Vec3<u32> => U32Vec3,
-        Vec4<u32> => U32Vec4,
-        Vec2<i32> => I32Vec2,
-        Vec3<i32> => I32Vec3,
-        Vec4<i32> => I32Vec4,
+#[doc(hidden)]
+pub trait MintVertexAttribute {
+    fn vertex_format(&self) -> VertexFormat;
+}
+impl<T> MintVertexAttribute for &VertexAttributeOf<T>
+where
+    T: mint::IntoMint,
+    T::MintType: HasVertexAttribute,
+{
+    fn vertex_format(&self) -> VertexFormat {
+        <T::MintType as HasVertexAttribute>::FORMAT
     }
 }

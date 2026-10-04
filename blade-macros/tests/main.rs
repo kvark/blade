@@ -12,6 +12,49 @@ struct ShaderParams {
     sprite_sampler: blade_graphics::Sampler,
 }
 
+/// A vector from a math library that converts into `mint`, as glam's and
+/// synaga's do. The `Vertex` derive finds its format through `mint`.
+#[derive(Clone, Copy)]
+struct Position([f32; 3]);
+impl From<Position> for mint::Vector3<f32> {
+    fn from(p: Position) -> Self {
+        p.0.into()
+    }
+}
+impl mint::IntoMint for Position {
+    type MintType = mint::Vector3<f32>;
+}
+
+#[derive(blade_macros::Vertex)]
+#[allow(dead_code)]
+struct MixedVertex {
+    pos: Position,
+    tex_coords: mint::Vector2<f32>,
+    color: u32,
+    normal: [i32; 3],
+}
+
+#[test]
+fn test_vertex_formats() {
+    use blade_graphics::{Vertex as _, VertexFormat as Vf};
+
+    let layout = MixedVertex::layout();
+    let formats = layout
+        .attributes
+        .iter()
+        .map(|&(name, attribute)| (name, attribute.format))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        formats,
+        [
+            ("pos", Vf::F32Vec3),
+            ("tex_coords", Vf::F32Vec2),
+            ("color", Vf::U32),
+            ("normal", Vf::I32Vec3),
+        ]
+    );
+}
+
 #[derive(blade_macros::Flat, PartialEq, Debug)]
 struct FlatData<'a> {
     array: [u32; 2],

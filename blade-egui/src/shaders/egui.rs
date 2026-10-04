@@ -1,6 +1,6 @@
 use synaga_shader::*;
 
-#[derive(Clone, Copy, Debug, Default, Io)]
+#[derive(Io)]
 struct VertexOutput {
     #[location(0)]
     tex_coord: Vec2,

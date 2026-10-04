@@ -34,14 +34,15 @@ egui = "0.34"
 glam = { version = "0.33", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
-mint = "0.5"
+# 0.5.8 added `IntoMint`, which the `Vertex` derive finds a vector's format with.
+mint = "0.5.8"
 # `deserialize` lets bincode read the module into this copy of Naga.
 # `wgsl-in` stays for shaders that are still text.
 naga = { version = "30", git = "https://github.com/gfx-rs/wgpu", rev = "323acfb729a00c3030e362faa27252afe6368792", features = ["wgsl-in", "termcolor", "deserialize"] }
 # Synaga is not published. This revision is what CI builds. A local checkout
 # can replace these with path = "../synaga" and path = "../synaga/crates/shader".
-synaga = { git = "https://github.com/kvark/synaga", rev = "a2971c2c1f89341eb4ddd65cd3f1ae61ac6ad483" }
-synaga-shader = { git = "https://github.com/kvark/synaga", rev = "a2971c2c1f89341eb4ddd65cd3f1ae61ac6ad483", features = [
+synaga = { git = "https://github.com/kvark/synaga", rev = "a265b35cf3829e88408df734e2a936da0074fb71" }
+synaga-shader = { git = "https://github.com/kvark/synaga", rev = "a265b35cf3829e88408df734e2a936da0074fb71", features = [
     "bytemuck",
     "mint",
 ] }

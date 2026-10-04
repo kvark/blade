@@ -254,6 +254,7 @@ impl super::Context {
                     .as_ptr()
             },
         };
+        manager.allocated += block.size();
         Allocation {
             memory: *block.memory(),
             offset: block.offset(),
@@ -266,6 +267,7 @@ impl super::Context {
     fn free_memory(&self, handle: usize) {
         let mut manager = self.memory.lock().unwrap();
         let (block, _name) = manager.slab.remove(handle);
+        manager.allocated -= block.size();
         unsafe {
             manager
                 .allocator

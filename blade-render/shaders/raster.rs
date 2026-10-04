@@ -68,7 +68,7 @@ pub struct ShadowDrawParams {
     pub model: Mat4,
 }
 
-#[derive(Clone, Copy, Debug, Default, Io)]
+#[derive(Io)]
 struct VertexOutput {
     #[builtin(position)]
     clip_pos: Vec4,
@@ -84,7 +84,7 @@ struct VertexOutput {
     uv: Vec2,
 }
 
-#[derive(Clone, Copy, Debug, Default, Io)]
+#[derive(Io)]
 struct SkyOutput {
     #[builtin(position)]
     clip_pos: Vec4,
@@ -198,21 +198,21 @@ fn raster_vertex(
     tangent: Vec3,
     bitangent_sign: f32,
 ) -> VertexOutput {
-    let mut out = VertexOutput::default();
     let pos_world = draw_params.model * position.extend(1.0);
-    out.clip_pos = frame_params.view_proj * pos_world;
-    out.world_pos = pos_world.xyz();
+    let mut world_pos = pos_world.xyz();
     // GLES 3.00 requires matching uniform blocks in vs+fs. The multiply is
     // zero, so lighting does not leak into the vertex stage.
-    out.world_pos.x += light_params.count_seed.x * 0.0;
+    world_pos.x += light_params.count_seed.x * 0.0;
     let n = draw_params.normal_quat.rotate(normal).normalize();
     let t = draw_params.normal_quat.rotate(tangent).normalize();
-    let b = n.cross(t).normalize() * bitangent_sign;
-    out.normal = n;
-    out.tangent = t;
-    out.bitangent = b;
-    out.uv = input.tex_coords;
-    out
+    VertexOutput {
+        clip_pos: frame_params.view_proj * pos_world,
+        world_pos,
+        normal: n,
+        tangent: t,
+        bitangent: n.cross(t).normalize() * bitangent_sign,
+        uv: input.tex_coords,
+    }
 }
 
 #[entry_point(fragment)]

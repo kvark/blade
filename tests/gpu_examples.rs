@@ -1595,7 +1595,10 @@ fn animated_blas_memory_stays_bounded() {
     const OBJECT_COUNT: usize = 64;
     const FRAME_COUNT: usize = 32;
     const WARM_UP_FRAMES: usize = 8;
-    const MAX_LATE_GROWTH: u64 = 64 << 20;
+    // Objects are retired and added back in cycles of 8 frames, which
+    // retire 16 objects' worth of acceleration structures, about 3 MiB.
+    const CYCLE_FRAMES: usize = 8;
+    const MAX_LATE_GROWTH: u64 = 1 << 20;
 
     let harness = PbrHarness::new(context, "animated-blas-stress", true);
     let context = std::sync::Arc::clone(&harness.context);
@@ -1686,7 +1689,10 @@ fn animated_blas_memory_stays_bounded() {
         pairwise_mis: true,
         defensive_mis: 0.1,
     };
-    let mut late_memory_usage = Vec::new();
+    // What the context holds at the end of each cycle, as Blade counts it.
+    // The driver's `usage` would not do: lavapipe, which CI runs, reports
+    // the memory in use across the whole machine.
+    let mut cycle_end_allocated = Vec::new();
 
     for frame_index in 0..FRAME_COUNT {
         let (encoder, temp) = pacer.begin_frame();
@@ -1747,27 +1753,19 @@ fn animated_blas_memory_stays_bounded() {
             object.flip();
         }
 
-        let usage = context.memory_stats().usage;
-        if usage != 0 && frame_index >= WARM_UP_FRAMES {
-            late_memory_usage.push(usage);
+        if frame_index >= WARM_UP_FRAMES && frame_index % CYCLE_FRAMES == CYCLE_FRAMES - 1 {
+            cycle_end_allocated.push(context.memory_stats().allocated);
         }
     }
 
-    if let (Some(min), Some(max)) = (
-        late_memory_usage.iter().min(),
-        late_memory_usage.iter().max(),
-    ) {
-        println!(
-            "animated BLAS late-frame device memory: {:.1}–{:.1} MiB",
-            *min as f64 / (1 << 20) as f64,
-            *max as f64 / (1 << 20) as f64,
-        );
-        assert!(
-            max - min <= MAX_LATE_GROWTH,
-            "animated BLAS memory kept growing after warm-up: {} MiB",
-            (max - min) >> 20,
-        );
-    }
+    println!("animated BLAS allocations at each cycle's end: {cycle_end_allocated:?} bytes");
+    let first = cycle_end_allocated[0];
+    let last = cycle_end_allocated[cycle_end_allocated.len() - 1];
+    assert!(
+        last <= first + MAX_LATE_GROWTH,
+        "animated BLAS allocations kept growing after warm-up: {} KiB",
+        (last - first) >> 10,
+    );
 
     pacer.destroy(&context);
     for object in objects.iter_mut() {

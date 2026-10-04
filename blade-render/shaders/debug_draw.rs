@@ -3,7 +3,7 @@ use super::debug::{DebugLine, debug_buf};
 use super::quaternion::Quaternion;
 use synaga_shader::*;
 
-#[derive(Clone, Copy, Debug, Default, Io)]
+#[derive(Io)]
 struct DebugVarying {
     #[builtin(position)]
     pos: Vec4,

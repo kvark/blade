@@ -26,6 +26,10 @@ pub fn shader_data_derive(input: TokenStream) -> TokenStream {
 
 /// Derive the `Vertex` trait for a struct.
 ///
+/// A field's type picks its format: a scalar or an array of `f32`, `u32` or
+/// `i32`, a `mint` vector of them, or a type that names its `mint` vector with
+/// `mint::IntoMint`, as glam's and synaga-shader's vectors do.
+///
 /// ## Example
 ///
 /// ```rust

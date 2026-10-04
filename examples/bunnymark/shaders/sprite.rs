@@ -23,7 +23,7 @@ struct Vertex {
     pub pos: Vec2,
 }
 
-#[derive(Clone, Copy, Debug, Default, Io)]
+#[derive(Io)]
 struct VertexOutput {
     #[builtin(position)]
     position: Vec4,

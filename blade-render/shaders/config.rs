@@ -27,6 +27,7 @@ pub const MAX_JOINTS_PER_DRAW: usize = 64;
     PartialOrd,
     blade_macros::AsPrimitive,
     bytemuck::NoUninit,
+    bytemuck::Zeroable,
     strum::EnumIter,
 )]
 pub enum DebugMode {

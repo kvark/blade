@@ -12,8 +12,7 @@ repository = "https://github.com/kvark/blade"
 
 [dependencies]
 synaga-shader.workspace = true
-blade-graphics = { workspace = true, features = ["synaga"] }
-naga = { workspace = true }
+blade-graphics = { workspace = true }
 blade-macros = { workspace = true }
 blade-util = { workspace = true }
 egui = { workspace = true, features = ["bytemuck"] }
