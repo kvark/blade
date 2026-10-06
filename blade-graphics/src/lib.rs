@@ -293,12 +293,6 @@ pub struct Capabilities {
     ///
     /// [`ContextDesc::timing`] panics on init if this is false.
     pub timing: bool,
-    /// Whether the damage given to `CommandEncoder::present_with_damage`
-    /// reaches the presentation engine.
-    ///
-    /// Even then it is a hint: a compositor may still update the whole window.
-    /// Without it the damage is ignored and every present updates everything.
-    pub present_damage: bool,
 }
 
 #[derive(Clone, Debug)]

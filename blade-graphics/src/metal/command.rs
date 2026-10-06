@@ -513,6 +513,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.raw.as_mut().unwrap().presentDrawable(&frame.drawable);
     }
 
+    /// `CAMetalLayer` has no way to present part of a drawable.
     fn present_with_damage(&mut self, frame: super::Frame, _damage: &[crate::ScissorRect]) {
         self.present(frame);
     }

@@ -583,7 +583,8 @@ pub struct CommandEncoder {
     device: Device,
     update_data: Vec<u8>,
     present: Option<Presentation>,
-    /// Changed regions for the window presentation, if any were given.
+    /// Changed regions for the window presentation, when the device can
+    /// pass them on. Never empty then: an empty rectangle means no change.
     present_damage: Vec<vk::RectLayerKHR>,
     crash_handler: Option<CrashHandler>,
     temp_label: Vec<u8>,

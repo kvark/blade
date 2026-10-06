@@ -777,7 +777,14 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     }
 
     fn present(&mut self, frame: super::Frame) {
-        self.present_with_damage(frame, &[]);
+        let [width, height] = frame.swapchain.target_size;
+        let whole = crate::ScissorRect {
+            x: 0,
+            y: 0,
+            w: width.into(),
+            h: height.into(),
+        };
+        self.present_with_damage(frame, &[whole]);
     }
 
     fn present_with_damage(&mut self, frame: super::Frame, damage: &[crate::ScissorRect]) {
@@ -846,6 +853,12 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
                             layer: 0,
                         });
                     }
+                }
+                // Zero rectangles would mean the whole image to Vulkan. The
+                // image still goes back to the presentation engine, which needs
+                // it, but with an empty rectangle saying nothing changed.
+                if self.present_damage.is_empty() {
+                    self.present_damage.push(vk::RectLayerKHR::default());
                 }
             }
             super::Presentation::Window {

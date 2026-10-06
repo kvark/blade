@@ -90,11 +90,7 @@ impl super::Surface {
 }
 
 impl PlatformContext {
-    /// The browser composites the whole canvas.
-    pub(super) fn present_damage(&self) -> bool {
-        false
-    }
-
+    /// The browser composites the whole canvas, so damage is not used.
     pub(super) fn present(&self, frame: PlatformFrame, _damage: &[crate::ScissorRect]) {
         let gl = &self.glow;
         // The canvas drawing buffer is RGBA8. `blitFramebuffer` from an
