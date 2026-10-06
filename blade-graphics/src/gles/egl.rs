@@ -1059,20 +1059,23 @@ impl EglContext {
         extent: crate::Extent,
         damage: &[crate::ScissorRect],
     ) {
-        if let Some(function) = self.swap_buffers_with_damage
-            && !damage.is_empty()
-        {
+        if let Some(function) = self.swap_buffers_with_damage {
             let height = extent.height as i32;
-            let rects = damage
+            let mut rects = damage
                 .iter()
                 .flat_map(|r| [r.x, height - r.y - r.h as i32, r.w as i32, r.h as i32])
                 .collect::<Vec<egl::Int>>();
+            // Zero rectangles would mean the whole surface to EGL; an empty
+            // rectangle says that nothing changed.
+            if rects.is_empty() {
+                rects.extend([0; 4]);
+            }
             let swapped = unsafe {
                 function(
                     self.display.as_ptr(),
                     surface.as_ptr(),
                     rects.as_ptr(),
-                    damage.len() as egl::Int,
+                    (rects.len() / 4) as egl::Int,
                 )
             };
             if swapped != egl::FALSE {
@@ -1089,15 +1092,6 @@ impl EglContext {
 }
 
 impl PlatformContext {
-    pub(super) fn present_damage(&self) -> bool {
-        self.inner
-            .lock()
-            .unwrap()
-            .egl
-            .swap_buffers_with_damage
-            .is_some()
-    }
-
     pub(super) fn present(&self, frame: PlatformFrame, damage: &[crate::ScissorRect]) {
         match frame.present_mode {
             PresentMode::Direct(sc) => {

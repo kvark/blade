@@ -166,6 +166,14 @@ pub struct Frame {
     texture: Texture,
 }
 
+/// A frame to present at submission.
+#[derive(Debug)]
+struct Presentation {
+    frame: platform::PlatformFrame,
+    /// What changed since the previous present; empty if nothing did.
+    damage: Vec<crate::ScissorRect>,
+}
+
 impl Frame {
     pub fn texture(&self) -> Texture {
         self.texture
@@ -409,8 +417,7 @@ pub struct CommandEncoder {
     plain_data: Vec<u8>,
     string_data: Vec<u8>,
     needs_scopes: bool,
-    /// Frames to present at submission, each with its damage.
-    present_frames: Vec<(platform::PlatformFrame, Vec<crate::ScissorRect>)>,
+    present_frames: Vec<Presentation>,
     limits: Limits,
     timing: Option<TimingState>,
     gl: platform::GlHandle,
@@ -490,7 +497,6 @@ impl Context {
             timing: self
                 .capabilities
                 .contains(Capabilities::DISJOINT_TIMER_QUERY),
-            present_damage: self.platform.present_damage(),
             cooperative_matrix: crate::CooperativeMatrix::default(),
         }
     }
@@ -608,8 +614,9 @@ impl crate::traits::CommandDevice for Context {
                 gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0).unwrap()
             }
         };
-        for (frame, damage) in encoder.present_frames.drain(..) {
-            self.platform.present(frame, &damage);
+        for presentation in encoder.present_frames.drain(..) {
+            self.platform
+                .present(presentation.frame, &presentation.damage);
         }
         SyncPoint { fence }
     }

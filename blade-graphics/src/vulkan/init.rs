@@ -141,7 +141,6 @@ impl AdapterCapabilities {
             shader_float16: self.shader_float16,
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing,
-            present_damage: self.incremental_present,
             subgroup_size: self.subgroup_size,
             cooperative_matrix: self.cooperative_matrix.clone(),
         }
@@ -1634,7 +1633,6 @@ impl super::Context {
             shader_float16: self.shader_float16,
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing_supported,
-            present_damage: self.device.incremental_present,
             cooperative_matrix: self.cooperative_matrix.clone(),
         }
     }

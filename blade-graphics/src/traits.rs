@@ -65,6 +65,8 @@ pub trait CommandEncoder {
     type Frame: Send + Sync + Debug;
     fn start(&mut self);
     fn init_texture(&mut self, texture: Self::Texture);
+    /// Present a frame that may have changed anywhere. Same as
+    /// `present_with_damage` with one rectangle covering the frame.
     fn present(&mut self, frame: Self::Frame);
     /// Present a frame, telling the presentation engine which parts of it
     /// changed since the previous present to the same surface.
@@ -72,7 +74,11 @@ pub trait CommandEncoder {
     /// Rectangles are in framebuffer pixels with the origin at the top left,
     /// like scissor rectangles. Everything outside them must look exactly as
     /// it did in the previous present, though it may be redrawn. An empty
-    /// list means the whole frame changed. See `Capabilities::present_damage`.
+    /// list means nothing changed.
+    ///
+    /// The damage is a hint: Vulkan with `VK_KHR_incremental_present` and EGL
+    /// with `EGL_KHR_swap_buffers_with_damage` pass it on, a compositor may
+    /// still update the whole window, and other platforms ignore it.
     fn present_with_damage(&mut self, frame: Self::Frame, damage: &[super::ScissorRect]);
     /// Timing of the last submission.
     ///
