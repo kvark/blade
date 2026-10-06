@@ -66,6 +66,14 @@ pub trait CommandEncoder {
     fn start(&mut self);
     fn init_texture(&mut self, texture: Self::Texture);
     fn present(&mut self, frame: Self::Frame);
+    /// Present a frame, telling the presentation engine which parts of it
+    /// changed since the previous present to the same surface.
+    ///
+    /// Rectangles are in framebuffer pixels with the origin at the top left,
+    /// like scissor rectangles. Everything outside them must look exactly as
+    /// it did in the previous present, though it may be redrawn. An empty
+    /// list means the whole frame changed. See `Capabilities::present_damage`.
+    fn present_with_damage(&mut self, frame: Self::Frame, damage: &[super::ScissorRect]);
     /// Timing of the last submission.
     ///
     /// The caller must have waited on that submission's sync point.

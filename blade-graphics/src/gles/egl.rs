@@ -75,6 +75,13 @@ type EglDebugMessageControlFun =
     unsafe extern "system" fn(proc: DebugProcKHR, attrib_list: *const egl::Attrib) -> raw::c_int;
 
 // GBM function types (loaded dynamically from libgbm.so)
+/// `eglSwapBuffersWithDamageKHR`, or the EXT entry point of the same shape.
+type SwapBuffersWithDamageFun = unsafe extern "system" fn(
+    display: egl::EGLDisplay,
+    surface: egl::EGLSurface,
+    rects: *const egl::Int,
+    n_rects: egl::Int,
+) -> egl::Boolean;
 type GbmCreateDeviceFun = unsafe extern "C" fn(fd: raw::c_int) -> *mut ffi::c_void;
 type GbmDeviceDestroyFun = unsafe extern "C" fn(gbm: *mut ffi::c_void);
 type GbmBoCreateFun = unsafe extern "C" fn(
@@ -117,6 +124,7 @@ struct EglContext {
     srgb_kind: SrgbFrameBufferKind,
     /// If true, don't terminate the display on drop (shared display).
     shared_display: bool,
+    swap_buffers_with_damage: Option<SwapBuffersWithDamageFun>,
 }
 
 impl EglContext {
@@ -1042,8 +1050,55 @@ impl super::Context {
     }
 }
 
+impl EglContext {
+    /// Swap, passing damage on when the display takes it. `damage` uses
+    /// Blade's top-left origin; EGL rectangles start at the bottom left.
+    fn swap_buffers(
+        &self,
+        surface: egl::Surface,
+        extent: crate::Extent,
+        damage: &[crate::ScissorRect],
+    ) {
+        if let Some(function) = self.swap_buffers_with_damage
+            && !damage.is_empty()
+        {
+            let height = extent.height as i32;
+            let rects = damage
+                .iter()
+                .flat_map(|r| [r.x, height - r.y - r.h as i32, r.w as i32, r.h as i32])
+                .collect::<Vec<egl::Int>>();
+            let swapped = unsafe {
+                function(
+                    self.display.as_ptr(),
+                    surface.as_ptr(),
+                    rects.as_ptr(),
+                    damage.len() as egl::Int,
+                )
+            };
+            if swapped != egl::FALSE {
+                return;
+            }
+            // A failed call has not swapped, so a plain swap is still due.
+            log::warn!(
+                "eglSwapBuffersWithDamage failed: {:?}",
+                self.instance.get_error()
+            );
+        }
+        self.instance.swap_buffers(self.display, surface).unwrap();
+    }
+}
+
 impl PlatformContext {
-    pub(super) fn present(&self, frame: PlatformFrame) {
+    pub(super) fn present_damage(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap()
+            .egl
+            .swap_buffers_with_damage
+            .is_some()
+    }
+
+    pub(super) fn present(&self, frame: PlatformFrame, damage: &[crate::ScissorRect]) {
         match frame.present_mode {
             PresentMode::Direct(sc) => {
                 let inner = self.inner.lock().unwrap();
@@ -1067,11 +1122,7 @@ impl PlatformContext {
                     super::present_blit(&inner.glow, frame.framebuf, sc.extent);
                 }
 
-                inner
-                    .egl
-                    .instance
-                    .swap_buffers(inner.egl.display, sc.surface)
-                    .unwrap();
+                inner.egl.swap_buffers(sc.surface, sc.extent, damage);
                 inner
                     .egl
                     .instance
@@ -1108,10 +1159,7 @@ impl PlatformContext {
                     super::present_blit(&pres.glow, pres.source_framebuf, sc.extent);
                 }
 
-                pres.egl
-                    .instance
-                    .swap_buffers(pres.egl.display, sc.surface)
-                    .unwrap();
+                pres.egl.swap_buffers(sc.surface, sc.extent, damage);
                 pres.egl
                     .instance
                     .make_current(pres.egl.display, None, None, None)
@@ -1408,6 +1456,30 @@ impl EglContext {
             display_extensions.split_whitespace().collect::<Vec<_>>()
         );
 
+        let swap_buffers_with_damage = [
+            (
+                "EGL_KHR_swap_buffers_with_damage",
+                "eglSwapBuffersWithDamageKHR",
+            ),
+            (
+                "EGL_EXT_swap_buffers_with_damage",
+                "eglSwapBuffersWithDamageEXT",
+            ),
+        ]
+        .into_iter()
+        .filter(|&(extension, _)| {
+            display_extensions
+                .split_whitespace()
+                .any(|e| e == extension)
+        })
+        .find_map(|(_, name)| egl.get_proc_address(name))
+        .map(|address| unsafe {
+            std::mem::transmute::<extern "system" fn(), SwapBuffersWithDamageFun>(address)
+        });
+        if swap_buffers_with_damage.is_some() {
+            log::info!("\tEGL surface: +damage");
+        }
+
         let srgb_kind = if version >= (1, 5) {
             log::info!("\tEGL surface: +srgb");
             SrgbFrameBufferKind::Core
@@ -1501,6 +1573,7 @@ impl EglContext {
             pbuffer,
             srgb_kind,
             shared_display: false,
+            swap_buffers_with_damage,
         })
     }
 
