@@ -513,6 +513,10 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         self.raw.as_mut().unwrap().presentDrawable(&frame.drawable);
     }
 
+    fn present_with_damage(&mut self, frame: super::Frame, _damage: &[crate::ScissorRect]) {
+        self.present(frame);
+    }
+
     fn last_timing(&self) -> crate::Timing<'_> {
         let ts = self
             .timing_state

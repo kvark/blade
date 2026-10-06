@@ -777,6 +777,11 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     }
 
     fn present(&mut self, frame: super::Frame) {
+        self.present_with_damage(frame, &[]);
+    }
+
+    fn present_with_damage(&mut self, frame: super::Frame, damage: &[crate::ScissorRect]) {
+        self.present_damage.clear();
         let image_index = match frame.image_index {
             Some(index) => index,
             None => {
@@ -819,6 +824,29 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
                     &[],
                     &[barrier],
                 );
+            }
+            if self.device.incremental_present {
+                // The spec wants every rectangle inside the image.
+                let [width, height] = frame.swapchain.target_size.map(i64::from);
+                for rect in damage {
+                    let x = i64::from(rect.x).clamp(0, width);
+                    let y = i64::from(rect.y).clamp(0, height);
+                    let right = (i64::from(rect.x) + i64::from(rect.w)).clamp(x, width);
+                    let bottom = (i64::from(rect.y) + i64::from(rect.h)).clamp(y, height);
+                    if right > x && bottom > y {
+                        self.present_damage.push(vk::RectLayerKHR {
+                            offset: vk::Offset2D {
+                                x: x as i32,
+                                y: y as i32,
+                            },
+                            extent: vk::Extent2D {
+                                width: (right - x) as u32,
+                                height: (bottom - y) as u32,
+                            },
+                            layer: 0,
+                        });
+                    }
+                }
             }
             super::Presentation::Window {
                 swapchain: frame.swapchain.raw,

@@ -102,6 +102,7 @@ struct AdapterCapabilities {
     shader_info: bool,
     pipeline_executable_properties: bool,
     full_screen_exclusive: bool,
+    incremental_present: bool,
     external_memory: bool,
     external_memory_host: bool,
     /// `VkPhysicalDeviceExternalMemoryHostPropertiesEXT::minImportedHostPointerAlignment`.
@@ -140,6 +141,7 @@ impl AdapterCapabilities {
             shader_float16: self.shader_float16,
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing,
+            present_damage: self.incremental_present,
             subgroup_size: self.subgroup_size,
             cooperative_matrix: self.cooperative_matrix.clone(),
         }
@@ -628,6 +630,7 @@ fn inspect_adapter(
     let pipeline_executable_properties =
         supported_extensions.contains(&vk::KHR_PIPELINE_EXECUTABLE_PROPERTIES_NAME);
     let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
+    let incremental_present = supported_extensions.contains(&vk::KHR_INCREMENTAL_PRESENT_NAME);
     let memory_budget = supported_extensions.contains(&vk::EXT_MEMORY_BUDGET_NAME);
 
     let device_information = unsafe {
@@ -659,6 +662,7 @@ fn inspect_adapter(
         shader_info,
         pipeline_executable_properties,
         full_screen_exclusive,
+        incremental_present,
         external_memory,
         external_memory_host,
         min_imported_host_pointer_alignment,
@@ -1039,6 +1043,9 @@ impl super::Context {
             }
             if desc.presentation {
                 device_extensions.push(vk::KHR_SWAPCHAIN_NAME);
+                if capabilities.incremental_present {
+                    device_extensions.push(vk::KHR_INCREMENTAL_PRESENT_NAME);
+                }
             }
             if capabilities.layered {
                 log::info!("Enabling Vulkan Portability");
@@ -1348,6 +1355,7 @@ impl super::Context {
             } else {
                 None
             },
+            incremental_present: desc.presentation && capabilities.incremental_present,
             full_screen_exclusive: if desc.presentation && capabilities.full_screen_exclusive {
                 Some(ext::full_screen_exclusive::Device::new(
                     &instance.core,
@@ -1626,6 +1634,7 @@ impl super::Context {
             shader_float16: self.shader_float16,
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing_supported,
+            present_damage: self.device.incremental_present,
             cooperative_matrix: self.cooperative_matrix.clone(),
         }
     }

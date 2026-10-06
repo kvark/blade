@@ -143,6 +143,8 @@ struct Device {
     shader_info: Option<ash::amd::shader_info::Device>,
     pipeline_executable_properties: Option<ash::khr::pipeline_executable_properties::Device>,
     full_screen_exclusive: Option<ash::ext::full_screen_exclusive::Device>,
+    /// `VK_KHR_incremental_present` is enabled.
+    incremental_present: bool,
     #[cfg(target_os = "windows")]
     external_memory: Option<ash::khr::external_memory_win32::Device>,
     #[cfg(not(target_os = "windows"))]
@@ -581,6 +583,8 @@ pub struct CommandEncoder {
     device: Device,
     update_data: Vec<u8>,
     present: Option<Presentation>,
+    /// Changed regions for the window presentation, if any were given.
+    present_damage: Vec<vk::RectLayerKHR>,
     crash_handler: Option<CrashHandler>,
     temp_label: Vec<u8>,
     timing: Option<TimingState>,
@@ -707,6 +711,7 @@ impl crate::traits::CommandDevice for Context {
             device: self.device.clone(),
             update_data: Vec::new(),
             present: None,
+            present_damage: Vec::new(),
             crash_handler,
             temp_label: Vec::new(),
             timing: self.device.timing.as_ref().map(|_| {
@@ -822,10 +827,16 @@ impl crate::traits::CommandDevice for Context {
                     let swapchains = [swapchain];
                     let image_indices = [image_index];
                     let wait_semaphores = [present_semaphore];
-                    let present_info = vk::PresentInfoKHR::default()
+                    let mut present_info = vk::PresentInfoKHR::default()
                         .swapchains(&swapchains)
                         .image_indices(&image_indices)
                         .wait_semaphores(&wait_semaphores);
+                    let regions =
+                        [vk::PresentRegionKHR::default().rectangles(&encoder.present_damage)];
+                    let mut present_regions = vk::PresentRegionsKHR::default().regions(&regions);
+                    if !encoder.present_damage.is_empty() {
+                        present_info = present_info.push_next(&mut present_regions);
+                    }
                     let ret = unsafe { khr_swapchain.queue_present(queue.raw, &present_info) };
                     let _ = encoder.check_gpu_crash(ret);
                 }

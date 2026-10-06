@@ -299,7 +299,11 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     fn init_texture(&mut self, _texture: super::Texture) {}
 
     fn present(&mut self, frame: super::Frame) {
-        self.present_frames.push(frame.platform);
+        self.present_with_damage(frame, &[]);
+    }
+
+    fn present_with_damage(&mut self, frame: super::Frame, damage: &[crate::ScissorRect]) {
+        self.present_frames.push((frame.platform, damage.to_vec()));
     }
 
     fn last_timing(&self) -> crate::Timing<'_> {

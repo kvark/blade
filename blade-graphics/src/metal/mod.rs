@@ -655,6 +655,8 @@ impl Context {
             // MSL provides `dot4U8Packed`-equivalent math via packed char vectors.
             shader_integer_dot_product: true,
             timing: find_timestamp_counter_set(device).is_some(),
+            // `CAMetalLayer` has no way to present part of a drawable.
+            present_damage: false,
             cooperative_matrix: if device.supportsFamily(metal::MTLGPUFamily::Apple7)
                 || device.supportsFamily(metal::MTLGPUFamily::Mac2)
                 || device.supportsFamily(metal::MTLGPUFamily::Metal3)

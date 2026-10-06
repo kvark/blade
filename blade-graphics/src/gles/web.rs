@@ -90,7 +90,12 @@ impl super::Surface {
 }
 
 impl PlatformContext {
-    pub(super) fn present(&self, frame: PlatformFrame) {
+    /// The browser composites the whole canvas.
+    pub(super) fn present_damage(&self) -> bool {
+        false
+    }
+
+    pub(super) fn present(&self, frame: PlatformFrame, _damage: &[crate::ScissorRect]) {
         let gl = &self.glow;
         // The canvas drawing buffer is RGBA8. `blitFramebuffer` from an
         // sRGB offscreen decodes; a texelFetch draw copies stored bytes.
