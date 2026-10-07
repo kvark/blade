@@ -319,6 +319,22 @@ impl super::CommandEncoder {
         if let Some(ref mut ch) = self.crash_handler {
             let id = ch.add_marker(marker);
             unsafe {
+                self.device.core.cmd_pipeline_barrier(
+                    self.buffers[0].raw,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[vk::BufferMemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .buffer(ch.marker_buf.raw)
+                        .offset(0)
+                        .size(4)],
+                    &[],
+                );
                 self.device
                     .buffer_marker
                     .as_ref()

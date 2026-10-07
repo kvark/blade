@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mesa_dir=${MI300_MESA_DIR:-/root/mesa}
+prefix=${MI300_LIBDRM_PREFIX:-/root/mi300-local}
+export VK_DRIVER_FILES="$mesa_dir/build-mi300/src/amd/vulkan/radeon_devenv_icd.x86_64.json"
+export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
+export LD_LIBRARY_PATH="$prefix/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export RADV_EXPERIMENTAL_CDNA=1
+export RADV_MI300_ALL_XCC=${RADV_MI300_ALL_XCC:-1}
+exec "$@"
