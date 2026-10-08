@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+blade_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$blade_dir"
+launcher="$blade_dir/scripts/mi300-vulkan"
+cargo=${MI300_CARGO:-/root/.cargo/bin/cargo}
+"$cargo" build --example compute-smoke --example compute-throughput --example cooperative-smoke
+"$launcher" timeout 30 target/debug/examples/compute-smoke
+"$launcher" timeout 60 target/debug/examples/cooperative-smoke "${MI300_COOPERATIVE_REPETITIONS:-1}"
+"$launcher" timeout 60 target/debug/examples/compute-throughput "${MI300_TEST_WORKERS:-1}"
+for test in dispatch_gpu_test manual_barrier_gpu_test last_timing_reports_the_last_submission; do
+    "$launcher" timeout 60 "$cargo" test --test gpu_examples "$test" -- --ignored --exact --nocapture
+done

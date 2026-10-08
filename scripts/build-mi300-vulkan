@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+mesa_dir=${MI300_MESA_DIR:-/root/mesa}
+drm_dir=${MI300_DRM_DIR:-/root/libdrm}
+prefix=${MI300_LIBDRM_PREFIX:-/root/mi300-local}
+meson=${MI300_MESON:-/root/mesa-venv/bin/meson}
+"$meson" setup --reconfigure "$drm_dir/build" "$drm_dir" --prefix="$prefix" \
+    -Dintel=disabled -Dradeon=disabled -Dnouveau=disabled -Dvmwgfx=disabled -Dtests=false
+ninja -C "$drm_dir/build" install
+export PKG_CONFIG_PATH="$prefix/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+"$meson" setup --reconfigure "$mesa_dir/build-mi300" "$mesa_dir" \
+    -Dvulkan-drivers=amd -Dgallium-drivers= -Dplatforms= -Dglx=disabled \
+    -Degl=disabled -Dgbm=disabled -Dllvm=disabled -Dvideo-codecs= \
+    -Dbuild-tests=false -Dbuildtype=debugoptimized
+ninja -C "$mesa_dir/build-mi300" -j "${MI300_BUILD_JOBS:-18}"
