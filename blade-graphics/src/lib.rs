@@ -234,7 +234,15 @@ pub struct MemoryStats {
     pub budget: u64,
     /// Current memory usage across all device-local heaps (bytes).
     /// Zero if the backend doesn't support memory budget queries.
+    ///
+    /// This is the driver's estimate. A software driver such as lavapipe
+    /// has no heap of its own, and reports the memory in use across the
+    /// whole system, other processes included.
     pub usage: u64,
+    /// Memory held by this context's live allocations (bytes). Unlike
+    /// `usage`, nothing outside the context counts: Vulkan sums the blocks
+    /// Blade allocated, and Metal asks the device. Zero on GLES.
+    pub allocated: u64,
 }
 
 /// Cooperative matrix support information.

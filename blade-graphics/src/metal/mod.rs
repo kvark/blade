@@ -717,9 +717,11 @@ impl Context {
     pub fn memory_stats(&self) -> crate::MemoryStats {
         use metal::MTLDevice as _;
         let device = self.device.lock().unwrap();
+        let allocated = device.currentAllocatedSize() as u64;
         crate::MemoryStats {
             budget: device.recommendedMaxWorkingSetSize(),
-            usage: device.currentAllocatedSize() as u64,
+            usage: allocated,
+            allocated,
         }
     }
 }

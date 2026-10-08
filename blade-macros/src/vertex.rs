@@ -1,5 +1,6 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{quote, quote_spanned};
+use syn::spanned::Spanned as _;
 
 pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStream> {
     let item_struct = syn::parse::<syn::ItemStruct>(input_stream)?;
@@ -34,6 +35,12 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
     for field in fields.named.iter() {
         let name = field.ident.as_ref().unwrap();
         let ty = &field.ty;
+        // A type with no format is reported at the field.
+        let format = quote_spanned! {ty.span()=> {
+            #[allow(unused_imports)]
+            use blade_graphics::derive::{DirectVertexAttribute as _, MintVertexAttribute as _};
+            (&blade_graphics::derive::VertexAttributeOf::<#ty>(core::marker::PhantomData)).vertex_format()
+        }};
         //TODO: use this when MSRV gets to 1.77
         // `std::mem::offset_of!(#full_struct_name, #name)
         attributes.push(quote! {
@@ -41,7 +48,7 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
                 offset: unsafe {
                     (&(*base_ptr).#name as *const _ as *const u8).offset_from(base_ptr as *const u8) as u32
                 },
-                format: <#ty as blade_graphics::derive::HasVertexAttribute>::FORMAT,
+                format: #format,
             })
         });
     }

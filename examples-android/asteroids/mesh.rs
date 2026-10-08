@@ -187,9 +187,9 @@ pub fn generate_asteroid_mesh(
         let base_idx = vertices.len() as u32;
         for &pos in &[p0, p1, p2] {
             vertices.push(blade_render::Vertex {
-                position: pos,
+                position: pos.into(),
                 bitangent_sign: 1.0,
-                tex_coords: [0.0, 0.0],
+                tex_coords: [0.0, 0.0].into(),
                 normal: encoded_normal,
                 tangent: encode_normal([1.0, 0.0, 0.0]),
                 ..Default::default()
@@ -280,9 +280,9 @@ pub fn generate_planet_model(
         let base = verts.len() as u32;
         for (&pos, &normal) in [p0, p1, p2].iter().zip([n0, n1, n2].iter()) {
             verts.push(blade_render::Vertex {
-                position: pos,
+                position: pos.into(),
                 bitangent_sign: 1.0,
-                tex_coords: [0.0, 0.0],
+                tex_coords: [0.0, 0.0].into(),
                 normal: encode_normal(normal),
                 tangent: encode_normal([1.0, 0.0, 0.0]),
                 ..Default::default()
@@ -345,18 +345,18 @@ fn generate_ring_band(
         let s = angle.sin();
         // Inner vertex
         vertices.push(blade_render::Vertex {
-            position: [c * inner_radius, 0.0, s * inner_radius],
+            position: [c * inner_radius, 0.0, s * inner_radius].into(),
             bitangent_sign: 1.0,
-            tex_coords: [0.0, 0.0],
+            tex_coords: [0.0, 0.0].into(),
             normal: en,
             tangent: encode_normal([1.0, 0.0, 0.0]),
             ..Default::default()
         });
         // Outer vertex
         vertices.push(blade_render::Vertex {
-            position: [c * outer_radius, 0.0, s * outer_radius],
+            position: [c * outer_radius, 0.0, s * outer_radius].into(),
             bitangent_sign: 1.0,
-            tex_coords: [0.0, 0.0],
+            tex_coords: [0.0, 0.0].into(),
             normal: en,
             tangent: encode_normal([1.0, 0.0, 0.0]),
             ..Default::default()
@@ -471,9 +471,9 @@ pub fn generate_laser_mesh(length: f32, radius: f32) -> (Vec<blade_render::Verte
             (c1, s1, -length),
         ] {
             vertices.push(blade_render::Vertex {
-                position: [cx * radius, sx * radius, z],
+                position: [cx * radius, sx * radius, z].into(),
                 bitangent_sign: 1.0,
-                tex_coords: [0.0, 0.0],
+                tex_coords: [0.0, 0.0].into(),
                 normal: en,
                 tangent: encode_normal([0.0, 0.0, 1.0]),
                 ..Default::default()

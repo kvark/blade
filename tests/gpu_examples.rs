@@ -13,9 +13,6 @@ mod pbr_scene;
 mod ray_query_example;
 mod snapshot;
 
-/// Directory with the renderer shaders, needed by the asset hub.
-const SHADER_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/blade-render/code");
-
 // --- Sky snapshot test structs ---
 
 #[repr(C)]
@@ -442,8 +439,12 @@ fn env_map_gpu_test() {
     let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
 
     let shader_prepare = context.create_shader(gpu::ShaderDesc {
-        source: include_str!("../blade-render/code/env-prepare.wgsl"),
-        naga_module: None,
+        source: "env-prepare",
+        naga_module: Some(
+            blade_render::ir::ENV_PREPARE
+                .decode()
+                .expect("env-prepare shader IR"),
+        ),
     });
     let shader_sample = context.create_shader(gpu::ShaderDesc {
         source: include_str!("shaders/env_map_sample.wgsl"),
@@ -672,9 +673,9 @@ fn snapshot_particle() {
         let proj = glam::camera::rh::proj::directx::perspective(fov_y, aspect, near, far);
         let view_proj = proj * view;
         blade_particle::CameraParams {
-            view_proj: view_proj.to_cols_array(),
-            camera_right: [1.0, 0.0, 0.0, 0.0],
-            camera_up: [0.0, 1.0, 0.0, 0.0],
+            view_proj: view_proj.to_cols_array_2d().into(),
+            camera_right: [1.0, 0.0, 0.0, 0.0].into(),
+            camera_up: [0.0, 1.0, 0.0, 0.0].into(),
         }
     };
 
@@ -751,11 +752,10 @@ fn snapshot_space_sky() {
         ..Default::default()
     });
 
-    // Compile the raster shader and create sky pipeline (no depth attachment)
-    let source = snapshot::shader_source("raster.wgsl");
+    // The raster shader is embedded IR. Sky draws with no depth attachment.
     let shader = context.create_shader(gpu::ShaderDesc {
-        source: &source,
-        naga_module: None,
+        source: "raster",
+        naga_module: Some(blade_render::ir::RASTER.decode().expect("raster shader IR")),
     });
     let sky_layout = <SkyTestData as gpu::ShaderData>::layout();
     let mut sky_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
@@ -896,8 +896,7 @@ impl PbrHarness {
             .join("test-assets")
             .join(cache_name);
         let asset_hub = blade_render::AssetHub::new(&cache_path, &choir, &context);
-        let (shaders, shader_task) =
-            blade_render::Shaders::load(SHADER_DIR.as_ref(), &asset_hub, ray_tracing);
+        let (shaders, shader_task) = blade_render::Shaders::load(&asset_hub, ray_tracing);
         if workers.is_empty() {
             shader_task.join_active();
         } else {
@@ -1596,7 +1595,10 @@ fn animated_blas_memory_stays_bounded() {
     const OBJECT_COUNT: usize = 64;
     const FRAME_COUNT: usize = 32;
     const WARM_UP_FRAMES: usize = 8;
-    const MAX_LATE_GROWTH: u64 = 64 << 20;
+    // Objects are retired and added back in cycles of 8 frames, which
+    // retire 16 objects' worth of acceleration structures, about 3 MiB.
+    const CYCLE_FRAMES: usize = 8;
+    const MAX_LATE_GROWTH: u64 = 1 << 20;
 
     let harness = PbrHarness::new(context, "animated-blas-stress", true);
     let context = std::sync::Arc::clone(&harness.context);
@@ -1631,15 +1633,15 @@ fn animated_blas_memory_stays_bounded() {
                 name: "triangle".into(),
                 vertices: vec![
                     blade_render::Vertex {
-                        position: [-0.25, -0.25, 0.0],
+                        position: [-0.25, -0.25, 0.0].into(),
                         ..Default::default()
                     },
                     blade_render::Vertex {
-                        position: [0.25, -0.25, 0.0],
+                        position: [0.25, -0.25, 0.0].into(),
                         ..Default::default()
                     },
                     blade_render::Vertex {
-                        position: [0.0, 0.25, 0.0],
+                        position: [0.0, 0.25, 0.0].into(),
                         ..Default::default()
                     },
                 ],
@@ -1687,7 +1689,10 @@ fn animated_blas_memory_stays_bounded() {
         pairwise_mis: true,
         defensive_mis: 0.1,
     };
-    let mut late_memory_usage = Vec::new();
+    // What the context holds at the end of each cycle, as Blade counts it.
+    // The driver's `usage` would not do: lavapipe, which CI runs, reports
+    // the memory in use across the whole machine.
+    let mut cycle_end_allocated = Vec::new();
 
     for frame_index in 0..FRAME_COUNT {
         let (encoder, temp) = pacer.begin_frame();
@@ -1748,27 +1753,19 @@ fn animated_blas_memory_stays_bounded() {
             object.flip();
         }
 
-        let usage = context.memory_stats().usage;
-        if usage != 0 && frame_index >= WARM_UP_FRAMES {
-            late_memory_usage.push(usage);
+        if frame_index >= WARM_UP_FRAMES && frame_index % CYCLE_FRAMES == CYCLE_FRAMES - 1 {
+            cycle_end_allocated.push(context.memory_stats().allocated);
         }
     }
 
-    if let (Some(min), Some(max)) = (
-        late_memory_usage.iter().min(),
-        late_memory_usage.iter().max(),
-    ) {
-        println!(
-            "animated BLAS late-frame device memory: {:.1}–{:.1} MiB",
-            *min as f64 / (1 << 20) as f64,
-            *max as f64 / (1 << 20) as f64,
-        );
-        assert!(
-            max - min <= MAX_LATE_GROWTH,
-            "animated BLAS memory kept growing after warm-up: {} MiB",
-            (max - min) >> 20,
-        );
-    }
+    println!("animated BLAS allocations at each cycle's end: {cycle_end_allocated:?} bytes");
+    let first = cycle_end_allocated[0];
+    let last = cycle_end_allocated[cycle_end_allocated.len() - 1];
+    assert!(
+        last <= first + MAX_LATE_GROWTH,
+        "animated BLAS allocations kept growing after warm-up: {} KiB",
+        (last - first) >> 10,
+    );
 
     pacer.destroy(&context);
     for object in objects.iter_mut() {

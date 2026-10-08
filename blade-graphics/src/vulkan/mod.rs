@@ -166,6 +166,8 @@ struct MemoryManager {
     allocator: gpu_alloc::GpuAllocator<vk::DeviceMemory>,
     slab: slab::Slab<(gpu_alloc::MemoryBlock<vk::DeviceMemory>, String)>,
     valid_ash_memory_types: u32,
+    /// Sum of the sizes of the blocks in `slab`.
+    allocated: u64,
 }
 
 struct Queue {

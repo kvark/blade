@@ -32,36 +32,67 @@ pub struct Shaders {
 }
 
 impl Shaders {
-    pub fn load(
-        path: &Path,
-        asset_hub: &AssetHub,
-        ray_tracing: bool,
-    ) -> (Self, choir::RunningTask) {
-        let mut ctx = asset_hub.open_context(path, "shader finish");
+    /// Load the stock shaders embedded in this crate.
+    ///
+    /// Ray-traced passes are replaced with a no-op shader when `ray_tracing` is false.
+    pub fn load(asset_hub: &AssetHub, ray_tracing: bool) -> (Self, choir::RunningTask) {
+        let mut ctx = asset_hub.open_context(Path::new("."), "shader finish");
         let noop = if ray_tracing {
             None
         } else {
-            Some(ctx.load_shader("noop.wgsl"))
+            Some(ctx.load_shader_ir("noop.naga", crate::ir::NOOP.bytes()))
         };
         let shaders = Self {
-            env_prepare: noop.unwrap_or_else(|| ctx.load_shader("env-prepare.wgsl")),
-            fill_gbuf: noop.unwrap_or_else(|| ctx.load_shader("fill-gbuf.wgsl")),
-            ray_trace: noop.unwrap_or_else(|| ctx.load_shader("ray-trace.wgsl")),
-            path_trace: noop.unwrap_or_else(|| ctx.load_shader("path-trace.wgsl")),
-            a_trous: noop.unwrap_or_else(|| ctx.load_shader("a-trous.wgsl")),
-            post_proc: noop.unwrap_or_else(|| ctx.load_shader("post-proc.wgsl")),
-            raster: ctx.load_shader("raster.wgsl"),
+            env_prepare: noop.unwrap_or_else(|| {
+                ctx.load_shader_ir("env_prepare.naga", crate::ir::ENV_PREPARE.bytes())
+            }),
+            fill_gbuf: noop.unwrap_or_else(|| {
+                ctx.load_shader_ir("fill_gbuf.naga", crate::ir::FILL_GBUF.bytes())
+            }),
+            ray_trace: noop.unwrap_or_else(|| {
+                ctx.load_shader_ir("ray_trace.naga", crate::ir::RAY_TRACE.bytes())
+            }),
+            path_trace: noop.unwrap_or_else(|| {
+                ctx.load_shader_ir("path_trace.naga", crate::ir::PATH_TRACE.bytes())
+            }),
+            a_trous: noop
+                .unwrap_or_else(|| ctx.load_shader_ir("a_trous.naga", crate::ir::A_TROUS.bytes())),
+            post_proc: noop.unwrap_or_else(|| {
+                ctx.load_shader_ir("post_proc.naga", crate::ir::POST_PROC.bytes())
+            }),
+            raster: ctx.load_shader_ir("raster.naga", crate::ir::RASTER.bytes()),
             // GLES/WebGL keep vertex-stage skinning; compute skin is native-only.
             // `cfg!(gles)` is not set for wasm32 git dependents unless they
             // pass RUSTFLAGS, so match blade-graphics: wasm32 == GLES profile.
             skin: if cfg!(any(gles, target_arch = "wasm32")) {
-                ctx.load_shader("noop.wgsl")
+                ctx.load_shader_ir("noop.naga", crate::ir::NOOP.bytes())
             } else {
-                ctx.load_shader("skin.wgsl")
+                ctx.load_shader_ir("skin.naga", crate::ir::SKIN.bytes())
             },
-            debug_draw: ctx.load_shader("debug-draw.wgsl"),
-            debug_blit: ctx.load_shader("debug-blit.wgsl"),
+            debug_draw: ctx.load_shader_ir("debug_draw.naga", crate::ir::DEBUG_DRAW.bytes()),
+            debug_blit: ctx.load_shader_ir("debug_blit.naga", crate::ir::DEBUG_BLIT.bytes()),
         };
         (shaders, ctx.close())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn stock_ir_deserializes() {
+        let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
+        let caps = naga::valid::Capabilities::RAY_QUERY
+            | naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY
+            | naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY_NON_UNIFORM_INDEXING
+            | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY
+            | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING;
+        for (name, ir) in crate::ir::ALL {
+            let module: naga::Module = ir
+                .decode()
+                .unwrap_or_else(|err| panic!("{name} did not decode: {err}"));
+            naga::valid::Validator::new(flags, caps)
+                .validate(&module)
+                .unwrap_or_else(|err| panic!("{name} failed validation: {err}"));
+        }
     }
 }

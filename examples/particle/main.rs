@@ -239,9 +239,9 @@ impl Example {
         let view_proj = proj * view;
         // Camera looks along -Z, so right=+X, up=+Y (identity orientation)
         blade_particle::CameraParams {
-            view_proj: view_proj.to_cols_array(),
-            camera_right: [1.0, 0.0, 0.0, 0.0],
-            camera_up: [0.0, 1.0, 0.0, 0.0],
+            view_proj: view_proj.to_cols_array_2d().into(),
+            camera_right: [1.0, 0.0, 0.0, 0.0].into(),
+            camera_up: [0.0, 1.0, 0.0, 0.0].into(),
         }
     }
 

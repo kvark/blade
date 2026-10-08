@@ -1477,6 +1477,7 @@ impl super::Context {
                 allocator: gpu_alloc::GpuAllocator::new(config, properties),
                 slab: slab::Slab::new(),
                 valid_ash_memory_types,
+                allocated: 0,
             }
         };
 
@@ -1661,8 +1662,12 @@ impl super::Context {
     }
 
     pub fn memory_stats(&self) -> crate::MemoryStats {
+        let allocated = self.memory.lock().unwrap().allocated;
         if !self.memory_budget {
-            return crate::MemoryStats::default();
+            return crate::MemoryStats {
+                allocated,
+                ..Default::default()
+            };
         }
 
         let mut budget_properties = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
@@ -1697,6 +1702,7 @@ impl super::Context {
         crate::MemoryStats {
             budget: total_budget,
             usage: total_usage,
+            allocated,
         }
     }
 }

@@ -4,35 +4,26 @@
 unsafe extern "C" {}
 
 use blade_graphics as gpu;
-use bytemuck::{Pod, Zeroable};
+
+#[path = "shaders/mod.rs"]
+mod shaders;
+
+mod shader_ir {
+    synaga_shader::include_ir!("bunnymark_shaders.rs");
+}
+use shaders::sprite::{Globals, Locals};
 use std::{mem, ptr};
+use synaga_shader::vec2;
 
 const BUNNY_SIZE: f32 = 0.15 * 256.0;
 const GRAVITY: f32 = -9.8 * 100.0;
 const MAX_VELOCITY: i32 = 750;
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Globals {
-    mvp_transform: [[f32; 4]; 4],
-    sprite_size: [f32; 2],
-    pad: [f32; 2],
-}
 
 #[derive(blade_macros::ShaderData)]
 struct Params {
     globals: Globals,
     sprite_texture: gpu::TextureView,
     sprite_sampler: gpu::Sampler,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Locals {
-    position: [f32; 2],
-    velocity: [f32; 2],
-    color: u32,
-    pad: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -67,13 +58,10 @@ impl Example {
     ) -> Self {
         let global_layout = <Params as gpu::ShaderData>::layout();
         let local_layout = <SpriteData as gpu::ShaderData>::layout();
-        #[cfg(target_arch = "wasm32")]
-        let shader_source = include_str!("shader.wgsl");
-        #[cfg(not(target_arch = "wasm32"))]
-        let shader_source = std::fs::read_to_string("examples/bunnymark/shader.wgsl").unwrap();
+        let module: naga::Module = shader_ir::SPRITE.decode().expect("sprite shader IR");
         let shader = context.create_shader(gpu::ShaderDesc {
-            source: &shader_source,
-            naga_module: None,
+            source: "sprite",
+            naga_module: Some(module),
         });
 
         let pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
@@ -175,10 +163,10 @@ impl Example {
         let bunnies = vec![Sprite {
             data: SpriteData {
                 locals: Locals {
-                    position: [-100.0, 100.0],
-                    velocity: [10.0, 0.0],
+                    position: vec2(-100.0, 100.0),
+                    velocity: vec2(10.0, 0.0),
                     color: 0xFFFFFFFF,
-                    pad: 0,
+                    _pad: 0,
                 },
             },
             vertex_buf: vertex_buf.into(),
@@ -228,10 +216,10 @@ impl Example {
             self.bunnies.push(Sprite {
                 data: SpriteData {
                     locals: Locals {
-                        position: [0.0, 0.5 * (self.screen_size.height as f32)],
-                        velocity: [speed, 0.0],
+                        position: vec2(0.0, 0.5 * (self.screen_size.height as f32)),
+                        velocity: vec2(speed, 0.0),
                         color: self.rng.generate::<u32>(),
-                        pad: 0,
+                        _pad: 0,
                     },
                 },
                 vertex_buf: self.vertex_buf.into(),
@@ -255,16 +243,16 @@ impl Example {
                 ..
             } = *bunny;
 
-            pos[0] += vel[0] * delta;
-            pos[1] += vel[1] * delta;
-            vel[1] += GRAVITY * delta;
-            if (vel[0] > 0.0 && pos[0] + 0.5 * BUNNY_SIZE > self.screen_size.width as f32)
-                || (vel[0] < 0.0 && pos[0] - 0.5 * BUNNY_SIZE < 0.0)
+            pos.x += vel.x * delta;
+            pos.y += vel.y * delta;
+            vel.y += GRAVITY * delta;
+            if (vel.x > 0.0 && pos.x + 0.5 * BUNNY_SIZE > self.screen_size.width as f32)
+                || (vel.x < 0.0 && pos.x - 0.5 * BUNNY_SIZE < 0.0)
             {
-                vel[0] *= -1.0;
+                vel.x *= -1.0;
             }
-            if vel[1] < 0.0 && pos[1] < 0.5 * BUNNY_SIZE {
-                vel[1] *= -1.0;
+            if vel.y < 0.0 && pos.y < 0.5 * BUNNY_SIZE {
+                vel.y *= -1.0;
             }
         }
     }
@@ -291,9 +279,10 @@ impl Example {
                             [0.0, 2.0 / self.screen_size.height as f32, 0.0, 0.0],
                             [0.0, 0.0, 1.0, 0.0],
                             [-1.0, -1.0, 0.0, 1.0],
-                        ],
-                        sprite_size: [BUNNY_SIZE; 2],
-                        pad: [0.0; 2],
+                        ]
+                        .into(),
+                        sprite_size: vec2(BUNNY_SIZE, BUNNY_SIZE),
+                        ..Default::default()
                     },
                     sprite_texture: self.view,
                     sprite_sampler: self.sampler,

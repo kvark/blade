@@ -23,8 +23,14 @@
     clippy::pattern_type_mismatch,
 )]
 
+mod shaders;
 mod system;
 
+mod shader_ir {
+    synaga_shader::include_ir!();
+}
+
+pub use shaders::particle::CameraParams;
 pub use system::{ParticlePipeline, ParticleSystem, PipelineDesc};
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -87,14 +93,27 @@ impl ParticleEffect {
     }
 }
 
-/// Camera parameters for 3D particle projection.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct CameraParams {
-    /// Column-major 4x4 view-projection matrix.
-    pub view_proj: [f32; 16],
-    /// Camera right vector in world space (for billboard X offset).
-    pub camera_right: [f32; 4],
-    /// Camera up vector in world space (for billboard Y offset).
-    pub camera_up: [f32; 4],
+#[cfg(test)]
+mod tests {
+    /// The module this crate embeds, read back with the Naga that will read it.
+    ///
+    /// The workspace's `[patch.crates-io]` makes the build script's Naga and
+    /// this crate's one package, so the bytes were written by the Naga this
+    /// reads them with. `decode` refusing trailing bytes is most of the proof
+    /// of that, and reading the module into the Naga that will really read it
+    /// is the rest of it. A GPU test would say the same thing where there is a
+    /// GPU, which is why this is here: `blade-render`'s version of it runs on
+    /// every runner, and these two modules did not.
+    #[test]
+    fn stock_ir_decodes_and_validates() {
+        let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
+        for (name, ir) in crate::shader_ir::ALL {
+            let module: naga::Module = ir
+                .decode()
+                .unwrap_or_else(|err| panic!("{name} did not decode: {err}"));
+            naga::valid::Validator::new(flags, naga::valid::Capabilities::empty())
+                .validate(&module)
+                .unwrap_or_else(|err| panic!("{name} failed validation: {err}"));
+        }
+    }
 }

@@ -1,30 +1,7 @@
 use blade_graphics as gpu;
 
+use crate::shaders::particle::{EmitParams, UpdateParams};
 use crate::{CameraParams, ColorConfig, EmitterShape, ParticleEffect};
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct EmitParams {
-    origin: [f32; 3],
-    emitter_radius: f32,
-    direction: [f32; 3],
-    cone_half_angle_cos: f32,
-    colors: [u32; 4],
-    color_count: u32,
-    emit_count: u32,
-    life_min: f32,
-    life_max: f32,
-    speed_min: f32,
-    speed_max: f32,
-    scale_min: f32,
-    scale_max: f32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct UpdateParams {
-    time_delta: f32,
-}
 
 #[derive(blade_macros::ShaderData)]
 struct MainData {
@@ -67,10 +44,13 @@ pub struct ParticlePipeline {
 
 impl ParticlePipeline {
     pub fn new(context: &gpu::Context, desc: PipelineDesc) -> Self {
-        let source = include_str!("particle.wgsl");
+        // The IR decodes into whichever `naga::Module` blade-graphics takes.
+        let module = crate::shader_ir::PARTICLE
+            .decode()
+            .expect("particle shader IR");
         let shader = context.create_shader(gpu::ShaderDesc {
-            source,
-            naga_module: None,
+            source: "particle",
+            naga_module: Some(module),
         });
 
         let particle_size = shader.get_struct_size("Particle");
@@ -234,11 +214,11 @@ impl ParticleSystem {
         };
 
         EmitParams {
-            origin: position,
+            origin: position.into(),
             emitter_radius,
-            direction: self.axis,
+            direction: self.axis.into(),
             cone_half_angle_cos: self.effect.emitter.cone_angle.cos(),
-            colors,
+            colors: colors.into(),
             color_count,
             emit_count: count,
             life_min: self.effect.particle.life[0],

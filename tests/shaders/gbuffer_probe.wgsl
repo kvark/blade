@@ -11,7 +11,7 @@ var t_diffuse_albedo: texture_2d<f32>;
 var t_specular_f0: texture_2d<f32>;
 var output: texture_storage_2d<rgba32float, write>;
 
-// Matches `qrot` in the renderer's quaternion.inc.wgsl.
+// Matches `Quaternion::rotate` in the renderer's shaders/quaternion.rs.
 fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
 }

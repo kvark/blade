@@ -144,18 +144,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
 
-      - name: Install Vulkan (Windows)
-        if: matrix.name == 'Windows'
-        uses: jakoch/install-vulkan-sdk-action@v1
-        with:
-          install_runtime: true
-          install_lavapipe: true
-          cache: true
-          # The action queries GitHub for LavaPipe releases. Anonymous hosted
-          # runners share a tiny rate limit and made unrelated PRs fail before
-          # any Vulkan test ran.
-          github_token: ${{ github.token }}
-
       # One test at a time, as the GLES step below already does. Each of these
       # stands up its own GPU context, and the ray traced ones also build
       # acceleration structures and full sized render targets. Ten of those at
@@ -168,9 +156,22 @@ jobs:
         env:
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
 
-      - name: Run GPU integration tests
-        if: matrix.name != 'Linux'
+      # Windows runs only the GLES tests below: lavapipe is Linux's job.
+      - name: Run GPU integration tests (macOS)
+        if: matrix.name == 'macOS'
         run: cargo test --test gpu_examples -- --ignored --nocapture --test-threads=1
+
+      # The shader helpers run on the CPU in the CPU jobs; this runs the same
+      # source on the GPU and compares the two.
+      - name: Compare shader helpers on the CPU and GPU (Linux)
+        if: matrix.name == 'Linux'
+        run: cargo test -p blade-render --test shader_helpers -- --ignored --nocapture
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
+
+      - name: Compare shader helpers on the CPU and GPU (macOS)
+        if: matrix.name == 'macOS'
+        run: cargo test -p blade-render --test shader_helpers -- --ignored --nocapture
 
       - name: Install EGL/GLES (Linux)
         if: matrix.name == 'Linux'

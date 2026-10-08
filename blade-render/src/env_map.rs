@@ -1,11 +1,6 @@
 use crate::DummyResources;
+use crate::shader_sources::env_prepare::EnvPreprocParams;
 use std::num::NonZeroU32;
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct EnvPreprocParams {
-    target_level: u32,
-}
 
 #[derive(blade_macros::ShaderData)]
 struct EnvPreprocData {
@@ -29,7 +24,6 @@ impl EnvironmentMap {
         gpu: &blade_graphics::Context,
     ) -> Result<blade_graphics::ComputePipeline, &'static str> {
         let layout = <EnvPreprocData as blade_graphics::ShaderData>::layout();
-        shader.check_struct_size::<EnvPreprocParams>();
 
         Ok(
             gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {

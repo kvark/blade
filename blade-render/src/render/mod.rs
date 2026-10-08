@@ -2,72 +2,50 @@ mod debug;
 
 use crate::{
     CameraParams, DebugLine, DummyResources, EnvironmentMap, RenderConfig, Shaders,
+    shader_sources::{
+        a_trous::BlurParams, debug_param::DebugParams, hit::HitEntry, path_trace::PathTraceParams,
+        post_proc::PostProcParams, ray_trace::MainParams,
+    },
     skin::{self, SkinPass},
 };
-use debug::{DebugEntry, DebugVariance};
 
 pub use debug::DebugBlit;
 pub(crate) use debug::DebugRender;
 
-use std::{collections::HashMap, mem, num::NonZeroU32, ptr};
+use std::{collections::HashMap, fmt, mem, num::NonZeroU32, ptr};
 
 const MAX_RESOURCES: u32 = 8192;
 const RADIANCE_FORMAT: blade_graphics::TextureFormat = blade_graphics::TextureFormat::Rgba16Float;
 
-fn mat4_transform(t: &blade_graphics::Transform) -> glam::Mat4 {
-    glam::Mat4 {
-        x_axis: t.x.into(),
-        y_axis: t.y.into(),
-        z_axis: t.z.into(),
-        w_axis: glam::Vec4::W,
-    }
-    .transpose()
-}
 struct Samplers {
     nearest: blade_graphics::Sampler,
     linear: blade_graphics::Sampler,
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, PartialOrd, blade_macros::AsPrimitive, strum::EnumIter,
-)]
-#[repr(u32)]
-pub enum DebugMode {
-    #[default]
-    Final = 0,
-    Depth = 1,
-    DiffuseAlbedoTexture = 2,
-    DiffuseAlbedoFactor = 3,
-    NormalTexture = 4,
-    NormalScale = 5,
-    GeometryNormal = 6,
-    ShadingNormal = 7,
-    Motion = 8,
-    HitConsistency = 9,
-    SampleReuse = 10,
-    Roughness = 11,
-    SpecularF0 = 12,
-    Emissive = 13,
-    Variance = 15,
-}
+pub use crate::shader_sources::config::{DebugDrawFlags, DebugMode, DebugTextureFlags};
 
-bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq, PartialOrd)]
-    pub struct DebugDrawFlags: u32 {
-        const SPACE = 1;
-        const GEOMETRY = 2;
-        const RESTIR = 4;
+// A set declared on its own newtype gets its flags from `bitflags!`, but not a
+// `Debug` that names them.
+impl fmt::Debug for DebugDrawFlags {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        debug_flags("DebugDrawFlags", self, f)
     }
 }
 
-bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq, PartialOrd)]
-    pub struct DebugTextureFlags: u32 {
-        const ALBEDO = 1;
-        const NORMAL = 2;
-        const METALLIC_ROUGHNESS = 4;
-        const EMISSIVE = 8;
+impl fmt::Debug for DebugTextureFlags {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        debug_flags("DebugTextureFlags", self, f)
     }
+}
+
+fn debug_flags<F: bitflags::Flags<Bits = u32>>(
+    name: &str,
+    flags: &F,
+    f: &mut fmt::Formatter,
+) -> fmt::Result {
+    write!(f, "{name}(")?;
+    bitflags::parser::to_writer(flags, &mut *f)?;
+    f.write_str(")")
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -191,7 +169,7 @@ pub struct GBufferViews {
     /// `Rgba8Snorm`. The shading tangent frame as a quaternion, which is where
     /// normal mapping ends up. The shading normal is the quaternion applied to
     /// `+Z`: `v + 2 * cross(q.xyz, cross(q.xyz, v) + q.w * v)` for
-    /// `v = (0, 0, 1)`, matching `qrot` in `quaternion.inc.wgsl`.
+    /// `v = (0, 0, 1)`, matching `Quaternion::rotate` in `shaders/quaternion.rs`.
     pub basis: blade_graphics::TextureView,
     /// `Rgba8Snorm`. The geometric normal in XYZ, straight from the triangle,
     /// with no normal map applied. Cheaper to consume than [`basis`] when the
@@ -207,7 +185,7 @@ pub struct GBufferViews {
     /// Emitted radiance, in the renderer's radiance format.
     pub emissive: blade_graphics::TextureView,
     /// `Rg16Float`. Screen space motion since the previous frame, scaled by
-    /// `MOTION_SCALE` from `gbuf.inc.wgsl`. Half precision keeps subpixel
+    /// `MOTION_SCALE` from `shaders/gbuf.rs`. Half precision keeps subpixel
     /// reprojection accurate enough for temporal upscaling; `Rg8Snorm` stepped
     /// by roughly 0.4 pixels after decoding.
     pub motion: blade_graphics::TextureView,
@@ -534,33 +512,6 @@ pub struct RayTracer {
         HashMap<blade_graphics::ResourceIndex, blade_asset::Handle<crate::Texture>>,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-pub(crate) struct DebugParams {
-    view_mode: u32,
-    draw_flags: u32,
-    texture_flags: u32,
-    unused: u32,
-    mouse_pos: [i32; 2],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct MainParams {
-    frame_index: u32,
-    num_environment_samples: u32,
-    num_brdf_samples: u32,
-    environment_importance_sampling: u32,
-    tap_count: u32,
-    tap_radius: f32,
-    tap_confidence_near: f32,
-    tap_confidence_far: f32,
-    t_start: f32,
-    use_pairwise_mis: u32,
-    defensive_mis: f32,
-    use_motion_vectors: u32,
-}
-
 #[derive(blade_macros::ShaderData)]
 struct FillData<'a> {
     camera: CameraParams,
@@ -618,21 +569,6 @@ struct MainData<'a> {
     out_debug: blade_graphics::TextureView,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct PathTraceParams {
-    frame_index: u32,
-    num_environment_samples: u32,
-    num_brdf_samples: u32,
-    max_bounces: u32,
-    max_accumulated_samples: u32,
-    t_start: f32,
-    environment_importance_sampling: u32,
-    reset_accumulation: u32,
-    jitter_primary_rays: u32,
-    _pad: [u32; 3],
-}
-
 #[derive(blade_macros::ShaderData)]
 struct PathTraceData<'a> {
     camera: CameraParams,
@@ -650,16 +586,6 @@ struct PathTraceData<'a> {
     accumulator_diffuse: blade_graphics::TextureView,
     accumulator_specular: blade_graphics::TextureView,
     accumulator_emissive: blade_graphics::TextureView,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct BlurParams {
-    extent: [u32; 2],
-    temporal_weight: f32,
-    iteration: i32,
-    use_motion_vectors: u32,
-    pad: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -685,19 +611,6 @@ struct ATrousData {
     output: blade_graphics::TextureView,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
-struct PostProcParams {
-    tone_map_enabled: u32,
-    average_lum: f32,
-    key_value: f32,
-    white_level: f32,
-    accumulated: u32,
-    encode_srgb: u32,
-    external_input: u32,
-    _pad: u32,
-}
-
 #[derive(blade_macros::ShaderData)]
 struct PostProcData {
     t_diffuse_albedo: blade_graphics::TextureView,
@@ -709,30 +622,6 @@ struct PostProcData {
     t_external: blade_graphics::TextureView,
     post_proc_params: PostProcParams,
     debug_params: DebugParams,
-}
-
-#[repr(C)]
-#[derive(Debug)]
-struct HitEntry {
-    index_buf: u32,
-    vertex_buf: u32,
-    prev_vertex_buf: u32,
-    flags: u32,
-    //Note: it's technically `mat4x3` on WGSL side,
-    // but it's aligned and sized the same way as `mat4`.
-    geometry_to_object: mint::ColumnMatrix4<f32>,
-    prev_geometry_to_object: mint::ColumnMatrix4<f32>,
-    prev_object_to_world: mint::ColumnMatrix4<f32>,
-    base_color_texture: u32,
-    base_color_factor: [u8; 4],
-    normal_texture: u32,
-    normal_scale: f32,
-    metallic_roughness_texture: u32,
-    metalness: f32,
-    roughness: f32,
-    emissive_texture: u32,
-    //Note: aligned to 16 bytes, matching `vec4` on the WGSL side
-    emissive_factor: [f32; 4],
 }
 
 struct AnimatedBlasWork {
@@ -839,8 +728,6 @@ impl ShaderPipelines {
         shader: &blade_graphics::Shader,
         gpu: &blade_graphics::Context,
     ) -> blade_graphics::ComputePipeline {
-        shader.check_struct_size::<crate::Vertex>();
-        shader.check_struct_size::<HitEntry>();
         let layout = <FillData as blade_graphics::ShaderData>::layout();
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "fill-gbuf",
@@ -852,11 +739,6 @@ impl ShaderPipelines {
         shader: &blade_graphics::Shader,
         gpu: &blade_graphics::Context,
     ) -> blade_graphics::ComputePipeline {
-        shader.check_struct_size::<CameraParams>();
-        shader.check_struct_size::<DebugParams>();
-        shader.check_struct_size::<MainParams>();
-        shader.check_struct_size::<DebugVariance>();
-        shader.check_struct_size::<DebugEntry>();
         let layout = <MainData as blade_graphics::ShaderData>::layout();
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "ray-trace",
@@ -869,10 +751,6 @@ impl ShaderPipelines {
         shader: &blade_graphics::Shader,
         gpu: &blade_graphics::Context,
     ) -> blade_graphics::ComputePipeline {
-        shader.check_struct_size::<crate::Vertex>();
-        shader.check_struct_size::<HitEntry>();
-        shader.check_struct_size::<CameraParams>();
-        shader.check_struct_size::<PathTraceParams>();
         let layout = <PathTraceData as blade_graphics::ShaderData>::layout();
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "path-trace",
@@ -901,7 +779,7 @@ impl ShaderPipelines {
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "a-trous",
             data_layouts: &[&layout],
-            compute: shader.at("atrous3x3"),
+            compute: shader.at("atrous_filter"),
         })
     }
 
@@ -1539,29 +1417,15 @@ impl RayTracer {
                         .vertex_buffers
                         .alloc(previous_vertex_buffer.at(vertex_offset)),
                     flags: u32::from(model.winding < 0.0),
-                    geometry_to_object: mint::ColumnMatrix4::from(mint::RowMatrix4 {
-                        x: geometry_transform.x,
-                        y: geometry_transform.y,
-                        z: geometry_transform.z,
-                        w: [0.0, 0.0, 0.0, 1.0].into(),
-                    }),
-                    prev_geometry_to_object: mint::ColumnMatrix4::from(mint::RowMatrix4 {
-                        x: prev_geometry_transform.x,
-                        y: prev_geometry_transform.y,
-                        z: prev_geometry_transform.z,
-                        w: [0.0, 0.0, 0.0, 1.0].into(),
-                    }),
-                    prev_object_to_world: mat4_transform(&prev_transform).into(),
+                    geometry_to_object: mint::ColumnMatrix3x4::from(geometry_transform).into(),
+                    prev_geometry_to_object: mint::ColumnMatrix3x4::from(prev_geometry_transform)
+                        .into(),
+                    prev_object_to_world: mint::ColumnMatrix3x4::from(prev_transform).into(),
                     base_color_texture: alloc_texture(material.base_color_texture, dummy_white),
-                    base_color_factor: {
-                        let c = material.base_color_factor;
-                        [
-                            (c[0] * 255.0) as u8,
-                            (c[1] * 255.0) as u8,
-                            (c[2] * 255.0) as u8,
-                            (c[3] * 255.0) as u8,
-                        ]
-                    },
+                    // What `unpack4x8unorm` reads back, the first lane lowest.
+                    base_color_factor: u32::from_le_bytes(
+                        material.base_color_factor.map(|c| (c * 255.0) as u8),
+                    ),
                     normal_texture: alloc_texture(material.normal_texture, dummy_black),
                     normal_scale: material.normal_scale,
                     //Note: the dummy is white, so that the factors are unaffected
@@ -1574,7 +1438,7 @@ impl RayTracer {
                     emissive_texture: alloc_texture(material.emissive_texture, dummy_white),
                     emissive_factor: {
                         let c = material.emissive_factor;
-                        [c[0], c[1], c[2], 0.0]
+                        synaga_shader::vec4(c[0], c[1], c[2], 0.0)
                     },
                 };
 
@@ -1658,11 +1522,12 @@ impl RayTracer {
 
     fn make_debug_params(&self, config: &DebugConfig) -> DebugParams {
         DebugParams {
-            view_mode: config.view_mode as u32,
-            draw_flags: config.draw_flags.bits(),
-            texture_flags: config.texture_flags.bits(),
-            unused: 0,
-            mouse_pos: config.mouse_pos.unwrap_or([-1; 2]),
+            view_mode: config.view_mode,
+            draw_flags: config.draw_flags,
+            texture_flags: config.texture_flags,
+            _pad: 0,
+            // Off screen is out of any image, as the shader compares it.
+            mouse_pos: config.mouse_pos.unwrap_or([-1; 2]).map(|c| c as u32).into(),
         }
     }
 
@@ -1783,7 +1648,7 @@ impl RayTracer {
                     environment_importance_sampling: config.environment_importance_sampling as u32,
                     reset_accumulation: self.reset_accumulation as u32,
                     jitter_primary_rays: config.jitter_primary_rays as u32,
-                    _pad: [0; 3],
+                    ..Default::default()
                 },
                 acc_struct: self.acceleration_structure,
                 hit_entries: self.hit_buffer.into(),
@@ -1938,11 +1803,14 @@ impl RayTracer {
         denoiser_config: DenoiserConfig,
     ) {
         let mut params = BlurParams {
-            extent: [self.surface_size.width, self.surface_size.height],
+            extent: synaga_shader::vec2(
+                self.surface_size.width as i32,
+                self.surface_size.height as i32,
+            ),
             temporal_weight: denoiser_config.temporal_weight,
             iteration: 0,
             use_motion_vectors: (self.frame_scene_built >= self.frame_index) as u32,
-            pad: 0,
+            _pad: 0,
         };
         let (cur, prev) = self.work_indices();
         // Both of the lighting lobes are filtered the same way.
@@ -2107,8 +1975,8 @@ impl RayTracer {
             std_deviation: if db_v.count == 0 {
                 [0.0; 3].into()
             } else {
-                let sum_avg = glam::Vec3::from(db_v.color_sum) / (db_v.count as f32);
-                let sum2_avg = glam::Vec3::from(db_v.color2_sum) / (db_v.count as f32);
+                let sum_avg = glam::Vec3::from_array(db_v.color_sum.into()) / (db_v.count as f32);
+                let sum2_avg = glam::Vec3::from_array(db_v.color2_sum.into()) / (db_v.count as f32);
                 let variance = sum2_avg - sum_avg * sum_avg;
                 mint::Vector3 {
                     x: variance.x.sqrt(),
@@ -2120,7 +1988,7 @@ impl RayTracer {
             custom_index: db_e.custom_index,
             depth: db_e.depth,
             position: db_e.position.into(),
-            normal: db_e.normal.into(),
+            normal: db_e.flat_normal.into(),
             tex_coords: db_e.tex_coords.into(),
             base_color_texture: self
                 .texture_resource_lookup
@@ -2131,15 +1999,5 @@ impl RayTracer {
                 .get(&db_e.normal_texture)
                 .cloned(),
         }
-    }
-}
-
-#[cfg(test)]
-mod layout_tests {
-    #[test]
-    fn animated_hit_entry_matches_shader_layout() {
-        assert_eq!(std::mem::size_of::<super::HitEntry>(), 256);
-        assert_eq!(std::mem::size_of::<crate::Vertex>(), 32);
-        assert_eq!(std::mem::size_of::<crate::SkinVertex>(), 8);
     }
 }

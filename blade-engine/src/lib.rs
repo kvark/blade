@@ -291,15 +291,16 @@ impl rapier3d::pipeline::DebugRenderBackend for DebugPhysicsRender {
         .rev()
         .fold(0u32, |u, &c| (u << 8) | c as u32);
         self.lines.push(blade_render::DebugLine {
-            a: blade_render::DebugPoint {
-                pos: a.to_array(),
-                color,
-            },
-            b: blade_render::DebugPoint {
-                pos: b.to_array(),
-                color,
-            },
+            a: debug_point(a, color),
+            b: debug_point(b, color),
         });
+    }
+}
+
+fn debug_point(pos: impl Into<[f32; 3]>, color: u32) -> blade_render::DebugPoint {
+    blade_render::DebugPoint {
+        pos: pos.into().into(),
+        color,
     }
 }
 
@@ -790,11 +791,8 @@ impl Engine {
         let asset_hub = blade_render::AssetHub::new(&asset_cache_path, &choir, &gpu_context);
         let animation_models =
             blade_asset::AssetManager::new(&asset_cache_path, &choir, animation::Baker);
-        let (shaders, shader_task) = blade_render::Shaders::load(
-            config.shader_path.as_ref(),
-            &asset_hub,
-            render_backend.uses_ray_tracing(),
-        );
+        let (shaders, shader_task) =
+            blade_render::Shaders::load(&asset_hub, render_backend.uses_ray_tracing());
 
         log::info!("Spinning up the renderer");
         if workers.is_empty() {
@@ -1208,30 +1206,18 @@ impl Engine {
                 };
                 let position = rb.position() * local_frame;
                 let length = 1.0;
-                let base = blade_render::DebugPoint {
-                    pos: position.translation.to_array(),
-                    color: 0xFFFFFF,
-                };
+                let base = debug_point(position.translation, 0xFFFFFF);
                 debug_lines.push(blade_render::DebugLine {
                     a: base,
-                    b: blade_render::DebugPoint {
-                        pos: position.transform_point(glam::Vec3::X * length).to_array(),
-                        color: 0x0000FF,
-                    },
+                    b: debug_point(position.transform_point(glam::Vec3::X * length), 0x0000FF),
                 });
                 debug_lines.push(blade_render::DebugLine {
                     a: base,
-                    b: blade_render::DebugPoint {
-                        pos: position.transform_point(glam::Vec3::Y * length).to_array(),
-                        color: 0x00FF00,
-                    },
+                    b: debug_point(position.transform_point(glam::Vec3::Y * length), 0x00FF00),
                 });
                 debug_lines.push(blade_render::DebugLine {
                     a: base,
-                    b: blade_render::DebugPoint {
-                        pos: position.transform_point(glam::Vec3::Z * length).to_array(),
-                        color: 0xFF0000,
-                    },
+                    b: debug_point(position.transform_point(glam::Vec3::Z * length), 0xFF0000),
                 });
             }
         }
@@ -1715,9 +1701,9 @@ impl Engine {
         let right = rot * glam::Vec3::X;
         let up = rot * glam::Vec3::Y;
         blade_particle::CameraParams {
-            view_proj: view_proj.to_cols_array(),
-            camera_right: [right.x, right.y, right.z, 0.0],
-            camera_up: [up.x, up.y, up.z, 0.0],
+            view_proj: view_proj.to_cols_array_2d().into(),
+            camera_right: right.extend(0.0).to_array().into(),
+            camera_up: up.extend(0.0).to_array().into(),
         }
     }
 
