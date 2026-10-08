@@ -1,6 +1,6 @@
 use ash::vk;
 use naga::back::spv;
-use std::{ffi, mem, str};
+use std::{ffi, mem, str, sync::atomic};
 
 const DUMP_PREFIX: Option<&str> = None;
 
@@ -175,6 +175,9 @@ impl super::Context {
         layout: &crate::ShaderDataLayout,
         info: &crate::ShaderDataInfo,
     ) -> super::DescriptorSetLayout {
+        let unique_id = self
+            .next_descriptor_layout_id
+            .fetch_add(1, atomic::Ordering::Relaxed);
         if info.visibility.is_empty() {
             // we need to have a valid `VkDescriptorSetLayout` regardless
             return super::DescriptorSetLayout {
@@ -184,6 +187,7 @@ impl super::Context {
                         .create_descriptor_set_layout(&Default::default(), None)
                         .unwrap()
                 },
+                unique_id,
                 ..Default::default()
             };
         }
@@ -328,6 +332,7 @@ impl super::Context {
 
         super::DescriptorSetLayout {
             raw,
+            unique_id,
             update_template,
             template_size: update_offset as u32,
             template_offsets: template_offsets.into_boxed_slice(),

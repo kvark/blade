@@ -1566,6 +1566,7 @@ impl super::Context {
         Ok(super::Context {
             memory: Mutex::new(memory_manager),
             device,
+            next_descriptor_layout_id: Default::default(),
             queue_family_index: capabilities.queue_family_index,
             queue: Mutex::new(super::Queue {
                 raw: queue,
