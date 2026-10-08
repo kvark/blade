@@ -5,7 +5,7 @@ use std::{
     num::NonZeroU32,
     path::PathBuf,
     ptr,
-    sync::Mutex,
+    sync::{Mutex, atomic},
     time::{Duration, Instant},
 };
 
@@ -352,6 +352,7 @@ fn map_timeout(millis: u32) -> u64 {
 pub struct Context {
     memory: Mutex<MemoryManager>,
     device: Device,
+    next_descriptor_layout_id: atomic::AtomicU64,
     queue_family_index: u32,
     queue: Mutex<Queue>,
     physical_device: vk::PhysicalDevice,
@@ -448,9 +449,13 @@ pub struct AccelerationStructure {
     updatable: bool,
 }
 
+type UniqueLayoutId = u64;
+
 #[derive(Debug, Default)]
 struct DescriptorSetLayout {
     raw: vk::DescriptorSetLayout,
+    /// Unique within the context, even when Vulkan recycles a layout handle.
+    unique_id: UniqueLayoutId,
     update_template: vk::DescriptorUpdateTemplate,
     template_size: u32,
     template_offsets: Box<[u32]>,
@@ -663,7 +668,6 @@ impl crate::traits::CommandDevice for Context {
                 if !desc.name.is_empty() {
                     self.set_object_name(raw, desc.name);
                 };
-                let descriptor_pool = self.device.create_descriptor_pool();
                 // Always create a scratch buffer for UBO bindings.
                 // Even when inline uniform blocks are supported, individual
                 // bindings that exceed the device limit fall back to UBOs.
@@ -683,7 +687,7 @@ impl crate::traits::CommandDevice for Context {
                 });
                 CommandBuffer {
                     raw,
-                    descriptor_pool,
+                    descriptor_pool: Default::default(),
                     scratch,
                 }
             })
