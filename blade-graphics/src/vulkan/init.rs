@@ -372,7 +372,11 @@ fn inspect_adapter(
     };
 
     let dual_source_blending = features2_khr.features.dual_src_blend != 0;
-    let shader_float16 = float16_int8_features.shader_float16 != 0;
+    // Naga declares 16-bit storage capabilities for any `f16` type, so the
+    // storage features have to come along with `shaderFloat16`.
+    let shader_float16 = float16_int8_features.shader_float16 != 0
+        && storage_16bit_features.storage_buffer16_bit_access != 0
+        && storage_16bit_features.uniform_and_storage_buffer16_bit_access != 0;
     // `VK_KHR_shader_integer_dot_product` is promoted to core in Vulkan 1.3.
     let shader_integer_dot_product = integer_dot_product_features.shader_integer_dot_product != 0
         && (api_version >= vk::API_VERSION_1_3
@@ -596,9 +600,7 @@ fn inspect_adapter(
         let f32t = vk::ComponentTypeKHR::FLOAT32;
         let f16t = vk::ComponentTypeKHR::FLOAT16;
         let f32_shapes = find_shapes(f32t, f32t, f32t, f32t);
-        let f16_f32_shapes = if float16_int8_features.shader_float16 != 0
-            && storage_16bit_features.storage_buffer16_bit_access != 0
-        {
+        let f16_f32_shapes = if shader_float16 {
             find_shapes(f16t, f16t, f32t, f32t)
         } else {
             Vec::new()
@@ -621,9 +623,6 @@ fn inspect_adapter(
         }
         cm
     };
-    // Auto-enable shader_float16 when cooperative matrix has f16 support.
-    let shader_float16 = shader_float16 || !cooperative_matrix.f16_f32_shapes.is_empty();
-
     let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
     let pipeline_executable_properties =
@@ -1196,8 +1195,6 @@ impl super::Context {
                     ..Default::default()
                 };
                 device_create_info = device_create_info.push_next(&mut khr_float16_int8);
-            }
-            if !capabilities.cooperative_matrix.f16_f32_shapes.is_empty() {
                 storage_16bit = vk::PhysicalDevice16BitStorageFeatures {
                     storage_buffer16_bit_access: vk::TRUE,
                     uniform_and_storage_buffer16_bit_access: vk::TRUE,
