@@ -5,6 +5,40 @@ use std::{ffi, sync::Mutex};
 
 use crate::NotSupportedError;
 
+// Remove when the released ash bindings include VK_KHR_shader_bfloat16.
+mod shader_bfloat16 {
+    use ash::vk;
+    use std::ffi;
+
+    pub const NAME: &ffi::CStr = c"VK_KHR_shader_bfloat16";
+    pub const COMPONENT_TYPE: vk::ComponentTypeKHR = vk::ComponentTypeKHR::from_raw(1000141000);
+
+    #[repr(C)]
+    pub struct PhysicalDeviceFeatures {
+        pub s_type: vk::StructureType,
+        pub p_next: *mut ffi::c_void,
+        pub shader_bfloat16_type: vk::Bool32,
+        pub shader_bfloat16_dot_product: vk::Bool32,
+        pub shader_bfloat16_cooperative_matrix: vk::Bool32,
+    }
+    impl Default for PhysicalDeviceFeatures {
+        fn default() -> Self {
+            Self {
+                s_type: vk::StructureType::from_raw(1000141000),
+                p_next: std::ptr::null_mut(),
+                shader_bfloat16_type: vk::FALSE,
+                shader_bfloat16_dot_product: vk::FALSE,
+                shader_bfloat16_cooperative_matrix: vk::FALSE,
+            }
+        }
+    }
+    unsafe impl vk::TaggedStructure for PhysicalDeviceFeatures {
+        const STRUCTURE_TYPE: vk::StructureType = vk::StructureType::from_raw(1000141000);
+    }
+    unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for PhysicalDeviceFeatures {}
+    unsafe impl vk::ExtendsDeviceCreateInfo for PhysicalDeviceFeatures {}
+}
+
 // TODO: Remove once `ash` includes VK_KHR_unified_image_layouts bindings.
 // See https://registry.khronos.org/vulkan/specs/latest/man/html/VK_KHR_unified_image_layouts.html
 mod unified_image_layouts {
@@ -116,6 +150,7 @@ struct AdapterCapabilities {
     timestamp_valid_bits: u32,
     dual_source_blending: bool,
     shader_float16: bool,
+    shader_bfloat16: bool,
     shader_integer_dot_product: bool,
     subgroup_size: u32,
     cooperative_matrix: crate::CooperativeMatrix,
@@ -141,6 +176,7 @@ impl AdapterCapabilities {
                 .as_raw(),
             dual_source_blending: self.dual_source_blending,
             shader_float16: self.shader_float16,
+            shader_bfloat16: self.shader_bfloat16,
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing,
             subgroup_size: self.subgroup_size,
@@ -343,6 +379,7 @@ fn inspect_adapter(
     let mut cooperative_matrix_features = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default();
     let mut vulkan_memory_model_features = vk::PhysicalDeviceVulkanMemoryModelFeatures::default();
     let mut float16_int8_features = vk::PhysicalDeviceShaderFloat16Int8Features::default();
+    let mut bfloat16_features = shader_bfloat16::PhysicalDeviceFeatures::default();
     let mut storage_16bit_features = vk::PhysicalDevice16BitStorageFeatures::default();
     let mut integer_dot_product_features =
         vk::PhysicalDeviceShaderIntegerDotProductFeaturesKHR::default();
@@ -369,6 +406,9 @@ fn inspect_adapter(
     if global_priority_extension {
         features2_khr = features2_khr.push_next(&mut global_priority_query_features);
     }
+    if supported_extensions.contains(&shader_bfloat16::NAME) {
+        features2_khr = features2_khr.push_next(&mut bfloat16_features);
+    }
     unsafe {
         instance
             .get_physical_device_properties2
@@ -379,6 +419,9 @@ fn inspect_adapter(
     // Naga declares 16-bit storage capabilities for any `f16` type, so the
     // storage features have to come along with `shaderFloat16`.
     let shader_float16 = float16_int8_features.shader_float16 != 0
+        && storage_16bit_features.storage_buffer16_bit_access != 0
+        && storage_16bit_features.uniform_and_storage_buffer16_bit_access != 0;
+    let shader_bfloat16 = bfloat16_features.shader_bfloat16_type != 0
         && storage_16bit_features.storage_buffer16_bit_access != 0
         && storage_16bit_features.uniform_and_storage_buffer16_bit_access != 0;
     // `VK_KHR_shader_integer_dot_product` is promoted to core in Vulkan 1.3.
@@ -612,12 +655,21 @@ fn inspect_adapter(
         let cm = crate::CooperativeMatrix {
             f32_shapes,
             f16_f32_shapes,
+            bf16_f32_shapes: if shader_bfloat16
+                && bfloat16_features.shader_bfloat16_cooperative_matrix != 0
+            {
+                let bf16t = shader_bfloat16::COMPONENT_TYPE;
+                find_shapes(bf16t, bf16t, f32t, f32t)
+            } else {
+                Vec::new()
+            },
         };
         if cm.is_supported() {
             log::info!(
-                "Cooperative matrix: f32 shapes={:?}, f16/f32 shapes={:?}",
+                "Cooperative matrix: f32 shapes={:?}, f16/f32 shapes={:?}, bf16/f32 shapes={:?}",
                 cm.f32_shapes,
                 cm.f16_f32_shapes,
+                cm.bf16_f32_shapes,
             );
         } else {
             log::info!(
@@ -672,6 +724,7 @@ fn inspect_adapter(
         timestamp_valid_bits: queue_family.timestamp_valid_bits,
         dual_source_blending,
         shader_float16,
+        shader_bfloat16,
         shader_integer_dot_product,
         subgroup_size: subgroup_properties.subgroup_size,
         cooperative_matrix,
@@ -1101,6 +1154,9 @@ impl super::Context {
                     device_extensions.push(vk::KHR_VULKAN_MEMORY_MODEL_NAME);
                 }
             }
+            if capabilities.shader_bfloat16 {
+                device_extensions.push(shader_bfloat16::NAME);
+            }
             if capabilities.shader_integer_dot_product
                 && capabilities.api_version < vk::API_VERSION_1_3
             {
@@ -1199,6 +1255,25 @@ impl super::Context {
                     ..Default::default()
                 };
                 device_create_info = device_create_info.push_next(&mut khr_float16_int8);
+            }
+            let mut khr_bfloat16;
+            if capabilities.shader_bfloat16 {
+                khr_bfloat16 = shader_bfloat16::PhysicalDeviceFeatures {
+                    shader_bfloat16_type: vk::TRUE,
+                    shader_bfloat16_cooperative_matrix: if capabilities
+                        .cooperative_matrix
+                        .bf16_f32_shapes
+                        .is_empty()
+                    {
+                        vk::FALSE
+                    } else {
+                        vk::TRUE
+                    },
+                    ..Default::default()
+                };
+                device_create_info = device_create_info.push_next(&mut khr_bfloat16);
+            }
+            if capabilities.shader_float16 || capabilities.shader_bfloat16 {
                 storage_16bit = vk::PhysicalDevice16BitStorageFeatures {
                     storage_buffer16_bit_access: vk::TRUE,
                     uniform_and_storage_buffer16_bit_access: vk::TRUE,
@@ -1598,6 +1673,7 @@ impl super::Context {
             subgroup_size: capabilities.subgroup_size,
             dual_source_blending: capabilities.dual_source_blending,
             shader_float16: capabilities.shader_float16,
+            shader_bfloat16: capabilities.shader_bfloat16,
             shader_integer_dot_product: capabilities.shader_integer_dot_product,
             cooperative_matrix: capabilities.cooperative_matrix,
             binding_array: capabilities.binding_array,
@@ -1634,6 +1710,7 @@ impl super::Context {
             sample_count_mask: self.sample_count_flags.as_raw(),
             dual_source_blending: self.dual_source_blending,
             shader_float16: self.shader_float16,
+            shader_bfloat16: self.shader_bfloat16,
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing_supported,
             cooperative_matrix: self.cooperative_matrix.clone(),

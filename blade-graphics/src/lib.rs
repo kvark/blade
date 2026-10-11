@@ -251,12 +251,16 @@ pub struct CooperativeMatrix {
     pub f32_shapes: Vec<[u32; 3]>,
     /// f16 operands with an f32 accumulator and result.
     pub f16_f32_shapes: Vec<[u32; 3]>,
+    /// BF16 operands with an f32 accumulator and result.
+    pub bf16_f32_shapes: Vec<[u32; 3]>,
 }
 
 impl CooperativeMatrix {
     /// Returns true if any cooperative matrix configuration is supported.
     pub fn is_supported(&self) -> bool {
-        !self.f32_shapes.is_empty() || !self.f16_f32_shapes.is_empty()
+        !self.f32_shapes.is_empty()
+            || !self.f16_f32_shapes.is_empty()
+            || !self.bf16_f32_shapes.is_empty()
     }
 }
 
@@ -284,6 +288,8 @@ pub struct Capabilities {
     pub dual_source_blending: bool,
     /// Support for 16-bit floating-point types in shaders.
     pub shader_float16: bool,
+    /// Support for BF16 storage and conversions to/from f32 in shaders.
+    pub shader_bfloat16: bool,
     /// Support for integer dot product instructions in shaders,
     /// such as `dot4U8Packed`.
     pub shader_integer_dot_product: bool,

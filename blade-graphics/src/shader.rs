@@ -48,6 +48,14 @@ impl super::Context {
             device_caps.shader_float16,
         );
         caps.set(
+            naga::valid::Capabilities::SHADER_BFLOAT16,
+            device_caps.shader_bfloat16,
+        );
+        caps.set(
+            naga::valid::Capabilities::COOPERATIVE_MATRIX_BFLOAT16,
+            !device_caps.cooperative_matrix.bf16_f32_shapes.is_empty(),
+        );
+        caps.set(
             naga::valid::Capabilities::COOPERATIVE_MATRIX,
             device_caps.cooperative_matrix.is_supported(),
         );
