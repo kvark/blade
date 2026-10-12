@@ -1,6 +1,6 @@
 use ash::vk;
 use naga::back::spv;
-use std::{ffi, mem, str, sync::atomic};
+use std::{ffi, mem, str, sync, sync::atomic};
 
 const DUMP_PREFIX: Option<&str> = None;
 
@@ -13,6 +13,19 @@ struct CompiledShader<'a> {
 }
 
 impl super::Context {
+    fn lock_pipeline_compiler(&self) -> Option<sync::MutexGuard<'static, ()>> {
+        // Quest 3S / Adreno 740 (driver 0x80345009, build 810c66ceb7) can
+        // crash in libllvm-qgl's pass lookup during concurrent compilation.
+        // The compiler's registry is process-global: compute and graphics
+        // compilation must share this lock across devices/contexts too.
+        // Keep SPIR-V generation and other Vulkan calls outside the lock.
+        static COMPILER: sync::Mutex<()> = sync::Mutex::new(());
+        self.device
+            .workarounds
+            .serialize_pipeline_creation
+            .then(|| COMPILER.lock().unwrap_or_else(|error| error.into_inner()))
+    }
+
     fn make_spv_options(&self, data_layouts: &[&crate::ShaderDataLayout]) -> spv::Options<'_> {
         // collect all the array bindings into overrides
         let mut binding_map = spv::BindingMap::default();
@@ -423,6 +436,7 @@ impl crate::traits::ShaderDevice for super::Context {
         }
 
         let mut raw_vec = unsafe {
+            let _compiler_guard = self.lock_pipeline_compiler();
             self.device
                 .core
                 .create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None)
@@ -734,6 +748,7 @@ impl crate::traits::ShaderDevice for super::Context {
             .push_next(&mut rendering_info);
 
         let mut raw_vec = unsafe {
+            let _compiler_guard = self.lock_pipeline_compiler();
             self.device
                 .core
                 .create_graphics_pipelines(vk::PipelineCache::null(), &[create_info], None)
