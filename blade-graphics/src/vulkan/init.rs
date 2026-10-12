@@ -85,6 +85,8 @@ struct RayTracingCapabilities {
 struct SystemBugs {
     /// https://github.com/kvark/blade/issues/117
     intel_fix_descriptor_pool_leak: bool,
+    /// Work around crashes in Qualcomm LLVM pass lookup during concurrent compilation.
+    qualcomm_serialize_pipeline_creation: bool,
 }
 
 #[derive(Debug)]
@@ -305,6 +307,8 @@ fn inspect_adapter(
 
     let bugs = SystemBugs {
         intel_fix_descriptor_pool_leak: cfg!(windows) && properties.vendor_id == db::intel::VENDOR,
+        qualcomm_serialize_pipeline_creation: cfg!(target_os = "android")
+            && driver_properties.driver_id == vk::DriverId::QUALCOMM_PROPRIETARY,
     };
 
     let queue_family_index = 0; //TODO
@@ -1389,6 +1393,7 @@ impl super::Context {
             timing,
             //TODO: detect GPU family
             workarounds: super::Workarounds {
+                serialize_pipeline_creation: capabilities.bugs.qualcomm_serialize_pipeline_creation,
                 extra_sync_src_access: vk::AccessFlags::TRANSFER_WRITE,
                 extra_sync_dst_access: vk::AccessFlags::TRANSFER_WRITE
                     | vk::AccessFlags::TRANSFER_READ
