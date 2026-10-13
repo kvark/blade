@@ -77,6 +77,7 @@ impl super::Context {
             task_dispatch_limits: None,
             mesh_shader_primitive_indices_clamp: true,
             emit_int_div_checks: false,
+            use_vulkan_memory_model: self.vulkan_memory_model,
         }
     }
 

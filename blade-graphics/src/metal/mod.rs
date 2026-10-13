@@ -652,6 +652,8 @@ impl Context {
             dual_source_blending: true,
             // Metal Shading Language supports half-precision floats on all supported devices.
             shader_float16: true,
+            // Naga's MSL backend does not support bfloat16 yet.
+            shader_bfloat16: false,
             // MSL provides `dot4U8Packed`-equivalent math via packed char vectors.
             shader_integer_dot_product: true,
             timing: find_timestamp_counter_set(device).is_some(),
@@ -662,6 +664,7 @@ impl Context {
                 crate::CooperativeMatrix {
                     f32_shapes: vec![[8, 8, 8]],
                     f16_f32_shapes: Vec::new(),
+                    bf16_f32_shapes: Vec::new(),
                 }
             } else {
                 crate::CooperativeMatrix::default()

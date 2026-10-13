@@ -12,59 +12,70 @@ impl From<naga::ShaderStage> for super::ShaderVisibility {
     }
 }
 
+fn validation_capabilities(device_caps: &super::Capabilities) -> naga::valid::Capabilities {
+    // Naga's default is the set it considers universally available:
+    // `MULTISAMPLED_SHADING` and `CUBE_ARRAY_TEXTURES`. We support both
+    // (`MultisampleState`, `ViewDimension::CubeArray`), so start there
+    // rather than from nothing, and pick up future additions to it.
+    let mut caps = naga::valid::Capabilities::default();
+    caps.set(
+        naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY
+            | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY
+            | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING
+            | naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY_NON_UNIFORM_INDEXING,
+        device_caps.binding_array,
+    );
+    caps.set(
+        naga::valid::Capabilities::RAY_QUERY
+            | naga::valid::Capabilities::ACCELERATION_STRUCTURE_BINDING_ARRAY,
+        !device_caps.ray_query.is_empty(),
+    );
+    caps.set(
+        naga::valid::Capabilities::DUAL_SOURCE_BLENDING,
+        device_caps.dual_source_blending,
+    );
+    caps.set(
+        naga::valid::Capabilities::SHADER_FLOAT16,
+        device_caps.shader_float16,
+    );
+    caps.set(
+        naga::valid::Capabilities::SHADER_BFLOAT16,
+        device_caps.shader_bfloat16,
+    );
+    caps.set(
+        naga::valid::Capabilities::COOPERATIVE_MATRIX,
+        device_caps.cooperative_matrix.is_supported(),
+    );
+    caps.set(
+        naga::valid::Capabilities::COOPERATIVE_MATRIX_BFLOAT16,
+        !device_caps.cooperative_matrix.bf16_f32_shapes.is_empty(),
+    );
+    // Subgroup operations (subgroupAdd, subgroupBroadcast, etc.) are
+    // broadly supported on modern GPUs via VK_EXT_subgroup_size_control.
+    // Enable unconditionally so naga validates subgroup ops and emits
+    // the correct SPIR-V capabilities (GroupNonUniform, etc.).
+    // `SUBGROUP_BARRIER` is separate, and every backend we target has it.
+    // (It is split out for HLSL, which we don't generate.)
+    caps.set(
+        naga::valid::Capabilities::SUBGROUP | naga::valid::Capabilities::SUBGROUP_BARRIER,
+        true,
+    );
+    // `quantizeToF16`, `pack2x16float` and `unpack2x16float` only store
+    // f16-precision values inside f32, so they don't need the `f16`
+    // extension. Every backend we target supports them.
+    caps.set(naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32, true);
+    caps
+}
+
 impl super::Context {
     fn validate_module(
         &self,
         module: &naga::Module,
         source: &str,
     ) -> Result<naga::valid::ModuleInfo, &'static str> {
-        let device_caps = self.capabilities();
-
         // Bindings are set up at pipeline creation, ignore here
         let flags = naga::valid::ValidationFlags::all() ^ naga::valid::ValidationFlags::BINDINGS;
-        // Naga's default is the set it considers universally available:
-        // `MULTISAMPLED_SHADING` and `CUBE_ARRAY_TEXTURES`. We support both
-        // (`MultisampleState`, `ViewDimension::CubeArray`), so start there
-        // rather than from nothing, and pick up future additions to it.
-        let mut caps = naga::valid::Capabilities::default();
-        caps.set(
-            naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY
-                | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY
-                | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING
-                | naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY_NON_UNIFORM_INDEXING,
-            device_caps.binding_array,
-        );
-        caps.set(
-            naga::valid::Capabilities::RAY_QUERY
-                | naga::valid::Capabilities::ACCELERATION_STRUCTURE_BINDING_ARRAY,
-            !device_caps.ray_query.is_empty(),
-        );
-        caps.set(
-            naga::valid::Capabilities::DUAL_SOURCE_BLENDING,
-            device_caps.dual_source_blending,
-        );
-        caps.set(
-            naga::valid::Capabilities::SHADER_FLOAT16,
-            device_caps.shader_float16,
-        );
-        caps.set(
-            naga::valid::Capabilities::COOPERATIVE_MATRIX,
-            device_caps.cooperative_matrix.is_supported(),
-        );
-        // Subgroup operations (subgroupAdd, subgroupBroadcast, etc.) are
-        // broadly supported on modern GPUs via VK_EXT_subgroup_size_control.
-        // Enable unconditionally so naga validates subgroup ops and emits
-        // the correct SPIR-V capabilities (GroupNonUniform, etc.).
-        // `SUBGROUP_BARRIER` is separate, and every backend we target has it.
-        // (It is split out for HLSL, which we don't generate.)
-        caps.set(
-            naga::valid::Capabilities::SUBGROUP | naga::valid::Capabilities::SUBGROUP_BARRIER,
-            true,
-        );
-        // `quantizeToF16`, `pack2x16float` and `unpack2x16float` only store
-        // f16-precision values inside f32, so they don't need the `f16`
-        // extension. Every backend we target supports them.
-        caps.set(naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32, true);
+        let caps = validation_capabilities(&self.capabilities());
 
         naga::valid::Validator::new(flags, caps)
             .validate(module)
@@ -356,5 +367,51 @@ impl super::Shader {
             }
         }
         attribute_mappings
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validation_capabilities;
+
+    const BF16_SOURCE: &str = r#"
+enable wgpu_bfloat16;
+
+@compute @workgroup_size(1)
+fn main() {
+    let value = bf16(1.0);
+    _ = f32(value);
+}
+"#;
+
+    #[test]
+    fn bfloat16_validation_follows_device_capabilities() {
+        let module = naga::front::wgsl::parse_str(BF16_SOURCE).unwrap();
+        let flags = naga::valid::ValidationFlags::all();
+        let mut device_caps = crate::Capabilities::default();
+
+        let low_end_caps = validation_capabilities(&device_caps);
+        assert!(
+            naga::valid::Validator::new(flags, low_end_caps)
+                .validate(&module)
+                .is_err()
+        );
+
+        device_caps.shader_bfloat16 = true;
+        let bfloat16_caps = validation_capabilities(&device_caps);
+        assert!(
+            naga::valid::Validator::new(flags, bfloat16_caps)
+                .validate(&module)
+                .is_ok()
+        );
+        assert!(!bfloat16_caps.contains(naga::valid::Capabilities::COOPERATIVE_MATRIX_BFLOAT16));
+
+        device_caps
+            .cooperative_matrix
+            .bf16_f32_shapes
+            .push([16, 16, 16]);
+        let cooperative_caps = validation_capabilities(&device_caps);
+        assert!(cooperative_caps.contains(naga::valid::Capabilities::COOPERATIVE_MATRIX));
+        assert!(cooperative_caps.contains(naga::valid::Capabilities::COOPERATIVE_MATRIX_BFLOAT16));
     }
 }
