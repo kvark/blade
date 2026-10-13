@@ -12,7 +12,7 @@ struct Parameters {
 
 var<uniform> parameters: Parameters;
 var acc_struct: acceleration_structure;
-var output: texture_storage_2d<rgba8unorm, write>;
+var output: texture_storage_2d<rgba16float, write>;
 
 fn qmake(axis: vec3<f32>, angle: f32) -> vec4<f32> {
     return vec4<f32>(axis * sin(angle), cos(angle));
