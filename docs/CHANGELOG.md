@@ -2,9 +2,10 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- graphics: vk: expose `shader_bfloat16` and bf16/f32 cooperative-matrix shapes; enable BF16 and Vulkan-memory-model SPIR-V only when the device reports the corresponding optional features
 - graphics: vk: `shader_float16` requires and enables 16-bit storage buffer access, which naga's `f16` SPIR-V declares; the auto-enable from cooperative matrix f16 support is gone
 - graphics: `CommandEncoder::present_with_damage` tells the compositor which rectangles changed since the previous present, empty if none did: `VK_KHR_incremental_present` on Vulkan, `EGL_KHR/EXT_swap_buffers_with_damage` on GLES, ignored on Metal and WebGL
-- graphics: `CooperativeMatrix` lists `[M, N, K]` shapes in `f32_shapes` and `f16_f32_shapes` instead of square tile sizes, and is no longer `Copy`
+- graphics: `CooperativeMatrix` lists `[M, N, K]` shapes in `f32_shapes`, `f16_f32_shapes`, and `bf16_f32_shapes` instead of square tile sizes, and is no longer `Copy`
 - graphics: `Capabilities` reports the default subgroup size and `max_compute_shared_memory_size`
 - graphics: a pass-boundary GPU timestamp uses that barrier's source stage, so the sample is the completion that releases the next pass
 - graphics: `CommandEncoder::last_timing` returns `Timing` with borrowed pass names; wait on its sync point first

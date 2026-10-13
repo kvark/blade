@@ -295,6 +295,81 @@ fn dispatch_gpu_test() {
     run_dispatch_gpu_test(false);
 }
 
+#[test]
+#[ignore = "requires a working GPU context with bfloat16"]
+fn bfloat16_gpu_test() {
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    if !context.capabilities().shader_bfloat16 {
+        println!("Skipping: shader bfloat16 is not supported");
+        return;
+    }
+
+    let input = context.create_buffer(gpu::BufferDesc {
+        name: "bfloat16-input",
+        size: 16,
+        memory: gpu::Memory::Shared,
+    });
+    let output = context.create_buffer(gpu::BufferDesc {
+        name: "bfloat16-output",
+        size: 16,
+        memory: gpu::Memory::Shared,
+    });
+    unsafe {
+        slice::from_raw_parts_mut(input.data() as *mut f32, 4)
+            .copy_from_slice(&[1.0, 2.0, 3.0, 4.0]);
+    }
+    context.sync_buffer(input.into(), input.size(), gpu::BufferTarget::Data);
+
+    let shader = context.create_shader(gpu::ShaderDesc {
+        source: r#"
+enable wgpu_bfloat16;
+
+var<storage, read> input: array<f32>;
+var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(4)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    output[id.x] = f32(bf16(input[id.x]));
+}
+"#,
+        naga_module: None,
+    });
+    let global_layout = DispatchGlobals::layout();
+    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        name: "bfloat16-test",
+        data_layouts: &[&global_layout],
+        compute: shader.at("main"),
+    });
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "bfloat16-test",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    encoder.start();
+    if let mut compute = encoder.compute("bfloat16")
+        && let mut pass = compute.with(&pipeline)
+    {
+        pass.bind(
+            0,
+            &DispatchGlobals {
+                input: input.into(),
+                output: output.into(),
+            },
+        );
+        pass.dispatch([1, 1, 1]);
+    }
+    let sync_point = context.submit(&mut encoder);
+    assert!(context.wait_for(&sync_point, 2000).unwrap());
+
+    let actual = unsafe { slice::from_raw_parts(output.data() as *const f32, 4) };
+    assert_eq!(actual, [1.0, 2.0, 3.0, 4.0]);
+
+    context.destroy_command_encoder(&mut encoder);
+    context.destroy_compute_pipeline(&mut pipeline);
+    context.destroy_buffer(output);
+    context.destroy_buffer(input);
+}
+
 #[cfg(not(gles))]
 #[test]
 #[ignore = "requires a working GPU context"]
