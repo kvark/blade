@@ -610,8 +610,11 @@ impl Context {
             capture,
             timestamp_counter_set,
             info: PrivateInfo {
-                //TODO: determine based on OS version
-                language_version: metal::MTLLanguageVersion::Version2_4,
+                language_version: if objc2::available!(macos = 14.0, ios = 17.0) {
+                    metal::MTLLanguageVersion::Version3_1
+                } else {
+                    metal::MTLLanguageVersion::Version2_4
+                },
                 enable_debug_groups: desc.capture,
                 enable_dispatch_type: true,
                 pipeline_statistics: desc.capture,
@@ -629,6 +632,8 @@ impl Context {
         device: &objc2::runtime::ProtocolObject<dyn metal::MTLDevice>,
     ) -> crate::Capabilities {
         use metal::MTLDevice as _;
+        let bfloat16 = objc2::available!(macos = 14.0, ios = 17.0)
+            && device.supportsFamily(metal::MTLGPUFamily::Apple9);
         crate::Capabilities {
             compute: true,
             max_compute_shared_memory_size: device.maxThreadgroupMemoryLength() as u32,
@@ -652,8 +657,7 @@ impl Context {
             dual_source_blending: true,
             // Metal Shading Language supports half-precision floats on all supported devices.
             shader_float16: true,
-            // Naga's MSL backend does not support bfloat16 yet.
-            shader_bfloat16: false,
+            shader_bfloat16: bfloat16,
             // MSL provides `dot4U8Packed`-equivalent math via packed char vectors.
             shader_integer_dot_product: true,
             timing: find_timestamp_counter_set(device).is_some(),
@@ -663,8 +667,16 @@ impl Context {
             {
                 crate::CooperativeMatrix {
                     f32_shapes: vec![[8, 8, 8]],
-                    f16_f32_shapes: Vec::new(),
-                    bf16_f32_shapes: Vec::new(),
+                    f16_f32_shapes: if device.supportsFamily(metal::MTLGPUFamily::Apple7) {
+                        vec![[8, 8, 8]]
+                    } else {
+                        Vec::new()
+                    },
+                    bf16_f32_shapes: if bfloat16 {
+                        vec![[8, 8, 8]]
+                    } else {
+                        Vec::new()
+                    },
                 }
             } else {
                 crate::CooperativeMatrix::default()
