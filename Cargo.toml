@@ -36,7 +36,7 @@ gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
 # From stable "blade-20261011" branch
-naga = { version = "30", git = "https://github.com/kvark/wgpu", rev = "a4b4183e7fa1f26848e48ba5e837084999c8dfe8", features = ["wgsl-in", "termcolor"] }
+naga = { version = "30", git = "https://github.com/kvark/wgpu", rev = "a97559b6318dc0a857ace502ffc7f3e442951f39", features = ["wgsl-in", "termcolor"] }
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.28", features = ["derive"] }
