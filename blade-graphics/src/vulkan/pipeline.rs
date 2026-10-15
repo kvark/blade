@@ -89,9 +89,13 @@ impl super::Context {
         group_infos: &mut [crate::ShaderDataInfo],
         vertex_fetch_states: &[crate::VertexFetchState],
     ) -> CompiledShader<'_> {
+        let (mut module, module_info) = sf.resolve_entry_point();
+        crate::shader::validate_workgroup_matrices(&module, &module_info, &self.capabilities())
+            .expect("invalid workgroup cooperative matrix pipeline");
+        let stage = module.entry_points[0].stage;
+        let wg_size = module.entry_points[0].workgroup_size;
         let workgroup_options;
-        let naga_options_base = if naga::back::uses_workgroup_cooperative_matrix(&sf.shader.module)
-        {
+        let naga_options_base = if naga::back::uses_workgroup_cooperative_matrix(&module) {
             workgroup_options = spv::Options {
                 lang_version: (1, 6),
                 ..naga_options_base.clone()
@@ -100,23 +104,18 @@ impl super::Context {
         } else {
             naga_options_base
         };
-        let ep_index = sf.entry_point_index();
-        let ep = &sf.shader.module.entry_points[ep_index];
-        let ep_info = sf.shader.info.get_entry_point(ep_index);
-
-        let (mut module, module_info) = sf.shader.resolve_constants(sf.constants);
         crate::Shader::fill_resource_bindings(
             &mut module,
             group_infos,
-            ep.stage,
-            ep_info,
+            stage,
+            module_info.get_entry_point(0),
             group_layouts,
         );
         let attribute_mappings =
-            crate::Shader::fill_vertex_locations(&mut module, ep_index, vertex_fetch_states);
+            crate::Shader::fill_vertex_locations(&mut module, 0, vertex_fetch_states);
 
         let pipeline_options = spv::PipelineOptions {
-            shader_stage: ep.stage,
+            shader_stage: stage,
             entry_point: sf.entry_point.to_string(),
         };
         let file_path;
@@ -151,7 +150,7 @@ impl super::Context {
         if let Some(dump_prefix) = DUMP_PREFIX {
             let mut file_name = String::new();
             for i in 1.. {
-                file_name = format!("{}{}_{:?}{}.spv", dump_prefix, sf.entry_point, ep.stage, i);
+                file_name = format!("{}{}_{:?}{}.spv", dump_prefix, sf.entry_point, stage, i);
                 if !std::path::Path::new(&file_name).exists() {
                     break;
                 }
@@ -171,11 +170,11 @@ impl super::Context {
                 .unwrap()
         };
 
-        let vk_stage = match ep.stage {
+        let vk_stage = match stage {
             naga::ShaderStage::Compute => vk::ShaderStageFlags::COMPUTE,
             naga::ShaderStage::Vertex => vk::ShaderStageFlags::VERTEX,
             naga::ShaderStage::Fragment => vk::ShaderStageFlags::FRAGMENT,
-            _ => panic!("Unsupported shader stage: {:?}", ep.stage),
+            _ => panic!("Unsupported shader stage: {:?}", stage),
         };
 
         let entry_point = ffi::CString::new(sf.entry_point).unwrap();
@@ -191,7 +190,7 @@ impl super::Context {
             _entry_point: entry_point,
             create_info,
             attribute_mappings,
-            wg_size: ep.workgroup_size,
+            wg_size,
         }
     }
 
