@@ -390,18 +390,84 @@ pub(crate) fn validate_workgroup_matrices(
             }
         }
     }
-    let mut layouter = naga::proc::Layouter::default();
-    layouter
-        .update(module.to_ctx())
-        .map_err(|_| "invalid workgroup memory layout")?;
-    let mut shared = u64::from(matrix.reserved_shared_memory);
+    // Vulkan bounds implicit workgroup storage by std430 layout in any variable order.
+    let round_up = |size: u64, alignment: u64| size.div_ceil(alignment) * alignment;
+    let scalar_size = |scalar: naga::Scalar| {
+        if scalar.kind == naga::ScalarKind::Bool {
+            4
+        } else {
+            u64::from(scalar.width)
+        }
+    };
+    let vector_alignment = |size: naga::VectorSize, width: u64| match size {
+        naga::VectorSize::Bi => 2 * width,
+        naga::VectorSize::Tri | naga::VectorSize::Quad => 4 * width,
+    };
+    let mut layouts: Vec<Option<(u64, u64)>> = Vec::with_capacity(module.types.len());
+    for (_, ty) in module.types.iter() {
+        let layout = match ty.inner {
+            naga::TypeInner::Scalar(scalar) | naga::TypeInner::Atomic(scalar) => {
+                let size = scalar_size(scalar);
+                Some((size, size))
+            }
+            naga::TypeInner::Vector { size, scalar } => {
+                let width = scalar_size(scalar);
+                Some((size as u64 * width, vector_alignment(size, width)))
+            }
+            naga::TypeInner::Matrix {
+                columns,
+                rows,
+                scalar,
+            } => {
+                let width = scalar_size(scalar);
+                let alignment = vector_alignment(rows, width);
+                Some((
+                    columns as u64 * round_up(rows as u64 * width, alignment),
+                    alignment,
+                ))
+            }
+            naga::TypeInner::Array {
+                base,
+                size: naga::ArraySize::Constant(count),
+                ..
+            } => layouts[base.index()].map(|(size, alignment)| {
+                (
+                    u64::from(count.get()) * round_up(size, alignment),
+                    alignment,
+                )
+            }),
+            naga::TypeInner::Struct { ref members, .. } => members
+                .iter()
+                .try_fold((0, 1), |(offset, alignment), member| {
+                    let (size, member_alignment) = layouts[member.ty.index()]?;
+                    Some((
+                        round_up(offset, member_alignment) + size,
+                        alignment.max(member_alignment),
+                    ))
+                })
+                .map(|(size, alignment)| (round_up(size, alignment), alignment)),
+            _ => None,
+        };
+        layouts.push(layout);
+    }
+    let mut variables = Vec::new();
     for (handle, variable) in module.global_variables.iter() {
         if variable.space == naga::AddressSpace::WorkGroup
             && !info.get_entry_point(0)[handle].is_empty()
         {
-            shared += u64::from(layouter[variable.ty].to_stride());
+            variables.push(layouts[variable.ty.index()].ok_or("invalid workgroup memory layout")?);
         }
     }
+    let alignment = variables
+        .iter()
+        .map(|&(_, alignment)| alignment)
+        .max()
+        .unwrap_or(1);
+    let shared = u64::from(matrix.reserved_shared_memory)
+        + variables
+            .iter()
+            .map(|&(size, _)| round_up(size, alignment))
+            .sum::<u64>();
     if shared > u64::from(caps.max_compute_shared_memory_size) {
         return Err("workgroup storage plus matrix reserved memory exceeds device limits");
     }
@@ -1069,6 +1135,35 @@ fn main() {
             check(SOURCE, &caps),
             Err("workgroup matrix product does not match one device configuration")
         );
+    }
+
+    #[test]
+    fn shared_memory_includes_inter_variable_padding_and_32_bit_booleans() {
+        for (declarations, writes, bytes) in [
+            (
+                "var<workgroup> scalar: f32; var<workgroup> vector: vec4<f32>;",
+                "scalar = 1.0; vector = vec4<f32>(1.0);",
+                32,
+            ),
+            (
+                "var<workgroup> flag: bool; var<workgroup> flags: array<bool, 4>;",
+                "flag = true; flags[0] = true;",
+                20,
+            ),
+        ] {
+            let source = SOURCE
+                .replace("@compute", &format!("{declarations}\n@compute"))
+                .replace("    let left", &format!("    {writes}\n    let left"));
+            let mut caps = caps();
+            caps.max_compute_shared_memory_size =
+                caps.cooperative_matrix.workgroup.reserved_shared_memory + bytes;
+            check(&source, &caps).unwrap();
+            caps.max_compute_shared_memory_size -= 1;
+            assert_eq!(
+                check(&source, &caps),
+                Err("workgroup storage plus matrix reserved memory exceeds device limits")
+            );
+        }
     }
 
     #[test]
