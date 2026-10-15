@@ -28,11 +28,14 @@ struct VulkanInstance {
 const QUERY_POOL_SIZE: usize = crate::limits::PASS_COUNT + 1;
 const MAX_XR_EYES: usize = 2;
 
+mod cooperative_matrix2;
+
 struct Instance {
     core: ash::Instance,
     _debug_utils: ash::ext::debug_utils::Instance,
     get_physical_device_properties2: khr::get_physical_device_properties2::Instance,
     cooperative_matrix: khr::cooperative_matrix::Instance,
+    cooperative_matrix2: Option<cooperative_matrix2::Query>,
     get_surface_capabilities2: Option<khr::get_surface_capabilities2::Instance>,
     surface: Option<khr::surface::Instance>,
 }

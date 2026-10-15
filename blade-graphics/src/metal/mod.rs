@@ -677,6 +677,7 @@ impl Context {
                     } else {
                         Vec::new()
                     },
+                    workgroup: crate::WorkgroupCooperativeMatrix::default(),
                 }
             } else {
                 crate::CooperativeMatrix::default()

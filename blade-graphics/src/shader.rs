@@ -48,7 +48,15 @@ fn validation_capabilities(device_caps: &super::Capabilities) -> naga::valid::Ca
     );
     caps.set(
         naga::valid::Capabilities::COOPERATIVE_MATRIX_BFLOAT16,
-        !device_caps.cooperative_matrix.bf16_f32_shapes.is_empty(),
+        device_caps.cooperative_matrix.supports_bfloat16(),
+    );
+    caps.set(
+        naga::valid::Capabilities::COOPERATIVE_MATRIX_WORKGROUP,
+        !device_caps
+            .cooperative_matrix
+            .workgroup
+            .granularities
+            .is_empty(),
     );
     // Subgroup operations (subgroupAdd, subgroupBroadcast, etc.) are
     // broadly supported on modern GPUs via VK_EXT_subgroup_size_control.
@@ -545,6 +553,48 @@ fn main() {
         let cooperative_caps = validation_capabilities(&device_caps);
         assert!(cooperative_caps.contains(naga::valid::Capabilities::COOPERATIVE_MATRIX));
         assert!(cooperative_caps.contains(naga::valid::Capabilities::COOPERATIVE_MATRIX_BFLOAT16));
+    }
+    #[test]
+    fn workgroup_matrix_capabilities_are_independent_of_subgroup_shapes() {
+        let mut caps = crate::Capabilities {
+            shader_float16: true,
+            shader_bfloat16: true,
+            ..Default::default()
+        };
+        let source = "enable wgpu_cooperative_matrix; enable wgpu_bfloat16; @compute @workgroup_size(64) fn main() { var a: coop_mat64x64<bf16,A,workgroup>; }";
+        let module = naga::front::wgsl::parse_str(source).unwrap();
+        let validate = |caps: &crate::Capabilities| {
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                validation_capabilities(caps),
+            )
+            .validate(&module)
+            .is_ok()
+        };
+        assert!(!validate(&caps));
+        caps.cooperative_matrix.workgroup = crate::WorkgroupCooperativeMatrix {
+            granularities: vec![crate::CooperativeMatrixGranularity {
+                operand: crate::CooperativeMatrixOperand::Bf16,
+                size: [32, 16, 16],
+                invocations: 64,
+            }],
+            max_workgroup_size: 256,
+            max_dimension: 1024,
+            reserved_shared_memory: 8192,
+        };
+        assert!(validate(&caps));
+        assert!(caps.cooperative_matrix.supports_bfloat16());
+        let workgroup = &caps.cooperative_matrix.workgroup;
+        assert!(workgroup.supports(crate::CooperativeMatrixOperand::Bf16, [64, 128, 32], 64));
+        for (size, threads) in [
+            ([16, 128, 32], 64),
+            ([64, 128, 32], 128),
+            ([2048, 128, 32], 64),
+            ([0, 128, 32], 64),
+        ] {
+            assert!(!workgroup.supports(crate::CooperativeMatrixOperand::Bf16, size, threads));
+        }
+        assert!(!workgroup.supports(crate::CooperativeMatrixOperand::F16, [64, 128, 32], 64));
     }
 }
 
