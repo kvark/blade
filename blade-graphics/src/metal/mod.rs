@@ -665,6 +665,7 @@ impl Context {
                     f32_shapes: vec![[8, 8, 8]],
                     f16_f32_shapes: Vec::new(),
                     bf16_f32_shapes: Vec::new(),
+                    workgroup: crate::WorkgroupCooperativeMatrix::default(),
                 }
             } else {
                 crate::CooperativeMatrix::default()

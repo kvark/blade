@@ -237,14 +237,55 @@ pub struct MemoryStats {
     pub usage: u64,
 }
 
+/// Operand storage for a workgroup cooperative product with an f32 accumulator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CooperativeMatrixOperand {
+    F16,
+    Bf16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CooperativeMatrixGranularity {
+    pub operand: CooperativeMatrixOperand,
+    /// Granularity of M, N, and K, in elements.
+    pub size: [u32; 3],
+    pub invocations: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WorkgroupCooperativeMatrix {
+    pub granularities: Vec<CooperativeMatrixGranularity>,
+    pub max_workgroup_size: u32,
+    pub max_dimension: u32,
+    pub reserved_shared_memory: u32,
+}
+
+impl WorkgroupCooperativeMatrix {
+    pub fn supports(
+        &self,
+        operand: CooperativeMatrixOperand,
+        size: [u32; 3],
+        invocations: u32,
+    ) -> bool {
+        invocations > 0
+            && invocations <= self.max_workgroup_size
+            && self.granularities.iter().any(|g| {
+                g.operand == operand
+                    && g.invocations == invocations
+                    && size.iter().zip(g.size).all(|(&s, granularity)| {
+                        s > 0 && s <= self.max_dimension && granularity != 0 && s % granularity == 0
+                    })
+            })
+    }
+}
+
 /// Cooperative matrix support information.
 ///
 /// Each list holds `[M, N, K]` configurations for a subgroup-scoped
 /// multiply-add. A is M×K, B is K×N, and the accumulator is M×N, so K is
 /// not implied by M and N. An empty list means that operand combination
 /// is unsupported. Components are 8 or 16, matching Naga's
-/// `CooperativeSize`. Naga's WGSL frontend only spells `coop_mat8x8` and
-/// `coop_mat16x16`, so a listed triple is a device fact rather than a WGSL type.
+/// `CooperativeSize`. Workgroup granularities are reported separately.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CooperativeMatrix {
     /// All-f32 operands, accumulator, and result.
@@ -253,14 +294,26 @@ pub struct CooperativeMatrix {
     pub f16_f32_shapes: Vec<[u32; 3]>,
     /// bf16 operands with an f32 accumulator and result.
     pub bf16_f32_shapes: Vec<[u32; 3]>,
+    /// Flexible workgroup products; empty on backends without this extension.
+    pub workgroup: WorkgroupCooperativeMatrix,
 }
 
 impl CooperativeMatrix {
+    pub fn supports_bfloat16(&self) -> bool {
+        !self.bf16_f32_shapes.is_empty()
+            || self
+                .workgroup
+                .granularities
+                .iter()
+                .any(|g| g.operand == CooperativeMatrixOperand::Bf16)
+    }
+
     /// Returns true if any cooperative matrix configuration is supported.
     pub fn is_supported(&self) -> bool {
         !self.f32_shapes.is_empty()
             || !self.f16_f32_shapes.is_empty()
             || !self.bf16_f32_shapes.is_empty()
+            || !self.workgroup.granularities.is_empty()
     }
 }
 

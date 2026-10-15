@@ -89,6 +89,17 @@ impl super::Context {
         group_infos: &mut [crate::ShaderDataInfo],
         vertex_fetch_states: &[crate::VertexFetchState],
     ) -> CompiledShader<'_> {
+        let workgroup_options;
+        let naga_options_base = if naga::back::uses_workgroup_cooperative_matrix(&sf.shader.module)
+        {
+            workgroup_options = spv::Options {
+                lang_version: (1, 6),
+                ..naga_options_base.clone()
+            };
+            &workgroup_options
+        } else {
+            naga_options_base
+        };
         let ep_index = sf.entry_point_index();
         let ep = &sf.shader.module.entry_points[ep_index];
         let ep_info = sf.shader.info.get_entry_point(ep_index);

@@ -35,8 +35,8 @@ glam = { version = "0.33", features = ["mint"] }
 gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
-# From stable "blade-20261011" branch
-naga = { version = "30", git = "https://github.com/kvark/wgpu", rev = "a97559b6318dc0a857ace502ffc7f3e442951f39", features = ["wgsl-in", "termcolor"] }
+# Workgroup cooperative-matrix prototype on experiment/workgroup-matrix.
+naga = { version = "30", git = "https://github.com/kvark/wgpu", rev = "2f6069d00335489bffd0da0d6fba3afed1822939", features = ["wgsl-in", "termcolor"] }
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.28", features = ["derive"] }
