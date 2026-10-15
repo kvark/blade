@@ -284,8 +284,8 @@ impl WorkgroupCooperativeMatrix {
 /// Each list holds `[M, N, K]` configurations for a subgroup-scoped
 /// multiply-add. A is M×K, B is K×N, and the accumulator is M×N, so K is
 /// not implied by M and N. An empty list means that operand combination
-/// is unsupported. Components are 8 or 16, matching Naga's
-/// `CooperativeSize`. Workgroup granularities are reported separately.
+/// is unsupported. Subgroup components are 8 or 16; workgroup granularities
+/// are reported separately.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CooperativeMatrix {
     /// All-f32 operands, accumulator, and result.

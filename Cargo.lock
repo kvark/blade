@@ -2046,7 +2046,7 @@ dependencies = [
 [[package]]
 name = "naga"
 version = "30.0.0"
-source = "git+https://github.com/kvark/wgpu?rev=2f6069d00335489bffd0da0d6fba3afed1822939#2f6069d00335489bffd0da0d6fba3afed1822939"
+source = "git+https://github.com/kvark/wgpu?rev=c32067f08c27ba70d6da40a08049ba4268052a6f#c32067f08c27ba70d6da40a08049ba4268052a6f"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -2071,7 +2071,7 @@ dependencies = [
 [[package]]
 name = "naga-types"
 version = "30.0.0"
-source = "git+https://github.com/kvark/wgpu?rev=2f6069d00335489bffd0da0d6fba3afed1822939#2f6069d00335489bffd0da0d6fba3afed1822939"
+source = "git+https://github.com/kvark/wgpu?rev=c32067f08c27ba70d6da40a08049ba4268052a6f#c32067f08c27ba70d6da40a08049ba4268052a6f"
 dependencies = [
  "hashbrown 0.17.1",
  "indexmap",

@@ -90,11 +90,12 @@ impl super::Context {
         vertex_fetch_states: &[crate::VertexFetchState],
     ) -> CompiledShader<'_> {
         let (mut module, module_info) = sf.resolve_entry_point();
+        crate::shader::validate_workgroup_matrices(&module, &module_info, &self.capabilities())
+            .expect("invalid workgroup cooperative matrix pipeline");
         let stage = module.entry_points[0].stage;
         let wg_size = module.entry_points[0].workgroup_size;
         let workgroup_options;
-        let naga_options_base = if naga::back::uses_workgroup_cooperative_matrix(&module)
-        {
+        let naga_options_base = if naga::back::uses_workgroup_cooperative_matrix(&module) {
             workgroup_options = spv::Options {
                 lang_version: (1, 6),
                 ..naga_options_base.clone()
