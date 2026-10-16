@@ -40,15 +40,11 @@ fn validation_capabilities(device_caps: &super::Capabilities) -> naga::valid::Ca
     );
     caps.set(
         naga::valid::Capabilities::SHADER_BFLOAT16,
-        device_caps.shader_bfloat16,
+        device_caps.shader_bfloat16 && device_caps.cooperative_matrix.supports_bfloat16(),
     );
     caps.set(
         naga::valid::Capabilities::COOPERATIVE_MATRIX,
         device_caps.cooperative_matrix.is_supported(),
-    );
-    caps.set(
-        naga::valid::Capabilities::COOPERATIVE_MATRIX_BFLOAT16,
-        device_caps.cooperative_matrix.supports_bfloat16(),
     );
     caps.set(
         naga::valid::Capabilities::COOPERATIVE_MATRIX_WORKGROUP,
@@ -764,9 +760,9 @@ fn main() {
         assert!(
             naga::valid::Validator::new(flags, bfloat16_caps)
                 .validate(&module)
-                .is_ok()
+                .is_err()
         );
-        assert!(!bfloat16_caps.contains(naga::valid::Capabilities::COOPERATIVE_MATRIX_BFLOAT16));
+        assert!(!bfloat16_caps.contains(naga::valid::Capabilities::SHADER_BFLOAT16));
 
         device_caps
             .cooperative_matrix
@@ -774,7 +770,21 @@ fn main() {
             .push([16, 16, 16]);
         let cooperative_caps = validation_capabilities(&device_caps);
         assert!(cooperative_caps.contains(naga::valid::Capabilities::COOPERATIVE_MATRIX));
-        assert!(cooperative_caps.contains(naga::valid::Capabilities::COOPERATIVE_MATRIX_BFLOAT16));
+        assert!(cooperative_caps.contains(naga::valid::Capabilities::SHADER_BFLOAT16));
+        naga::valid::Validator::new(flags, cooperative_caps)
+            .validate(&module)
+            .unwrap();
+        let product = naga::front::wgsl::parse_str(
+            "enable wgpu_cooperative_matrix; enable wgpu_bfloat16; @compute @workgroup_size(32) fn main() { var a: coop_mat16x16<bf16,A>; }",
+        ).unwrap();
+        naga::valid::Validator::new(flags, cooperative_caps)
+            .validate(&product)
+            .unwrap();
+        device_caps.shader_bfloat16 = false;
+        assert!(
+            !validation_capabilities(&device_caps)
+                .contains(naga::valid::Capabilities::SHADER_BFLOAT16)
+        );
     }
     #[test]
     fn workgroup_matrix_capabilities_are_independent_of_subgroup_shapes() {

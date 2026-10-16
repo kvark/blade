@@ -341,7 +341,7 @@ pub struct Capabilities {
     pub dual_source_blending: bool,
     /// Support for 16-bit floating-point types in shaders.
     pub shader_float16: bool,
-    /// Support for bfloat16 storage and conversion in shaders.
+    /// Support for bfloat16 storage, conversion, and cooperative matrix operands.
     pub shader_bfloat16: bool,
     /// Support for integer dot product instructions in shaders,
     /// such as `dot4U8Packed`.

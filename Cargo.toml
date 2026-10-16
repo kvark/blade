@@ -36,7 +36,7 @@ gltf = { version = "1.1", default-features = false }
 log = "0.4"
 mint = "0.5"
 # Workgroup cooperative-matrix prototype on experiment/workgroup-matrix.
-naga = { version = "30", git = "https://github.com/kvark/wgpu", rev = "c32067f08c27ba70d6da40a08049ba4268052a6f", features = ["wgsl-in", "termcolor"] }
+naga = { version = "30", git = "https://github.com/kvark/wgpu", rev = "43cabfa2b5a71eb1c286462f2256bb8492a7f397", features = ["wgsl-in", "termcolor"] }
 profiling = "1"
 slab = "0.4"
 strum = { version = "0.28", features = ["derive"] }

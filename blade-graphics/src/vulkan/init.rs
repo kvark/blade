@@ -437,8 +437,10 @@ fn inspect_adapter(
     let storage_16bit = storage_16bit_features.storage_buffer16_bit_access != 0
         && storage_16bit_features.uniform_and_storage_buffer16_bit_access != 0;
     let shader_float16 = float16_int8_features.shader_float16 != 0 && storage_16bit;
-    let shader_bfloat16 =
-        shader_bfloat16_extension && bfloat16_features.shader_bfloat16_type != 0 && storage_16bit;
+    let shader_bfloat16 = shader_bfloat16_extension
+        && bfloat16_features.shader_bfloat16_type != 0
+        && bfloat16_features.shader_bfloat16_cooperative_matrix != 0
+        && storage_16bit;
     let vulkan_memory_model =
         vulkan_memory_model_available && vulkan_memory_model_features.vulkan_memory_model != 0;
     // `VK_KHR_shader_integer_dot_product` is promoted to core in Vulkan 1.3.
@@ -670,12 +672,11 @@ fn inspect_adapter(
         } else {
             Vec::new()
         };
-        let bf16_f32_shapes =
-            if shader_bfloat16 && bfloat16_features.shader_bfloat16_cooperative_matrix != 0 {
-                find_shapes(bf16t, bf16t, f32t, f32t)
-            } else {
-                Vec::new()
-            };
+        let bf16_f32_shapes = if shader_bfloat16 {
+            find_shapes(bf16t, bf16t, f32t, f32t)
+        } else {
+            Vec::new()
+        };
         let mut workgroup = crate::WorkgroupCooperativeMatrix::default();
         if matrix2_available
             && matrix2_features.workgroup_scope != 0
@@ -703,10 +704,7 @@ fn inspect_adapter(
                 }
                 let operand = if p.a_type == f16t && shader_float16 {
                     crate::CooperativeMatrixOperand::F16
-                } else if p.a_type == bf16t
-                    && shader_bfloat16
-                    && bfloat16_features.shader_bfloat16_cooperative_matrix != 0
-                {
+                } else if p.a_type == bf16t && shader_bfloat16 {
                     crate::CooperativeMatrixOperand::Bf16
                 } else {
                     continue;
@@ -742,6 +740,7 @@ fn inspect_adapter(
         }
         cm
     };
+    let shader_bfloat16 = shader_bfloat16 && cooperative_matrix.supports_bfloat16();
     let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
     let pipeline_executable_properties =
@@ -1335,14 +1334,7 @@ impl super::Context {
             if capabilities.shader_bfloat16 {
                 khr_bfloat16 = shader_bfloat16::PhysicalDeviceFeatures {
                     shader_bfloat16_type: vk::TRUE,
-                    shader_bfloat16_cooperative_matrix: if capabilities
-                        .cooperative_matrix
-                        .supports_bfloat16()
-                    {
-                        vk::TRUE
-                    } else {
-                        vk::FALSE
-                    },
+                    shader_bfloat16_cooperative_matrix: vk::TRUE,
                     ..Default::default()
                 };
                 device_create_info = device_create_info.push_next(&mut khr_bfloat16);
