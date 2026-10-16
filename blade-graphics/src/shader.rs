@@ -277,14 +277,14 @@ pub(crate) fn validate_workgroup_matrices(
     module: &naga::Module,
     info: &naga::valid::ModuleInfo,
     caps: &super::Capabilities,
-) -> Result<(), &'static str> {
+) -> Result<(), String> {
     if !naga::back::uses_workgroup_cooperative_matrix(module) {
         return Ok(());
     }
     assert_eq!(module.entry_points.len(), 1);
     let entry = &module.entry_points[0];
     if entry.stage != naga::ShaderStage::Compute {
-        return Err("workgroup matrices require a compute entry point");
+        return Err("workgroup matrices require a compute entry point".into());
     }
     let matrix = &caps.cooperative_matrix.workgroup;
     let Some(invocations) = entry
@@ -292,15 +292,27 @@ pub(crate) fn validate_workgroup_matrices(
         .into_iter()
         .try_fold(1u32, u32::checked_mul)
     else {
-        return Err("workgroup invocation count overflows");
+        return Err(format!(
+            "workgroup invocation count overflows for size {:?}",
+            entry.workgroup_size
+        ));
     };
     if invocations == 0 || invocations > matrix.max_workgroup_size {
-        return Err("workgroup matrix invocation count exceeds device limits");
+        return Err(format!(
+            "workgroup matrix invocation count {invocations} is outside 1..={}",
+            matrix.max_workgroup_size
+        ));
     }
     let operand = |scalar| match scalar {
         naga::Scalar::F16 => Some(super::CooperativeMatrixOperand::F16),
         naga::Scalar::BF16 => Some(super::CooperativeMatrixOperand::Bf16),
         _ => None,
+    };
+    let scalar_name = |scalar| match scalar {
+        naga::Scalar::F16 => "f16",
+        naga::Scalar::BF16 => "bf16",
+        naga::Scalar::F32 => "f32",
+        _ => "unsupported scalar",
     };
     let validate_type = |ty: &naga::TypeInner| {
         let naga::TypeInner::CooperativeMatrix {
@@ -318,7 +330,11 @@ pub(crate) fn validate_workgroup_matrices(
             || columns > matrix.max_dimension
             || rows > matrix.max_dimension
         {
-            return Err("workgroup matrix dimension exceeds device limits");
+            return Err(format!(
+                "workgroup matrix {} {role:?} {rows}x{columns}, invocations={invocations}: dimensions must be in 1..={}",
+                scalar_name(scalar),
+                matrix.max_dimension
+            ));
         }
         let supported = matrix.granularities.iter().any(|g| {
             let (row_granularity, column_granularity, scalar_matches) = match role {
@@ -340,7 +356,10 @@ pub(crate) fn validate_workgroup_matrices(
         if supported {
             Ok(())
         } else {
-            Err("unsupported workgroup matrix type or invocation count")
+            Err(format!(
+                "unsupported workgroup matrix {} {role:?} {rows}x{columns}, invocations={invocations}",
+                scalar_name(scalar)
+            ))
         }
     };
     for (_, ty) in module.types.iter() {
@@ -381,7 +400,11 @@ pub(crate) fn validate_workgroup_matrices(
                     || !operand(scalar)
                         .is_some_and(|operand| matrix.supports(operand, [m, n, k], invocations))
                 {
-                    return Err("workgroup matrix product does not match one device configuration");
+                    return Err(format!(
+                        "workgroup matrix product {} -> {}, [M, N, K]=[{m}, {n}, {k}], invocations={invocations} does not match one device configuration",
+                        scalar_name(scalar),
+                        scalar_name(accumulator)
+                    ));
                 }
             }
         }
@@ -454,6 +477,8 @@ pub(crate) fn validate_workgroup_matrices(
             variables.push(layouts[variable.ty.index()].ok_or("invalid workgroup memory layout")?);
         }
     }
+    // Rounding every variable to the largest alignment bounds every ordering,
+    // but may reject a layout that would fit with less padding.
     let alignment = variables
         .iter()
         .map(|&(_, alignment)| alignment)
@@ -465,7 +490,10 @@ pub(crate) fn validate_workgroup_matrices(
             .map(|&(size, _)| round_up(size, alignment))
             .sum::<u64>();
     if shared > u64::from(caps.max_compute_shared_memory_size) {
-        return Err("workgroup storage plus matrix reserved memory exceeds device limits");
+        return Err(format!(
+            "workgroup storage bound {shared} bytes (including {} reserved for matrices) exceeds device limit {} bytes",
+            matrix.reserved_shared_memory, caps.max_compute_shared_memory_size
+        ));
     }
     Ok(())
 }
@@ -1089,7 +1117,7 @@ fn main() {
         caps
     }
 
-    fn check(source: &str, caps: &crate::Capabilities) -> Result<(), &'static str> {
+    fn check(source: &str, caps: &crate::Capabilities) -> Result<(), String> {
         let shader = shader(source);
         let entry = shader.at("main");
         let (module, info) = entry.resolve_entry_point();
@@ -1130,12 +1158,12 @@ fn main() {
                 &SOURCE.replace("workgroup_size(64)", "workgroup_size(128)"),
                 &caps
             ),
-            Err("unsupported workgroup matrix type or invocation count")
+            Err("unsupported workgroup matrix f32 C 64x64, invocations=128".into())
         );
         let ragged = SOURCE.replace("32x64", "24x64").replace("64x32", "64x24");
         assert_eq!(
             check(&ragged, &caps),
-            Err("unsupported workgroup matrix type or invocation count")
+            Err("unsupported workgroup matrix f16 A 64x24, invocations=64".into())
         );
         let shared = SOURCE
             .replace(
@@ -1145,13 +1173,15 @@ fn main() {
             .replace("    let left", "    scratch[0] = 1.0;\n    let left");
         assert_eq!(
             check(&shared, &caps),
-            Err("workgroup storage plus matrix reserved memory exceeds device limits")
+            Err("workgroup storage bound 73728 bytes (including 8192 reserved for matrices) exceeds device limit 65536 bytes".into())
         );
         check(&shared.replace("16384", "14336"), &caps).unwrap();
         caps.cooperative_matrix.workgroup.max_dimension = 32;
         assert_eq!(
             check(SOURCE, &caps),
-            Err("workgroup matrix dimension exceeds device limits")
+            Err(
+                "workgroup matrix f32 C 64x64, invocations=64: dimensions must be in 1..=32".into()
+            )
         );
     }
 
@@ -1168,7 +1198,7 @@ fn main() {
                 .to_vec();
         assert_eq!(
             check(SOURCE, &caps),
-            Err("workgroup matrix product does not match one device configuration")
+            Err("workgroup matrix product f16 -> f32, [M, N, K]=[64, 64, 32], invocations=64 does not match one device configuration".into())
         );
     }
 
@@ -1196,7 +1226,11 @@ fn main() {
             caps.max_compute_shared_memory_size -= 1;
             assert_eq!(
                 check(&source, &caps),
-                Err("workgroup storage plus matrix reserved memory exceeds device limits")
+                Err(format!(
+                    "workgroup storage bound {} bytes (including 8192 reserved for matrices) exceeds device limit {} bytes",
+                    8192 + bytes,
+                    8192 + bytes - 1
+                ))
             );
         }
     }

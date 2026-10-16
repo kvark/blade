@@ -244,6 +244,7 @@ pub enum CooperativeMatrixOperand {
     Bf16,
 }
 
+/// Flexible dimensions for one operand type, with f32 accumulators and results.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CooperativeMatrixGranularity {
     pub operand: CooperativeMatrixOperand,
@@ -252,6 +253,8 @@ pub struct CooperativeMatrixGranularity {
     pub invocations: u32,
 }
 
+/// Workgroup cooperative products with f32 accumulators and results.
+/// Configurations with f16 accumulators are not exposed.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WorkgroupCooperativeMatrix {
     pub granularities: Vec<CooperativeMatrixGranularity>,
