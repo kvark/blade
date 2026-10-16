@@ -40,15 +40,19 @@ fn validation_capabilities(device_caps: &super::Capabilities) -> naga::valid::Ca
     );
     caps.set(
         naga::valid::Capabilities::SHADER_BFLOAT16,
-        device_caps.shader_bfloat16,
+        device_caps.shader_bfloat16 && device_caps.cooperative_matrix.supports_bfloat16(),
     );
     caps.set(
         naga::valid::Capabilities::COOPERATIVE_MATRIX,
         device_caps.cooperative_matrix.is_supported(),
     );
     caps.set(
-        naga::valid::Capabilities::COOPERATIVE_MATRIX_BFLOAT16,
-        !device_caps.cooperative_matrix.bf16_f32_shapes.is_empty(),
+        naga::valid::Capabilities::COOPERATIVE_MATRIX_WORKGROUP,
+        !device_caps
+            .cooperative_matrix
+            .workgroup
+            .granularities
+            .is_empty(),
     );
     // Subgroup operations (subgroupAdd, subgroupBroadcast, etc.) are
     // broadly supported on modern GPUs via VK_EXT_subgroup_size_control.
@@ -131,6 +135,7 @@ impl<'a> super::ShaderFunction<'a> {
         if self.shader.module.entry_points.len() == 1
             && self.shader.module.overrides.is_empty()
             && self.constants.is_empty()
+            && !naga::back::uses_workgroup_cooperative_matrix(&self.shader.module)
         {
             return (self.shader.module.clone(), Cow::Borrowed(&self.shader.info));
         }
@@ -217,7 +222,21 @@ impl<'a> super::ShaderFunction<'a> {
             self.constants,
         )
         .unwrap();
-        let mut module = module.into_owned();
+        let (mut module, info) = if matches!(module, Cow::Borrowed(_))
+            && naga::back::uses_workgroup_cooperative_matrix(&module)
+        {
+            // process_overrides skips compaction for a single entry point without overrides.
+            let mut module = module.into_owned();
+            naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
+            let flags =
+                naga::valid::ValidationFlags::all() - naga::valid::ValidationFlags::BINDINGS;
+            let info = naga::valid::Validator::new(flags, naga::valid::Capabilities::all())
+                .validate_resolved_overrides(&module)
+                .unwrap();
+            (module, info)
+        } else {
+            (module.into_owned(), info.into_owned())
+        };
         for (_, var) in module.global_variables.iter_mut() {
             if var
                 .binding
@@ -240,8 +259,243 @@ impl<'a> super::ShaderFunction<'a> {
             }
             module.types.replace(handle, ty);
         }
-        (module, Cow::Owned(info.into_owned()))
+        (module, Cow::Owned(info))
     }
+}
+
+#[cfg(all(
+    not(any(gles, target_arch = "wasm32")),
+    any(
+        vulkan,
+        windows,
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd"
+    )
+))]
+pub(crate) fn validate_workgroup_matrices(
+    module: &naga::Module,
+    info: &naga::valid::ModuleInfo,
+    caps: &super::Capabilities,
+) -> Result<(), String> {
+    if !naga::back::uses_workgroup_cooperative_matrix(module) {
+        return Ok(());
+    }
+    assert_eq!(module.entry_points.len(), 1);
+    let entry = &module.entry_points[0];
+    if entry.stage != naga::ShaderStage::Compute {
+        return Err("workgroup matrices require a compute entry point".into());
+    }
+    let matrix = &caps.cooperative_matrix.workgroup;
+    let Some(invocations) = entry
+        .workgroup_size
+        .into_iter()
+        .try_fold(1u32, u32::checked_mul)
+    else {
+        return Err(format!(
+            "workgroup invocation count overflows for size {:?}",
+            entry.workgroup_size
+        ));
+    };
+    if invocations == 0 || invocations > matrix.max_workgroup_size {
+        return Err(format!(
+            "workgroup matrix invocation count {invocations} is outside 1..={}",
+            matrix.max_workgroup_size
+        ));
+    }
+    let operand = |scalar| match scalar {
+        naga::Scalar::F16 => Some(super::CooperativeMatrixOperand::F16),
+        naga::Scalar::BF16 => Some(super::CooperativeMatrixOperand::Bf16),
+        _ => None,
+    };
+    let scalar_name = |scalar| match scalar {
+        naga::Scalar::F16 => "f16",
+        naga::Scalar::BF16 => "bf16",
+        naga::Scalar::F32 => "f32",
+        _ => "unsupported scalar",
+    };
+    let validate_type = |ty: &naga::TypeInner| {
+        let naga::TypeInner::CooperativeMatrix {
+            columns,
+            rows,
+            scalar,
+            role,
+            scope: naga::CooperativeScope::Workgroup,
+        } = *ty
+        else {
+            return Ok(());
+        };
+        if columns == 0
+            || rows == 0
+            || columns > matrix.max_dimension
+            || rows > matrix.max_dimension
+        {
+            return Err(format!(
+                "workgroup matrix {} {role:?} {rows}x{columns}, invocations={invocations}: dimensions must be in 1..={}",
+                scalar_name(scalar),
+                matrix.max_dimension
+            ));
+        }
+        let supported = matrix.granularities.iter().any(|g| {
+            let (row_granularity, column_granularity, scalar_matches) = match role {
+                naga::CooperativeRole::A => {
+                    (g.size[0], g.size[2], operand(scalar) == Some(g.operand))
+                }
+                naga::CooperativeRole::B => {
+                    (g.size[2], g.size[1], operand(scalar) == Some(g.operand))
+                }
+                naga::CooperativeRole::C => (g.size[0], g.size[1], scalar == naga::Scalar::F32),
+            };
+            g.invocations == invocations
+                && scalar_matches
+                && row_granularity != 0
+                && column_granularity != 0
+                && rows % row_granularity == 0
+                && columns % column_granularity == 0
+        });
+        if supported {
+            Ok(())
+        } else {
+            Err(format!(
+                "unsupported workgroup matrix {} {role:?} {rows}x{columns}, invocations={invocations}",
+                scalar_name(scalar)
+            ))
+        }
+    };
+    for (_, ty) in module.types.iter() {
+        validate_type(&ty.inner)?;
+    }
+    let functions = module
+        .functions
+        .iter()
+        .map(|(handle, f)| (f, &info[handle]))
+        .chain(std::iter::once((&entry.function, info.get_entry_point(0))));
+    for (function, function_info) in functions {
+        for (handle, expression) in function.expressions.iter() {
+            validate_type(function_info[handle].ty.inner_with(&module.types))?;
+            if let naga::Expression::CooperativeMultiplyAdd { a, b, c } = *expression {
+                let naga::TypeInner::CooperativeMatrix {
+                    columns: k,
+                    rows: m,
+                    scalar,
+                    scope: naga::CooperativeScope::Workgroup,
+                    ..
+                } = *function_info[a].ty.inner_with(&module.types)
+                else {
+                    continue;
+                };
+                let naga::TypeInner::CooperativeMatrix { columns: n, .. } =
+                    *function_info[b].ty.inner_with(&module.types)
+                else {
+                    unreachable!();
+                };
+                let naga::TypeInner::CooperativeMatrix {
+                    scalar: accumulator,
+                    ..
+                } = *function_info[c].ty.inner_with(&module.types)
+                else {
+                    unreachable!();
+                };
+                if accumulator != naga::Scalar::F32
+                    || !operand(scalar)
+                        .is_some_and(|operand| matrix.supports(operand, [m, n, k], invocations))
+                {
+                    return Err(format!(
+                        "workgroup matrix product {} -> {}, [M, N, K]=[{m}, {n}, {k}], invocations={invocations} does not match one device configuration",
+                        scalar_name(scalar),
+                        scalar_name(accumulator)
+                    ));
+                }
+            }
+        }
+    }
+    // Vulkan bounds implicit workgroup storage by std430 layout in any variable order.
+    let round_up = |size: u64, alignment: u64| size.div_ceil(alignment) * alignment;
+    let scalar_size = |scalar: naga::Scalar| {
+        if scalar.kind == naga::ScalarKind::Bool {
+            4
+        } else {
+            u64::from(scalar.width)
+        }
+    };
+    let vector_alignment = |size: naga::VectorSize, width: u64| match size {
+        naga::VectorSize::Bi => 2 * width,
+        naga::VectorSize::Tri | naga::VectorSize::Quad => 4 * width,
+    };
+    let mut layouts: Vec<Option<(u64, u64)>> = Vec::with_capacity(module.types.len());
+    for (_, ty) in module.types.iter() {
+        let layout = match ty.inner {
+            naga::TypeInner::Scalar(scalar) | naga::TypeInner::Atomic(scalar) => {
+                let size = scalar_size(scalar);
+                Some((size, size))
+            }
+            naga::TypeInner::Vector { size, scalar } => {
+                let width = scalar_size(scalar);
+                Some((size as u64 * width, vector_alignment(size, width)))
+            }
+            naga::TypeInner::Matrix {
+                columns,
+                rows,
+                scalar,
+            } => {
+                let width = scalar_size(scalar);
+                let alignment = vector_alignment(rows, width);
+                Some((
+                    columns as u64 * round_up(rows as u64 * width, alignment),
+                    alignment,
+                ))
+            }
+            naga::TypeInner::Array {
+                base,
+                size: naga::ArraySize::Constant(count),
+                ..
+            } => layouts[base.index()].map(|(size, alignment)| {
+                (
+                    u64::from(count.get()) * round_up(size, alignment),
+                    alignment,
+                )
+            }),
+            naga::TypeInner::Struct { ref members, .. } => members
+                .iter()
+                .try_fold((0, 1), |(offset, alignment), member| {
+                    let (size, member_alignment) = layouts[member.ty.index()]?;
+                    Some((
+                        round_up(offset, member_alignment) + size,
+                        alignment.max(member_alignment),
+                    ))
+                })
+                .map(|(size, alignment)| (round_up(size, alignment), alignment)),
+            _ => None,
+        };
+        layouts.push(layout);
+    }
+    let mut variables = Vec::new();
+    for (handle, variable) in module.global_variables.iter() {
+        if variable.space == naga::AddressSpace::WorkGroup
+            && !info.get_entry_point(0)[handle].is_empty()
+        {
+            variables.push(layouts[variable.ty.index()].ok_or("invalid workgroup memory layout")?);
+        }
+    }
+    // Rounding every variable to the largest alignment bounds every ordering,
+    // but may reject a layout that would fit with less padding.
+    let alignment = variables
+        .iter()
+        .map(|&(_, alignment)| alignment)
+        .max()
+        .unwrap_or(1);
+    let shared = u64::from(matrix.reserved_shared_memory)
+        + variables
+            .iter()
+            .map(|&(size, _)| round_up(size, alignment))
+            .sum::<u64>();
+    if shared > u64::from(caps.max_compute_shared_memory_size) {
+        return Err(format!(
+            "workgroup storage bound {shared} bytes (including {} reserved for matrices) exceeds device limit {} bytes",
+            matrix.reserved_shared_memory, caps.max_compute_shared_memory_size
+        ));
+    }
+    Ok(())
 }
 
 impl super::Shader {
@@ -534,9 +788,9 @@ fn main() {
         assert!(
             naga::valid::Validator::new(flags, bfloat16_caps)
                 .validate(&module)
-                .is_ok()
+                .is_err()
         );
-        assert!(!bfloat16_caps.contains(naga::valid::Capabilities::COOPERATIVE_MATRIX_BFLOAT16));
+        assert!(!bfloat16_caps.contains(naga::valid::Capabilities::SHADER_BFLOAT16));
 
         device_caps
             .cooperative_matrix
@@ -544,7 +798,63 @@ fn main() {
             .push([16, 16, 16]);
         let cooperative_caps = validation_capabilities(&device_caps);
         assert!(cooperative_caps.contains(naga::valid::Capabilities::COOPERATIVE_MATRIX));
-        assert!(cooperative_caps.contains(naga::valid::Capabilities::COOPERATIVE_MATRIX_BFLOAT16));
+        assert!(cooperative_caps.contains(naga::valid::Capabilities::SHADER_BFLOAT16));
+        naga::valid::Validator::new(flags, cooperative_caps)
+            .validate(&module)
+            .unwrap();
+        let product = naga::front::wgsl::parse_str(
+            "enable wgpu_cooperative_matrix; enable wgpu_bfloat16; @compute @workgroup_size(32) fn main() { var a: coop_mat16x16<bf16,A>; }",
+        ).unwrap();
+        naga::valid::Validator::new(flags, cooperative_caps)
+            .validate(&product)
+            .unwrap();
+        device_caps.shader_bfloat16 = false;
+        assert!(
+            !validation_capabilities(&device_caps)
+                .contains(naga::valid::Capabilities::SHADER_BFLOAT16)
+        );
+    }
+    #[test]
+    fn workgroup_matrix_capabilities_are_independent_of_subgroup_shapes() {
+        let mut caps = crate::Capabilities {
+            shader_float16: true,
+            shader_bfloat16: true,
+            ..Default::default()
+        };
+        let source = "enable wgpu_cooperative_matrix; enable wgpu_bfloat16; @compute @workgroup_size(64) fn main() { var a: coop_mat64x64<bf16,A,workgroup>; }";
+        let module = naga::front::wgsl::parse_str(source).unwrap();
+        let validate = |caps: &crate::Capabilities| {
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                validation_capabilities(caps),
+            )
+            .validate(&module)
+            .is_ok()
+        };
+        assert!(!validate(&caps));
+        caps.cooperative_matrix.workgroup = crate::WorkgroupCooperativeMatrix {
+            granularities: vec![crate::CooperativeMatrixGranularity {
+                operand: crate::CooperativeMatrixOperand::Bf16,
+                size: [32, 16, 16],
+                invocations: 64,
+            }],
+            max_workgroup_size: 256,
+            max_dimension: 1024,
+            reserved_shared_memory: 8192,
+        };
+        assert!(validate(&caps));
+        assert!(caps.cooperative_matrix.supports_bfloat16());
+        let workgroup = &caps.cooperative_matrix.workgroup;
+        assert!(workgroup.supports(crate::CooperativeMatrixOperand::Bf16, [64, 128, 32], 64));
+        for (size, threads) in [
+            ([16, 128, 32], 64),
+            ([64, 128, 32], 128),
+            ([2048, 128, 32], 64),
+            ([0, 128, 32], 64),
+        ] {
+            assert!(!workgroup.supports(crate::CooperativeMatrixOperand::Bf16, size, threads));
+        }
+        assert!(!workgroup.supports(crate::CooperativeMatrixOperand::F16, [64, 128, 32], 64));
     }
 }
 
@@ -741,6 +1051,251 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) { halves[id.x] = f16(1.0);
                     .contains(&naga::back::spv::Capability::Float16),
                 float16
             );
+        }
+    }
+}
+
+#[cfg(all(
+    test,
+    not(any(gles, target_arch = "wasm32")),
+    any(
+        vulkan,
+        windows,
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd"
+    )
+))]
+mod workgroup_tests {
+    use super::validate_workgroup_matrices;
+
+    const SOURCE: &str = r#"
+enable f16;
+enable wgpu_cooperative_matrix;
+@group(0) @binding(0) var<storage> a: array<f16>;
+@group(0) @binding(1) var<storage> b: array<f16>;
+@group(0) @binding(2) var<storage, read_write> c: array<f32>;
+@compute @workgroup_size(64)
+fn main() {
+    let left = coopLoadT<coop_mat32x64<f16,A,workgroup>>(&a[0], 32u);
+    let right = coopLoadT<coop_mat64x32<f16,B,workgroup>>(&b[0], 64u);
+    let result = coopMultiplyAdd(left, right, coop_mat64x64<f32,C,workgroup>());
+    coopStoreT(result, &c[0], 64u);
+}
+"#;
+
+    fn shader(source: &str) -> crate::Shader {
+        let module = naga::front::wgsl::parse_str(source).unwrap();
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all() - naga::valid::ValidationFlags::BINDINGS,
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+        crate::Shader {
+            module,
+            info,
+            source: source.to_owned(),
+        }
+    }
+
+    fn caps() -> crate::Capabilities {
+        let mut caps = crate::Capabilities {
+            max_compute_shared_memory_size: 65536,
+            ..Default::default()
+        };
+        caps.cooperative_matrix.workgroup = crate::WorkgroupCooperativeMatrix {
+            granularities: vec![crate::CooperativeMatrixGranularity {
+                operand: crate::CooperativeMatrixOperand::F16,
+                size: [16, 16, 16],
+                invocations: 64,
+            }],
+            max_workgroup_size: 256,
+            max_dimension: 1024,
+            reserved_shared_memory: 8192,
+        };
+        caps
+    }
+
+    fn check(source: &str, caps: &crate::Capabilities) -> Result<(), String> {
+        let shader = shader(source);
+        let entry = shader.at("main");
+        let (module, info) = entry.resolve_entry_point();
+        validate_workgroup_matrices(&module, &info, caps)
+    }
+
+    #[test]
+    fn unbound_workgroup_resources_survive_single_and_multiple_entry_points() {
+        let source = SOURCE
+            .replace("@group(0) @binding(0) ", "")
+            .replace("@group(0) @binding(1) ", "")
+            .replace("@group(0) @binding(2) ", "");
+        for extra in [
+            "",
+            "@vertex fn vertex() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }",
+        ] {
+            let shader = shader(&format!("{source}\n{extra}"));
+            let entry = shader.at("main");
+            let (module, info) = entry.resolve_entry_point();
+            assert_eq!(module.entry_points.len(), 1);
+            assert_eq!(module.global_variables.len(), 3);
+            assert!(
+                module
+                    .global_variables
+                    .iter()
+                    .all(|(_, var)| var.binding.is_none())
+            );
+            validate_workgroup_matrices(&module, &info, &caps()).unwrap();
+        }
+    }
+
+    #[test]
+    fn device_shapes_invocations_and_shared_memory() {
+        let mut caps = caps();
+        check(SOURCE, &caps).unwrap();
+        assert_eq!(
+            check(
+                &SOURCE.replace("workgroup_size(64)", "workgroup_size(128)"),
+                &caps
+            ),
+            Err("unsupported workgroup matrix f32 C 64x64, invocations=128".into())
+        );
+        let ragged = SOURCE.replace("32x64", "24x64").replace("64x32", "64x24");
+        assert_eq!(
+            check(&ragged, &caps),
+            Err("unsupported workgroup matrix f16 A 64x24, invocations=64".into())
+        );
+        let shared = SOURCE
+            .replace(
+                "@compute",
+                "var<workgroup> scratch: array<f32, 16384>;\n@compute",
+            )
+            .replace("    let left", "    scratch[0] = 1.0;\n    let left");
+        assert_eq!(
+            check(&shared, &caps),
+            Err("workgroup storage bound 73728 bytes (including 8192 reserved for matrices) exceeds device limit 65536 bytes".into())
+        );
+        check(&shared.replace("16384", "14336"), &caps).unwrap();
+        caps.cooperative_matrix.workgroup.max_dimension = 32;
+        assert_eq!(
+            check(SOURCE, &caps),
+            Err(
+                "workgroup matrix f32 C 64x64, invocations=64: dimensions must be in 1..=32".into()
+            )
+        );
+    }
+
+    #[test]
+    fn product_must_match_one_configuration() {
+        let mut caps = caps();
+        caps.cooperative_matrix.workgroup.granularities =
+            [[64, 128, 32], [128, 64, 32], [64, 64, 64]]
+                .map(|size| crate::CooperativeMatrixGranularity {
+                    operand: crate::CooperativeMatrixOperand::F16,
+                    size,
+                    invocations: 64,
+                })
+                .to_vec();
+        assert_eq!(
+            check(SOURCE, &caps),
+            Err("workgroup matrix product f16 -> f32, [M, N, K]=[64, 64, 32], invocations=64 does not match one device configuration".into())
+        );
+    }
+
+    #[test]
+    fn shared_memory_includes_inter_variable_padding_and_32_bit_booleans() {
+        for (declarations, writes, bytes) in [
+            (
+                "var<workgroup> scalar: f32; var<workgroup> vector: vec4<f32>;",
+                "scalar = 1.0; vector = vec4<f32>(1.0);",
+                32,
+            ),
+            (
+                "var<workgroup> flag: bool; var<workgroup> flags: array<bool, 4>;",
+                "flag = true; flags[0] = true;",
+                20,
+            ),
+        ] {
+            let source = SOURCE
+                .replace("@compute", &format!("{declarations}\n@compute"))
+                .replace("    let left", &format!("    {writes}\n    let left"));
+            let mut caps = caps();
+            caps.max_compute_shared_memory_size =
+                caps.cooperative_matrix.workgroup.reserved_shared_memory + bytes;
+            check(&source, &caps).unwrap();
+            caps.max_compute_shared_memory_size -= 1;
+            assert_eq!(
+                check(&source, &caps),
+                Err(format!(
+                    "workgroup storage bound {} bytes (including 8192 reserved for matrices) exceeds device limit {} bytes",
+                    8192 + bytes,
+                    8192 + bytes - 1
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn workgroup_size_checked_after_overrides() {
+        let shader = shader(
+            &SOURCE
+                .replace("@compute", "override threads: u32 = 64u;\n@compute")
+                .replace("workgroup_size(64)", "workgroup_size(threads)"),
+        );
+        for threads in [64, 128] {
+            let constants =
+                crate::PipelineConstants::from_iter([("threads".to_owned(), f64::from(threads))]);
+            let entry = shader.with_constants("main", &constants);
+            let (module, info) = entry.resolve_entry_point();
+            assert_eq!(module.entry_points[0].workgroup_size, [threads, 1, 1]);
+            assert_eq!(
+                validate_workgroup_matrices(&module, &info, &caps()).is_ok(),
+                threads == 64
+            );
+        }
+    }
+
+    #[test]
+    fn single_entry_point_drops_unreachable_workgroup_functions() {
+        let source = SOURCE.replace("@compute @workgroup_size(64)", "");
+        let shader = shader(&format!(
+            "{source}\n@vertex fn vertex() -> @builtin(position) vec4<f32> {{ return vec4<f32>(0.0); }}"
+        ));
+        let entry = shader.at("vertex");
+        let (module, info) = entry.resolve_entry_point();
+        assert!(!naga::back::uses_workgroup_cooperative_matrix(&module));
+        assert!(module.functions.is_empty());
+        validate_workgroup_matrices(&module, &info, &caps()).unwrap();
+    }
+
+    #[test]
+    fn mixed_entry_points_drop_unrelated_types_and_bindings() {
+        let shader = shader(&format!(
+            "{SOURCE}\n@vertex fn vertex() -> @builtin(position) vec4<f32> {{ return vec4<f32>(0.0); }}"
+        ));
+        for (name, version, workgroup) in [("vertex", (1, 3), false), ("main", (1, 6), true)] {
+            let entry = shader.at(name);
+            let (module, info) = entry.resolve_entry_point();
+            assert_eq!(module.entry_points.len(), 1);
+            assert_eq!(module.entry_points[0].name, name);
+            assert_eq!(
+                naga::back::uses_workgroup_cooperative_matrix(&module),
+                workgroup
+            );
+            validate_workgroup_matrices(&module, &info, &caps()).unwrap();
+            if !workgroup {
+                assert!(module.global_variables.is_empty());
+            }
+            naga::back::spv::write_vec(
+                &module,
+                &info,
+                &naga::back::spv::Options {
+                    lang_version: version,
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
         }
     }
 }
