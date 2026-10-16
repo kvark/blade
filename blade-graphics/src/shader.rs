@@ -1049,7 +1049,7 @@ fn main() {
     fn shader(source: &str) -> crate::Shader {
         let module = naga::front::wgsl::parse_str(source).unwrap();
         let info = naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
+            naga::valid::ValidationFlags::all() - naga::valid::ValidationFlags::BINDINGS,
             naga::valid::Capabilities::all(),
         )
         .validate(&module)
@@ -1084,6 +1084,31 @@ fn main() {
         let entry = shader.at("main");
         let (module, info) = entry.resolve_entry_point();
         validate_workgroup_matrices(&module, &info, caps)
+    }
+
+    #[test]
+    fn unbound_workgroup_resources_survive_single_and_multiple_entry_points() {
+        let source = SOURCE
+            .replace("@group(0) @binding(0) ", "")
+            .replace("@group(0) @binding(1) ", "")
+            .replace("@group(0) @binding(2) ", "");
+        for extra in [
+            "",
+            "@vertex fn vertex() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }",
+        ] {
+            let shader = shader(&format!("{source}\n{extra}"));
+            let entry = shader.at("main");
+            let (module, info) = entry.resolve_entry_point();
+            assert_eq!(module.entry_points.len(), 1);
+            assert_eq!(module.global_variables.len(), 3);
+            assert!(
+                module
+                    .global_variables
+                    .iter()
+                    .all(|(_, var)| var.binding.is_none())
+            );
+            validate_workgroup_matrices(&module, &info, &caps()).unwrap();
+        }
     }
 
     #[test]
