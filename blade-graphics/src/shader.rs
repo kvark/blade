@@ -40,7 +40,7 @@ fn validation_capabilities(device_caps: &super::Capabilities) -> naga::valid::Ca
     );
     caps.set(
         naga::valid::Capabilities::SHADER_BFLOAT16,
-        device_caps.shader_bfloat16 && device_caps.cooperative_matrix.supports_bfloat16(),
+        device_caps.shader_bfloat16,
     );
     caps.set(
         naga::valid::Capabilities::COOPERATIVE_MATRIX,
@@ -785,12 +785,13 @@ fn main() {
 
         device_caps.shader_bfloat16 = true;
         let bfloat16_caps = validation_capabilities(&device_caps);
+        // The backend owns capability detection; validation follows its public flag.
         assert!(
             naga::valid::Validator::new(flags, bfloat16_caps)
                 .validate(&module)
-                .is_err()
+                .is_ok()
         );
-        assert!(!bfloat16_caps.contains(naga::valid::Capabilities::SHADER_BFLOAT16));
+        assert!(bfloat16_caps.contains(naga::valid::Capabilities::SHADER_BFLOAT16));
 
         device_caps
             .cooperative_matrix

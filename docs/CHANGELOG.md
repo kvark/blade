@@ -3,7 +3,7 @@ Changelog for *Blade* project
 ## (TBD)
 
 - graphics: add `CooperativeMatrix::workgroup`, `WorkgroupCooperativeMatrix`, `CooperativeMatrixGranularity`, and `CooperativeMatrixOperand` for flexible workgroup matrix products with f32 accumulators; Vulkan enables `VK_NV_cooperative_matrix2` when supported and checks shader dimensions, invocation counts, and shared memory against device limits
-- graphics: BF16 shader support includes cooperative matrix operands under one Naga capability; Vulkan requires both BF16 features and a usable matrix configuration
+- graphics: `shader_bfloat16` requires BF16 cooperative matrices, even for storage and conversion alone; Vulkan enables both BF16 features together, and shader validation follows the advertised capability
 - graphics: vk: build each shader stage from a module reduced to its entry point, so its SPIR-V declares only what that entry point uses; pipeline overrides no longer panic on unbound resources, and they set the reported workgroup size
 - graphics: vk: expose `shader_bfloat16` and bf16/f32 cooperative-matrix shapes; enable BF16 and Vulkan-memory-model SPIR-V only when the device reports the corresponding optional features
 - graphics: vk: `shader_float16` requires and enables 16-bit storage buffer access, which naga's `f16` SPIR-V declares; the auto-enable from cooperative matrix f16 support is gone

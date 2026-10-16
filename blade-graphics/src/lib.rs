@@ -345,6 +345,8 @@ pub struct Capabilities {
     /// Support for 16-bit floating-point types in shaders.
     pub shader_float16: bool,
     /// Support for bfloat16 storage, conversion, and cooperative matrix operands.
+    /// Requires a BF16 cooperative matrix configuration, even for shaders that
+    /// only use storage and conversion.
     pub shader_bfloat16: bool,
     /// Support for integer dot product instructions in shaders,
     /// such as `dot4U8Packed`.
