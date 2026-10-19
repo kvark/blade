@@ -154,6 +154,7 @@ struct AdapterCapabilities {
     timestamp_valid_bits: u32,
     dual_source_blending: bool,
     shader_float16: bool,
+    preserve_f16_denorms: bool,
     shader_bfloat16: bool,
     shader_integer_dot_product: bool,
     subgroup_size: u32,
@@ -437,6 +438,24 @@ fn inspect_adapter(
     let storage_16bit = storage_16bit_features.storage_buffer16_bit_access != 0
         && storage_16bit_features.uniform_and_storage_buffer16_bit_access != 0;
     let shader_float16 = float16_int8_features.shader_float16 != 0 && storage_16bit;
+    let preserve_f16_denorms = if shader_float16
+        && (api_version >= vk::API_VERSION_1_2
+            || supported_extensions.contains(&vk::KHR_SHADER_FLOAT_CONTROLS_NAME))
+    {
+        let mut controls = vk::PhysicalDeviceFloatControlsProperties::default();
+        let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut controls);
+        unsafe {
+            instance
+                .get_physical_device_properties2
+                .get_physical_device_properties2(phd, &mut props);
+        }
+        // Naga sets only the 16-bit mode; 32_BIT_ONLY couples it to the 64-bit
+        // mode (VUID-RuntimeSpirv-denormBehaviorIndependence-06289).
+        controls.shader_denorm_preserve_float16 == vk::TRUE
+            && controls.denorm_behavior_independence == vk::ShaderFloatControlsIndependence::ALL
+    } else {
+        false
+    };
     let shader_bfloat16 = shader_bfloat16_extension
         && bfloat16_features.shader_bfloat16_type != 0
         && bfloat16_features.shader_bfloat16_cooperative_matrix != 0
@@ -786,6 +805,7 @@ fn inspect_adapter(
         timestamp_valid_bits: queue_family.timestamp_valid_bits,
         dual_source_blending,
         shader_float16,
+        preserve_f16_denorms,
         shader_bfloat16,
         shader_integer_dot_product,
         subgroup_size: subgroup_properties.subgroup_size,
@@ -1177,10 +1197,14 @@ impl super::Context {
             if needs_descriptor_indexing && capabilities.api_version < vk::API_VERSION_1_2 {
                 device_extensions.push(vk::EXT_DESCRIPTOR_INDEXING_NAME);
             }
+            if capabilities.api_version < vk::API_VERSION_1_2
+                && (capabilities.preserve_f16_denorms || capabilities.ray_tracing.is_some())
+            {
+                device_extensions.push(vk::KHR_SHADER_FLOAT_CONTROLS_NAME);
+            }
             if capabilities.ray_tracing.is_some() {
                 if capabilities.api_version < vk::API_VERSION_1_2 {
                     device_extensions.push(vk::KHR_BUFFER_DEVICE_ADDRESS_NAME);
-                    device_extensions.push(vk::KHR_SHADER_FLOAT_CONTROLS_NAME);
                     device_extensions.push(vk::KHR_SPIRV_1_4_NAME);
                 }
                 device_extensions.push(vk::KHR_DEFERRED_HOST_OPERATIONS_NAME);
@@ -1669,6 +1693,10 @@ impl super::Context {
         };
 
         let mut naga_flags = spv::WriterFlags::FORCE_POINT_SIZE;
+        naga_flags.set(
+            spv::WriterFlags::PRESERVE_F16_DENORMS,
+            capabilities.preserve_f16_denorms,
+        );
         let shader_debug_path = if desc.validation || desc.capture {
             use std::{env, fs};
             naga_flags |= spv::WriterFlags::DEBUG;
