@@ -2,6 +2,7 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- graphics: Vulkan automatically preserves f16 subnormals when the device supports independent denormal controls
 - graphics: add `CooperativeMatrix::workgroup`, `WorkgroupCooperativeMatrix`, `CooperativeMatrixGranularity`, and `CooperativeMatrixOperand` for flexible workgroup matrix products with f32 accumulators; Vulkan enables `VK_NV_cooperative_matrix2` when supported and checks shader dimensions, invocation counts, and shared memory against device limits
 - graphics: `shader_bfloat16` requires BF16 cooperative matrices, even for storage and conversion alone; Vulkan enables both BF16 features together, and shader validation follows the advertised capability
 - graphics: vk: build each shader stage from a module reduced to its entry point, so its SPIR-V declares only what that entry point uses; pipeline overrides no longer panic on unbound resources, and they set the reported workgroup size
