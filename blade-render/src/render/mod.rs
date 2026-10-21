@@ -915,6 +915,7 @@ impl ShaderPipelines {
             name: "fill-gbuf",
             data_layouts: &[&layout],
             compute: shader.at("main"),
+            full_subgroup_size: None,
         })
     }
     fn create_ray_trace(
@@ -931,6 +932,7 @@ impl ShaderPipelines {
             name: "ray-trace",
             data_layouts: &[&layout],
             compute: shader.at("main"),
+            full_subgroup_size: None,
         })
     }
 
@@ -947,6 +949,7 @@ impl ShaderPipelines {
             name: "path-trace",
             data_layouts: &[&layout],
             compute: shader.at("main"),
+            full_subgroup_size: None,
         })
     }
 
@@ -959,6 +962,7 @@ impl ShaderPipelines {
             name: "temporal-accum",
             data_layouts: &[&layout],
             compute: shader.at("temporal_accum"),
+            full_subgroup_size: None,
         })
     }
 
@@ -971,6 +975,7 @@ impl ShaderPipelines {
             name: "a-trous",
             data_layouts: &[&layout],
             compute: shader.at("atrous3x3"),
+            full_subgroup_size: None,
         })
     }
 

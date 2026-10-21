@@ -36,6 +36,7 @@ impl EnvironmentMap {
                 name: "env-prepare",
                 data_layouts: &[&layout],
                 compute: shader.at("downsample"),
+                full_subgroup_size: None,
             }),
         )
     }

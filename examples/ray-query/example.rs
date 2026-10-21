@@ -126,6 +126,7 @@ impl Example {
             name: "ray-trace",
             data_layouts: &[&rt_layout],
             compute: shader.at("main"),
+            full_subgroup_size: None,
         });
         let draw_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
             name: "main",

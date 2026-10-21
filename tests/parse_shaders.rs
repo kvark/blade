@@ -1,6 +1,16 @@
 use naga::{front::wgsl, valid::Validator};
 use std::{collections::HashMap, fs, path::Path, path::PathBuf};
 
+#[test]
+fn full_subgroups_shader() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    validate_shader(
+        &root.join("tests/shaders/full_subgroups.wgsl"),
+        root,
+        &HashMap::new(),
+    );
+}
+
 fn validate_shader(
     path: &Path,
     base_path: &Path,
