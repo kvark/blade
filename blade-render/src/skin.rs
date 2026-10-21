@@ -56,6 +56,7 @@ impl SkinPass {
             name: "skin",
             data_layouts: &[&layout],
             compute: shader.at("skin"),
+            full_subgroup_size: None,
         })
     }
 

@@ -93,6 +93,7 @@ fn main() {
         name: "matmul",
         data_layouts: &[&MatmulData::layout()],
         compute: shader.at("main"),
+        full_subgroup_size: None,
     });
 
     // Prepare input matrices (always compute in f32, convert to f16 if needed)

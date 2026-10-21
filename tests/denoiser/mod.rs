@@ -27,6 +27,7 @@ fn normals_use_inverse_transpose_for_nonuniform_scale() {
         name: "normal transform",
         data_layouts: &[&layout],
         compute: shader.at("main"),
+        full_subgroup_size: None,
     });
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "normal transform test",
@@ -106,11 +107,13 @@ fn svgf_preserves_edges_and_temporal_moments() {
         name: "SVGF edge test",
         data_layouts: &[&layout],
         compute: shader.at("atrous3x3"),
+        full_subgroup_size: None,
     });
     let mut temporal = context.create_compute_pipeline(gpu::ComputePipelineDesc {
         name: "SVGF moment test",
         data_layouts: &[&layout],
         compute: shader.at("temporal_accum"),
+        full_subgroup_size: None,
     });
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "SVGF tests",

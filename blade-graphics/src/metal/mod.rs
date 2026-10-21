@@ -662,6 +662,7 @@ impl Context {
             max_compute_shared_memory_size: device.maxThreadgroupMemoryLength() as u32,
             // `threadExecutionWidth` is a property of a compiled pipeline, not the device.
             subgroup_size: 0,
+            full_subgroups: None,
             indirect_draw: true,
             binding_array: objc2::available!(macos = 13.0, ios = 16.0)
                 && device.argumentBuffersSupport() == metal::MTLArgumentBuffersTier::Tier2,

@@ -447,6 +447,7 @@ fn verify_motion(
         name: "motion probe",
         data_layouts: &[&MotionProbeData::layout()],
         compute: shader.at("probe"),
+        full_subgroup_size: None,
     });
     let views = renderer.view_gbuffer();
     {
