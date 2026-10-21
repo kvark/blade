@@ -158,6 +158,7 @@ struct AdapterCapabilities {
     shader_bfloat16: bool,
     shader_integer_dot_product: bool,
     subgroup_size: u32,
+    full_subgroups: Option<crate::FullSubgroups>,
     cooperative_matrix: crate::CooperativeMatrix,
     vulkan_memory_model: bool,
     global_low_priority: bool,
@@ -186,6 +187,7 @@ impl AdapterCapabilities {
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing,
             subgroup_size: self.subgroup_size,
+            full_subgroups: self.full_subgroups,
             cooperative_matrix: self.cooperative_matrix.clone(),
         }
     }
@@ -372,6 +374,20 @@ fn inspect_adapter(
     }
 
     let shader_bfloat16_extension = supported_extensions.contains(&shader_bfloat16::NAME);
+    let subgroup_control_available = api_version >= vk::API_VERSION_1_3
+        || supported_extensions.contains(&vk::EXT_SUBGROUP_SIZE_CONTROL_NAME);
+    let mut subgroup_control_properties =
+        vk::PhysicalDeviceSubgroupSizeControlProperties::default();
+    if subgroup_control_available {
+        let mut properties =
+            vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup_control_properties);
+        unsafe {
+            instance
+                .get_physical_device_properties2
+                .get_physical_device_properties2(phd, &mut properties);
+        }
+    }
+    let mut subgroup_control_features = vk::PhysicalDeviceSubgroupSizeControlFeatures::default();
     let vulkan_memory_model_available = api_version >= vk::API_VERSION_1_2
         || supported_extensions.contains(&vk::KHR_VULKAN_MEMORY_MODEL_NAME);
 
@@ -418,6 +434,9 @@ fn inspect_adapter(
     if matrix2_available {
         features2_khr = features2_khr.push_next(&mut matrix2_features);
     }
+    if subgroup_control_available {
+        features2_khr = features2_khr.push_next(&mut subgroup_control_features);
+    }
     if vulkan_memory_model_available {
         features2_khr = features2_khr.push_next(&mut vulkan_memory_model_features);
     }
@@ -434,6 +453,16 @@ fn inspect_adapter(
     };
 
     let dual_source_blending = features2_khr.features.dual_src_blend != 0;
+    let full_subgroups = (subgroup_control_features.subgroup_size_control == vk::TRUE
+        && subgroup_control_features.compute_full_subgroups == vk::TRUE
+        && subgroup_control_properties
+            .required_subgroup_size_stages
+            .contains(vk::ShaderStageFlags::COMPUTE))
+    .then_some(crate::FullSubgroups {
+        min_size: subgroup_control_properties.min_subgroup_size,
+        max_size: subgroup_control_properties.max_subgroup_size,
+        max_workgroup_subgroups: subgroup_control_properties.max_compute_workgroup_subgroups,
+    });
     // Naga declares 16-bit storage capabilities for any `f16` or `bf16` type.
     let storage_16bit = storage_16bit_features.storage_buffer16_bit_access != 0
         && storage_16bit_features.uniform_and_storage_buffer16_bit_access != 0;
@@ -809,6 +838,7 @@ fn inspect_adapter(
         shader_bfloat16,
         shader_integer_dot_product,
         subgroup_size: subgroup_properties.subgroup_size,
+        full_subgroups,
         cooperative_matrix,
         vulkan_memory_model,
         global_low_priority,
@@ -1263,6 +1293,11 @@ impl super::Context {
             if capabilities.memory_budget {
                 device_extensions.push(vk::EXT_MEMORY_BUDGET_NAME);
             }
+            if capabilities.full_subgroups.is_some()
+                && capabilities.api_version < vk::API_VERSION_1_3
+            {
+                device_extensions.push(vk::EXT_SUBGROUP_SIZE_CONTROL_NAME);
+            }
             if capabilities.unified_image_layouts {
                 // TODO: Replace with ash constant once available.
                 device_extensions.push(unified_image_layouts::NAME);
@@ -1296,6 +1331,14 @@ impl super::Context {
                 .enabled_extension_names(&str_pointers)
                 .push_next(&mut khr_timeline_semaphore)
                 .push_next(&mut khr_dynamic_rendering);
+            let mut subgroup_control_features;
+            if capabilities.full_subgroups.is_some() {
+                subgroup_control_features =
+                    vk::PhysicalDeviceSubgroupSizeControlFeatures::default()
+                        .subgroup_size_control(true)
+                        .compute_full_subgroups(true);
+                device_create_info = device_create_info.push_next(&mut subgroup_control_features);
+            }
             if capabilities.max_inline_uniform_block_size > 0 {
                 device_create_info = device_create_info.push_next(&mut ext_inline_uniform_block);
             }
@@ -1790,6 +1833,7 @@ impl super::Context {
                 .limits
                 .max_compute_shared_memory_size,
             subgroup_size: capabilities.subgroup_size,
+            full_subgroups: capabilities.full_subgroups,
             dual_source_blending: capabilities.dual_source_blending,
             shader_float16: capabilities.shader_float16,
             shader_bfloat16: capabilities.shader_bfloat16,
@@ -1821,6 +1865,7 @@ impl super::Context {
             compute: true,
             max_compute_shared_memory_size: self.max_compute_shared_memory_size,
             subgroup_size: self.subgroup_size,
+            full_subgroups: self.full_subgroups,
             indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.device.ray_tracing {

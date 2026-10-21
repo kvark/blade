@@ -26,6 +26,7 @@
 )]
 
 pub use naga::{StorageAccess, VectorSize, back::PipelineConstants};
+pub use subgroup::FullSubgroups;
 pub type Transform = mint::RowMatrix3x4<f32>;
 
 pub const IDENTITY_TRANSFORM: Transform = mint::RowMatrix3x4 {
@@ -71,6 +72,7 @@ pub mod derive;
 mod hal;
 mod internal;
 mod shader;
+mod subgroup;
 pub mod traits;
 pub mod util;
 pub mod limits {
@@ -329,9 +331,11 @@ pub struct Capabilities {
     /// Default subgroup width, or zero if this backend does not report one.
     ///
     /// On Vulkan this is `VkPhysicalDeviceSubgroupProperties::subgroupSize`.
-    /// Blade does not request a required subgroup size, so a compute shader
+    /// Unless a compute pipeline requests `full_subgroup_size`, its shader
     /// may run at another width.
     pub subgroup_size: u32,
+    /// Explicit full-subgroup compute requirements supported by this device.
+    pub full_subgroups: Option<FullSubgroups>,
     /// Indirect draw command support.
     pub indirect_draw: bool,
     /// Support binding arrays of handles.
@@ -1043,6 +1047,10 @@ pub struct ComputePipelineDesc<'a> {
     pub name: &'a str,
     pub data_layouts: &'a [&'a ShaderDataLayout],
     pub compute: ShaderFunction<'a>,
+    /// Require full compute subgroups of this width; `None` keeps backend defaults.
+    /// Check `Capabilities::full_subgroups` and `FullSubgroups::supports` first.
+    /// Unsupported requests panic rather than silently falling back.
+    pub full_subgroup_size: Option<u32>,
 }
 
 /// A single statistic reported for a pipeline executable.

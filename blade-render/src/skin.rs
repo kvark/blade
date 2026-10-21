@@ -53,6 +53,7 @@ impl SkinPass {
         shader.check_struct_size::<SkinDispatch>();
         let layout = <SkinData as gpu::ShaderData>::layout();
         gpu.create_compute_pipeline(gpu::ComputePipelineDesc {
+            full_subgroup_size: None,
             name: "skin",
             data_layouts: &[&layout],
             compute: shader.at("skin"),
