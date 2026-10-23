@@ -2,6 +2,7 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- graphics: optional `ComputePipelineDesc::full_subgroup_size` requests full compute subgroups of an explicit width; check `Capabilities::full_subgroups` first. Vulkan enforces the request, while unsupported backends reject it. Existing callers should pass `None` to preserve default behavior.
 - graphics: Vulkan automatically preserves f16 subnormals when the device supports independent denormal controls
 - graphics: add `CooperativeMatrix::workgroup`, `WorkgroupCooperativeMatrix`, `CooperativeMatrixGranularity`, and `CooperativeMatrixOperand` for flexible workgroup matrix products with f32 accumulators; Vulkan enables `VK_NV_cooperative_matrix2` when supported and checks shader dimensions, invocation counts, and shared memory against device limits
 - graphics: `shader_bfloat16` requires BF16 cooperative matrices, even for storage and conversion alone; Vulkan enables both BF16 features together, and shader validation follows the advertised capability

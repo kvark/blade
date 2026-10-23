@@ -33,6 +33,7 @@ impl EnvironmentMap {
 
         Ok(
             gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+                full_subgroup_size: None,
                 name: "env-prepare",
                 data_layouts: &[&layout],
                 compute: shader.at("downsample"),

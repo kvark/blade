@@ -206,32 +206,53 @@ impl EnvMapSampler {
     }
 }
 
-fn run_dispatch_gpu_test(manual_barriers: bool) {
+fn run_dispatch_gpu_test(manual_barriers: bool, full_subgroups: bool) {
     let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    let full_subgroup_size = if full_subgroups {
+        let Some(caps) = context.capabilities().full_subgroups else {
+            println!("Skipping: explicit full subgroups are not supported");
+            return;
+        };
+        if !caps.supports(caps.min_size, [128, 1, 1]) {
+            println!("Skipping: full subgroups do not support this workgroup");
+            return;
+        }
+        Some(caps.min_size)
+    } else {
+        None
+    };
+    let count = if full_subgroups { 128 } else { 4 };
 
     let input = context.create_buffer(gpu::BufferDesc {
         name: "dispatch-input",
-        size: 16,
+        size: count as u64 * 4,
         memory: gpu::Memory::Shared,
     });
     let output = context.create_buffer(gpu::BufferDesc {
         name: "dispatch-output",
-        size: 16,
+        size: count as u64 * 4,
         memory: gpu::Memory::Shared,
     });
 
     unsafe {
-        let input_data = slice::from_raw_parts_mut(input.data() as *mut u32, 4);
-        input_data.copy_from_slice(&[1, 2, 3, 4]);
+        let input_data = slice::from_raw_parts_mut(input.data() as *mut u32, count);
+        for (index, value) in input_data.iter_mut().enumerate() {
+            *value = index as u32 + 1;
+        }
     }
     context.sync_buffer(input.into(), input.size(), gpu::BufferTarget::Data);
 
     let shader = context.create_shader(gpu::ShaderDesc {
-        source: include_str!("shaders/dispatch.wgsl"),
+        source: if full_subgroups {
+            include_str!("shaders/full_subgroups.wgsl")
+        } else {
+            include_str!("shaders/dispatch.wgsl")
+        },
         naga_module: None,
     });
     let global_layout = DispatchGlobals::layout();
     let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        full_subgroup_size,
         name: "dispatch-test",
         data_layouts: &[&global_layout],
         compute: shader.at("main"),
@@ -275,13 +296,22 @@ fn run_dispatch_gpu_test(manual_barriers: bool) {
     assert!(context.wait_for(&sync_point, 2000).unwrap());
 
     let actual_buffer = if manual_barriers { input } else { output };
-    let actual = unsafe { slice::from_raw_parts(actual_buffer.data() as *const u32, 4) };
-    let expected = if manual_barriers {
-        [7, 11, 15, 19]
-    } else {
-        [3, 5, 7, 9]
-    };
-    assert_eq!(actual, expected);
+    let actual = unsafe { slice::from_raw_parts(actual_buffer.data() as *const u32, count) };
+    let subgroup_term = 10000 * 2 * full_subgroup_size.unwrap_or(0);
+    for (index, &value) in actual.iter().enumerate() {
+        let expected = (index as u32 + 1) * 2 + 1 + subgroup_term;
+        assert_eq!(
+            value,
+            if manual_barriers {
+                expected * 2 + 1 + subgroup_term
+            } else {
+                expected
+            }
+        );
+    }
+    if let Some(size) = full_subgroup_size {
+        println!("Verified {count} invocations with full subgroup size {size}");
+    }
 
     context.destroy_command_encoder(&mut command_encoder);
     context.destroy_compute_pipeline(&mut pipeline);
@@ -292,7 +322,13 @@ fn run_dispatch_gpu_test(manual_barriers: bool) {
 #[test]
 #[ignore = "requires a working GPU context"]
 fn dispatch_gpu_test() {
-    run_dispatch_gpu_test(false);
+    run_dispatch_gpu_test(false, false);
+}
+
+#[test]
+#[ignore = "requires a working GPU context with explicit full subgroups"]
+fn full_subgroups_gpu_test() {
+    run_dispatch_gpu_test(false, true);
 }
 
 #[test]
@@ -336,6 +372,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     });
     let global_layout = DispatchGlobals::layout();
     let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        full_subgroup_size: None,
         name: "bfloat16-test",
         data_layouts: &[&global_layout],
         compute: shader.at("main"),
@@ -374,7 +411,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 #[test]
 #[ignore = "requires a working GPU context"]
 fn manual_barrier_gpu_test() {
-    run_dispatch_gpu_test(true);
+    run_dispatch_gpu_test(true, false);
 }
 
 /// `last_timing` reports the last submission after its sync point is waited on.
@@ -400,6 +437,7 @@ fn last_timing_reports_the_last_submission() {
         naga_module: None,
     });
     let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        full_subgroup_size: None,
         name: "timing-test",
         data_layouts: &[],
         compute: shader.at("main"),
@@ -2256,6 +2294,7 @@ fn gbuffer_views_describe_the_rendered_frame() {
             });
             let layout = <GBufferProbeData as gpu::ShaderData>::layout();
             let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+                full_subgroup_size: None,
                 name: "gbuffer-probe",
                 data_layouts: &[&layout],
                 compute: shader.at("probe"),
