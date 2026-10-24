@@ -199,6 +199,7 @@ impl super::Context {
         layout: &crate::ShaderDataLayout,
         info: &crate::ShaderDataInfo,
     ) -> super::DescriptorSetLayout {
+        assert!(layout.bindings.len() <= crate::limits::RESOURCES_IN_GROUP as usize);
         let unique_id = self
             .next_descriptor_layout_id
             .fetch_add(1, atomic::Ordering::Relaxed);

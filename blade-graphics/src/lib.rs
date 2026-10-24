@@ -78,8 +78,9 @@ pub mod limits {
     pub const PASS_COUNT: usize = 1234;
     /// Max plain data size for a pipeline.
     pub const PLAIN_DATA_SIZE: u32 = 256;
-    /// Max number of resources in a bind group.
-    pub const RESOURCES_IN_GROUP: u32 = 8;
+    /// Implementation ceiling for bindings in one group. Device limits also apply.
+    /// Vulkan tracks inline uniform bindings in a 64-bit mask.
+    pub const RESOURCES_IN_GROUP: u32 = u64::BITS;
     /// Min storage buffer alignment.
     pub const STORAGE_BUFFER_ALIGNMENT: u64 = 16;
     /// Min acceleration structure scratch buffer alignment.
