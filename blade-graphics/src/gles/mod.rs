@@ -486,6 +486,7 @@ impl Context {
         crate::Capabilities {
             compute_binding_limits: None,
             compute: self.capabilities.contains(Capabilities::BUFFER_STORAGE),
+            device_memory_fence: false,
             max_compute_shared_memory_size: self.limits.max_compute_shared_memory_size,
             subgroup_size: 0,
             indirect_draw: false,

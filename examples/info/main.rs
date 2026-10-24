@@ -21,6 +21,7 @@ fn main() {
             device.information.is_software_emulated
         );
         if let Some(caps) = caps {
+            println!("  device_memory_fence: {}", caps.device_memory_fence);
             println!(
                 "  compute_binding_limits: {:?}",
                 caps.compute_binding_limits

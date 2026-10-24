@@ -182,6 +182,7 @@ impl AdapterCapabilities {
     fn to_capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             compute: true,
+            device_memory_fence: self.vulkan_memory_model,
             max_compute_shared_memory_size: self.properties.limits.max_compute_shared_memory_size,
             compute_binding_limits: Some(self.compute_binding_limits()),
             indirect_draw: true,
@@ -1834,6 +1835,7 @@ impl super::Context {
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             compute: true,
+            device_memory_fence: self.vulkan_memory_model,
             max_compute_shared_memory_size: self.max_compute_shared_memory_size,
             compute_binding_limits: Some(self.compute_binding_limits),
             subgroup_size: self.subgroup_size,

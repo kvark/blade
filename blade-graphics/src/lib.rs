@@ -327,6 +327,10 @@ pub struct Capabilities {
     pub compute_binding_limits: Option<ComputeBindingLimits>,
     /// Compute pipeline support.
     pub compute: bool,
+    /// Native storage fences and coherent storage accesses within a dispatch.
+    /// Currently supported by Vulkan with the Vulkan memory model enabled.
+    /// This provides memory ordering, not workgroup execution progress.
+    pub device_memory_fence: bool,
     /// Maximum shared-memory bytes per compute workgroup, or zero if not reported.
     pub max_compute_shared_memory_size: u32,
     /// Default subgroup width, or zero if this backend does not report one.

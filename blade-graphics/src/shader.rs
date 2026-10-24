@@ -19,6 +19,11 @@ fn validation_capabilities(device_caps: &super::Capabilities) -> naga::valid::Ca
     // rather than from nothing, and pick up future additions to it.
     let mut caps = naga::valid::Capabilities::default();
     caps.set(
+        naga::valid::Capabilities::MEMORY_FENCE
+            | naga::valid::Capabilities::MEMORY_DECORATION_COHERENT,
+        device_caps.device_memory_fence,
+    );
+    caps.set(
         naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY
             | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY
             | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING

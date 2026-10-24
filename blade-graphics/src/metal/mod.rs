@@ -645,6 +645,7 @@ impl Context {
                 max_storage_buffer_range: device.maxBufferLength() as u64,
             }),
             compute: true,
+            device_memory_fence: false,
             max_compute_shared_memory_size: device.maxThreadgroupMemoryLength() as u32,
             // `threadExecutionWidth` is a property of a compiled pipeline, not the device.
             subgroup_size: 0,
