@@ -167,10 +167,22 @@ struct AdapterCapabilities {
 }
 
 impl AdapterCapabilities {
+    fn compute_binding_limits(&self) -> crate::ComputeBindingLimits {
+        let limits = &self.properties.limits;
+        crate::ComputeBindingLimits {
+            max_storage_buffers: limits
+                .max_per_stage_descriptor_storage_buffers
+                .min(limits.max_descriptor_set_storage_buffers),
+            max_bind_groups: limits.max_bound_descriptor_sets,
+            max_storage_buffer_range: u64::from(limits.max_storage_buffer_range),
+        }
+    }
+
     fn to_capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             compute: true,
             max_compute_shared_memory_size: self.properties.limits.max_compute_shared_memory_size,
+            compute_binding_limits: Some(self.compute_binding_limits()),
             indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.ray_tracing {
@@ -1501,6 +1513,7 @@ impl super::Context {
         } else {
             None
         };
+        let compute_binding_limits = capabilities.compute_binding_limits();
         let device = super::Device {
             swapchain: if desc.presentation {
                 Some(khr::swapchain::Device::new(&instance.core, &device_core))
@@ -1785,6 +1798,7 @@ impl super::Context {
                     .properties
                     .limits
                     .framebuffer_depth_sample_counts,
+            compute_binding_limits,
             max_compute_shared_memory_size: capabilities
                 .properties
                 .limits
@@ -1820,6 +1834,7 @@ impl super::Context {
         crate::Capabilities {
             compute: true,
             max_compute_shared_memory_size: self.max_compute_shared_memory_size,
+            compute_binding_limits: Some(self.compute_binding_limits),
             subgroup_size: self.subgroup_size,
             indirect_draw: true,
             binding_array: self.binding_array,

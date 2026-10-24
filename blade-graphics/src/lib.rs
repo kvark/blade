@@ -322,6 +322,9 @@ impl CooperativeMatrix {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Capabilities {
+    /// Limits for compute pipelines containing storage buffers and plain data.
+    /// `None` means this backend does not yet report these limits.
+    pub compute_binding_limits: Option<ComputeBindingLimits>,
     /// Compute pipeline support.
     pub compute: bool,
     /// Maximum shared-memory bytes per compute workgroup, or zero if not reported.
@@ -357,6 +360,19 @@ pub struct Capabilities {
     ///
     /// [`ContextDesc::timing`] panics on init if this is false.
     pub timing: bool,
+}
+
+/// Device limits used when composing buffer-based compute pipelines.
+/// Plain data must additionally fit [`limits::PLAIN_DATA_SIZE`] and each
+/// group must fit [`limits::RESOURCES_IN_GROUP`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComputeBindingLimits {
+    /// Total storage buffers across all groups of one compute pipeline.
+    pub max_storage_buffers: u32,
+    /// Number of bound shader data groups.
+    pub max_bind_groups: u32,
+    /// Maximum bytes accessible through one storage buffer binding.
+    pub max_storage_buffer_range: u64,
 }
 
 #[derive(Clone, Debug)]

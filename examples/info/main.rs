@@ -21,6 +21,10 @@ fn main() {
             device.information.is_software_emulated
         );
         if let Some(caps) = caps {
+            println!(
+                "  compute_binding_limits: {:?}",
+                caps.compute_binding_limits
+            );
             println!("  ray_query: {:?}", caps.ray_query);
             println!("  sample_count_mask: 0x{:X}", caps.sample_count_mask);
             println!("  dual_source_blending: {}", caps.dual_source_blending);

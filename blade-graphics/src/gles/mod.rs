@@ -484,6 +484,7 @@ struct ExecutionContext {
 impl Context {
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
+            compute_binding_limits: None,
             compute: self.capabilities.contains(Capabilities::BUFFER_STORAGE),
             max_compute_shared_memory_size: self.limits.max_compute_shared_memory_size,
             subgroup_size: 0,

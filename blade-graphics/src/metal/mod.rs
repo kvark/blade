@@ -635,6 +635,7 @@ impl Context {
         let bfloat16 = objc2::available!(macos = 14.0, ios = 17.0)
             && device.supportsFamily(metal::MTLGPUFamily::Apple9);
         crate::Capabilities {
+            compute_binding_limits: None,
             compute: true,
             max_compute_shared_memory_size: device.maxThreadgroupMemoryLength() as u32,
             // `threadExecutionWidth` is a property of a compiled pipeline, not the device.
