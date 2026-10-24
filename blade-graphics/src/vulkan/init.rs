@@ -173,6 +173,7 @@ impl AdapterCapabilities {
             max_storage_buffers: limits
                 .max_per_stage_descriptor_storage_buffers
                 .min(limits.max_descriptor_set_storage_buffers),
+            max_buffer_bindings: limits.max_per_stage_resources,
             max_bind_groups: limits.max_bound_descriptor_sets,
             max_storage_buffer_range: u64::from(limits.max_storage_buffer_range),
         }

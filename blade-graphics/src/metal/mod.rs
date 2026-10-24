@@ -635,7 +635,15 @@ impl Context {
         let bfloat16 = objc2::available!(macos = 14.0, ios = 17.0)
             && device.supportsFamily(metal::MTLGPUFamily::Apple9);
         crate::Capabilities {
-            compute_binding_limits: None,
+            // Metal has 31 buffer argument slots. Blade reserves one for its
+            // buffer-size table; plain-data bindings consume slots as well.
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
+            compute_binding_limits: Some(crate::ComputeBindingLimits {
+                max_storage_buffers: 30,
+                max_buffer_bindings: 30,
+                max_bind_groups: 30,
+                max_storage_buffer_range: device.maxBufferLength() as u64,
+            }),
             compute: true,
             max_compute_shared_memory_size: device.maxThreadgroupMemoryLength() as u32,
             // `threadExecutionWidth` is a property of a compiled pipeline, not the device.

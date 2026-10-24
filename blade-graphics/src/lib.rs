@@ -369,6 +369,8 @@ pub struct Capabilities {
 pub struct ComputeBindingLimits {
     /// Total storage buffers across all groups of one compute pipeline.
     pub max_storage_buffers: u32,
+    /// Combined storage-buffer and plain-data bindings, after backend reservations.
+    pub max_buffer_bindings: u32,
     /// Number of bound shader data groups.
     pub max_bind_groups: u32,
     /// Maximum bytes accessible through one storage buffer binding.
