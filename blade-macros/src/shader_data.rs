@@ -15,6 +15,7 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
 
     let mut bindings = Vec::new();
     let mut assignments = Vec::new();
+    let mut visits = Vec::new();
     for (index_usize, field) in fields.named.iter().enumerate() {
         let index = index_usize as u32;
         let name = field.ident.as_ref().unwrap();
@@ -24,6 +25,9 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
         });
         assignments.push(quote! {
             self.#name.bind_to(&mut ctx, #index);
+        });
+        visits.push(quote! {
+            self.#name.visit(visitor, #index);
         });
     }
 
@@ -53,6 +57,10 @@ pub fn generate(input_stream: TokenStream) -> syn::Result<proc_macro2::TokenStre
             fn fill(&self, mut ctx: blade_graphics::PipelineContext) {
                 use blade_graphics::ShaderBindable as _;
                 #(#assignments)*
+            }
+            fn visit(&self, visitor: &mut dyn blade_graphics::ShaderDataVisitor) {
+                use blade_graphics::ShaderBindable as _;
+                #(#visits)*
             }
         }
     })

@@ -48,6 +48,10 @@ const COLOR_ATTACHMENTS: &[u32] = &[
 ];
 
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
+    fn visit(&self, visitor: &mut dyn crate::ShaderDataVisitor, index: u32) {
+        visitor.plain(index, bytemuck::bytes_of(self));
+    }
+
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let self_slice = bytemuck::bytes_of(self);
         let alignment = ctx.limits.uniform_buffer_alignment as usize;
@@ -96,6 +100,10 @@ impl crate::ShaderBindable for super::Sampler {
     }
 }
 impl crate::ShaderBindable for crate::BufferPiece {
+    fn visit(&self, visitor: &mut dyn crate::ShaderDataVisitor, index: u32) {
+        visitor.buffer(index, *self);
+    }
+
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         for &slot in ctx.targets[index as usize].iter() {
             ctx.commands.push(super::Command::BindBuffer {
@@ -105,6 +113,12 @@ impl crate::ShaderBindable for crate::BufferPiece {
                 size: (self.buffer.size - self.offset) as u32,
             });
         }
+    }
+}
+
+impl super::PipelineContext<'_> {
+    pub fn bind_buffer_array(&mut self, _index: u32, _pieces: &[crate::BufferPiece]) {
+        unimplemented!("buffer binding arrays are unavailable on GLES");
     }
 }
 impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {

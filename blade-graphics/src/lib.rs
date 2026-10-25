@@ -976,6 +976,20 @@ pub enum ShaderBinding {
 
 pub trait ShaderBindable: Clone + Copy + derive::HasShaderBinding {
     fn bind_to(&self, context: &mut PipelineContext, index: u32);
+
+    fn visit(&self, visitor: &mut dyn ShaderDataVisitor, index: u32) {
+        visitor.unsupported(index, Self::TYPE);
+    }
+}
+
+/// Inspect buffer bindings and uniform bytes without recording GPU commands.
+/// The visitor must copy any data it needs after the call returns.
+pub trait ShaderDataVisitor {
+    fn buffer(&mut self, index: u32, piece: BufferPiece);
+    fn plain(&mut self, index: u32, bytes: &[u8]);
+    fn unsupported(&mut self, index: u32, binding: ShaderBinding) {
+        panic!("shader binding {index} cannot be inspected: {binding:?}");
+    }
 }
 
 #[derive(Debug)]
@@ -1004,6 +1018,10 @@ impl ShaderDataLayout {
 pub trait ShaderData {
     fn layout() -> ShaderDataLayout;
     fn fill(&self, context: PipelineContext);
+
+    fn visit(&self, _visitor: &mut dyn ShaderDataVisitor) {
+        panic!("shader data does not implement binding inspection");
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]

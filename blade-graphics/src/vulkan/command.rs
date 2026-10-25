@@ -56,6 +56,19 @@ impl super::TimingState {
 }
 
 impl super::PipelineContext<'_> {
+    /// Bind exactly the buffers in a runtime-sized shader-data layout entry.
+    /// Its `ShaderBinding::BufferArray::count` must equal `pieces.len()`.
+    pub fn bind_buffer_array(&mut self, index: u32, pieces: &[crate::BufferPiece]) {
+        self.write_array(
+            index,
+            pieces.iter().map(|piece| vk::DescriptorBufferInfo {
+                buffer: piece.buffer.raw,
+                offset: piece.offset,
+                range: vk::WHOLE_SIZE,
+            }),
+        );
+    }
+
     #[inline]
     fn write<T>(&mut self, index: u32, value: T) {
         let offset = self.template_offsets[index as usize];
@@ -79,6 +92,10 @@ impl super::PipelineContext<'_> {
 }
 
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
+    fn visit(&self, visitor: &mut dyn crate::ShaderDataVisitor, index: u32) {
+        visitor.plain(index, bytemuck::bytes_of(self));
+    }
+
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         if ctx.inline_uniform_mask & (1 << index) != 0 {
             // Inline uniform block mode: write raw data directly
@@ -159,6 +176,10 @@ impl crate::ShaderBindable for super::Sampler {
     }
 }
 impl crate::ShaderBindable for crate::BufferPiece {
+    fn visit(&self, visitor: &mut dyn crate::ShaderDataVisitor, index: u32) {
+        visitor.buffer(index, *self);
+    }
+
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         ctx.write(
             index,

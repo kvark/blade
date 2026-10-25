@@ -39,6 +39,10 @@ fn map_gpu_ns(
 static ASSOCIATED_BLAS_KEY: u8 = 0;
 
 impl<T: bytemuck::Pod> crate::ShaderBindable for T {
+    fn visit(&self, visitor: &mut dyn crate::ShaderDataVisitor, index: u32) {
+        visitor.plain(index, bytemuck::bytes_of(self));
+    }
+
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let slot = ctx.targets[index as usize] as _;
         let size = mem::size_of::<T>();
@@ -96,6 +100,10 @@ impl crate::ShaderBindable for super::Sampler {
     }
 }
 impl crate::ShaderBindable for crate::BufferPiece {
+    fn visit(&self, visitor: &mut dyn crate::ShaderDataVisitor, index: u32) {
+        visitor.buffer(index, *self);
+    }
+
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
         let slot = ctx.targets[index as usize] as _;
         let value = Some(self.buffer.as_ref());
@@ -110,6 +118,12 @@ impl crate::ShaderBindable for crate::BufferPiece {
                 encoder.setBuffer_offset_atIndex(value, self.offset as usize, slot);
             }
         }
+    }
+}
+
+impl super::PipelineContext<'_> {
+    pub fn bind_buffer_array(&mut self, _index: u32, _pieces: &[crate::BufferPiece]) {
+        unimplemented!("buffer binding arrays are unavailable on Metal");
     }
 }
 impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
