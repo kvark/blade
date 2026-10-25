@@ -122,7 +122,7 @@ impl Example {
         });
         let rt_layout = <ShaderData as gpu::ShaderData>::layout();
         let draw_layout = <DrawData as gpu::ShaderData>::layout();
-        let rt_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        let rt_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc { full_subgroup_size: None,
             name: "ray-trace",
             data_layouts: &[&rt_layout],
             compute: shader.at("main"),

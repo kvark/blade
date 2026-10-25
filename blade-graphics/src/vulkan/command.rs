@@ -407,6 +407,29 @@ impl super::CommandEncoder {
         cmd_buf.raw
     }
 
+    /// Seal a secondary recording. It is immutable until destruction.
+    pub fn finish_secondary(&mut self) {
+        assert!(self.secondary && !self.executable);
+        self.finish();
+        self.executable = true;
+    }
+
+    /// Execute a sealed chunk. Its resources and encoder must outlive this
+    /// primary's submission; resource writes still need normal synchronization.
+    pub fn execute_secondary(&mut self, secondary: &Self) {
+        assert!(!self.secondary && secondary.secondary && secondary.executable);
+        assert_eq!(self.device.core.handle(), secondary.device.core.handle());
+        self.barrier();
+        let boundary = self.boundary_source.take();
+        self.add_timestamp("cached_graph", Self::timestamp_stage(boundary));
+        unsafe {
+            self.device
+                .core
+                .cmd_execute_commands(self.buffers[0].raw, &[secondary.buffers[0].raw]);
+        }
+        self.producer_kinds.insert(super::PassKind::Unknown);
+    }
+
     /// Stages and write accesses a pass of this kind may have produced.
     fn source_scope(kind: super::PassKind) -> (vk::PipelineStageFlags, vk::AccessFlags) {
         use super::PassKind as Pk;
@@ -705,6 +728,10 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     type Frame = super::Frame;
 
     fn start(&mut self) {
+        assert!(
+            !self.secondary || !self.executable,
+            "sealed secondary commands are immutable"
+        );
         self.producer_kinds.clear();
         self.boundary_source = None;
         if !self.manual_barriers {
@@ -725,8 +752,14 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
             scratch.offset = 0;
         }
 
+        let inheritance = vk::CommandBufferInheritanceInfo::default();
         let vk_info = vk::CommandBufferBeginInfo {
-            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            flags: if self.secondary {
+                vk::CommandBufferUsageFlags::SIMULTANEOUS_USE
+            } else {
+                vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT
+            },
+            p_inheritance_info: &inheritance,
             ..Default::default()
         };
         unsafe {

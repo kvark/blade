@@ -366,6 +366,7 @@ pub struct Context {
     min_uniform_buffer_offset_alignment: u64,
     max_compute_shared_memory_size: u32,
     subgroup_size: u32,
+    full_subgroups: Option<crate::FullSubgroups>,
     sample_count_flags: vk::SampleCountFlags,
     dual_source_blending: bool,
     shader_float16: bool,
@@ -378,6 +379,21 @@ pub struct Context {
     memory_budget: bool,
     inner: VulkanInstance,
     xr: Option<Mutex<XrSessionState>>,
+}
+
+impl Context {
+    /// Isolated profiler bridge. Caller keeps the context alive and exclusively
+    /// owns all queue access until the profiler session has closed.
+    pub unsafe fn diagnostic_perf_handles(&self) -> [u64; 5] {
+        use ash::vk::Handle;
+        [
+            self.inner.instance.core.handle().as_raw(),
+            self.physical_device.as_raw(),
+            self.device.core.handle().as_raw(),
+            self.queue.lock().unwrap().raw.as_raw(),
+            u64::from(self.queue_family_index),
+        ]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
@@ -588,6 +604,8 @@ impl PassKinds {
 
 pub struct CommandEncoder {
     pool: vk::CommandPool,
+    secondary: bool,
+    executable: bool,
     #[cfg(target_os = "linux")]
     queue_family_index: u32,
     buffers: Box<[CommandBuffer]>,
@@ -604,6 +622,16 @@ pub struct CommandEncoder {
     producer_kinds: PassKinds,
     /// Source stage of a barrier not yet followed by a timestamp.
     boundary_source: Option<vk::PipelineStageFlags>,
+}
+
+impl CommandEncoder {
+    /// Isolated profiler bridge: only append range commands while this primary
+    /// encoder is recording, outside a compute/transfer pass.
+    pub unsafe fn diagnostic_perf_command_buffer(&self) -> u64 {
+        use ash::vk::Handle;
+        assert!(!self.secondary);
+        self.buffers[0].raw.as_raw()
+    }
 }
 pub struct TransferCommandEncoder<'a> {
     raw: vk::CommandBuffer,
@@ -640,12 +668,18 @@ pub struct SyncPoint {
     progress: u64,
 }
 
-#[hidden_trait::expose]
-impl crate::traits::CommandDevice for Context {
-    type CommandEncoder = CommandEncoder;
-    type SyncPoint = SyncPoint;
+impl Context {
+    /// Record a reusable compute/transfer chunk. The caller keeps this encoder
+    /// and all bound resources alive until every referencing submission ends.
+    pub fn create_secondary_command_encoder(
+        &self,
+        desc: super::CommandEncoderDesc,
+    ) -> CommandEncoder {
+        assert_eq!(desc.buffer_count, 1);
+        self.create_encoder(desc, true)
+    }
 
-    fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
+    fn create_encoder(&self, desc: super::CommandEncoderDesc, secondary: bool) -> CommandEncoder {
         let pool_info = vk::CommandPoolCreateInfo {
             flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
             ..Default::default()
@@ -659,6 +693,11 @@ impl crate::traits::CommandDevice for Context {
         let cmd_buf_info = vk::CommandBufferAllocateInfo {
             command_pool: pool,
             command_buffer_count: desc.buffer_count,
+            level: if secondary {
+                vk::CommandBufferLevel::SECONDARY
+            } else {
+                vk::CommandBufferLevel::PRIMARY
+            },
             ..Default::default()
         };
         let cmd_buffers = unsafe {
@@ -716,6 +755,8 @@ impl crate::traits::CommandDevice for Context {
 
         CommandEncoder {
             pool,
+            secondary,
+            executable: false,
             #[cfg(target_os = "linux")]
             queue_family_index: self.queue_family_index,
             buffers,
@@ -725,7 +766,7 @@ impl crate::traits::CommandDevice for Context {
             present_damage: Vec::new(),
             crash_handler,
             temp_label: Vec::new(),
-            timing: self.device.timing.as_ref().map(|_| {
+            timing: self.device.timing.as_ref().filter(|_| !secondary).map(|_| {
                 let query_pool_info = vk::QueryPoolCreateInfo::default()
                     .query_type(vk::QueryType::TIMESTAMP)
                     .query_count(QUERY_POOL_SIZE as u32);
@@ -745,6 +786,16 @@ impl crate::traits::CommandDevice for Context {
             producer_kinds: PassKinds::default(),
             boundary_source: None,
         }
+    }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::CommandDevice for Context {
+    type CommandEncoder = CommandEncoder;
+    type SyncPoint = SyncPoint;
+
+    fn create_command_encoder(&self, desc: super::CommandEncoderDesc) -> CommandEncoder {
+        self.create_encoder(desc, false)
     }
 
     fn destroy_command_encoder(&self, command_encoder: &mut CommandEncoder) {
@@ -783,6 +834,10 @@ impl crate::traits::CommandDevice for Context {
     }
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
+        assert!(
+            !encoder.secondary,
+            "secondary commands must execute through a primary"
+        );
         let raw_cmd_buf = encoder.finish();
         let mut queue = self.queue.lock().unwrap();
         if let Some(ref mut timing) = encoder.timing {

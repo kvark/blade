@@ -231,7 +231,7 @@ fn run_dispatch_gpu_test(manual_barriers: bool) {
         naga_module: None,
     });
     let global_layout = DispatchGlobals::layout();
-    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc { full_subgroup_size: None,
         name: "dispatch-test",
         data_layouts: &[&global_layout],
         compute: shader.at("main"),
@@ -335,7 +335,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         naga_module: None,
     });
     let global_layout = DispatchGlobals::layout();
-    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc { full_subgroup_size: None,
         name: "bfloat16-test",
         data_layouts: &[&global_layout],
         compute: shader.at("main"),
@@ -399,7 +399,7 @@ fn last_timing_reports_the_last_submission() {
         source: "@compute @workgroup_size(1) fn main() {}",
         naga_module: None,
     });
-    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc { full_subgroup_size: None,
         name: "timing-test",
         data_layouts: &[],
         compute: shader.at("main"),
@@ -2255,7 +2255,7 @@ fn gbuffer_views_describe_the_rendered_frame() {
                 naga_module: None,
             });
             let layout = <GBufferProbeData as gpu::ShaderData>::layout();
-            let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+            let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc { full_subgroup_size: None,
                 name: "gbuffer-probe",
                 data_layouts: &[&layout],
                 compute: shader.at("probe"),

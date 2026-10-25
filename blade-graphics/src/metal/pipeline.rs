@@ -355,6 +355,7 @@ impl crate::traits::ShaderDevice for super::Context {
     type RenderPipeline = super::RenderPipeline;
 
     fn create_compute_pipeline(&self, desc: crate::ComputePipelineDesc) -> super::ComputePipeline {
+        assert!(desc.full_subgroup_size.is_none(), "explicit full subgroups are unsupported");
         use metal::MTLDevice as _;
         let mut layout = make_pipeline_layout(desc.data_layouts, 0);
 

@@ -415,6 +415,53 @@ impl super::Context {
     }
 }
 
+fn full_subgroup_stage<'a>(
+    mut stage: vk::PipelineShaderStageCreateInfo<'a>,
+    size: Option<u32>,
+    capabilities: Option<crate::FullSubgroups>,
+    workgroup: [u32; 3],
+    required: &'a mut vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo<'_>,
+) -> Result<vk::PipelineShaderStageCreateInfo<'a>, &'static str> {
+    if let Some(size) = size {
+        if !capabilities.is_some_and(|caps| caps.supports(size, workgroup)) {
+            return Err("unsupported full-subgroup requirement");
+        }
+        required.required_subgroup_size = size;
+        stage = stage.push_next(required);
+        stage.flags |= vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS;
+    }
+    Ok(stage)
+}
+
+#[test]
+fn full_subgroup_pipeline_contract() {
+    let caps = crate::FullSubgroups { min_size: 32, max_size: 32, max_workgroup_subgroups: 32 };
+    let mut required = vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default();
+    let expected = (&raw const required).cast();
+    let stage = full_subgroup_stage(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE),
+        Some(32), Some(caps), [128, 1, 1], &mut required).unwrap();
+    assert_eq!(stage.flags, vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS);
+    assert_eq!(stage.p_next, expected);
+    assert_eq!(stage.stage, vk::ShaderStageFlags::COMPUTE);
+    assert_eq!(stage.module, vk::ShaderModule::null());
+    assert_eq!(required.required_subgroup_size, 32);
+
+    let mut required = vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default();
+    let default = full_subgroup_stage(vk::PipelineShaderStageCreateInfo::default(), None, None, [1, 1, 1], &mut required).unwrap();
+    assert!(default.flags.is_empty());
+    assert!(default.p_next.is_null());
+    assert_eq!(required.required_subgroup_size, 0);
+    for (size, capability, group) in [
+        (32, None, [128, 1, 1]),
+        (64, Some(caps), [128, 1, 1]),
+        (32, Some(caps), [16, 2, 1]),
+        (0, Some(caps), [128, 1, 1]),
+    ] {
+        let mut required = vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default();
+        assert!(full_subgroup_stage(vk::PipelineShaderStageCreateInfo::default(), Some(size), capability, group, &mut required).is_err());
+    }
+}
+
 #[hidden_trait::expose]
 impl crate::traits::ShaderDevice for super::Context {
     type ComputePipeline = super::ComputePipeline;
@@ -438,9 +485,13 @@ impl crate::traits::ShaderDevice for super::Context {
 
         let layout = self.create_pipeline_layout(desc.data_layouts, &group_infos);
 
+        let mut subgroup_size = vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default();
+        let stage = full_subgroup_stage(cs.create_info, desc.full_subgroup_size,
+            self.full_subgroups, cs.wg_size, &mut subgroup_size)
+            .unwrap_or_else(|error| panic!("compute pipeline '{}': {error}", desc.name));
         let mut create_info = vk::ComputePipelineCreateInfo::default()
             .layout(layout.raw)
-            .stage(cs.create_info);
+            .stage(stage);
 
         if self.device.pipeline_executable_properties.is_some() {
             create_info.flags |= vk::PipelineCreateFlags::CAPTURE_STATISTICS_KHR;

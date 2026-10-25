@@ -89,7 +89,7 @@ fn main() {
         source: &source,
         naga_module: None,
     });
-    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc { full_subgroup_size: None,
         name: "matmul",
         data_layouts: &[&MatmulData::layout()],
         compute: shader.at("main"),

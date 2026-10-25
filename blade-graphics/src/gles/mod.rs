@@ -487,6 +487,7 @@ impl Context {
             compute: self.capabilities.contains(Capabilities::BUFFER_STORAGE),
             max_compute_shared_memory_size: self.limits.max_compute_shared_memory_size,
             subgroup_size: 0,
+            full_subgroups: None,
             indirect_draw: false,
             binding_array: false,
             ray_query: crate::ShaderVisibility::empty(),

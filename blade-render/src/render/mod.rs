@@ -842,7 +842,7 @@ impl ShaderPipelines {
         shader.check_struct_size::<crate::Vertex>();
         shader.check_struct_size::<HitEntry>();
         let layout = <FillData as blade_graphics::ShaderData>::layout();
-        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc { full_subgroup_size: None,
             name: "fill-gbuf",
             data_layouts: &[&layout],
             compute: shader.at("main"),
@@ -858,7 +858,7 @@ impl ShaderPipelines {
         shader.check_struct_size::<DebugVariance>();
         shader.check_struct_size::<DebugEntry>();
         let layout = <MainData as blade_graphics::ShaderData>::layout();
-        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc { full_subgroup_size: None,
             name: "ray-trace",
             data_layouts: &[&layout],
             compute: shader.at("main"),
@@ -874,7 +874,7 @@ impl ShaderPipelines {
         shader.check_struct_size::<CameraParams>();
         shader.check_struct_size::<PathTraceParams>();
         let layout = <PathTraceData as blade_graphics::ShaderData>::layout();
-        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc { full_subgroup_size: None,
             name: "path-trace",
             data_layouts: &[&layout],
             compute: shader.at("main"),
@@ -886,7 +886,7 @@ impl ShaderPipelines {
         gpu: &blade_graphics::Context,
     ) -> blade_graphics::ComputePipeline {
         let layout = <TemporalAccumData as blade_graphics::ShaderData>::layout();
-        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc { full_subgroup_size: None,
             name: "temporal-accum",
             data_layouts: &[&layout],
             compute: shader.at("temporal_accum"),
@@ -898,7 +898,7 @@ impl ShaderPipelines {
         gpu: &blade_graphics::Context,
     ) -> blade_graphics::ComputePipeline {
         let layout = <ATrousData as blade_graphics::ShaderData>::layout();
-        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+        gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc { full_subgroup_size: None,
             name: "a-trous",
             data_layouts: &[&layout],
             compute: shader.at("atrous3x3"),

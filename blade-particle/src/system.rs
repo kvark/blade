@@ -80,17 +80,17 @@ impl ParticlePipeline {
         let update_layout = <UpdateData as gpu::ShaderData>::layout();
         let draw_layout = <DrawData as gpu::ShaderData>::layout();
 
-        let reset_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        let reset_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc { full_subgroup_size: None,
             name: &format!("{} - reset", desc.name),
             data_layouts: &[&main_layout],
             compute: shader.at("reset"),
         });
-        let emit_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        let emit_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc { full_subgroup_size: None,
             name: &format!("{} - emit", desc.name),
             data_layouts: &[&main_layout, &emit_layout],
             compute: shader.at("emit"),
         });
-        let update_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        let update_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc { full_subgroup_size: None,
             name: &format!("{} - update", desc.name),
             data_layouts: &[&main_layout, &update_layout],
             compute: shader.at("update"),

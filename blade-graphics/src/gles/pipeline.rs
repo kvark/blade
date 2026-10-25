@@ -384,6 +384,7 @@ impl crate::traits::ShaderDevice for super::Context {
     type RenderPipeline = super::RenderPipeline;
 
     fn create_compute_pipeline(&self, desc: crate::ComputePipelineDesc) -> super::ComputePipeline {
+        assert!(desc.full_subgroup_size.is_none(), "explicit full subgroups are unsupported");
         let wg_size = desc.compute.shader.module.entry_points[desc.compute.entry_point_index()]
             .workgroup_size;
         let inner = unsafe {

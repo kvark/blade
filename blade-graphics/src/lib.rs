@@ -26,6 +26,8 @@
 )]
 
 pub use naga::{StorageAccess, VectorSize, back::PipelineConstants};
+mod subgroup;
+pub use subgroup::FullSubgroups;
 pub type Transform = mint::RowMatrix3x4<f32>;
 
 pub const IDENTITY_TRANSFORM: Transform = mint::RowMatrix3x4 {
@@ -332,6 +334,8 @@ pub struct Capabilities {
     /// Blade does not request a required subgroup size, so a compute shader
     /// may run at another width.
     pub subgroup_size: u32,
+    /// Explicit full-subgroup compute requirements supported by this device.
+    pub full_subgroups: Option<FullSubgroups>,
     /// Indirect draw command support.
     pub indirect_draw: bool,
     /// Support binding arrays of handles.
@@ -1043,6 +1047,8 @@ pub struct ComputePipelineDesc<'a> {
     pub name: &'a str,
     pub data_layouts: &'a [&'a ShaderDataLayout],
     pub compute: ShaderFunction<'a>,
+    /// Require full compute subgroups of this width; `None` keeps backend defaults.
+    pub full_subgroup_size: Option<u32>,
 }
 
 /// A single statistic reported for a pipeline executable.
