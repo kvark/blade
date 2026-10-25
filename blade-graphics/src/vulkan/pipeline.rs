@@ -30,7 +30,8 @@ impl super::Context {
         // collect all the array bindings into overrides
         let mut binding_map = spv::BindingMap::default();
         for (group_index, layout) in data_layouts.iter().enumerate() {
-            for (binding_index, &(_, binding)) in layout.bindings.iter().enumerate() {
+            for binding_index in 0..layout.bindings.len() {
+                let (target_index, binding) = layout.resolve_buffer_alias(binding_index);
                 let binding_array_size = match binding {
                     crate::ShaderBinding::TextureArray { count }
                     | crate::ShaderBinding::BufferArray { count }
@@ -45,7 +46,7 @@ impl super::Context {
                     rb,
                     spv::BindingInfo {
                         descriptor_set: group_index as u32,
-                        binding: binding_index as u32,
+                        binding: target_index as u32,
                         binding_array_size,
                     },
                 );
@@ -232,6 +233,12 @@ impl super::Context {
             .enumerate()
         {
             let (descriptor_type, descriptor_size, descriptor_count, flag) = match binding {
+                crate::ShaderBinding::BufferAlias { binding } => {
+                    // Preserve the logical index for PipelineContext, but write
+                    // the shared descriptor only once in the update template.
+                    template_offsets.push(template_offsets[binding as usize]);
+                    continue;
+                }
                 crate::ShaderBinding::Texture => (
                     if access.is_empty() {
                         vk::DescriptorType::SAMPLED_IMAGE

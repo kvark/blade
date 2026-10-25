@@ -590,12 +590,20 @@ impl super::Shader {
             for (group_index, (&layout, info)) in
                 group_layouts.iter().zip(sd_infos.iter_mut()).enumerate()
             {
-                if let Some((binding_index, &(_, proto_binding))) = layout
+                if let Some((binding_index, _)) = layout
                     .bindings
                     .iter()
                     .enumerate()
                     .find(|&(_, &(name, _))| name == var_name)
                 {
+                    let (physical_index, proto_binding) =
+                        layout.resolve_buffer_alias(binding_index);
+                    if physical_index != binding_index {
+                        assert!(
+                            matches!(var.space, naga::AddressSpace::Storage { .. }),
+                            "buffer aliases require storage-buffer declarations"
+                        );
+                    }
                     let (expected_proto, access) = match module.types[var.ty].inner {
                         naga::TypeInner::Image {
                             class: naga::ImageClass::Storage { access, format: _ },
@@ -659,6 +667,7 @@ impl super::Shader {
                     });
                     info.visibility |= naga_stage.into();
                     info.binding_access[binding_index] |= access;
+                    info.binding_access[physical_index] |= access;
                     break;
                 }
             }
@@ -763,6 +772,34 @@ impl super::Shader {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn buffer_alias_layout_requires_an_earlier_concrete_buffer() {
+        use crate::{ShaderBinding, ShaderDataLayout};
+
+        let mut layout = ShaderDataLayout {
+            bindings: vec![
+                ("data", ShaderBinding::BufferArray { count: 7 }),
+                ("view", ShaderBinding::BufferAlias { binding: 0 }),
+            ],
+        };
+        assert_eq!(
+            layout.resolve_buffer_alias(1),
+            (0, ShaderBinding::BufferArray { count: 7 })
+        );
+        for invalid in [1, 2, u32::MAX] {
+            layout.bindings[1].1 = ShaderBinding::BufferAlias { binding: invalid };
+            assert!(std::panic::catch_unwind(|| layout.resolve_buffer_alias(1)).is_err());
+        }
+        layout.bindings[1].1 = ShaderBinding::BufferAlias { binding: 0 };
+        for invalid in [
+            ShaderBinding::Sampler,
+            ShaderBinding::BufferAlias { binding: 0 },
+        ] {
+            layout.bindings[0].1 = invalid;
+            assert!(std::panic::catch_unwind(|| layout.resolve_buffer_alias(1)).is_err());
+        }
+    }
+
     use super::validation_capabilities;
 
     const BF16_SOURCE: &str = r#"

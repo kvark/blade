@@ -965,13 +965,27 @@ impl ShaderFunction<'_> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShaderBinding {
     Texture,
-    TextureArray { count: u32 },
+    TextureArray {
+        count: u32,
+    },
     Sampler,
     Buffer,
-    BufferArray { count: u32 },
+    BufferArray {
+        count: u32,
+    },
+    /// Another typed view of an earlier buffer or buffer-array binding.
+    /// Vulkan only. Bind data once, at the target index. Aliases consume no
+    /// additional descriptors and inherit the target's array count.
+    BufferAlias {
+        binding: u32,
+    },
     AccelerationStructure,
-    AccelerationStructureArray { count: u32 },
-    Plain { size: u32 },
+    AccelerationStructureArray {
+        count: u32,
+    },
+    Plain {
+        size: u32,
+    },
 }
 
 pub trait ShaderBindable: Clone + Copy + derive::HasShaderBinding {
@@ -1006,6 +1020,28 @@ impl ShaderDataLayout {
     pub const EMPTY: &'static Self = &Self {
         bindings: Vec::new(),
     };
+
+    fn resolve_buffer_alias(&self, index: usize) -> (usize, ShaderBinding) {
+        match self.bindings[index].1 {
+            ShaderBinding::BufferAlias { binding } => {
+                let target = binding as usize;
+                assert!(
+                    target < index,
+                    "buffer aliases must refer to an earlier binding"
+                );
+                let kind = self.bindings[target].1;
+                assert!(
+                    matches!(
+                        kind,
+                        ShaderBinding::Buffer | ShaderBinding::BufferArray { .. }
+                    ),
+                    "buffer aliases must refer directly to a buffer binding"
+                );
+                (target, kind)
+            }
+            kind => (index, kind),
+        }
+    }
 
     fn to_info(&self) -> ShaderDataInfo {
         ShaderDataInfo {
