@@ -158,6 +158,7 @@ struct AdapterCapabilities {
     shader_bfloat16: bool,
     shader_integer_dot_product: bool,
     subgroup_size: u32,
+    subgroup_vote: bool,
     cooperative_matrix: crate::CooperativeMatrix,
     vulkan_memory_model: bool,
     global_low_priority: bool,
@@ -200,6 +201,7 @@ impl AdapterCapabilities {
             shader_integer_dot_product: self.shader_integer_dot_product,
             timing: self.timing,
             subgroup_size: self.subgroup_size,
+            subgroup_vote: self.subgroup_vote,
             cooperative_matrix: self.cooperative_matrix.clone(),
         }
     }
@@ -823,6 +825,12 @@ fn inspect_adapter(
         shader_bfloat16,
         shader_integer_dot_product,
         subgroup_size: subgroup_properties.subgroup_size,
+        subgroup_vote: subgroup_properties
+            .supported_stages
+            .contains(vk::ShaderStageFlags::COMPUTE)
+            && subgroup_properties
+                .supported_operations
+                .contains(vk::SubgroupFeatureFlags::VOTE),
         cooperative_matrix,
         vulkan_memory_model,
         global_low_priority,
@@ -1806,6 +1814,7 @@ impl super::Context {
                 .limits
                 .max_compute_shared_memory_size,
             subgroup_size: capabilities.subgroup_size,
+            subgroup_vote: capabilities.subgroup_vote,
             dual_source_blending: capabilities.dual_source_blending,
             shader_float16: capabilities.shader_float16,
             shader_bfloat16: capabilities.shader_bfloat16,
@@ -1839,6 +1848,7 @@ impl super::Context {
             max_compute_shared_memory_size: self.max_compute_shared_memory_size,
             compute_binding_limits: Some(self.compute_binding_limits),
             subgroup_size: self.subgroup_size,
+            subgroup_vote: self.subgroup_vote,
             indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.device.ray_tracing {

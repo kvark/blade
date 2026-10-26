@@ -340,6 +340,9 @@ pub struct Capabilities {
     /// Blade does not request a required subgroup size, so a compute shader
     /// may run at another width.
     pub subgroup_size: u32,
+    /// Reported support for subgroup vote operations in compute shaders.
+    /// False when the backend does not report this capability.
+    pub subgroup_vote: bool,
     /// Indirect draw command support.
     pub indirect_draw: bool,
     /// Support binding arrays of handles.

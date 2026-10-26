@@ -489,6 +489,7 @@ impl Context {
             device_memory_fence: false,
             max_compute_shared_memory_size: self.limits.max_compute_shared_memory_size,
             subgroup_size: 0,
+            subgroup_vote: false,
             indirect_draw: false,
             binding_array: false,
             ray_query: crate::ShaderVisibility::empty(),

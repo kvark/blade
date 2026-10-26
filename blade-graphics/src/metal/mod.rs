@@ -649,6 +649,7 @@ impl Context {
             max_compute_shared_memory_size: device.maxThreadgroupMemoryLength() as u32,
             // `threadExecutionWidth` is a property of a compiled pipeline, not the device.
             subgroup_size: 0,
+            subgroup_vote: false,
             indirect_draw: true,
             binding_array: false,
             ray_query: if device.supportsFamily(metal::MTLGPUFamily::Apple6) {

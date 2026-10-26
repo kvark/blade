@@ -367,6 +367,7 @@ pub struct Context {
     max_compute_shared_memory_size: u32,
     compute_binding_limits: crate::ComputeBindingLimits,
     subgroup_size: u32,
+    subgroup_vote: bool,
     sample_count_flags: vk::SampleCountFlags,
     dual_source_blending: bool,
     shader_float16: bool,
