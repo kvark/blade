@@ -30,9 +30,7 @@ fn skin_stored_vertex(input: Vertex, skin: SkinVertex) -> Vertex {
     let skinned_position = apply_affine(blended, input.position);
     let linear = skin_linear(skinning_params.post_transform) * skin_linear(blended);
     out.position = apply_affine(skinning_params.post_transform, skinned_position);
-    // Uniform scale is assumed, so the linear part rotates the normals
-    // after normalization (non-uniform scale logs a load-time warning).
-    out.normal = encode_normal(normalize_or_zero(linear * decode_normal(input.normal)));
+    out.normal = encode_normal(transform_normal(linear, decode_normal(input.normal)));
     out.tangent = encode_normal(normalize_or_zero(linear * decode_normal(input.tangent)));
     out.bitangent_sign *= sign(determinant(linear));
     return out;
