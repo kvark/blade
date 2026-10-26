@@ -12,6 +12,43 @@ Rasterized and ray-traced rendering based on [blade-graphics](https://crates.io/
 The rasterizer supports the portable graphics profile, including WebGL2. The
 ray tracer requires a backend and device with ray-query support.
 
+## Denoiser diagnostics
+
+From the workspace root, capture matched vehicle views and profile the
+renderer on a working ray-tracing GPU:
+
+```sh
+BLADE_CAPTURE_VEHICLE=1 BLADE_PROFILE_GPU=1 cargo test --test gpu_examples compare_vehicle_denoising -- --ignored --nocapture --test-threads=1
+```
+
+The manual test writes PNGs under `target/denoiser-diagnostic/WIDTHxHEIGHT/`:
+raw lighting, the normal engine denoiser, a history-preserved control, and an
+accumulated reference. It checks reference error and residual noise, including
+that resetting debug statistics each frame does not discard SVGF history.
+It requires `BLADE_CAPTURE_VEHICLE=1`, including when running ignored tests,
+so CI does not run captures. It does not update golden images.
+
+For short timing runs, set `BLADE_CAPTURE_CASE=current-engine`,
+`BLADE_CAPTURE_SIZE=1280x832`, and `BLADE_CAPTURE_FRAMES=16`.
+`BLADE_CAPTURE_PASSES` and `BLADE_CAPTURE_TAPS` override spatial passes and
+ReSTIR reuse taps. Omit `BLADE_PROFILE_GPU` to measure without GPU counters.
+Set `BLADE_CAPTURE_MOTION=1` for a moving vehicle with a following camera, or
+`BLADE_CAPTURE_MOTION=turn` to also rotate and nonuniformly scale the vehicle.
+These cases verify ground/vehicle motion vectors and previous-hit depths against
+CPU reprojection and check noise reduction in newly exposed regions.
+Compare under the same power/load conditions; this controlled offscreen fixture
+excludes game physics, presentation, and UI, so its timings are not game FPS.
+
+For a short scene-update profile using the vehicle wheel assets:
+
+```sh
+BLADE_PROFILE_VEHICLE=1 cargo test --test gpu_examples animated_blas_memory_stays_bounded -- --ignored --nocapture
+```
+
+This measures rigid-instance updates alongside skinned/refitted geometry over
+32 frames at 16×16, not full-resolution vehicle FPS. Add `BLADE_PROFILE_GPU=1`
+for per-pass counters; omit it for wall timing without counter-resolution overhead.
+
 ## Shader sources / shipping
 
 Canonical WGSL lives in this crate’s `code/` directory. It is listed in
