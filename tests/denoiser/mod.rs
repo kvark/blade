@@ -2,6 +2,8 @@
 use blade_graphics as gpu;
 use gpu::ShaderData as _;
 
+mod capture;
+
 #[test]
 #[ignore = "requires a working compute GPU"]
 fn normals_use_inverse_transpose_for_nonuniform_scale() {
