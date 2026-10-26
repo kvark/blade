@@ -2,6 +2,19 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- graphics: ray queries require macOS 13+ / iOS 16+ on Metal; compute limits report direct sampled-texture slots, and renderer resource tables account for Vulkan image descriptors
+- graphics: `ResourceArray::with_limit` allocates runtime tables below their generic index ceiling
+- graphics: Vulkan explicitly marks non-indexed acceleration-structure geometry, avoiding a null index-buffer read during BLAS builds
+- graphics: Metal binding arrays query populated resource handles once before padding the argument table, avoiding repeated Objective-C validation for unused slots
+- graphics: Metal timing takes completion from a real pass instead of an empty blit encoder, and handles empty submissions; remove redundant unsafe blocks and guard the macOS 15 math-mode API
+- graphics: validate array bindings consistently and pad Vulkan acceleration-structure arrays to the actual layout count; render scene limits account for direct descriptor budgets
+- graphics: Metal BLAS builds and refits apply geometry transforms, requiring macOS 13+ / iOS 16+; upload `AccelerationStructureTransform` values for backend-correct matrix packing
+- graphics: Metal supports sampled-texture and storage-buffer binding arrays through argument tables, reported by `Capabilities::binding_array`; partially filled arrays repeat their resources to fill the declared length
+- graphics: `Capabilities::compute_binding_limits` always reports `ComputeBindingLimits`, including separate storage-buffer, plain-data, combined-slot, bind-group, range, and indirect-array limits
+- graphics: `Capabilities::device_memory_fence` reports cross-workgroup publication support; declare shared storage buffers `@coherent`, and synchronize workgroups explicitly; Metal requires Apple silicon with MSL 3.2
+- graphics: buffer arrays use the ordinary `ResourceArray` / `ShaderBindable` path; Vulkan validates descriptor counts before writing, and binding empty resource arrays is rejected
+- graphics: raise `limits::RESOURCES_IN_GROUP` from 8 to 64; device-specific limits still apply
+- graphics: Metal `Buffer::size()` returns the accessible buffer length, not the padded allocation size
 - graphics: Vulkan automatically preserves f16 subnormals when the device supports independent denormal controls
 - graphics: add `CooperativeMatrix::workgroup`, `WorkgroupCooperativeMatrix`, `CooperativeMatrixGranularity`, and `CooperativeMatrixOperand` for flexible workgroup matrix products with f32 accumulators; Vulkan enables `VK_NV_cooperative_matrix2` when supported and checks shader dimensions, invocation counts, and shared memory against device limits
 - graphics: `shader_bfloat16` requires BF16 cooperative matrices, even for storage and conversion alone; Vulkan enables both BF16 features together, and shader validation follows the advertised capability

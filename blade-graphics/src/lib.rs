@@ -28,6 +28,15 @@
 pub use naga::{StorageAccess, VectorSize, back::PipelineConstants};
 pub type Transform = mint::RowMatrix3x4<f32>;
 
+/// A geometry transform packed for the active graphics backend.
+///
+/// Convert from [`Transform`] before uploading to
+/// [`AccelerationStructureMesh::transform_data`]. The GPU representation is
+/// backend-specific (column-major on Metal, row-major on Vulkan).
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct AccelerationStructureTransform([f32; 12]);
+
 pub const IDENTITY_TRANSFORM: Transform = mint::RowMatrix3x4 {
     x: mint::Vector4 {
         x: 1.0,
@@ -78,8 +87,9 @@ pub mod limits {
     pub const PASS_COUNT: usize = 1234;
     /// Max plain data size for a pipeline.
     pub const PLAIN_DATA_SIZE: u32 = 256;
-    /// Max number of resources in a bind group.
-    pub const RESOURCES_IN_GROUP: u32 = 8;
+    /// Implementation ceiling for bindings in one group. Device limits also apply.
+    /// Vulkan tracks inline uniform bindings in a 64-bit mask.
+    pub const RESOURCES_IN_GROUP: u32 = u64::BITS;
     /// Min storage buffer alignment.
     pub const STORAGE_BUFFER_ALIGNMENT: u64 = 16;
     /// Min acceleration structure scratch buffer alignment.
@@ -320,10 +330,21 @@ impl CooperativeMatrix {
     }
 }
 
+/// Device capabilities. On Metal, shaders must receive runtime storage-buffer
+/// lengths explicitly: WGSL `arrayLength` is not supported for either ordinary
+/// buffer bindings or elements of binding arrays.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Capabilities {
+    /// Limits for compute pipelines containing storage buffers and plain data.
+    /// Zero limits are reported when compute is unavailable.
+    pub compute_binding_limits: ComputeBindingLimits,
     /// Compute pipeline support.
     pub compute: bool,
+    /// Native storage fences and coherent storage accesses within a dispatch.
+    /// Supported by Vulkan with its memory model and Apple silicon with MSL 3.2.
+    /// This provides memory ordering, not workgroup execution progress.
+    /// Publishing storage writes to other workgroups requires `@coherent` buffers.
+    pub device_memory_fence: bool,
     /// Maximum shared-memory bytes per compute workgroup, or zero if not reported.
     pub max_compute_shared_memory_size: u32,
     /// Default subgroup width, or zero if this backend does not report one.
@@ -334,7 +355,7 @@ pub struct Capabilities {
     pub subgroup_size: u32,
     /// Indirect draw command support.
     pub indirect_draw: bool,
-    /// Support binding arrays of handles.
+    /// Support binding arrays of sampled textures and storage buffers.
     pub binding_array: bool,
     /// Which shader stages support ray queries.
     pub ray_query: ShaderVisibility,
@@ -357,6 +378,32 @@ pub struct Capabilities {
     ///
     /// [`ContextDesc::timing`] panics on init if this is false.
     pub timing: bool,
+}
+
+/// Device limits used when composing buffer-based compute pipelines.
+/// Plain data must additionally fit [`limits::PLAIN_DATA_SIZE`] and each
+/// group must fit [`limits::RESOURCES_IN_GROUP`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ComputeBindingLimits {
+    /// Indirect binding arrays (buffers and textures) allow at most this many elements.
+    /// A buffer array occupies one buffer binding on these backends.
+    /// `None` means each array element consumes a binding.
+    pub max_indirect_buffer_array_elements: Option<u32>,
+    /// Total storage buffers across all groups of one compute pipeline.
+    pub max_storage_buffers: u32,
+    /// Plain-data bindings, guaranteed independently of their sizes.
+    pub max_plain_data_bindings: u32,
+    /// Combined storage-buffer and plain-data bindings, after backend reservations.
+    /// On Vulkan, sampled/storage images share this stage-resource budget.
+    pub max_buffer_bindings: u32,
+    /// Direct sampled-texture slots; each direct-array element consumes one.
+    /// Indirect argument tables have their separate element limit above.
+    pub max_sampled_texture_bindings: u32,
+    /// Number of bound shader data groups.
+    pub max_bind_groups: u32,
+    /// Maximum bytes accessible through one storage buffer binding.
+    pub max_storage_buffer_range: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -534,15 +581,24 @@ impl Buffer {
 pub type ResourceIndex = u32;
 /// An array of resources to be used with shader bindings.
 /// The generic argument tells the maximum number of resources.
+/// A pipeline layout may bind fewer than this maximum.
+/// Populate at least one element before binding; unused slots repeat the elements.
 pub struct ResourceArray<T, const N: ResourceIndex> {
     data: Vec<T>,
     free_list: Vec<ResourceIndex>,
+    limit: ResourceIndex,
 }
 impl<T, const N: ResourceIndex> ResourceArray<T, N> {
     pub fn new() -> Self {
+        Self::with_limit(N)
+    }
+    /// Limit allocations to a smaller, device-specific shader layout.
+    pub fn with_limit(limit: ResourceIndex) -> Self {
+        assert!(limit <= N);
         Self {
-            data: Vec::with_capacity(N as usize),
+            data: Vec::with_capacity(limit as usize),
             free_list: Vec::new(),
+            limit,
         }
     }
     pub fn alloc(&mut self, value: T) -> ResourceIndex {
@@ -551,7 +607,11 @@ impl<T, const N: ResourceIndex> ResourceArray<T, N> {
             index
         } else {
             let index = self.data.len() as u32;
-            assert!(index < N);
+            assert!(
+                index < self.limit,
+                "resource array exceeds its {}-entry limit",
+                self.limit
+            );
             self.data.push(value);
             index
         }
@@ -562,6 +622,9 @@ impl<T, const N: ResourceIndex> ResourceArray<T, N> {
     pub fn clear(&mut self) {
         self.data.clear();
         self.free_list.clear();
+    }
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
     }
 }
 impl<T, const N: ResourceIndex> std::ops::Index<ResourceIndex> for ResourceArray<T, N> {
@@ -575,6 +638,8 @@ impl<T, const N: ResourceIndex> std::ops::IndexMut<ResourceIndex> for ResourceAr
         &mut self.data[index as usize]
     }
 }
+/// On Metal, pass runtime element lengths explicitly: `arrayLength` inside
+/// these buffers is not supported.
 pub type BufferArray<const N: ResourceIndex> = ResourceArray<BufferPiece, N>;
 pub type TextureArray<const N: ResourceIndex> = ResourceArray<TextureView, N>;
 pub type AccelerationStructureArray<const N: ResourceIndex> =
@@ -882,6 +947,8 @@ pub struct AccelerationStructureMesh {
     pub index_data: BufferPiece,
     pub index_type: Option<IndexType>,
     pub triangle_count: u32,
+    /// An uploaded [`AccelerationStructureTransform`], or a default buffer for
+    /// the identity transform. The offset must be a multiple of 16 bytes.
     pub transform_data: BufferPiece,
     pub is_opaque: bool,
 }

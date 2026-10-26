@@ -15,7 +15,8 @@ mod pipeline;
 mod resource;
 mod surface;
 
-const MAX_TIMESTAMPS: usize = crate::limits::PASS_COUNT + 1;
+const MAX_TIMESTAMPS: usize = crate::limits::PASS_COUNT * 2;
+const MAX_BINDING_ARRAY_ELEMENTS: u32 = 4096 / std::mem::size_of::<u64>() as u32;
 
 pub struct Surface {
     view: Option<objc2::rc::Retained<objc2::runtime::NSObject>>,
@@ -94,8 +95,8 @@ impl Buffer {
     }
 
     pub fn size(&self) -> u64 {
-        use metal::MTLResource as _;
-        self.as_ref().allocatedSize() as u64
+        use metal::MTLBuffer as _;
+        self.as_ref().length() as u64
     }
 }
 
@@ -276,6 +277,7 @@ fn find_timestamp_counter_set(
 }
 
 type RawCommandBuffer = Retained<ProtocolObject<dyn metal::MTLCommandBuffer>>;
+
 pub struct CommandEncoder {
     raw: Option<RawCommandBuffer>,
     name: String,
@@ -290,6 +292,8 @@ pub struct CommandEncoder {
 struct ShaderDataMapping {
     visibility: crate::ShaderVisibility,
     targets: Box<[u32]>,
+    array_counts: Box<[u32]>,
+    write_mask: u64,
 }
 
 #[derive(Debug)]
@@ -372,6 +376,8 @@ pub struct PipelineContext<'a> {
     vs_encoder: Option<&'a ProtocolObject<dyn metal::MTLRenderCommandEncoder>>,
     fs_encoder: Option<&'a ProtocolObject<dyn metal::MTLRenderCommandEncoder>>,
     targets: &'a [u32],
+    array_counts: &'a [u32],
+    write_mask: u64,
 }
 
 pub struct ComputePipelineContext<'a> {
@@ -529,7 +535,7 @@ fn new_command_queue(
         if qos {
             let _: () = unsafe { objc2::msg_send![&*descriptor, setQosClass: QOS_CLASS_UTILITY] };
         }
-        let queue = unsafe { device.newCommandQueueWithDescriptor(&descriptor) };
+        let queue = device.newCommandQueueWithDescriptor(&descriptor);
         applied |= qos && queue.is_some();
         queue
     } else {
@@ -610,7 +616,9 @@ impl Context {
             capture,
             timestamp_counter_set,
             info: PrivateInfo {
-                language_version: if objc2::available!(macos = 14.0, ios = 17.0) {
+                language_version: if objc2::available!(macos = 15.0, ios = 18.0) {
+                    metal::MTLLanguageVersion::Version3_2
+                } else if objc2::available!(macos = 14.0, ios = 17.0) {
                     metal::MTLLanguageVersion::Version3_1
                 } else {
                     metal::MTLLanguageVersion::Version2_4
@@ -635,13 +643,31 @@ impl Context {
         let bfloat16 = objc2::available!(macos = 14.0, ios = 17.0)
             && device.supportsFamily(metal::MTLGPUFamily::Apple9);
         crate::Capabilities {
+            // Metal has 31 buffer argument slots. Blade reserves one for its
+            // buffer-size table; plain-data bindings consume slots as well.
+            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
+            compute_binding_limits: crate::ComputeBindingLimits {
+                max_indirect_buffer_array_elements: Some(MAX_BINDING_ARRAY_ELEMENTS),
+                max_storage_buffers: 30,
+                max_plain_data_bindings: 30,
+                max_buffer_bindings: 30,
+                // All supported GPU families provide at least 31 direct slots.
+                max_sampled_texture_bindings: 31,
+                max_bind_groups: 30,
+                max_storage_buffer_range: device.maxBufferLength() as u64,
+            },
             compute: true,
+            device_memory_fence: objc2::available!(macos = 15.0, ios = 18.0)
+                && device.supportsFamily(metal::MTLGPUFamily::Apple7),
             max_compute_shared_memory_size: device.maxThreadgroupMemoryLength() as u32,
             // `threadExecutionWidth` is a property of a compiled pipeline, not the device.
             subgroup_size: 0,
             indirect_draw: true,
-            binding_array: false,
-            ray_query: if device.supportsFamily(metal::MTLGPUFamily::Apple6) {
+            binding_array: objc2::available!(macos = 13.0, ios = 16.0)
+                && device.argumentBuffersSupport() == metal::MTLArgumentBuffersTier::Tier2,
+            ray_query: if !objc2::available!(macos = 13.0, ios = 16.0) {
+                crate::ShaderVisibility::empty()
+            } else if device.supportsFamily(metal::MTLGPUFamily::Apple6) {
                 crate::ShaderVisibility::all()
             } else if device.supportsFamily(metal::MTLGPUFamily::Mac2)
                 || device.supportsFamily(metal::MTLGPUFamily::Metal3)
@@ -757,18 +783,14 @@ impl crate::traits::CommandDevice for Context {
                 desc.setSampleCount(MAX_TIMESTAMPS);
                 desc
             };
-            unsafe {
-                csb_desc.setLabel(&objc2_foundation::NSString::from_str(&format!(
-                    "{}/counter",
-                    desc.name
-                )));
-            }
+            csb_desc.setLabel(&objc2_foundation::NSString::from_str(&format!(
+                "{}/counter",
+                desc.name
+            )));
             Some(TimingState {
-                sample_buffer: unsafe {
-                    device
-                        .newCounterSampleBufferWithDescriptor_error(&csb_desc)
-                        .unwrap()
-                },
+                sample_buffer: device
+                    .newCounterSampleBufferWithDescriptor_error(&csb_desc)
+                    .unwrap(),
                 pass_names: Default::default(),
                 submitted_count: 0,
                 calibration: None,
@@ -792,9 +814,7 @@ impl crate::traits::CommandDevice for Context {
 
     fn submit(&self, encoder: &mut CommandEncoder) -> SyncPoint {
         use metal::MTLCommandBuffer as _;
-        if encoder.timing_state.is_some() {
-            encoder.write_gpu_done();
-            let timing_state = encoder.timing_state.as_mut().unwrap();
+        if let Some(ref mut timing_state) = encoder.timing_state {
             timing_state
                 .pass_names
                 .drain_prefix(timing_state.submitted_count);
@@ -844,6 +864,10 @@ fn make_bottom_level_acceleration_structure_desc(
     meshes: &[crate::AccelerationStructureMesh],
     updatable: bool,
 ) -> Retained<metal::MTLPrimitiveAccelerationStructureDescriptor> {
+    assert!(
+        objc2::available!(macos = 13.0, ios = 16.0),
+        "Metal geometry transforms require macOS 13+ or iOS 16+"
+    );
     let mut geometry_descriptors = Vec::with_capacity(meshes.len());
     for mesh in meshes {
         geometry_descriptors.push(unsafe {
@@ -858,16 +882,11 @@ fn make_bottom_level_acceleration_structure_desc(
                 descriptor.setIndexBufferOffset(mesh.index_data.offset as usize);
                 descriptor.setIndexType(map_index_type(index_type));
             }
-            //TODO: requires macOS-13 ?
-            if false {
-                let (_, attribute_format) = map_vertex_format(mesh.vertex_format);
-                descriptor.setVertexFormat(attribute_format);
-                if !mesh.transform_data.buffer.raw.is_null() {
-                    descriptor
-                        .setTransformationMatrixBuffer(Some(mesh.transform_data.buffer.as_ref()));
-                    descriptor
-                        .setTransformationMatrixBufferOffset(mesh.transform_data.offset as usize);
-                }
+            let (_, attribute_format) = map_vertex_format(mesh.vertex_format);
+            descriptor.setVertexFormat(attribute_format);
+            if !mesh.transform_data.buffer.raw.is_null() {
+                descriptor.setTransformationMatrixBuffer(Some(mesh.transform_data.buffer.as_ref()));
+                descriptor.setTransformationMatrixBufferOffset(mesh.transform_data.offset as usize);
             }
             Retained::cast_unchecked(descriptor)
         });

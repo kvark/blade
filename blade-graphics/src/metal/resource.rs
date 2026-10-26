@@ -4,6 +4,15 @@ use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{self as metal, MTLTexture};
 use std::{mem, ptr};
 
+impl From<crate::Transform> for crate::AccelerationStructureTransform {
+    fn from(transform: crate::Transform) -> Self {
+        // Metal's macOS 13 / iOS 16 geometry transform buffers use packed
+        // column-major matrices. Selecting row-major requires macOS 15 / iOS 18.
+        let columns: [[f32; 3]; 4] = mint::ColumnMatrix3x4::from(transform).into();
+        Self(bytemuck::cast(columns))
+    }
+}
+
 fn map_texture_usage(usage: crate::TextureUsage) -> metal::MTLTextureUsage {
     use crate::TextureUsage as Tu;
 

@@ -151,6 +151,7 @@ impl super::Context {
             },
             // WebGL2 has no compute shaders.
             max_compute_shared_memory_size: 0,
+            compute_binding_limits: crate::ComputeBindingLimits::default(),
         };
         let device_information = unsafe {
             crate::DeviceInformation {

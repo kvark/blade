@@ -22,6 +22,12 @@ The backend is selected automatically based on the host platform:
 | compute | :white_check_mark: | :white_check_mark: | |
 | ray tracing | :white_check_mark: | | |
 
+### Metal
+
+Ray tracing requires macOS 13+ / iOS 16+.
+Pass runtime storage-buffer lengths explicitly to shaders: `arrayLength` is
+currently unsupported on Metal, for both ordinary buffers and binding-array elements.
+
 ### Vulkan
 
 Required instance extensions:
