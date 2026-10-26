@@ -199,6 +199,7 @@ impl super::Context {
         layout: &crate::ShaderDataLayout,
         info: &crate::ShaderDataInfo,
     ) -> super::DescriptorSetLayout {
+        assert!(layout.bindings.len() <= crate::limits::RESOURCES_IN_GROUP as usize);
         let unique_id = self
             .next_descriptor_layout_id
             .fetch_add(1, atomic::Ordering::Relaxed);
@@ -360,6 +361,16 @@ impl super::Context {
             update_template,
             template_size: update_offset as u32,
             template_offsets: template_offsets.into_boxed_slice(),
+            array_counts: layout
+                .bindings
+                .iter()
+                .map(|&(_, binding)| match binding {
+                    crate::ShaderBinding::BufferArray { count }
+                    | crate::ShaderBinding::TextureArray { count }
+                    | crate::ShaderBinding::AccelerationStructureArray { count } => count,
+                    _ => 0,
+                })
+                .collect(),
             descriptor_counts,
             inline_uniform_mask,
         }

@@ -3,6 +3,14 @@ use glow::HasContext as _;
 use std::ptr;
 use std::slice;
 
+impl From<crate::Transform> for crate::AccelerationStructureTransform {
+    fn from(transform: crate::Transform) -> Self {
+        // Models still upload transforms when acceleration structures are disabled.
+        let rows: [[f32; 4]; 3] = transform.into();
+        Self(bytemuck::cast(rows))
+    }
+}
+
 impl super::Context {
     pub fn get_bottom_level_acceleration_structure_sizes(
         &self,

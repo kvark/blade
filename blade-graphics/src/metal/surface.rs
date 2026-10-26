@@ -77,7 +77,7 @@ impl super::Context {
                 let main_layer = view.layer();
                 let render_layer = if main_layer
                     .as_ref()
-                    .map_or(false, |layer| layer.isKindOfClass(&CAMetalLayer::class()))
+                    .is_some_and(|layer| layer.isKindOfClass(CAMetalLayer::class()))
                 {
                     Retained::cast_unchecked(main_layer.unwrap())
                 } else {
@@ -128,7 +128,7 @@ impl super::Context {
             crate::DisplaySync::Recent | crate::DisplaySync::Tear => false,
         };
 
-        unsafe {
+        {
             surface.render_layer.setOpaque(!config.transparent);
             surface.render_layer.setDevice(Some(device.as_ref()));
             surface

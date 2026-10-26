@@ -138,6 +138,7 @@ struct AdapterCapabilities {
     ray_tracing: Option<RayTracingCapabilities>,
     buffer_device_address: bool,
     max_inline_uniform_block_size: u32,
+    max_plain_data_bindings: u32,
     buffer_marker: bool,
     shader_info: bool,
     pipeline_executable_properties: bool,
@@ -167,10 +168,29 @@ struct AdapterCapabilities {
 }
 
 impl AdapterCapabilities {
+    fn compute_binding_limits(&self) -> crate::ComputeBindingLimits {
+        let limits = &self.properties.limits;
+        crate::ComputeBindingLimits {
+            max_indirect_buffer_array_elements: None,
+            max_storage_buffers: limits
+                .max_per_stage_descriptor_storage_buffers
+                .min(limits.max_descriptor_set_storage_buffers),
+            max_plain_data_bindings: self.max_plain_data_bindings,
+            max_buffer_bindings: limits.max_per_stage_resources,
+            max_sampled_texture_bindings: limits
+                .max_per_stage_descriptor_sampled_images
+                .min(limits.max_descriptor_set_sampled_images),
+            max_bind_groups: limits.max_bound_descriptor_sets,
+            max_storage_buffer_range: u64::from(limits.max_storage_buffer_range),
+        }
+    }
+
     fn to_capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             compute: true,
+            device_memory_fence: self.vulkan_memory_model,
             max_compute_shared_memory_size: self.properties.limits.max_compute_shared_memory_size,
+            compute_binding_limits: self.compute_binding_limits(),
             indirect_draw: true,
             binding_array: self.binding_array,
             ray_query: match self.ray_tracing {
@@ -793,6 +813,22 @@ fn inspect_adapter(
         ray_tracing,
         buffer_device_address,
         max_inline_uniform_block_size,
+        max_plain_data_bindings: {
+            let uniform_buffers = properties
+                .limits
+                .max_per_stage_descriptor_uniform_buffers
+                .min(properties.limits.max_descriptor_set_uniform_buffers);
+            if max_inline_uniform_block_size == 0 {
+                uniform_buffers
+            } else {
+                uniform_buffers
+                    .min(
+                        inline_uniform_block_properties
+                            .max_per_stage_descriptor_inline_uniform_blocks,
+                    )
+                    .min(inline_uniform_block_properties.max_descriptor_set_inline_uniform_blocks)
+            }
+        },
         buffer_marker,
         shader_info,
         pipeline_executable_properties,
@@ -1501,6 +1537,7 @@ impl super::Context {
         } else {
             None
         };
+        let compute_binding_limits = capabilities.compute_binding_limits();
         let device = super::Device {
             swapchain: if desc.presentation {
                 Some(khr::swapchain::Device::new(&instance.core, &device_core))
@@ -1785,6 +1822,7 @@ impl super::Context {
                     .properties
                     .limits
                     .framebuffer_depth_sample_counts,
+            compute_binding_limits,
             max_compute_shared_memory_size: capabilities
                 .properties
                 .limits
@@ -1819,7 +1857,9 @@ impl super::Context {
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
             compute: true,
+            device_memory_fence: self.vulkan_memory_model,
             max_compute_shared_memory_size: self.max_compute_shared_memory_size,
+            compute_binding_limits: self.compute_binding_limits,
             subgroup_size: self.subgroup_size,
             indirect_draw: true,
             binding_array: self.binding_array,

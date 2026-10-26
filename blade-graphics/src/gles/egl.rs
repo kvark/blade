@@ -759,9 +759,9 @@ impl super::Context {
                 let window_ptr = handle.ns_view.as_ptr();
                 #[cfg(target_os = "macos")]
                 let window_ptr = unsafe {
-                    use objc2::{msg_send, runtime::Object};
-                    let layer: *mut Object =
-                        msg_send![handle.ns_view.as_ptr() as *mut Object, layer];
+                    use objc2::{msg_send, runtime::AnyObject};
+                    let layer: *mut AnyObject =
+                        msg_send![handle.ns_view.as_ptr() as *mut AnyObject, layer];
                     layer as *mut ffi::c_void
                 };
                 window_ptr
@@ -1663,6 +1663,7 @@ impl EglContext {
                     .get_parameter_i32(glow::UNIFORM_BUFFER_OFFSET_ALIGNMENT)
                     as u32,
                 max_compute_shared_memory_size: max_compute_shared_memory_size(&gl),
+                compute_binding_limits: compute_binding_limits(&gl),
             };
             (gl, capabilities, toggles, device_information, limits)
         }
@@ -1693,6 +1694,31 @@ fn max_compute_shared_memory_size(gl: &glow::Context) -> u32 {
         unsafe { gl.get_parameter_i32(glow::MAX_COMPUTE_SHARED_MEMORY_SIZE) }.max(0) as u32
     } else {
         0
+    }
+}
+
+fn compute_binding_limits(gl: &glow::Context) -> crate::ComputeBindingLimits {
+    if max_compute_shared_memory_size(gl) == 0 {
+        return crate::ComputeBindingLimits::default();
+    }
+    unsafe {
+        let storage_slots = gl.get_parameter_i32(glow::MAX_SHADER_STORAGE_BUFFER_BINDINGS) as u32;
+        let uniform_slots = gl.get_parameter_i32(glow::MAX_UNIFORM_BUFFER_BINDINGS) as u32;
+        crate::ComputeBindingLimits {
+            max_indirect_buffer_array_elements: None,
+            max_storage_buffers: storage_slots
+                .min(gl.get_parameter_i32(glow::MAX_COMPUTE_SHADER_STORAGE_BLOCKS) as u32),
+            max_plain_data_bindings: uniform_slots
+                .min(gl.get_parameter_i32(glow::MAX_COMPUTE_UNIFORM_BLOCKS) as u32),
+            // Blade assigns buffer slots from one counter for both namespaces.
+            max_buffer_bindings: storage_slots.min(uniform_slots),
+            max_sampled_texture_bindings: gl
+                .get_parameter_i32(glow::MAX_COMPUTE_TEXTURE_IMAGE_UNITS)
+                as u32,
+            max_bind_groups: u32::MAX,
+            max_storage_buffer_range: gl.get_parameter_i64(glow::MAX_SHADER_STORAGE_BLOCK_SIZE)
+                as u64,
+        }
     }
 }
 

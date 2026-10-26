@@ -821,8 +821,9 @@ impl Baker {
             memory: blade_graphics::Memory::Shared,
         });
 
-        let total_transform_size =
-            (geometries.len() * mem::size_of::<blade_graphics::Transform>()) as u64;
+        let total_transform_size = (geometries.len()
+            * mem::size_of::<blade_graphics::AccelerationStructureTransform>())
+            as u64;
         let transform_buffer = self.gpu_context.create_buffer(blade_graphics::BufferDesc {
             name: "proc transform",
             size: total_transform_size,
@@ -856,11 +857,12 @@ impl Baker {
                 );
             }
             let transform = blade_graphics::IDENTITY_TRANSFORM;
+            let packed_transform = blade_graphics::AccelerationStructureTransform::from(transform);
             unsafe {
                 ptr::copy_nonoverlapping(
-                    ptr::from_ref(&transform).cast::<u8>(),
+                    ptr::from_ref(&packed_transform).cast::<u8>(),
                     transform_buffer.data().add(transform_offset as usize),
-                    mem::size_of::<blade_graphics::Transform>(),
+                    mem::size_of::<blade_graphics::AccelerationStructureTransform>(),
                 );
             }
 
@@ -911,7 +913,8 @@ impl Baker {
 
             start_vertex += geo.vertices.len() as u32;
             index_offset += geo.indices.len() as u64 * 4;
-            transform_offset += mem::size_of::<blade_graphics::Transform>() as u64;
+            transform_offset +=
+                mem::size_of::<blade_graphics::AccelerationStructureTransform>() as u64;
         }
 
         self.gpu_context.sync_buffer(
@@ -1295,8 +1298,9 @@ impl blade_asset::Baker for Baker {
         let index_buffer = index_upload.dst;
         let index_stage = index_upload.stage;
 
-        let total_transform_size =
-            (model.geometries.len() * mem::size_of::<blade_graphics::Transform>()) as u64;
+        let total_transform_size = (model.geometries.len()
+            * mem::size_of::<blade_graphics::AccelerationStructureTransform>())
+            as u64;
         let transform_upload = BufferUpload::new(
             &self.gpu_context,
             "transform",
@@ -1318,6 +1322,8 @@ impl blade_asset::Baker for Baker {
                 blade_graphics::limits::STORAGE_BUFFER_ALIGNMENT,
             );
             let material = &model.materials[geometry.material_index as usize];
+            let transform = blade_graphics::Transform::from(geometry.transform);
+            let packed_transform = blade_graphics::AccelerationStructureTransform::from(transform);
             unsafe {
                 ptr::copy_nonoverlapping(
                     geometry.vertices.as_ptr(),
@@ -1335,9 +1341,9 @@ impl blade_asset::Baker for Baker {
                     geometry.indices.len(),
                 );
                 ptr::copy_nonoverlapping(
-                    geometry.transform.as_ptr() as *const u8,
+                    ptr::from_ref(&packed_transform).cast::<u8>(),
                     transform_stage.data().add(transform_offset as usize),
-                    mem::size_of::<blade_graphics::Transform>(),
+                    mem::size_of::<blade_graphics::AccelerationStructureTransform>(),
                 );
             }
             let index_type = if geometry.indices.is_empty() {
@@ -1358,7 +1364,7 @@ impl blade_asset::Baker for Baker {
                 index_data: index_buffer.at(index_offset),
                 index_type,
                 triangle_count,
-                transform_data: transform_buffer.at(transform_offset), //TODO
+                transform_data: transform_buffer.at(transform_offset),
                 is_opaque: !material.transparent,
             });
             geometries.push(Geometry {
@@ -1367,7 +1373,7 @@ impl blade_asset::Baker for Baker {
                 index_offset,
                 index_type,
                 triangle_count,
-                transform: geometry.transform.into(),
+                transform,
                 material_index: geometry.material_index as usize,
                 node_index: geometry.node_index as usize,
                 skin_index: (geometry.skin_index != u32::MAX)
@@ -1376,7 +1382,8 @@ impl blade_asset::Baker for Baker {
             });
             start_vertex += geometry.vertices.len() as u32;
             index_offset += geometry.indices.len() as u64 * 4;
-            transform_offset += mem::size_of::<blade_graphics::Transform>() as u64;
+            transform_offset +=
+                mem::size_of::<blade_graphics::AccelerationStructureTransform>() as u64;
         }
         assert_eq!(start_vertex as usize, total_vertices);
         assert!(index_offset <= total_index_size);

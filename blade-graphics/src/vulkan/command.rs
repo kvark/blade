@@ -69,6 +69,12 @@ impl super::PipelineContext<'_> {
 
     #[inline]
     fn write_array<I: Iterator>(&mut self, index: u32, iter: I) {
+        let count = self.array_counts[index as usize] as usize;
+        assert_eq!(
+            iter.size_hint(),
+            (count, Some(count)),
+            "binding array must fill its layout count"
+        );
         let base_offset = self.template_offsets[index as usize];
         let base_ptr =
             unsafe { self.update_data.as_mut_ptr().offset(base_offset as isize) as *mut I::Item };
@@ -131,7 +137,9 @@ impl crate::ShaderBindable for super::TextureView {
 }
 impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::TextureArray<N> {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
-        assert!(self.data.len() <= N as usize);
+        let count = ctx.array_counts[index as usize] as usize;
+        assert!(count <= N as usize);
+        assert!(!self.data.is_empty() && self.data.len() <= count);
         ctx.write_array(
             index,
             self.data
@@ -142,7 +150,7 @@ impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::Tex
                     image_layout: vk::ImageLayout::GENERAL,
                 })
                 .cycle()
-                .take(N as usize),
+                .take(count),
         );
     }
 }
@@ -172,7 +180,9 @@ impl crate::ShaderBindable for crate::BufferPiece {
 }
 impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::BufferArray<N> {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
-        assert!(self.data.len() <= N as usize);
+        let count = ctx.array_counts[index as usize] as usize;
+        assert!(count <= N as usize);
+        assert!(!self.data.is_empty() && self.data.len() <= count);
         ctx.write_array(
             index,
             self.data
@@ -183,7 +193,7 @@ impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable for &'a crate::Buf
                     range: vk::WHOLE_SIZE,
                 })
                 .cycle()
-                .take(N as usize),
+                .take(count),
         );
     }
 }
@@ -196,14 +206,12 @@ impl<'a, const N: crate::ResourceIndex> crate::ShaderBindable
     for &'a crate::AccelerationStructureArray<N>
 {
     fn bind_to(&self, ctx: &mut super::PipelineContext, index: u32) {
-        assert!(self.data.len() <= N as usize);
+        let count = ctx.array_counts[index as usize] as usize;
+        assert!(count <= N as usize);
+        assert!(!self.data.is_empty() && self.data.len() <= count);
         ctx.write_array(
             index,
-            self.data
-                .iter()
-                .map(|accel| accel.raw)
-                .cycle()
-                .take(N as usize),
+            self.data.iter().map(|accel| accel.raw).cycle().take(count),
         );
     }
 }
@@ -1261,6 +1269,7 @@ impl crate::traits::PipelineEncoder for super::PipelineEncoder<'_, '_> {
             data.fill(super::PipelineContext {
                 update_data: self.update_data.as_mut_slice(),
                 template_offsets: &dsl.template_offsets,
+                array_counts: &dsl.array_counts,
                 scratch: self.cmd_buf.scratch.as_mut(),
                 inline_uniform_mask: dsl.inline_uniform_mask,
             });
@@ -1446,6 +1455,58 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::super::{CommandEncoder, PassKind, PassKinds, TimestampCalibration};
+
+    #[test]
+    fn acceleration_structure_array_uses_the_layout_count() {
+        use crate::ShaderBindable as _;
+        use ash::vk::Handle as _;
+        let mut words = [0u64; 2];
+        let mut context = super::super::PipelineContext {
+            update_data: bytemuck::cast_slice_mut(&mut words),
+            template_offsets: &[0],
+            array_counts: &[2],
+            scratch: None,
+            inline_uniform_mask: 0,
+        };
+        let mut array = crate::AccelerationStructureArray::<4>::new();
+        array.alloc(crate::AccelerationStructure {
+            raw: ash::vk::AccelerationStructureKHR::from_raw(7),
+            ..Default::default()
+        });
+        (&array).bind_to(&mut context, 0);
+        context.array_counts = &[0];
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (&crate::BufferArray::<4>::new()).bind_to(&mut context, 0);
+            }))
+            .is_err()
+        );
+        assert_eq!(words, [7, 7]);
+    }
+
+    #[test]
+    fn binding_array_count_is_checked_before_writing() {
+        let mut words = [0u64; 4];
+        let mut context = super::super::PipelineContext {
+            update_data: bytemuck::cast_slice_mut(&mut words),
+            template_offsets: &[0, 16],
+            array_counts: &[2, 2],
+            scratch: None,
+            inline_uniform_mask: 0,
+        };
+        for count in [0, 1, 3] {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    context.write_array(0, (0..count).map(|_| u64::MAX));
+                }))
+                .is_err()
+            );
+            assert!(context.update_data.iter().all(|&byte| byte == 0));
+        }
+        context.write_array(0, [1u64, 2].into_iter());
+        context.write_array(1, [3u64].into_iter().cycle().take(2));
+        assert_eq!(words, [1, 2, 3, 3]);
+    }
 
     #[test]
     fn calibrated_timestamp_mapping_handles_wrap_and_skew() {

@@ -365,6 +365,7 @@ pub struct Context {
     min_buffer_alignment: u64,
     min_uniform_buffer_offset_alignment: u64,
     max_compute_shared_memory_size: u32,
+    compute_binding_limits: crate::ComputeBindingLimits,
     subgroup_size: u32,
     sample_count_flags: vk::SampleCountFlags,
     dual_source_blending: bool,
@@ -465,6 +466,7 @@ struct DescriptorSetLayout {
     update_template: vk::DescriptorUpdateTemplate,
     template_size: u32,
     template_offsets: Box<[u32]>,
+    array_counts: Box<[u32]>,
     descriptor_counts: descriptor::DescriptorCounts,
     /// Bitmask: bit N is set if binding N uses inline uniform blocks.
     /// Clear bits use uniform buffer objects via the scratch buffer.
@@ -496,6 +498,7 @@ struct ScratchBuffer {
 pub struct PipelineContext<'a> {
     update_data: &'a mut [u8],
     template_offsets: &'a [u32],
+    array_counts: &'a [u32],
     scratch: Option<&'a mut ScratchBuffer>,
     /// Bitmask: bit N is set if binding N uses inline uniform blocks.
     inline_uniform_mask: u64,
@@ -1073,6 +1076,7 @@ impl Device {
                 },
                 vertex_stride: mesh.vertex_stride as u64,
                 max_vertex: mesh.vertex_count.saturating_sub(1),
+                index_type: vk::IndexType::NONE_KHR,
                 ..Default::default()
             };
             if let Some(index_type) = mesh.index_type {

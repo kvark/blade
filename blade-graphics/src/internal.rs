@@ -47,6 +47,23 @@ mod tests {
     use super::StringBuffer;
 
     #[test]
+    fn resource_array_runtime_limit_preserves_reused_slots() {
+        let mut array = crate::ResourceArray::<u32, 8>::with_limit(2);
+        assert!(array.is_empty());
+        assert_eq!(array.alloc(10), 0);
+        assert_eq!(array.alloc(20), 1);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| array.alloc(30))).is_err()
+        );
+        array.free(0);
+        assert_eq!(array.alloc(40), 0);
+        assert_eq!(array[0], 40);
+        array.clear();
+        assert!(array.is_empty());
+        assert_eq!(array.alloc(50), 0);
+    }
+
+    #[test]
     fn drain_prefix_keeps_the_rest() {
         let mut buf = StringBuffer::default();
         buf.push("shadow");

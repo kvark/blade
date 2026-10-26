@@ -23,6 +23,7 @@ bitflags::bitflags! {
 struct Limits {
     uniform_buffer_alignment: u32,
     max_compute_shared_memory_size: u32,
+    compute_binding_limits: crate::ComputeBindingLimits,
 }
 
 #[derive(Debug, Default)]
@@ -484,7 +485,9 @@ struct ExecutionContext {
 impl Context {
     pub fn capabilities(&self) -> crate::Capabilities {
         crate::Capabilities {
+            compute_binding_limits: self.limits.compute_binding_limits,
             compute: self.capabilities.contains(Capabilities::BUFFER_STORAGE),
+            device_memory_fence: false,
             max_compute_shared_memory_size: self.limits.max_compute_shared_memory_size,
             subgroup_size: 0,
             indirect_draw: false,

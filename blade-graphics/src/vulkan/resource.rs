@@ -4,6 +4,13 @@ use gpu_alloc_ash::AshMemoryDevice;
 use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd};
 use std::{mem, ptr};
 
+impl From<crate::Transform> for crate::AccelerationStructureTransform {
+    fn from(transform: crate::Transform) -> Self {
+        let rows: [[f32; 4]; 3] = transform.into();
+        Self(bytemuck::cast(rows))
+    }
+}
+
 fn memory_allocate_flags(needs_device_address: bool) -> vk::MemoryAllocateFlags {
     if needs_device_address {
         vk::MemoryAllocateFlags::DEVICE_ADDRESS
@@ -953,6 +960,21 @@ fn fetch_external_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn geometry_transform_preserves_vulkan_row_major_layout() {
+        let rows = [
+            [1.0, 2.0, 3.0, 4.0],
+            [5.0, 6.0, 7.0, 8.0],
+            [9.0, 10.0, 11.0, 12.0],
+        ];
+        let packed = crate::AccelerationStructureTransform::from(crate::Transform::from(rows));
+        assert_eq!(bytemuck::bytes_of(&packed), bytemuck::bytes_of(&rows));
+        assert_eq!(
+            mem::size_of_val(&packed),
+            mem::size_of::<vk::TransformMatrixKHR>()
+        );
+    }
 
     #[test]
     #[cfg(target_os = "linux")]
