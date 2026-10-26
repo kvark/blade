@@ -48,10 +48,8 @@ fn hit_winding(entry: HitEntry) -> f32 {
 }
 
 fn hit_normal(entry: HitEntry, object_to_world: mat4x3<f32>, normal: vec3<f32>) -> vec3<f32> {
-    // Skinning assumes uniform scale, so the linear part acts on normals
-    // like a rotation after normalization.
     let linear = affine_linear(object_to_world) * affine_linear(entry.geometry_to_object);
-    return normalize(linear * normal);
+    return transform_normal(linear, normal);
 }
 
 fn hit_tangent_space(

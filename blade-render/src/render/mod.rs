@@ -13,6 +13,45 @@ use std::{collections::HashMap, mem, num::NonZeroU32, ptr};
 
 const MAX_RESOURCES: u32 = 8192;
 const RADIANCE_FORMAT: blade_graphics::TextureFormat = blade_graphics::TextureFormat::Rgba16Float;
+const SCRATCH_LIGHTING_INDEX: usize = 2;
+
+fn resource_limit(gpu: &blade_graphics::Context) -> u32 {
+    resource_limit_for(gpu.capabilities().compute_binding_limits)
+}
+
+fn resource_limit_for(limits: blade_graphics::ComputeBindingLimits) -> u32 {
+    limits
+        .max_indirect_buffer_array_elements
+        .unwrap_or_else(|| {
+            // MainData has two buffer tables, one texture table, four ordinary
+            // storage buffers, four plain-data bindings, 13 sampled images,
+            // and three storage images. Vulkan images share the stage resource
+            // budget with buffers; each direct array element consumes a resource.
+            (limits.max_storage_buffers.saturating_sub(4) / 2)
+                .min(limits.max_buffer_bindings.saturating_sub(24) / 3)
+                .min(limits.max_sampled_texture_bindings.saturating_sub(13))
+        })
+        .min(MAX_RESOURCES)
+}
+
+fn ray_data_layout<D: blade_graphics::ShaderData>(
+    gpu: &blade_graphics::Context,
+) -> blade_graphics::ShaderDataLayout {
+    let count = resource_limit(gpu);
+    let mut layout = D::layout();
+    for entry in &mut layout.bindings {
+        match entry.1 {
+            blade_graphics::ShaderBinding::BufferArray {
+                count: ref mut size,
+            }
+            | blade_graphics::ShaderBinding::TextureArray {
+                count: ref mut size,
+            } => *size = count,
+            _ => {}
+        }
+    }
+    layout
+}
 
 fn mat4_transform(t: &blade_graphics::Transform) -> glam::Mat4 {
     glam::Mat4 {
@@ -22,6 +61,22 @@ fn mat4_transform(t: &blade_graphics::Transform) -> glam::Mat4 {
         w_axis: glam::Vec4::W,
     }
     .transpose()
+}
+
+// A rigid mesh node pose can be applied to the instance instead of
+// skinning vertices and refitting a BLAS. The BLAS already contains the bind
+// geometry transform, so remove that before applying the posed transform.
+fn rigid_instance_transform(
+    object: blade_graphics::Transform,
+    geometry: blade_graphics::Transform,
+    posed: blade_graphics::Transform,
+) -> Option<blade_graphics::Transform> {
+    let inverse_bind = mat4_transform(&geometry).inverse();
+    inverse_bind.is_finite().then(|| {
+        crate::model::mat4_to_transform(
+            mat4_transform(&object) * mat4_transform(&posed) * inverse_bind,
+        )
+    })
 }
 struct Samplers {
     nearest: blade_graphics::Sampler,
@@ -206,10 +261,10 @@ pub struct GBufferViews {
     pub specular_f0: blade_graphics::TextureView,
     /// Emitted radiance, in the renderer's radiance format.
     pub emissive: blade_graphics::TextureView,
-    /// `Rg16Float`. Screen space motion since the previous frame, scaled by
-    /// `MOTION_SCALE` from `gbuf.inc.wgsl`. Half precision keeps subpixel
-    /// reprojection accurate enough for temporal upscaling; `Rg8Snorm` stepped
-    /// by roughly 0.4 pixels after decoding.
+    /// `Rgba16Float`. XY is screen-space motion since the previous frame,
+    /// scaled by `MOTION_SCALE` from `gbuf.inc.wgsl`. Z is the hit's distance
+    /// from the previous camera, for rejecting disoccluded temporal history.
+    /// W is unused. Half precision preserves subpixel reprojection.
     pub motion: blade_graphics::TextureView,
 }
 
@@ -413,7 +468,7 @@ impl RestirTargets {
             emissive: RenderTarget::new("emissive", RADIANCE_FORMAT, size, encoder, gpu),
             motion: RenderTarget::new(
                 "motion",
-                blade_graphics::TextureFormat::Rg16Float,
+                blade_graphics::TextureFormat::Rgba16Float,
                 size,
                 encoder,
                 gpu,
@@ -482,6 +537,7 @@ impl RestirTargets {
 struct Blur {
     temporal_accum_pipeline: blade_graphics::ComputePipeline,
     a_trous_pipeline: blade_graphics::ComputePipeline,
+    history_frame: Option<usize>,
 }
 
 /// Blade RayTracer is a comprehensive rendering solution for
@@ -668,21 +724,34 @@ struct TemporalAccumData {
     prev_camera: CameraParams,
     params: BlurParams,
     input: blade_graphics::TextureView,
+    input_specular: blade_graphics::TextureView,
+    current_diffuse: blade_graphics::TextureView,
+    current_specular: blade_graphics::TextureView,
     t_depth: blade_graphics::TextureView,
     t_prev_depth: blade_graphics::TextureView,
     t_flat_normal: blade_graphics::TextureView,
     t_prev_flat_normal: blade_graphics::TextureView,
+    t_basis: blade_graphics::TextureView,
+    t_prev_basis: blade_graphics::TextureView,
+    t_specular_f0: blade_graphics::TextureView,
+    t_prev_specular_f0: blade_graphics::TextureView,
     t_motion: blade_graphics::TextureView,
     output: blade_graphics::TextureView,
+    output_specular: blade_graphics::TextureView,
 }
 
 #[derive(blade_macros::ShaderData)]
 struct ATrousData {
+    camera: CameraParams,
     params: BlurParams,
     input: blade_graphics::TextureView,
+    input_specular: blade_graphics::TextureView,
     t_depth: blade_graphics::TextureView,
     t_flat_normal: blade_graphics::TextureView,
+    t_basis: blade_graphics::TextureView,
+    t_specular_f0: blade_graphics::TextureView,
     output: blade_graphics::TextureView,
+    output_specular: blade_graphics::TextureView,
 }
 
 #[repr(C)]
@@ -841,7 +910,7 @@ impl ShaderPipelines {
     ) -> blade_graphics::ComputePipeline {
         shader.check_struct_size::<crate::Vertex>();
         shader.check_struct_size::<HitEntry>();
-        let layout = <FillData as blade_graphics::ShaderData>::layout();
+        let layout = ray_data_layout::<FillData>(gpu);
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "fill-gbuf",
             data_layouts: &[&layout],
@@ -857,7 +926,7 @@ impl ShaderPipelines {
         shader.check_struct_size::<MainParams>();
         shader.check_struct_size::<DebugVariance>();
         shader.check_struct_size::<DebugEntry>();
-        let layout = <MainData as blade_graphics::ShaderData>::layout();
+        let layout = ray_data_layout::<MainData>(gpu);
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "ray-trace",
             data_layouts: &[&layout],
@@ -873,7 +942,7 @@ impl ShaderPipelines {
         shader.check_struct_size::<HitEntry>();
         shader.check_struct_size::<CameraParams>();
         shader.check_struct_size::<PathTraceParams>();
-        let layout = <PathTraceData as blade_graphics::ShaderData>::layout();
+        let layout = ray_data_layout::<PathTraceData>(gpu);
         gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "path-trace",
             data_layouts: &[&layout],
@@ -962,6 +1031,7 @@ impl ShaderPipelines {
 pub struct FrameConfig {
     pub frozen: bool,
     pub debug_draw: bool,
+    /// Reset the selected debug pixel's statistics, not SVGF history.
     pub reset_variance: bool,
     pub reset_reservoirs: bool,
     /// Throw away what the canonical renderer has accumulated so far.
@@ -987,6 +1057,15 @@ impl RayTracer {
         config: &RenderConfig,
     ) -> Self {
         let capabilities = gpu.capabilities();
+        assert!(
+            capabilities.binding_array,
+            "ray tracing requires binding arrays"
+        );
+        let resource_limit = resource_limit(gpu);
+        assert!(
+            resource_limit >= 2,
+            "ray tracing requires two dummy textures"
+        );
         assert!(
             capabilities
                 .ray_query
@@ -1043,15 +1122,16 @@ impl RayTracer {
             blur: Blur {
                 temporal_accum_pipeline: sp.temporal_accum,
                 a_trous_pipeline: sp.a_trous,
+                history_frame: None,
             },
             acceleration_structure: blade_graphics::AccelerationStructure::default(),
             prev_acceleration_structure: blade_graphics::AccelerationStructure::default(),
             env_map: EnvironmentMap::with_pipeline(&dummy, sp.env_prepare),
             dummy,
             hit_buffer: blade_graphics::Buffer::default(),
-            vertex_buffers: blade_graphics::BufferArray::new(),
-            index_buffers: blade_graphics::BufferArray::new(),
-            textures: blade_graphics::TextureArray::new(),
+            vertex_buffers: blade_graphics::BufferArray::with_limit(resource_limit),
+            index_buffers: blade_graphics::BufferArray::with_limit(resource_limit),
+            textures: blade_graphics::TextureArray::with_limit(resource_limit),
             samplers,
             reservoir_size: sp.reservoir_size,
             debug,
@@ -1152,6 +1232,7 @@ impl RayTracer {
         {
             self.blur.temporal_accum_pipeline = ShaderPipelines::create_temporal_accum(shader, gpu);
             self.blur.a_trous_pipeline = ShaderPipelines::create_a_trous(shader, gpu);
+            self.blur.history_frame = None;
         }
         if self.shaders.post_proc != old.post_proc
             && let Ok(ref shader) = asset_hub.shaders[self.shaders.post_proc].raw
@@ -1253,6 +1334,7 @@ impl RayTracer {
         self.surface_size = size;
         self.targets.destroy(gpu);
         self.targets = RestirTargets::new(size, self.reservoir_size, encoder, gpu);
+        self.blur.history_frame = None;
     }
 
     #[profiling::function]
@@ -1345,27 +1427,57 @@ impl RayTracer {
             };
 
         for object in objects.iter_mut() {
-            let transform = object.transform;
-            let prev_transform = object.prev_transform;
+            let mut transform = object.transform;
+            let mut prev_transform = object.prev_transform;
             let pose = object.pose.clone();
             let prev_pose = object.prev_pose.clone();
             let model = &asset_hub.models[object.model];
             let pose = pose.as_ref();
             let prev_pose = prev_pose.as_ref();
+            let rigid_geometry = model
+                .geometries
+                .first()
+                .filter(|geometry| {
+                    (pose.is_some() || prev_pose.is_some())
+                        && model.geometries.iter().all(|other| {
+                            other.skin_index.is_none()
+                                && other.node_index == geometry.node_index
+                                && other.transform == geometry.transform
+                        })
+                })
+                .and_then(|geometry| {
+                    let current = rigid_instance_transform(
+                        transform,
+                        geometry.transform,
+                        model.geometry_transform(geometry, pose),
+                    )?;
+                    let previous = rigid_instance_transform(
+                        prev_transform,
+                        geometry.transform,
+                        model.geometry_transform(geometry, prev_pose),
+                    )?;
+                    transform = current;
+                    prev_transform = previous;
+                    Some(geometry.transform)
+                });
             let dynamic = model
                 .geometries
                 .iter()
                 .any(|geometry| geometry.skin_index.is_some())
-                || pose.is_some();
+                || (pose.is_some() && rigid_geometry.is_none());
             let geometry_transforms: Vec<_> = model
                 .geometries
                 .iter()
-                .map(|geometry| model.geometry_transform(geometry, pose))
+                .map(|geometry| {
+                    rigid_geometry.unwrap_or_else(|| model.geometry_transform(geometry, pose))
+                })
                 .collect();
             let prev_geometry_transforms: Vec<_> = model
                 .geometries
                 .iter()
-                .map(|geometry| model.geometry_transform(geometry, prev_pose))
+                .map(|geometry| {
+                    rigid_geometry.unwrap_or_else(|| model.geometry_transform(geometry, prev_pose))
+                })
                 .collect();
 
             let (
@@ -1524,6 +1636,15 @@ impl RayTracer {
                 let material = &model.materials[geometry.material_index];
                 let vertex_offset =
                     geometry.vertex_range.start as u64 * mem::size_of::<crate::Vertex>() as u64;
+                let vertex_buf = self
+                    .vertex_buffers
+                    .alloc(active_vertex_buffer.at(vertex_offset));
+                let prev_vertex_buf = if active_vertex_buffer == previous_vertex_buffer {
+                    vertex_buf
+                } else {
+                    self.vertex_buffers
+                        .alloc(previous_vertex_buffer.at(vertex_offset))
+                };
 
                 let hit_entry = HitEntry {
                     index_buf: match geometry.index_type {
@@ -1532,12 +1653,8 @@ impl RayTracer {
                             .alloc(model.index_buffer.at(geometry.index_offset)),
                         None => !0,
                     },
-                    vertex_buf: self
-                        .vertex_buffers
-                        .alloc(active_vertex_buffer.at(vertex_offset)),
-                    prev_vertex_buf: self
-                        .vertex_buffers
-                        .alloc(previous_vertex_buffer.at(vertex_offset)),
+                    vertex_buf,
+                    prev_vertex_buf,
                     flags: u32::from(model.winding < 0.0),
                     geometry_to_object: mint::ColumnMatrix4::from(mint::RowMatrix4 {
                         x: geometry_transform.x,
@@ -1589,13 +1706,20 @@ impl RayTracer {
             }
         }
 
+        if self.index_buffers.is_empty() {
+            self.index_buffers.alloc(self.hit_buffer.at(0));
+        }
+        if self.vertex_buffers.is_empty() {
+            self.vertex_buffers.alloc(self.hit_buffer.at(0));
+        }
+
         self.texture_resource_lookup.clear();
         for (handle, res_id) in texture_indices {
             self.texture_resource_lookup.insert(res_id, handle);
         }
 
         assert_eq!(geometry_index, geometry_count);
-        log::info!(
+        log::debug!(
             "Preparing ray tracing with {} geometries in total",
             geometry_count
         );
@@ -1694,6 +1818,9 @@ impl RayTracer {
             self.debug.enable_draw(&mut transfer, false);
         }
 
+        if reset_reservoirs {
+            self.blur.history_frame = None;
+        }
         if reset_reservoirs || config.reset_variance {
             self.debug.reset_variance(&mut transfer);
         } else {
@@ -1746,6 +1873,7 @@ impl RayTracer {
     ) {
         match mode {
             RenderMode::RealTime => {
+                self.post_proc_input_index = SCRATCH_LIGHTING_INDEX;
                 self.ray_trace(command_encoder, debug_config, ray_config);
                 if let Some(config) = denoiser_config {
                     self.denoise(command_encoder, config);
@@ -1861,7 +1989,7 @@ impl RayTracer {
     ) {
         let debug = self.make_debug_params(&debug_config);
         let (cur, prev) = self.work_indices();
-        assert_eq!(cur, self.post_proc_input_index);
+        assert_eq!(SCRATCH_LIGHTING_INDEX, self.post_proc_input_index);
 
         self.fill_gbuffer(command_encoder, debug_config);
 
@@ -1921,8 +2049,8 @@ impl RayTracer {
                     debug_buf: self.debug.buffer_resource(),
                     reservoirs: self.targets.reservoir_buf[cur].into(),
                     prev_reservoirs: self.targets.reservoir_buf[prev].into(),
-                    out_diffuse: self.targets.light_diffuse.views[cur],
-                    out_specular: self.targets.light_specular.views[cur],
+                    out_diffuse: self.targets.light_diffuse.views[SCRATCH_LIGHTING_INDEX],
+                    out_specular: self.targets.light_specular.views[SCRATCH_LIGHTING_INDEX],
                     out_debug: self.targets.debug.views[0],
                 },
             );
@@ -1939,47 +2067,64 @@ impl RayTracer {
     ) {
         let mut params = BlurParams {
             extent: [self.surface_size.width, self.surface_size.height],
-            temporal_weight: denoiser_config.temporal_weight,
+            temporal_weight: if self.blur.history_frame.is_some_and(|frame| {
+                frame + 1 == self.frame_index || (self.is_frozen && frame == self.frame_index)
+            }) {
+                denoiser_config.temporal_weight
+            } else {
+                1.0
+            },
             iteration: 0,
             use_motion_vectors: (self.frame_scene_built >= self.frame_index) as u32,
             pad: 0,
         };
         let (cur, prev) = self.work_indices();
-        // Both of the lighting lobes are filtered the same way.
+        // Separate lighting histories with shared guide reconstruction.
         let radiance_views = [
             self.targets.light_diffuse.views,
             self.targets.light_specular.views,
         ];
 
-        if denoiser_config.temporal_weight < 1.0 {
+        // Even without history, initialize the variance channel consistently.
+        {
             let mut pass = command_encoder.compute("temporal-accum");
             let mut pc = pass.with(&self.blur.temporal_accum_pipeline);
             let groups = self
                 .blur
                 .a_trous_pipeline
                 .get_dispatch_for(self.surface_size);
-            for views in radiance_views.iter() {
-                pc.bind(
-                    0,
-                    &TemporalAccumData {
-                        camera: self.targets.camera_params[cur],
-                        prev_camera: self.targets.camera_params[prev],
-                        params,
-                        input: views[prev],
-                        t_depth: self.targets.depth.views[cur],
-                        t_prev_depth: self.targets.depth.views[prev],
-                        t_flat_normal: self.targets.flat_normal.views[cur],
-                        t_prev_flat_normal: self.targets.flat_normal.views[prev],
-                        t_motion: self.targets.motion.views[0],
-                        output: views[cur],
-                    },
-                );
-                pc.dispatch(groups);
-            }
+            pc.bind(
+                0,
+                &TemporalAccumData {
+                    camera: self.targets.camera_params[cur],
+                    prev_camera: self.targets.camera_params[prev],
+                    params,
+                    input: radiance_views[0][prev],
+                    input_specular: radiance_views[1][prev],
+                    current_diffuse: radiance_views[0][SCRATCH_LIGHTING_INDEX],
+                    current_specular: radiance_views[1][SCRATCH_LIGHTING_INDEX],
+                    t_depth: self.targets.depth.views[cur],
+                    t_prev_depth: self.targets.depth.views[prev],
+                    t_flat_normal: self.targets.flat_normal.views[cur],
+                    t_prev_flat_normal: self.targets.flat_normal.views[prev],
+                    t_basis: self.targets.basis.views[cur],
+                    t_prev_basis: self.targets.basis.views[prev],
+                    t_specular_f0: self.targets.specular_f0.views[cur],
+                    t_prev_specular_f0: self.targets.specular_f0.views[prev],
+                    t_motion: self.targets.motion.views[0],
+                    output: radiance_views[0][cur],
+                    output_specular: radiance_views[1][cur],
+                },
+            );
+            pc.dispatch(groups);
         }
 
-        assert_eq!(cur, self.post_proc_input_index);
-        let mut ping_pong = [2, if self.is_frozen { cur } else { prev }];
+        assert_eq!(SCRATCH_LIGHTING_INDEX, self.post_proc_input_index);
+        self.post_proc_input_index = cur;
+        let mut ping_pong = [
+            SCRATCH_LIGHTING_INDEX,
+            if self.is_frozen { cur } else { prev },
+        ];
         for _ in 0..denoiser_config.num_passes {
             let mut pass = command_encoder.compute("a-trous");
             let mut pc = pass.with(&self.blur.a_trous_pipeline);
@@ -1987,23 +2132,27 @@ impl RayTracer {
                 .blur
                 .a_trous_pipeline
                 .get_dispatch_for(self.surface_size);
-            for views in radiance_views.iter() {
-                pc.bind(
-                    0,
-                    &ATrousData {
-                        params,
-                        input: views[self.post_proc_input_index],
-                        t_depth: self.targets.depth.views[cur],
-                        t_flat_normal: self.targets.flat_normal.views[cur],
-                        output: views[ping_pong[0]],
-                    },
-                );
-                pc.dispatch(groups);
-            }
+            pc.bind(
+                0,
+                &ATrousData {
+                    camera: self.targets.camera_params[cur],
+                    params,
+                    input: radiance_views[0][self.post_proc_input_index],
+                    input_specular: radiance_views[1][self.post_proc_input_index],
+                    t_depth: self.targets.depth.views[cur],
+                    t_flat_normal: self.targets.flat_normal.views[cur],
+                    t_basis: self.targets.basis.views[cur],
+                    t_specular_f0: self.targets.specular_f0.views[cur],
+                    output: radiance_views[0][ping_pong[0]],
+                    output_specular: radiance_views[1][ping_pong[0]],
+                },
+            );
+            pc.dispatch(groups);
             self.post_proc_input_index = ping_pong[0];
             ping_pong.swap(0, 1);
             params.iteration += 1;
         }
+        self.blur.history_frame = Some(self.frame_index);
     }
 
     /// Blit the rendering result into a specified render pass.
@@ -2136,6 +2285,51 @@ impl RayTracer {
 
 #[cfg(test)]
 mod layout_tests {
+    #[test]
+    fn rigid_pose_keeps_bind_geometry_and_instance_composition() {
+        let bind = glam::Mat4::from_scale_rotation_translation(
+            glam::vec3(2.0, 0.7, 1.3),
+            glam::Quat::from_rotation_z(0.4),
+            glam::vec3(1.0, 2.0, 3.0),
+        );
+        let posed = glam::Mat4::from_translation(glam::vec3(0.0, 0.5, 1.0)) * bind;
+        let object = glam::Mat4::from_rotation_y(0.3);
+        let to_transform = crate::model::mat4_to_transform;
+        let instance = super::rigid_instance_transform(
+            to_transform(object),
+            to_transform(bind),
+            to_transform(posed),
+        )
+        .unwrap();
+        let actual = super::mat4_transform(&instance) * bind;
+        assert!(actual.abs_diff_eq(object * posed, 1.0e-5));
+        assert!(
+            super::rigid_instance_transform(
+                to_transform(object),
+                to_transform(glam::Mat4::ZERO),
+                to_transform(posed)
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn resource_tables_reserve_direct_descriptors_for_other_buffers() {
+        let mut limits = blade_graphics::ComputeBindingLimits::default();
+        limits.max_storage_buffers = 68;
+        limits.max_buffer_bindings = 120;
+        limits.max_sampled_texture_bindings = 64;
+        assert_eq!(super::resource_limit_for(limits), 32);
+        limits.max_buffer_bindings = 84;
+        assert_eq!(super::resource_limit_for(limits), 20);
+        limits.max_sampled_texture_bindings = 21;
+        assert_eq!(super::resource_limit_for(limits), 8);
+        limits.max_sampled_texture_bindings = 12;
+        assert_eq!(super::resource_limit_for(limits), 0);
+        limits.max_indirect_buffer_array_elements = Some(512);
+        assert_eq!(super::resource_limit_for(limits), 512);
+    }
+
     #[test]
     fn animated_hit_entry_matches_shader_layout() {
         assert_eq!(std::mem::size_of::<super::HitEntry>(), 256);

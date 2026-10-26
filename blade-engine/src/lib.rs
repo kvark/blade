@@ -718,8 +718,13 @@ impl Engine {
             Err(error) => panic!("Unable to initialize graphics: {error}"),
         };
         render_backend = match render_backend {
-            config::RenderBackend::RayTracer if gpu_context.capabilities().ray_query.is_empty() => {
-                log::warn!("Ray tracing is not supported on this GPU; using rasterizer");
+            config::RenderBackend::RayTracer
+                if {
+                    let caps = gpu_context.capabilities();
+                    !caps.ray_query.contains(gpu::ShaderVisibility::COMPUTE) || !caps.binding_array
+                } =>
+            {
+                log::warn!("Ray queries or binding arrays are unavailable; using rasterizer");
                 config::RenderBackend::Rasterizer
             }
             backend => backend,

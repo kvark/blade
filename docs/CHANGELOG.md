@@ -3,12 +3,18 @@ Changelog for *Blade* project
 ## (TBD)
 
 - graphics: ray queries require macOS 13+ / iOS 16+ on Metal; compute limits report direct sampled-texture slots, and renderer resource tables account for Vulkan image descriptors
+- render: `GBufferViews::motion` is now `Rgba16Float`, with screen-space motion in XY and previous-hit distance in Z
 - graphics: `ResourceArray::with_limit` allocates runtime tables below their generic index ceiling
 - graphics: Vulkan explicitly marks non-indexed acceleration-structure geometry, avoiding a null index-buffer read during BLAS builds
+- render: bootstrap variance for newly visible surfaces from raw lighting, with separate raw/temporal targets to avoid in-place neighborhood read races
+- render: keep SVGF history when resetting debug pixel statistics; share temporal/spatial guide work across diffuse and specular lighting without changing resolution or pass count
 - graphics: Metal binding arrays query populated resource handles once before padding the argument table, avoiding repeated Objective-C validation for unused slots
+- render: preserve SVGF edges with shading-normal/material guides, point-to-plane depth tests, previous-hit depth for moving geometry, and temporal luminance variance; normal transforms use the inverse transpose under nonuniform scale
+- render: represent rigid poses shared by a model's unskinned primitives as instance transforms rather than skinning/refitting a BLAS, and reuse identical current/previous vertex-table entries
 - graphics: Metal timing takes completion from a real pass instead of an empty blit encoder, and handles empty submissions; remove redundant unsafe blocks and guard the macOS 15 math-mode API
 - graphics: validate array bindings consistently and pad Vulkan acceleration-structure arrays to the actual layout count; render scene limits account for direct descriptor budgets
 - graphics: Metal BLAS builds and refits apply geometry transforms, requiring macOS 13+ / iOS 16+; upload `AccelerationStructureTransform` values for backend-correct matrix packing
+- render: size ray-tracing resource tables and scene allocation limits to the device's reported indirect-array capacity; graphics array bindings pad to the actual pipeline layout count
 - graphics: Metal supports sampled-texture and storage-buffer binding arrays through argument tables, reported by `Capabilities::binding_array`; partially filled arrays repeat their resources to fill the declared length
 - graphics: `Capabilities::compute_binding_limits` always reports `ComputeBindingLimits`, including separate storage-buffer, plain-data, combined-slot, bind-group, range, and indirect-array limits
 - graphics: `Capabilities::device_memory_fence` reports cross-workgroup publication support; declare shared storage buffers `@coherent`, and synchronize workgroups explicitly; Metal requires Apple silicon with MSL 3.2

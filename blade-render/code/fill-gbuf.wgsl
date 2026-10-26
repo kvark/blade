@@ -20,7 +20,7 @@ var out_diffuse_albedo: texture_storage_2d<rgba8unorm, write>;
 // RGB is the specular reflectance at normal incidence, alpha is the roughness
 var out_specular_f0: texture_storage_2d<rgba8unorm, write>;
 var out_emissive: texture_storage_2d<rgba16float, write>;
-var out_motion: texture_storage_2d<rg16float, write>;
+var out_motion: texture_storage_2d<rgba16float, write>;
 var out_debug: texture_storage_2d<rgba8unorm, write>;
 
 fn debug_raw_normal(
@@ -53,6 +53,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var material = Material(vec3<f32>(1.0), vec3<f32>(0.0), 0.0);
     var emissive = vec3<f32>(0.0);
     var motion = vec2<f32>(0.0);
+    var prev_depth = 0.0;
     let enable_debug = all(global_id.xy == debug.mouse_pos);
 
     if (intersection.kind != RAY_QUERY_INTERSECTION_NONE) {
@@ -175,6 +176,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let prev_position_object = vec4<f32>(prev_positions_object * barycentrics, 1.0);
         let prev_position = (entry.prev_object_to_world * prev_position_object).xyz;
+        prev_depth = length(prev_position - prev_camera.position);
         let prev_screen = get_projected_pixel_float(prev_camera, prev_position);
         //TODO: consider just storing integers here?
         //TODO: technically this "0.5" is just a waste compute on both packing and unpacking
@@ -195,5 +197,5 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     textureStore(out_diffuse_albedo, global_id.xy, vec4<f32>(material.diffuse_albedo, 0.0));
     textureStore(out_specular_f0, global_id.xy, vec4<f32>(material.specular_f0, material.roughness));
     textureStore(out_emissive, global_id.xy, vec4<f32>(emissive, 0.0));
-    textureStore(out_motion, global_id.xy, vec4<f32>(motion * MOTION_SCALE, 0.0, 0.0));
+    textureStore(out_motion, global_id.xy, vec4<f32>(motion * MOTION_SCALE, prev_depth, 0.0));
 }
