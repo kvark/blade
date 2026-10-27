@@ -287,6 +287,10 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     type Texture = super::Texture;
     type Frame = super::Frame;
 
+    fn is_timing_enabled(&self) -> bool {
+        self.timing.is_some()
+    }
+
     fn start(&mut self) {
         self.commands.clear();
         self.plain_data.clear();

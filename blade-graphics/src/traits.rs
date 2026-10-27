@@ -80,6 +80,9 @@ pub trait CommandEncoder {
     /// with `EGL_KHR_swap_buffers_with_damage` pass it on, a compositor may
     /// still update the whole window, and other platforms ignore it.
     fn present_with_damage(&mut self, frame: Self::Frame, damage: &[super::ScissorRect]);
+    /// Whether GPU pass timing was enabled for this encoder by
+    /// [`super::ContextDesc::timing`]. Available before its first submission.
+    fn is_timing_enabled(&self) -> bool;
     /// Timing of the last submission.
     ///
     /// The caller must have waited on that submission's sync point.
