@@ -585,6 +585,10 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
     type Texture = super::Texture;
     type Frame = super::Frame;
 
+    fn is_timing_enabled(&self) -> bool {
+        self.timing_state.is_some()
+    }
+
     fn start(&mut self) {
         if let Some(ref mut timing_state) = self.timing_state {
             timing_state
