@@ -477,7 +477,35 @@ impl super::Context {
                 config.allow_exclusive_full_screen
             );
         }
-        let raw_swapchain = unsafe { surface.device.create_swapchain(&create_info, None).unwrap() };
+        // `vkCreateSwapchainKHR` may succeed with a suboptimal swapchain: it
+        // can still present, but no longer matches the surface exactly, so the
+        // driver scales the result until the surface is reconfigured. `ash`
+        // turns every non-`VK_SUCCESS` result into `Err` and drops the handle,
+        // so call the entry point directly and keep it.
+        let mut raw_swapchain = vk::SwapchainKHR::null();
+        let create_result = unsafe {
+            (surface.device.fp().create_swapchain_khr)(
+                surface.device.device(),
+                &create_info,
+                std::ptr::null(),
+                &mut raw_swapchain,
+            )
+        };
+        match create_result {
+            vk::Result::SUCCESS => {}
+            vk::Result::SUBOPTIMAL_KHR => {
+                log::warn!(
+                    "Swapchain is suboptimal at {}x{}",
+                    config.size.width,
+                    config.size.height
+                );
+            }
+            error => panic!("Failed to create swapchain: {error:?}"),
+        }
+        assert!(
+            !raw_swapchain.is_null(),
+            "Swapchain creation returned no handle"
+        );
 
         unsafe {
             surface.deinit_swapchain(&self.device.core);
