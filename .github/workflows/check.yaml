@@ -182,8 +182,26 @@ jobs:
         env:
           RUSTFLAGS: "--cfg gles"
 
-      - name: Install ANGLE (Windows)
-        if: matrix.name == 'Windows'
+      - name: Upload snapshot artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshots-${{ matrix.name }}
+          path: tests/reference/*_actual.png
+
+  gpu-test-angle:
+    name: GPU Tests (Angle)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install ANGLE
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -195,8 +213,7 @@ jobs:
           7z x angle.zip -oangle
           cp angle/angle-*/bin/*.dll .
 
-      - name: Run GLES integration tests (Windows/ANGLE)
-        if: matrix.name == 'Windows'
+      - name: Run GLES integration tests (ANGLE)
         run: cargo test --test gpu_examples snapshot_bunnymark -- --ignored --nocapture
         env:
           RUSTFLAGS: "--cfg gles"
@@ -205,5 +222,5 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: snapshots-${{ matrix.name }}
+          name: snapshots-angle
           path: tests/reference/*_actual.png
