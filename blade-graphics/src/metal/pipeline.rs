@@ -387,10 +387,6 @@ impl crate::traits::ShaderDevice for super::Context {
     type RenderPipeline = super::RenderPipeline;
 
     fn create_compute_pipeline(&self, desc: crate::ComputePipelineDesc) -> super::ComputePipeline {
-        assert!(
-            desc.full_subgroup_size.is_none(),
-            "explicit full subgroups are unsupported"
-        );
         use metal::MTLDevice as _;
         let mut layout = make_pipeline_layout(desc.data_layouts, 0);
 
@@ -403,14 +399,47 @@ impl crate::traits::ShaderDevice for super::Context {
                 ShaderFlags::empty(),
             );
 
-            //TODO: use `newComputePipelineStateWithDescriptor_options_reflection`
-            // https://github.com/madsmtm/objc2/issues/683
-            let raw = self
-                .device
-                .lock()
-                .unwrap()
-                .newComputePipelineStateWithFunction_error(&cs.function)
-                .unwrap();
+            let device = self.device.lock().unwrap();
+            let raw = if let Some(size) = desc.full_subgroup_size {
+                let wg_size = [cs.wg_size.width, cs.wg_size.height, cs.wg_size.depth];
+                assert!(
+                    super::full_subgroups(&device)
+                        .is_some_and(|caps| caps.supports(size, wg_size.map(|n| n as u32))),
+                    "compute pipeline '{}' cannot require full subgroups of {size}",
+                    desc.name
+                );
+                // Metal has no way to request a SIMD-group width. Promise that
+                // every threadgroup is made of whole SIMD-groups, then check
+                // the width the compiler picked.
+                let pipeline_desc = metal::MTLComputePipelineDescriptor::new();
+                pipeline_desc.setComputeFunction(Some(&cs.function));
+                unsafe { pipeline_desc.setThreadGroupSizeIsMultipleOfThreadExecutionWidth(true) };
+                let raw = device
+                    .newComputePipelineStateWithDescriptor_options_reflection_error(
+                        &pipeline_desc,
+                        metal::MTLPipelineOption::None,
+                        None,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    raw.threadExecutionWidth() as u32,
+                    size,
+                    "compute pipeline '{}' got a different SIMD-group width",
+                    desc.name
+                );
+                assert!(
+                    wg_size.iter().product::<usize>() <= raw.maxTotalThreadsPerThreadgroup(),
+                    "compute pipeline '{}' workgroup exceeds its threadgroup limit",
+                    desc.name
+                );
+                raw
+            } else {
+                //TODO: use `newComputePipelineStateWithDescriptor_options_reflection`
+                // https://github.com/madsmtm/objc2/issues/683
+                device
+                    .newComputePipelineStateWithFunction_error(&cs.function)
+                    .unwrap()
+            };
 
             super::ComputePipeline {
                 raw,

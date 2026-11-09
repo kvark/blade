@@ -2,7 +2,7 @@ Changelog for *Blade* project
 
 ## (TBD)
 
-- graphics: optional `ComputePipelineDesc::full_subgroup_size` requests full compute subgroups of an explicit width; check `Capabilities::full_subgroups` first. Vulkan enforces the request, while unsupported backends reject it. Existing callers should pass `None` to preserve default behavior.
+- graphics: `ComputePipelineDesc::full_subgroup_size` requires full compute subgroups of a given width; check `Capabilities::full_subgroups` first and pass `None` for the default. Vulkan uses subgroup size control; Metal supports width 32 on Apple GPUs and checks the compiled pipeline's SIMD-group width
 - render: retain SVGF history on frozen frames; vehicle diagnostic captures require `BLADE_CAPTURE_VEHICLE=1` even when running ignored tests
 - graphics: ray queries require macOS 13+ / iOS 16+ on Metal; compute limits report direct sampled-texture slots, and renderer resource tables account for Vulkan image descriptors
 - render: `GBufferViews::motion` is now `Rgba16Float`, with screen-space motion in XY and previous-hit distance in Z
