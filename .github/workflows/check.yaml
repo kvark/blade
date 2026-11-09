@@ -149,12 +149,30 @@ jobs:
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
           install_runtime: true
-          install_lavapipe: true
           cache: true
-          # The action queries GitHub for LavaPipe releases. Anonymous hosted
-          # runners share a tiny rate limit and made unrelated PRs fail before
-          # any Vulkan test ran.
-          github_token: ${{ github.token }}
+
+      # The SDK action only looks at the newest jakoch/rasterizers release,
+      # so one release with a broken download fails every job. Take the
+      # newest of the last few whose Lavapipe build downloads.
+      - name: Install Lavapipe (Windows)
+        if: matrix.name == 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MSYS_NO_PATHCONV: 1
+        run: |
+          for tag in $(gh release list -R jakoch/rasterizers --limit 5 --json tagName --jq '.[].tagName'); do
+            if gh release download "$tag" -R jakoch/rasterizers -p '*lavapipe*win64*' -D lavapipe-dl; then
+              echo "Using Lavapipe from jakoch/rasterizers $tag"
+              break
+            fi
+            rm -rf lavapipe-dl
+          done
+          [ -d lavapipe-dl ] || { echo "No recent Lavapipe release could be downloaded"; exit 1; }
+          7z x 'lavapipe-dl/*' -oC:/Lavapipe
+          icd=$(find /c/Lavapipe -name 'lvp_icd*.json' | head -n 1)
+          [ -n "$icd" ] || { echo "No Lavapipe ICD manifest in the archive"; exit 1; }
+          reg add 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /v "$(cygpath -w "$icd")" /t REG_DWORD /d 0 /f
 
       # One test at a time, as the GLES step below already does. Each of these
       # stands up its own GPU context, and the ray traced ones also build
