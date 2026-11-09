@@ -318,6 +318,8 @@ fn inspect_adapter(
 
     let mut driver_properties = vk::PhysicalDeviceDriverPropertiesKHR::default();
     let mut subgroup_properties = vk::PhysicalDeviceSubgroupProperties::default();
+    let mut subgroup_control_properties =
+        vk::PhysicalDeviceSubgroupSizeControlProperties::default();
     let mut properties2_khr = vk::PhysicalDeviceProperties2KHR::default()
         .push_next(&mut inline_uniform_block_properties)
         .push_next(&mut timeline_semaphore_properties)
@@ -325,6 +327,7 @@ fn inspect_adapter(
         .push_next(&mut acceleration_structure_properties)
         .push_next(&mut portability_subset_properties)
         .push_next(&mut subgroup_properties)
+        .push_next(&mut subgroup_control_properties)
         .push_next(&mut driver_properties);
     unsafe {
         instance
@@ -396,17 +399,6 @@ fn inspect_adapter(
     let shader_bfloat16_extension = supported_extensions.contains(&shader_bfloat16::NAME);
     let subgroup_control_available = api_version >= vk::API_VERSION_1_3
         || supported_extensions.contains(&vk::EXT_SUBGROUP_SIZE_CONTROL_NAME);
-    let mut subgroup_control_properties =
-        vk::PhysicalDeviceSubgroupSizeControlProperties::default();
-    if subgroup_control_available {
-        let mut properties =
-            vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup_control_properties);
-        unsafe {
-            instance
-                .get_physical_device_properties2
-                .get_physical_device_properties2(phd, &mut properties);
-        }
-    }
     let mut subgroup_control_features = vk::PhysicalDeviceSubgroupSizeControlFeatures::default();
     let vulkan_memory_model_available = api_version >= vk::API_VERSION_1_2
         || supported_extensions.contains(&vk::KHR_VULKAN_MEMORY_MODEL_NAME);
