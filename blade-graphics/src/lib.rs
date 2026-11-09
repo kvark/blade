@@ -26,7 +26,6 @@
 )]
 
 pub use naga::{StorageAccess, VectorSize, back::PipelineConstants};
-pub use subgroup::FullSubgroups;
 pub type Transform = mint::RowMatrix3x4<f32>;
 
 /// A geometry transform packed for the active graphics backend.
@@ -81,7 +80,6 @@ pub mod derive;
 mod hal;
 mod internal;
 mod shader;
-mod subgroup;
 pub mod traits;
 pub mod util;
 pub mod limits {
@@ -332,6 +330,49 @@ impl CooperativeMatrix {
     }
 }
 
+/// Subgroup widths a compute pipeline can require with
+/// [`ComputePipelineDesc::full_subgroup_size`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FullSubgroups {
+    pub min_size: u32,
+    pub max_size: u32,
+    /// Maximum number of subgroups in one workgroup.
+    pub max_workgroup_subgroups: u32,
+}
+
+impl FullSubgroups {
+    /// Whether a workgroup of this shape can run as full subgroups of `size`.
+    /// Ordinary workgroup limits are checked separately.
+    pub fn supports(self, size: u32, workgroup: [u32; 3]) -> bool {
+        let invocations = workgroup
+            .iter()
+            .try_fold(1u64, |n, &axis| n.checked_mul(u64::from(axis)));
+        size.is_power_of_two()
+            && (self.min_size..=self.max_size).contains(&size)
+            && !workgroup.contains(&0)
+            && workgroup[0].is_multiple_of(size)
+            && invocations
+                .is_some_and(|n| n <= u64::from(size) * u64::from(self.max_workgroup_subgroups))
+    }
+}
+
+#[test]
+fn full_subgroups_supports() {
+    let caps = FullSubgroups {
+        min_size: 16,
+        max_size: 64,
+        max_workgroup_subgroups: 8,
+    };
+    assert!(caps.supports(32, [64, 2, 2]));
+    assert!(caps.supports(16, [128, 1, 1]));
+    assert!(!caps.supports(16, [144, 1, 1])); // too many subgroups
+    assert!(!caps.supports(32, [16, 2, 1])); // X is not a multiple
+    assert!(!caps.supports(32, [32, 0, 1]));
+    assert!(!caps.supports(24, [48, 1, 1]));
+    assert!(!caps.supports(128, [128, 1, 1]));
+    assert!(!caps.supports(32, [u32::MAX - 31, u32::MAX, u32::MAX]));
+}
+
 /// Device capabilities. On Metal, shaders must receive runtime storage-buffer
 /// lengths explicitly: WGSL `arrayLength` is not supported for either ordinary
 /// buffer bindings or elements of binding arrays.
@@ -355,7 +396,7 @@ pub struct Capabilities {
     /// Unless a compute pipeline requests `full_subgroup_size`, its shader
     /// may run at another width.
     pub subgroup_size: u32,
-    /// Explicit full-subgroup compute requirements supported by this device.
+    /// Support for requiring full subgroups of a given width, or `None`.
     pub full_subgroups: Option<FullSubgroups>,
     /// Indirect draw command support.
     pub indirect_draw: bool,
@@ -1114,9 +1155,9 @@ pub struct ComputePipelineDesc<'a> {
     pub name: &'a str,
     pub data_layouts: &'a [&'a ShaderDataLayout],
     pub compute: ShaderFunction<'a>,
-    /// Require full compute subgroups of this width; `None` keeps backend defaults.
-    /// Check `Capabilities::full_subgroups` and `FullSubgroups::supports` first.
-    /// Unsupported requests panic rather than silently falling back.
+    /// Require every subgroup to have exactly this many active invocations.
+    /// `None` keeps the backend default. Panics unless
+    /// [`Capabilities::full_subgroups`] supports the size and workgroup shape.
     pub full_subgroup_size: Option<u32>,
 }
 
