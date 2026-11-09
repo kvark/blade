@@ -558,6 +558,21 @@ fn new_command_queue(
     queue
 }
 
+/// Apple GPUs always run 32-wide SIMD-groups. Other Mac GPUs pick a width
+/// per pipeline, so it cannot be promised up front.
+fn full_subgroups(
+    device: &objc2::runtime::ProtocolObject<dyn metal::MTLDevice>,
+) -> Option<crate::FullSubgroups> {
+    use metal::MTLDevice as _;
+    device
+        .supportsFamily(metal::MTLGPUFamily::Apple7)
+        .then(|| crate::FullSubgroups {
+            min_size: 32,
+            max_size: 32,
+            max_workgroup_subgroups: device.maxThreadsPerThreadgroup().width as u32 / 32,
+        })
+}
+
 impl Context {
     pub unsafe fn init(desc: super::ContextDesc) -> Result<Self, super::NotSupportedError> {
         if desc.validation {
@@ -662,7 +677,7 @@ impl Context {
             max_compute_shared_memory_size: device.maxThreadgroupMemoryLength() as u32,
             // `threadExecutionWidth` is a property of a compiled pipeline, not the device.
             subgroup_size: 0,
-            full_subgroups: None,
+            full_subgroups: full_subgroups(device),
             indirect_draw: true,
             binding_array: objc2::available!(macos = 13.0, ios = 16.0)
                 && device.argumentBuffersSupport() == metal::MTLArgumentBuffersTier::Tier2,
