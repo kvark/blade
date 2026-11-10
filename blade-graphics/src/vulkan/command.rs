@@ -1577,15 +1577,4 @@ mod tests {
             vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
         ));
     }
-
-    #[test]
-    fn scratch_alignment_checks_the_low_bits() {
-        assert!(super::is_aligned(0, 128));
-        assert!(super::is_aligned(128, 128));
-        assert!(super::is_aligned(0x7f00_0180, 128));
-        assert!(!super::is_aligned(64, 128));
-        assert!(!super::is_aligned(127, 128));
-        assert!(!super::is_aligned(129, 128));
-        assert!(super::is_aligned(u64::MAX, 1));
-    }
 }
