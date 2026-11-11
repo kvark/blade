@@ -17,12 +17,8 @@
 )]
 
 use blade_graphics as gpu;
-use std::{
-    ops,
-    path::PathBuf,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{ops, path::PathBuf, sync::Arc};
+use web_time::{Duration, Instant};
 
 pub use blade_asset::vfs;
 
