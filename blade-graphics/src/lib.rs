@@ -1692,13 +1692,16 @@ pub struct Viewport {
 
 /// GPU pass timestamps mapped onto the process monotonic clock.
 ///
+/// Instants use [`web_time`] so this type is valid on wasm32, where
+/// [`std::time::Instant`] panics.
+///
 /// Pass names are borrowed from the encoder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Timing<'a> {
     /// Pass starts in execution order.
-    pub passes: Vec<(&'a str, std::time::Instant)>,
+    pub passes: Vec<(&'a str, web_time::Instant)>,
     /// Completion time of the final pass.
-    pub done: std::time::Instant,
+    pub done: web_time::Instant,
 }
 
 impl Timing<'_> {
