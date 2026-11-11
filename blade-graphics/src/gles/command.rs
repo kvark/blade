@@ -1,7 +1,5 @@
-use std::{
-    str,
-    time::{Duration, Instant},
-};
+use std::str;
+use web_time::{Duration, Instant};
 
 fn map_gpu_ns(cal_cpu: Instant, cal_gpu_ns: u64, ts_ns: u64) -> Instant {
     assert!(ts_ns >= cal_gpu_ns, "GPU timestamp predates calibration");

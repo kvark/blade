@@ -28,6 +28,7 @@ profiling = { workspace = true }
 rapier3d = { version = "0.36", features = ["debug-render"] }
 serde = { version = "1", features = ["serde_derive"] }
 slab = { workspace = true }
+web-time = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 openxr = { workspace = true }
