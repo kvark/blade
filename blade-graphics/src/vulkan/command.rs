@@ -988,6 +988,10 @@ impl Drop for super::TransferCommandEncoder<'_> {
     }
 }
 
+fn is_aligned(address: u64, alignment: u64) -> bool {
+    address & (alignment - 1) == 0
+}
+
 impl super::AccelerationStructureCommandEncoder<'_> {
     fn encode_bottom_level(
         &mut self,
@@ -1006,9 +1010,8 @@ impl super::AccelerationStructureCommandEncoder<'_> {
         }
         blas_input.build_info.dst_acceleration_structure = acceleration_structure.raw;
         let scratch_address = self.device.get_device_address(&scratch_data);
-        assert_eq!(
-            scratch_address & rt.scratch_buffer_alignment,
-            0,
+        assert!(
+            is_aligned(scratch_address, rt.scratch_buffer_alignment),
             "BLAS scratch address {scratch_address} is not aligned"
         );
         blas_input.build_info.scratch_data = vk::DeviceOrHostAddressKHR {
