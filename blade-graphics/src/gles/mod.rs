@@ -409,7 +409,7 @@ struct TimingState {
     queries: Box<[glow::Query]>,
     pass_names: crate::internal::StringBuffer,
     submitted_count: usize,
-    calibration: Option<(std::time::Instant, u64)>,
+    calibration: Option<(web_time::Instant, u64)>,
 }
 
 pub struct CommandEncoder {
