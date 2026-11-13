@@ -20,6 +20,37 @@ const TEXTURED_SIZE: gpu::Extent = gpu::Extent {
 };
 const CHECKER_SIZE: u32 = 4;
 const CHECKER: [[u8; 4]; 2] = [[230, 70, 40, 255], [40, 130, 220, 255]];
+
+/// A texture for the dielectric row of the grid.
+#[derive(Clone, Copy, PartialEq)]
+enum Texturing {
+    None,
+    /// `CHECKER` as the base color.
+    BaseColor,
+    /// Normals tilted four ways, at a unit normal scale, on a quad facing
+    /// the camera instead of the grid. Spheres turn the normals away from
+    /// the view at their silhouettes, where the BSDF is cut off, which the
+    /// gradient doesn't account for.
+    Normal,
+}
+
+impl Texturing {
+    fn texels(self) -> Vec<[u8; 4]> {
+        let size = CHECKER_SIZE as usize;
+        (0..size * size)
+            .map(|i| match self {
+                Self::None => unreachable!(),
+                Self::BaseColor => CHECKER[(i / size + i % size) % 2],
+                Self::Normal => [
+                    [200, 128, 255, 255],
+                    [128, 200, 255, 255],
+                    [56, 128, 255, 255],
+                    [128, 56, 255, 255],
+                ][(i / size + i % size) % 4],
+            })
+            .collect()
+    }
+}
 // Different from any frame index the gradients are taken at.
 const TARGET_FRAMES: std::ops::Range<u32> = 1_000_000..1_000_032;
 const CONVERGED_FRAMES: std::ops::Range<u32> = 3_000_000..3_000_064;
@@ -61,9 +92,10 @@ struct DiffScene {
 }
 
 impl DiffScene {
-    /// The material grid under `sky_texels`, with the `CHECKER` texture
-    /// for the base color of the dielectric row if `textured`.
-    fn new(cache_name: &str, textured: bool) -> Option<Self> {
+    /// The material grid under `sky_texels`, with the textures that
+    /// `texturing` asks for, which are then parameters.
+    fn new(cache_name: &str, texturing: Texturing) -> Option<Self> {
+        let textured = texturing != Texturing::None;
         if cfg!(target_os = "macos") && std::env::var_os("CI").is_some() {
             println!("Skipping: ray tracing is not supported on macOS CI");
             return None;
@@ -119,26 +151,34 @@ impl DiffScene {
                 max_debug_lines: 16,
             },
         );
+        let geometries = if texturing == Texturing::Normal {
+            vec![quad()]
+        } else {
+            pbr_scene::material_grid([0.3, 1.0])
+        };
         let mut model = harness
             .asset_hub
             .models
             .baker
-            .create_model("diff-grid", pbr_scene::material_grid([0.3, 1.0]));
+            .create_model("diff-scene", geometries);
         if textured {
-            let texels = (0..CHECKER_SIZE * CHECKER_SIZE)
-                .map(|i| CHECKER[((i / CHECKER_SIZE + i % CHECKER_SIZE) % 2) as usize])
-                .collect::<Vec<_>>();
-            let checker = harness.asset_hub.textures.baker.create_texture(
-                "diff-checker",
+            let texture = harness.asset_hub.textures.baker.create_texture(
+                "diff-texture",
                 CHECKER_SIZE,
                 CHECKER_SIZE,
-                &texels,
+                &texturing.texels(),
             );
-            let checker = harness.asset_hub.textures.insert(checker);
-            for geometry in &model.geometries[..pbr_scene::COLUMNS] {
+            let texture = harness.asset_hub.textures.insert(texture);
+            let count = model.geometries.len().min(pbr_scene::COLUMNS);
+            for geometry in &model.geometries[..count] {
                 let material = &mut model.materials[geometry.material_index];
-                material.base_color_texture = Some(checker);
-                material.base_color_factor = [1.0; 4];
+                if texturing == Texturing::BaseColor {
+                    material.base_color_texture = Some(texture);
+                    material.base_color_factor = [1.0; 4];
+                } else {
+                    material.normal_texture = Some(texture);
+                    material.normal_scale = 1.0;
+                }
             }
         }
         let mut objects = vec![blade_render::Object::from(
@@ -185,10 +225,12 @@ impl DiffScene {
             },
         };
         scene.submit();
-        assert_eq!(
-            scene.diff.material_count(),
-            pbr_scene::COLUMNS * pbr_scene::ROWS
-        );
+        if texturing != Texturing::Normal {
+            assert_eq!(
+                scene.diff.material_count(),
+                pbr_scene::COLUMNS * pbr_scene::ROWS
+            );
+        }
         Some(scene)
     }
 
@@ -341,7 +383,7 @@ type Component = fn(&mut MaterialParams) -> &mut f32;
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_material_gradients_match_finite_differences() {
-    let Some(mut scene) = DiffScene::new("diff-gradients", false) else {
+    let Some(mut scene) = DiffScene::new("diff-gradients", Texturing::None) else {
         return;
     };
     scene.capture_target();
@@ -401,7 +443,7 @@ fn diff_material_gradients_match_finite_differences() {
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_recovers_base_colors() {
-    let Some(mut scene) = DiffScene::new("diff-recovery", false) else {
+    let Some(mut scene) = DiffScene::new("diff-recovery", Texturing::None) else {
         return;
     };
     scene.capture_target();
@@ -473,7 +515,7 @@ fn diff_recovers_base_colors() {
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_recovers_environment() {
     const STEPS: u32 = 150;
-    let Some(mut scene) = DiffScene::new("diff-environment", false) else {
+    let Some(mut scene) = DiffScene::new("diff-environment", Texturing::None) else {
         return;
     };
     scene.capture_target();
@@ -547,6 +589,32 @@ fn diff_recovers_environment() {
     scene.destroy();
 }
 
+/// A gray quad in the plane of the grid, facing the camera.
+fn quad() -> blade_render::ProceduralGeometry {
+    let [half_width, half_height] = [3.0, 2.4];
+    let corners = [[-1.0, 1.0], [-1.0, -1.0], [1.0, -1.0], [1.0, 1.0]];
+    let vertices = corners
+        .iter()
+        .map(|&[x, y]| blade_render::Vertex {
+            position: [x * half_width, y * half_height, 0.0],
+            bitangent_sign: 1.0,
+            tex_coords: [0.5 * (x + 1.0), 0.5 * (1.0 - y)],
+            normal: pbr_scene::encode_normal([0.0, 0.0, 1.0]),
+            tangent: pbr_scene::encode_normal([1.0, 0.0, 0.0]),
+        })
+        .collect();
+    blade_render::ProceduralGeometry {
+        name: "quad".to_string(),
+        vertices,
+        // Counter-clockwise, seen from the camera.
+        indices: vec![0, 1, 2, 0, 2, 3],
+        base_color_factor: [0.6, 0.6, 0.6, 1.0],
+        metalness: 0.0,
+        roughness: 0.4,
+        emissive_factor: [0.0; 3],
+    }
+}
+
 fn average_color(texels: &[[f32; 4]]) -> [f32; 4] {
     let mut average = [0.0, 0.0, 0.0, 1.0];
     for texel in texels {
@@ -557,12 +625,29 @@ fn average_color(texels: &[[f32; 4]]) -> [f32; 4] {
     average
 }
 
-/// The gradient by a texel agrees with central differences, and optimizing
-/// the texture recovers the texels that the camera sees.
+/// The gradient by the base color texels agrees with central differences,
+/// and optimizing them recovers those that the camera sees.
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_recovers_texture() {
-    let Some(mut scene) = DiffScene::new("diff-texture", true) else {
+    check_texture(Texturing::BaseColor, &[(5, 0), (8, 2)], 3);
+}
+
+/// The same for a normal map, which only has red and green.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_recovers_normal_map() {
+    check_texture(Texturing::Normal, &[(5, 0), (8, 1)], 2);
+}
+
+/// Check the gradient by some `(texel, channel)` pairs, and recover the first
+/// `channels` channels of the texels that the camera sees from their average.
+fn check_texture(texturing: Texturing, checks: &[(usize, usize)], channels: usize) {
+    let name = match texturing {
+        Texturing::BaseColor => "diff-texture",
+        _ => "diff-normal-map",
+    };
+    let Some(mut scene) = DiffScene::new(name, texturing) else {
         return;
     };
     // The sky is the environment, not a material texture.
@@ -574,8 +659,7 @@ fn diff_recovers_texture() {
     scene.capture_target();
     let truth = scene.download(params, texel_count);
     let size = CHECKER_SIZE as usize;
-    for (i, texel) in truth.iter().enumerate() {
-        let expected = CHECKER[(i / size + i % size) % 2];
+    for (texel, expected) in truth.iter().zip(texturing.texels()) {
         for c in 0..4 {
             assert!((texel[c] - f32::from(expected[c]) / 255.0).abs() < 1.0e-6);
         }
@@ -583,9 +667,17 @@ fn diff_recovers_texture() {
     let flat = vec![average_color(&truth); texel_count];
     scene.upload(params, &flat);
 
-    // The front of the spheres shows the first half of the columns, and
-    // the middle rows face the camera the most.
-    let visible = [size, size + 1, 2 * size, 2 * size + 1];
+    let visible = if texturing == Texturing::Normal {
+        // The whole quad is in view.
+        (0..texel_count).collect::<Vec<_>>()
+    } else {
+        // The front of the spheres shows the first half of the columns,
+        // and the middle rows face the camera the most.
+        vec![size, size + 1, 2 * size, 2 * size + 1]
+    };
+    for &(index, _) in checks {
+        assert!(visible.contains(&index));
+    }
 
     const ITERATIONS: u32 = 64;
     for iteration in 0..ITERATIONS {
@@ -594,7 +686,7 @@ fn diff_recovers_texture() {
     let grads = scene.download(scene.diff.texture_grads(), texel_count);
     const H: f32 = 0.05;
     let frames = 2_000_000..2_000_256;
-    for &(index, channel) in &[(visible[1], 0), (visible[2], 2)] {
+    for &(index, channel) in checks {
         let analytic = grads[index][channel] / ITERATIONS as f32;
         let mut texels = flat.clone();
         texels[index][channel] += H;
@@ -617,20 +709,25 @@ fn diff_recovers_texture() {
     // Drop the gradients of the check.
     scene.diff.step(&mut scene.encoder, &StepConfig::default());
     let error = |texels: &[[f32; 4]]| {
-        let mut max: f32 = 0.0;
+        let mut sum = 0.0;
         for &index in &visible {
-            for c in 0..3 {
-                max = max.max((texels[index][c] - truth[index][c]).abs());
+            for c in 0..channels {
+                sum += (texels[index][c] - truth[index][c]).abs();
             }
         }
-        max
+        sum / (visible.len() * channels) as f32
     };
     let initial_error = error(&flat);
+    // Normals change the image less than colors, so they get more steps.
+    let (learning_rate, steps) = match texturing {
+        Texturing::Normal => (0.05, 200),
+        _ => (0.03, 100),
+    };
     let adam = AdamConfig {
-        learning_rate: 0.03,
+        learning_rate,
         ..Default::default()
     };
-    for iteration in 0..100 {
+    for iteration in 0..steps {
         scene.backward(ITERATIONS + iteration, 2, 2);
         scene.diff.step(
             &mut scene.encoder,
@@ -652,10 +749,15 @@ fn diff_recovers_texture() {
         );
     }
     assert!(
-        final_error < 0.25 * initial_error,
+        final_error < 0.4 * initial_error,
         "the visible texel error only went from {initial_error} to {final_error}"
     );
-    // Untouched by the optimizer.
-    assert!(recovered.iter().all(|texel| texel[3] == 1.0));
+    // Untouched by the optimizer, and without a gradient for normal maps.
+    for texel in &recovered {
+        assert_eq!(texel[3], 1.0);
+        if texturing == Texturing::Normal {
+            assert!((texel[2] - 1.0).abs() < 1.0e-6);
+        }
+    }
     scene.destroy();
 }

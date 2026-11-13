@@ -10,10 +10,10 @@
 //!   - the glTF factors of every hit entry, which multiply its textures
 //!     (see [`MaterialParams`]),
 //!   - the radiance of every environment map texel,
-//!   - optionally, the texels of the base color, metallic-roughness, and
-//!     emissive textures (see [`DiffTracerDesc::textures`]).
+//!   - optionally, the texels of the base color, metallic-roughness,
+//!     emissive, and normal textures (see [`DiffTracerDesc::textures`]).
 //!
-//! Geometry, the camera, and normal maps are fixed.
+//! Geometry and the camera are fixed.
 
 use std::{collections::HashMap, mem, path::Path, slice};
 
@@ -111,8 +111,11 @@ impl Default for AdamConfig {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DiffTracerDesc {
-    /// Make the texels of the base color, metallic-roughness, and emissive
-    /// textures of the scene parameters, at their top mip level.
+    /// Make the texels of the base color, metallic-roughness, emissive, and
+    /// normal textures of the scene parameters, at their top mip level.
+    ///
+    /// Normal maps take the gradient of the shading normal, but not the
+    /// discontinuity of the BSDF where the normal turns away from the view.
     ///
     /// Each texel takes four floats in device memory, for the parameter,
     /// its gradient, and the two moments of the optimizer.
@@ -135,7 +138,8 @@ pub struct DiffTexture {
 pub struct StepConfig {
     pub materials: Option<(AdamConfig, MaterialParamFlags)>,
     pub environment: Option<AdamConfig>,
-    /// RGB of the texture texels, which stay in the unit interval.
+    /// RGB of the texture texels, which stay in the unit interval. Normal
+    /// maps only use red and green, so blue doesn't get a gradient.
     pub textures: Option<AdamConfig>,
 }
 
@@ -456,6 +460,7 @@ impl DiffTracer {
                         material.base_color_texture,
                         material.metallic_roughness_texture,
                         material.emissive_texture,
+                        material.normal_texture,
                     ]
                     .into_iter()
                     .flatten()

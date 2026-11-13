@@ -247,7 +247,10 @@ fn scatter_texture_grad(texture_index: u32, tex_coords: vec2<f32>, grad: vec4<f3
 }
 
 struct DiffVertex {
+    // With the normal from the parameters of the normal map, if it has them.
     surface: HitSurface,
+    // The normal map, in tangent space.
+    normal_local: vec3<f32>,
     material: Material,
     emissive: vec3<f32>,
     // Texture values that multiply the factors.
@@ -269,6 +272,11 @@ fn resolve_vertex(intersection: RayIntersection) -> DiffVertex {
     v.roughness_texel = mr.y;
     v.metalness_texel = mr.z;
     v.emissive_texel = sample_material_texture(entry.emissive_texture, tc, lod).xyz;
+    // `sample_hit_normal_map`
+    let raw_unorm = sample_material_texture(entry.normal_texture, tc, lod).xy;
+    let n_xy = entry.normal_scale * (2.0 * raw_unorm - 1.0);
+    v.normal_local = vec3<f32>(n_xy, sqrt(max(0.0, 1.0 - dot(n_xy, n_xy))));
+    v.surface.normal = normalize(v.surface.tangent_space * v.normal_local);
     v.material = material_from_metallic_roughness(
         params.base_color * v.base_color_texel,
         params.metalness * v.metalness_texel,
@@ -284,13 +292,16 @@ struct MaterialGrad {
     specular_f0: vec3<f32>,
     roughness: f32,
     emissive: vec3<f32>,
+    // By the shading normal, in world space, before its normalization.
+    normal: vec3<f32>,
 }
 
 // Add the BSDF's share, given the derivative of the loss by its value.
-fn add_bsdf_grad(grad: ptr<function, MaterialGrad>, bsdf: BsdfGradient, d_value: vec3<f32>) {
+fn add_bsdf_grad(grad: ptr<function, MaterialGrad>, bsdf: BsdfGradient, mat: Material, d_value: vec3<f32>) {
     (*grad).diffuse_albedo += d_value * bsdf.d_diffuse_albedo;
     (*grad).specular_f0 += d_value * bsdf.d_specular_f0;
     (*grad).roughness += dot(d_value, bsdf.d_roughness);
+    (*grad).normal += bsdf_normal_grad(bsdf, mat, d_value);
 }
 
 fn add_material_grad(index: u32, component: u32, value: f32) {
@@ -328,6 +339,22 @@ fn scatter_material_grad(v: DiffVertex, grad: MaterialGrad) {
     scatter_texture_grad(entry.metallic_roughness_texture, tc, vec4<f32>(
         0.0, grad.roughness * params.roughness, d_metalness * params.metalness, 0.0));
     scatter_texture_grad(entry.emissive_texture, tc, vec4<f32>(grad.emissive * params.emissive, 0.0));
+
+    if (texture_region(entry.normal_texture).offset != NO_TEXTURE_REGION) {
+        // Back through `normalize(tangent_space * normal_local)`.
+        let unnormalized = v.surface.tangent_space * v.normal_local;
+        let magnitude = length(unnormalized);
+        let normal = unnormalized / magnitude;
+        let d_unnormalized = (grad.normal - normal * dot(normal, grad.normal)) / magnitude;
+        let d_local = transpose(v.surface.tangent_space) * d_unnormalized;
+        // Z is the reconstruction of a unit normal from X and Y.
+        var d_xy = d_local.xy;
+        if (v.normal_local.z > 0.0) {
+            d_xy -= d_local.z * v.normal_local.xy / v.normal_local.z;
+        }
+        let d_raw = 2.0 * entry.normal_scale * d_xy;
+        scatter_texture_grad(entry.normal_texture, tc, vec4<f32>(d_raw, 0.0, 0.0));
+    }
 }
 
 // What the first walk of a path learns about each of its vertices.
@@ -406,7 +433,7 @@ fn walk_path(
         let flat_normal = v.surface.flat_normal;
         // Derivative of the loss by everything found at this vertex.
         let d_found = adjoint * throughput;
-        var grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found);
+        var grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found, vec3<f32>(0.0));
         var found = v.emissive;
         position = v.surface.position;
         t_min = parameters.t_start;
@@ -430,7 +457,7 @@ fn walk_path(
             let light = env_radiance(ls.texel);
             found += bsdf.value * light * weight;
             if (replay) {
-                add_bsdf_grad(&grad, bsdf, d_found * light * weight);
+                add_bsdf_grad(&grad, bsdf, v.material, d_found * light * weight);
                 scatter_env_grad(ls.texel, d_found * bsdf.value * weight);
             }
         }
@@ -456,7 +483,7 @@ fn walk_path(
                 if (survives) {
                     weight = bsdf.value * scale;
                     if (replay) {
-                        add_bsdf_grad(&grad, bsdf, d_found * (*incident)[bounce] * scale);
+                        add_bsdf_grad(&grad, bsdf, v.material, d_found * (*incident)[bounce] * scale);
                     }
                     bsdf_pdf = bs.pdf;
                     direction = bs.dir;

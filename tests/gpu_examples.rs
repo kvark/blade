@@ -729,7 +729,7 @@ fn bsdf_gradient_gpu_test() {
     }
     let output = context.create_buffer(gpu::BufferDesc {
         name: "bsdf-gradient-output",
-        size: (COUNT * 32) as u64,
+        size: (COUNT * 64) as u64,
         memory: gpu::Memory::Shared,
     });
     let source = [
@@ -739,6 +739,8 @@ fn bsdf_gradient_gpu_test() {
 struct Check {
     analytic: vec4<f32>,
     numeric: vec4<f32>,
+    analytic_normal: vec4<f32>,
+    numeric_normal: vec4<f32>,
 }
 var<storage, read_write> output: array<Check>;
 
@@ -784,10 +786,25 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     b.roughness -= h;
     let d_roughness = (reference_bsdf(a, normal, view_dir, light_dir) - reference_bsdf(b, normal, view_dir, light_dir)) / (2.0 * h);
 
+    // Tilting the normal along the tangents, which is all that a unit normal
+    // can do, through the first and the last channel. The tracer normalizes
+    // the normal, which takes the component along it out of the derivative.
+    var d_normal = mat2x3<f32>();
+    for (var axis = 0u; axis < 2u; axis += 1u) {
+        var offset = vec3<f32>(0.0);
+        offset[axis] = h;
+        d_normal[axis] = (reference_bsdf(mat, normalize(normal + offset), view_dir, light_dir)
+            - reference_bsdf(mat, normalize(normal - offset), view_dir, light_dir)) / (2.0 * h);
+    }
+    let d_normal_x = bsdf_normal_grad(grad, mat, vec3<f32>(1.0, 0.0, 0.0));
+    let d_normal_z = bsdf_normal_grad(grad, mat, vec3<f32>(0.0, 0.0, 1.0));
+
     let value = reference_bsdf(mat, normal, view_dir, light_dir);
     output[id.x] = Check(
         vec4<f32>(grad.d_diffuse_albedo.x, grad.d_specular_f0.y, grad.d_roughness.x, grad.value.z),
         vec4<f32>(d_albedo.x, d_f0.y, d_roughness.x, value.z),
+        vec4<f32>(d_normal_x.xy, d_normal_z.xy),
+        vec4<f32>(d_normal[0].x, d_normal[1].x, d_normal[0].z, d_normal[1].z),
     );
 }
 "#,
@@ -824,10 +841,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let sync_point = context.submit(&mut encoder);
     assert!(context.wait_for(&sync_point, 2000).unwrap());
 
-    let checks = unsafe { slice::from_raw_parts(output.data() as *const [[f32; 4]; 2], COUNT) };
+    let checks = unsafe { slice::from_raw_parts(output.data() as *const [[f32; 4]; 4], COUNT) };
     let mut nonzero = 0;
-    for (index, [analytic, numeric]) in checks.iter().enumerate() {
-        let names = ["albedo", "f0", "roughness", "value"];
+    for (index, [analytic, numeric, analytic_normal, numeric_normal]) in checks.iter().enumerate() {
+        let names = [
+            "albedo",
+            "f0",
+            "roughness",
+            "value",
+            "normal.x",
+            "normal.y",
+            "normal.x",
+            "normal.y",
+        ];
+        let analytic = analytic.iter().chain(analytic_normal);
+        let numeric = numeric.iter().chain(numeric_normal);
         for ((name, &a), &n) in names.iter().zip(analytic).zip(numeric) {
             let tolerance = 1.0e-3 + 1.0e-2 * a.abs().max(n.abs());
             assert!(
@@ -835,7 +863,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 "configuration {index}: d/d{name} is {a}, central difference is {n}"
             );
         }
-        if analytic[2] != 0.0 {
+        if checks[index][0][2] != 0.0 {
             nonzero += 1;
         }
     }
