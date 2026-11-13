@@ -581,6 +581,8 @@ pub struct RayTracer {
     frame_index: usize,
     frame_scene_built: usize,
     scene_models: Vec<blade_asset::Handle<crate::Model>>,
+    /// Object-to-world transform of every instance of the current scene.
+    instance_transforms: Vec<blade_graphics::Transform>,
     scene_topology_changed: bool,
     is_frozen: bool,
     reset_accumulation: bool,
@@ -1142,6 +1144,7 @@ impl RayTracer {
             frame_index: 0,
             frame_scene_built: 0,
             scene_models: Vec::new(),
+            instance_transforms: Vec::new(),
             scene_topology_changed: false,
             is_frozen: false,
             reset_accumulation: true,
@@ -1407,6 +1410,7 @@ impl RayTracer {
         let dummy_black = self.textures.alloc(self.dummy.black_view);
 
         let mut geometry_index = 0;
+        self.instance_transforms.clear();
         let mut instances = Vec::with_capacity(objects.len());
         let mut blases = Vec::with_capacity(objects.len());
         let mut dynamic_blas_work = Vec::new();
@@ -1611,6 +1615,7 @@ impl RayTracer {
             };
             object.blas.previous_generation = current_generation;
 
+            self.instance_transforms.push(transform);
             instances.push(blade_graphics::AccelerationStructureInstance {
                 acceleration_structure_index: blases.len() as u32,
                 transform,
