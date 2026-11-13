@@ -273,13 +273,9 @@ struct ParamGroup {
 }
 
 impl ParamGroup {
-    fn new(name: &str, count: u32, host_visible: bool, gpu: &blade_graphics::Context) -> Self {
+    fn new(name: &str, count: u32, gpu: &blade_graphics::Context) -> Self {
         let size = u64::from(count.max(1)) * 4;
-        let memory = if host_visible {
-            blade_graphics::Memory::Shared
-        } else {
-            blade_graphics::Memory::Device
-        };
+        let memory = blade_graphics::Memory::Device;
         Self {
             params: gpu.create_buffer(blade_graphics::BufferDesc {
                 name: &format!("{name} params"),
@@ -350,6 +346,8 @@ pub struct DiffTracer {
     target: blade_graphics::Buffer,
     image_adjoint: blade_graphics::Buffer,
     loss: blade_graphics::Buffer,
+    /// Material parameters and gradients, for the host to read.
+    readback: blade_graphics::Buffer,
     accumulated_frames: u32,
 }
 
@@ -416,12 +414,8 @@ impl DiffTracer {
 
         let material_count =
             (ray_tracer.hit_buffer.size() as usize / mem::size_of::<super::HitEntry>()) as u32;
-        let materials = ParamGroup::new(
-            "diff materials",
-            material_count * MATERIAL_PARAM_COUNT,
-            true,
-            gpu,
-        );
+        let materials =
+            ParamGroup::new("diff materials", material_count * MATERIAL_PARAM_COUNT, gpu);
         // Without a map, the environment is the 1x1 dummy texture.
         let environment_size = match ray_tracer.env_map.size {
             size if size.width == 0 || size.height == 0 => blade_graphics::Extent {
@@ -434,7 +428,6 @@ impl DiffTracer {
         let environment = ParamGroup::new(
             "diff environment",
             environment_size.width * environment_size.height * ENV_PARAM_COUNT,
-            false,
             gpu,
         );
 
@@ -493,12 +486,7 @@ impl DiffTracer {
                 }
             }
         }
-        let textures = ParamGroup::new(
-            "diff textures",
-            texture_count * TEXTURE_PARAM_COUNT,
-            false,
-            gpu,
-        );
+        let textures = ParamGroup::new("diff textures", texture_count * TEXTURE_PARAM_COUNT, gpu);
         let region_bytes = (region_table.len() * mem::size_of::<TextureRegion>()) as u64;
         let texture_regions = gpu.create_buffer(blade_graphics::BufferDesc {
             name: "diff texture regions",
@@ -550,6 +538,13 @@ impl DiffTracer {
                 name: "diff loss",
                 size: 4,
                 memory: blade_graphics::Memory::Shared,
+            }),
+            readback: gpu.create_buffer(blade_graphics::BufferDesc {
+                name: "diff readback",
+                size: 2
+                    * u64::from(material_count.max(1))
+                    * mem::size_of::<MaterialParams>() as u64,
+                memory: blade_graphics::Memory::Download,
             }),
             accumulated_frames: 0,
         };
@@ -679,41 +674,67 @@ impl DiffTracer {
         self.image_size
     }
 
-    /// The material parameters, as they are after the submitted work.
-    ///
-    /// Only meaningful while no work that changes them is in flight.
-    pub fn material_params(&self) -> &[MaterialParams] {
+    /// Copy the material parameters and their gradients, as they are at
+    /// this point of the `encoder`, to where [`Self::material_params`] and
+    /// [`Self::material_grads`] read them once the work is done.
+    pub fn read_back_materials(&self, encoder: &mut blade_graphics::CommandEncoder) {
+        let bytes = self.material_bytes();
+        let mut transfer = encoder.transfer("diff-read-back-materials");
+        transfer.copy_buffer_to_buffer(self.materials.params.into(), self.readback.at(0), bytes);
+        transfer.copy_buffer_to_buffer(self.materials.grads.into(), self.readback.at(bytes), bytes);
+    }
+
+    fn material_bytes(&self) -> u64 {
+        (self.material_count() * mem::size_of::<MaterialParams>()) as u64
+    }
+
+    fn read_back(&self, offset: u64) -> &[MaterialParams] {
         unsafe {
             slice::from_raw_parts(
-                self.materials.params.data() as *const MaterialParams,
+                self.readback.data().add(offset as usize) as *const MaterialParams,
                 self.material_count(),
             )
         }
     }
 
-    /// Change the material parameters for the work submitted from now on.
-    ///
-    /// Only valid while no work that uses them is in flight.
-    pub fn material_params_mut(&mut self) -> &mut [MaterialParams] {
-        unsafe {
-            slice::from_raw_parts_mut(
-                self.materials.params.data() as *mut MaterialParams,
-                self.material_count(),
-            )
-        }
+    /// The material parameters, as of the last [`Self::read_back_materials`],
+    /// once its work is done.
+    pub fn material_params(&self) -> &[MaterialParams] {
+        self.read_back(0)
     }
 
     /// Derivative of the loss by the material parameters, accumulated by
-    /// [`Self::backward`] since the last [`Self::step`].
-    ///
-    /// Only meaningful while no work that changes them is in flight.
+    /// [`Self::backward`] since the last [`Self::step`], as of the last
+    /// [`Self::read_back_materials`], once its work is done.
     pub fn material_grads(&self) -> &[MaterialParams] {
+        self.read_back(self.material_bytes())
+    }
+
+    /// Replace the material parameters at this point of the `encoder`.
+    ///
+    /// The staging buffer goes to `temp`, to be destroyed with it.
+    pub fn write_materials(
+        &self,
+        encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+        params: &[MaterialParams],
+        temp: &mut crate::FrameResources,
+    ) {
+        assert_eq!(params.len(), self.material_count());
+        let bytes = self.material_bytes();
+        let staging = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "diff material staging",
+            size: bytes,
+            memory: blade_graphics::Memory::Upload,
+        });
         unsafe {
-            slice::from_raw_parts(
-                self.materials.grads.data() as *const MaterialParams,
-                self.material_count(),
-            )
+            slice::from_raw_parts_mut(staging.data() as *mut MaterialParams, params.len())
+                .copy_from_slice(params);
         }
+        encoder
+            .transfer("diff-write-materials")
+            .copy_buffer_to_buffer(staging.into(), self.materials.params.into(), bytes);
+        temp.buffers.push(staging);
     }
 
     /// The loss computed by the last [`Self::backward`], once it's done.
@@ -903,6 +924,7 @@ impl DiffTracer {
         gpu.destroy_buffer(self.target);
         gpu.destroy_buffer(self.image_adjoint);
         gpu.destroy_buffer(self.loss);
+        gpu.destroy_buffer(self.readback);
     }
 }
 
