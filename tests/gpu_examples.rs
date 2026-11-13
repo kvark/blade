@@ -621,6 +621,99 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     context.destroy_buffer(input);
 }
 
+#[test]
+#[ignore = "requires a working GPU context with float32 atomics"]
+fn float32_atomic_gpu_test() {
+    const COUNT: usize = 256;
+    const BINS: usize = 4;
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    if !context.capabilities().shader_float32_atomic {
+        println!("Skipping: float32 atomics are not supported");
+        return;
+    }
+
+    let input = context.create_buffer(gpu::BufferDesc {
+        name: "float32-atomic-input",
+        size: (COUNT * 4) as u64,
+        memory: gpu::Memory::Shared,
+    });
+    let output = context.create_buffer(gpu::BufferDesc {
+        name: "float32-atomic-output",
+        size: (BINS * 4) as u64,
+        memory: gpu::Memory::Shared,
+    });
+    unsafe {
+        let values = slice::from_raw_parts_mut(input.data() as *mut f32, COUNT);
+        for (i, value) in values.iter_mut().enumerate() {
+            // Quarters add up exactly in any order.
+            *value = i as f32 * 0.25;
+        }
+        slice::from_raw_parts_mut(output.data() as *mut f32, BINS)
+            .copy_from_slice(&[0.0, 0.0, 0.0, 4.0]);
+    }
+    context.sync_buffer(input.into(), input.size(), gpu::BufferTarget::Data);
+    context.sync_buffer(output.into(), output.size(), gpu::BufferTarget::Data);
+
+    let shader = context.create_shader(gpu::ShaderDesc {
+        source: r#"
+var<storage, read> input: array<f32>;
+var<storage, read_write> output: array<atomic<f32>>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    atomicAdd(&output[id.x % 3u], input[id.x]);
+    if (id.x == 0u) {
+        // Takes the 4.0 from the host and moves it into the first bin,
+        // whose other additions commute with this one.
+        let old = atomicExchange(&output[3], 2.5);
+        atomicSub(&output[0], -old);
+    }
+}
+"#,
+        naga_module: None,
+    });
+    let global_layout = DispatchGlobals::layout();
+    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        name: "float32-atomic-test",
+        data_layouts: &[&global_layout],
+        compute: shader.at("main"),
+    });
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "float32-atomic-test",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    encoder.start();
+    if let mut compute = encoder.compute("float32-atomic")
+        && let mut pass = compute.with(&pipeline)
+    {
+        pass.bind(
+            0,
+            &DispatchGlobals {
+                input: input.into(),
+                output: output.into(),
+            },
+        );
+        pass.dispatch([(COUNT / 64) as u32, 1, 1]);
+    }
+    let sync_point = context.submit(&mut encoder);
+    assert!(context.wait_for(&sync_point, 2000).unwrap());
+
+    let mut expected = [0.0f32; BINS];
+    for i in 0..COUNT {
+        expected[i % 3] += i as f32 * 0.25;
+    }
+    expected[0] += 4.0;
+    expected[3] = 2.5;
+    let actual = unsafe { slice::from_raw_parts(output.data() as *const f32, BINS) };
+    assert_eq!(actual, expected);
+
+    context.destroy_command_encoder(&mut encoder);
+    context.destroy_compute_pipeline(&mut pipeline);
+    context.destroy_buffer(output);
+    context.destroy_buffer(input);
+}
+
 #[cfg(not(gles))]
 #[test]
 #[ignore = "requires a working GPU context"]

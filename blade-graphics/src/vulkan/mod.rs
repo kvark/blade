@@ -372,6 +372,7 @@ pub struct Context {
     shader_float16: bool,
     shader_bfloat16: bool,
     shader_integer_dot_product: bool,
+    shader_float32_atomic: bool,
     cooperative_matrix: crate::CooperativeMatrix,
     vulkan_memory_model: bool,
     binding_array: bool,

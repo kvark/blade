@@ -158,6 +158,7 @@ struct AdapterCapabilities {
     preserve_f16_denorms: bool,
     shader_bfloat16: bool,
     shader_integer_dot_product: bool,
+    shader_float32_atomic: bool,
     subgroup_size: u32,
     cooperative_matrix: crate::CooperativeMatrix,
     vulkan_memory_model: bool,
@@ -204,6 +205,7 @@ impl AdapterCapabilities {
             shader_float16: self.shader_float16,
             shader_bfloat16: self.shader_bfloat16,
             shader_integer_dot_product: self.shader_integer_dot_product,
+            shader_float32_atomic: self.shader_float32_atomic,
             timing: self.timing,
             subgroup_size: self.subgroup_size,
             cooperative_matrix: self.cooperative_matrix.clone(),
@@ -416,6 +418,7 @@ fn inspect_adapter(
     let mut storage_16bit_features = vk::PhysicalDevice16BitStorageFeatures::default();
     let mut integer_dot_product_features =
         vk::PhysicalDeviceShaderIntegerDotProductFeaturesKHR::default();
+    let mut atomic_float_features = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default();
     let mut unified_image_layouts_features =
         unified_image_layouts::PhysicalDeviceFeatures::default();
     let global_priority_extension =
@@ -434,6 +437,7 @@ fn inspect_adapter(
         .push_next(&mut float16_int8_features)
         .push_next(&mut storage_16bit_features)
         .push_next(&mut integer_dot_product_features)
+        .push_next(&mut atomic_float_features)
         .push_next(&mut unified_image_layouts_features);
     if matrix2_available {
         features2_khr = features2_khr.push_next(&mut matrix2_features);
@@ -489,6 +493,10 @@ fn inspect_adapter(
     if shader_integer_dot_product {
         log::info!("Integer dot product is supported");
     }
+    // Naga needs `atomicExchange` as well as `atomicAdd` for `atomic<f32>`.
+    let shader_float32_atomic = supported_extensions.contains(&vk::EXT_SHADER_ATOMIC_FLOAT_NAME)
+        && atomic_float_features.shader_buffer_float32_atomics != 0
+        && atomic_float_features.shader_buffer_float32_atomic_add != 0;
     let global_low_priority = if global_priority_extension
         && global_priority_query_features.global_priority_query == vk::TRUE
     {
@@ -844,6 +852,7 @@ fn inspect_adapter(
         preserve_f16_denorms,
         shader_bfloat16,
         shader_integer_dot_product,
+        shader_float32_atomic,
         subgroup_size: subgroup_properties.subgroup_size,
         cooperative_matrix,
         vulkan_memory_model,
@@ -1296,6 +1305,9 @@ impl super::Context {
             {
                 device_extensions.push(vk::KHR_SHADER_INTEGER_DOT_PRODUCT_NAME);
             }
+            if capabilities.shader_float32_atomic {
+                device_extensions.push(vk::EXT_SHADER_ATOMIC_FLOAT_NAME);
+            }
             if capabilities.memory_budget {
                 device_extensions.push(vk::EXT_MEMORY_BUDGET_NAME);
             }
@@ -1417,6 +1429,16 @@ impl super::Context {
                     ..Default::default()
                 };
                 device_create_info = device_create_info.push_next(&mut khr_integer_dot_product);
+            }
+
+            let mut ext_atomic_float;
+            if capabilities.shader_float32_atomic {
+                ext_atomic_float = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT {
+                    shader_buffer_float32_atomics: vk::TRUE,
+                    shader_buffer_float32_atomic_add: vk::TRUE,
+                    ..Default::default()
+                };
+                device_create_info = device_create_info.push_next(&mut ext_atomic_float);
             }
 
             let mut khr_cooperative_matrix;
@@ -1832,6 +1854,7 @@ impl super::Context {
             shader_float16: capabilities.shader_float16,
             shader_bfloat16: capabilities.shader_bfloat16,
             shader_integer_dot_product: capabilities.shader_integer_dot_product,
+            shader_float32_atomic: capabilities.shader_float32_atomic,
             cooperative_matrix: capabilities.cooperative_matrix,
             vulkan_memory_model: capabilities.vulkan_memory_model,
             binding_array: capabilities.binding_array,
@@ -1872,6 +1895,7 @@ impl super::Context {
             shader_float16: self.shader_float16,
             shader_bfloat16: self.shader_bfloat16,
             shader_integer_dot_product: self.shader_integer_dot_product,
+            shader_float32_atomic: self.shader_float32_atomic,
             timing: self.timing_supported,
             cooperative_matrix: self.cooperative_matrix.clone(),
         }

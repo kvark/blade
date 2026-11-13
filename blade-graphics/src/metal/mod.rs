@@ -686,6 +686,10 @@ impl Context {
             shader_bfloat16: bfloat16,
             // MSL provides `dot4U8Packed`-equivalent math via packed char vectors.
             shader_integer_dot_product: true,
+            // `atomic_float` in device memory needs MSL 3.0 and a Metal 3 GPU.
+            // Blade compiles MSL 3.1 or newer from these OS versions on.
+            shader_float32_atomic: objc2::available!(macos = 14.0, ios = 17.0)
+                && device.supportsFamily(metal::MTLGPUFamily::Metal3),
             timing: find_timestamp_counter_set(device).is_some(),
             cooperative_matrix: if device.supportsFamily(metal::MTLGPUFamily::Apple7)
                 || device.supportsFamily(metal::MTLGPUFamily::Mac2)

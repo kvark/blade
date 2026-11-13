@@ -498,6 +498,7 @@ impl Context {
             shader_float16: false,
             shader_bfloat16: false,
             shader_integer_dot_product: false,
+            shader_float32_atomic: false,
             timing: self
                 .capabilities
                 .contains(Capabilities::DISJOINT_TIMER_QUERY),

@@ -48,6 +48,10 @@ fn validation_capabilities(device_caps: &super::Capabilities) -> naga::valid::Ca
         device_caps.shader_bfloat16,
     );
     caps.set(
+        naga::valid::Capabilities::SHADER_FLOAT32_ATOMIC,
+        device_caps.shader_float32_atomic,
+    );
+    caps.set(
         naga::valid::Capabilities::COOPERATIVE_MATRIX,
         device_caps.cooperative_matrix.is_supported(),
     );
@@ -819,6 +823,23 @@ fn main() {
             !validation_capabilities(&device_caps)
                 .contains(naga::valid::Capabilities::SHADER_BFLOAT16)
         );
+    }
+    #[test]
+    fn float32_atomics_follow_the_device_capability() {
+        let source = "@group(0) @binding(0) var<storage, read_write> sum: atomic<f32>; @compute @workgroup_size(1) fn main() { atomicAdd(&sum, 1.0); }";
+        let module = naga::front::wgsl::parse_str(source).unwrap();
+        let validate = |caps: &crate::Capabilities| {
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                validation_capabilities(caps),
+            )
+            .validate(&module)
+            .is_ok()
+        };
+        let mut caps = crate::Capabilities::default();
+        assert!(!validate(&caps));
+        caps.shader_float32_atomic = true;
+        assert!(validate(&caps));
     }
     #[test]
     fn workgroup_matrix_capabilities_are_independent_of_subgroup_shapes() {
