@@ -257,6 +257,23 @@ impl DiffScene {
         );
     }
 
+    /// Material parameters and their gradients, after the submitted work.
+    fn read_materials(&mut self) -> (Vec<MaterialParams>, Vec<MaterialParams>) {
+        self.diff.read_back_materials(&mut self.encoder);
+        self.submit();
+        (
+            self.diff.material_params().to_vec(),
+            self.diff.material_grads().to_vec(),
+        )
+    }
+
+    fn write_materials(&mut self, params: &[MaterialParams]) {
+        let context = std::sync::Arc::clone(&self.harness.context);
+        self.diff
+            .write_materials(&mut self.encoder, &context, params, &mut self.temp);
+        self.submit();
+    }
+
     /// Read `count` texels of a parameter buffer.
     fn download(&mut self, piece: gpu::BufferPiece, count: usize) -> Vec<[f32; 4]> {
         let context = std::sync::Arc::clone(&self.harness.context);
@@ -335,16 +352,17 @@ fn diff_material_gradients_match_finite_differences() {
         ("roughness", METAL, |p| &mut p.roughness, 0.25),
         ("emissive", EMISSIVE, |p| &mut p.emissive[1], 0.5),
     ];
+    let (mut params, _) = scene.read_materials();
     for &(_, entry, component, offset) in &checks {
-        *component(&mut scene.diff.material_params_mut()[entry]) += offset;
+        *component(&mut params[entry]) += offset;
     }
+    scene.write_materials(&params);
 
     const ITERATIONS: u32 = 256;
     for iteration in 0..ITERATIONS {
         scene.backward(iteration, 8, 4);
     }
-    scene.submit();
-    let grads = scene.diff.material_grads().to_vec();
+    let (_, grads) = scene.read_materials();
 
     const H: f32 = 0.05;
     // Common random numbers for both sides of each difference.
@@ -352,11 +370,14 @@ fn diff_material_gradients_match_finite_differences() {
     for &(name, entry, component, _) in &checks {
         let mut grad = grads[entry];
         let analytic = *component(&mut grad) / ITERATIONS as f32;
-        *component(&mut scene.diff.material_params_mut()[entry]) += H;
+        *component(&mut params[entry]) += H;
+        scene.write_materials(&params);
         let above = scene.converged_loss(frames.clone());
-        *component(&mut scene.diff.material_params_mut()[entry]) -= 2.0 * H;
+        *component(&mut params[entry]) -= 2.0 * H;
+        scene.write_materials(&params);
         let below = scene.converged_loss(frames.clone());
-        *component(&mut scene.diff.material_params_mut()[entry]) += H;
+        *component(&mut params[entry]) += H;
+        scene.write_materials(&params);
         let numeric = (above - below) / (2.0 * H);
         println!("d loss / d {name}: gradient {analytic:e}, central difference {numeric:e}");
         assert!(
@@ -384,10 +405,12 @@ fn diff_recovers_base_colors() {
         return;
     };
     scene.capture_target();
-    let truth = scene.diff.material_params().to_vec();
-    for params in &mut scene.diff.material_params_mut()[..pbr_scene::COLUMNS] {
+    let (truth, _) = scene.read_materials();
+    let mut params = truth.clone();
+    for params in &mut params[..pbr_scene::COLUMNS] {
         params.base_color = [0.4, 0.4, 0.4];
     }
+    scene.write_materials(&params);
     let error = |params: &[MaterialParams]| {
         let mut sum = 0.0;
         for (p, t) in params.iter().zip(&truth).take(pbr_scene::COLUMNS) {
@@ -397,7 +420,7 @@ fn diff_recovers_base_colors() {
         }
         sum / (3 * pbr_scene::COLUMNS) as f32
     };
-    let initial_error = error(scene.diff.material_params());
+    let initial_error = error(&params);
     // The loss of a single step is mostly the noise of its image.
     let initial_loss = scene.converged_loss(CONVERGED_FRAMES);
 
@@ -416,18 +439,13 @@ fn diff_recovers_base_colors() {
         );
         scene.submit();
     }
-    let final_error = error(scene.diff.material_params());
+    let (params, _) = scene.read_materials();
+    let final_error = error(&params);
     let final_loss = scene.converged_loss(CONVERGED_FRAMES);
     println!(
         "base color error {initial_error:.3} -> {final_error:.3}, loss {initial_loss:e} -> {final_loss:e}"
     );
-    for (p, t) in scene
-        .diff
-        .material_params()
-        .iter()
-        .zip(&truth)
-        .take(pbr_scene::COLUMNS)
-    {
+    for (p, t) in params.iter().zip(&truth).take(pbr_scene::COLUMNS) {
         println!("  {:?} for {:?}", p.base_color, t.base_color);
     }
     assert!(
@@ -435,7 +453,7 @@ fn diff_recovers_base_colors() {
         "the base color error only went from {initial_error} to {final_error}"
     );
     // Nothing else is optimized.
-    for (p, t) in scene.diff.material_params().iter().zip(&truth) {
+    for (p, t) in params.iter().zip(&truth) {
         assert_eq!(
             (p.metalness, p.roughness, p.emissive),
             (t.metalness, t.roughness, t.emissive)
