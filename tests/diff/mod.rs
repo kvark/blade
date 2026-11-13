@@ -3,7 +3,8 @@
 use super::{PbrHarness, SHADER_DIR, pbr_scene};
 use blade_graphics as gpu;
 use blade_render::diff::{
-    AdamConfig, DiffConfig, DiffShaders, DiffTracer, MaterialParamFlags, MaterialParams,
+    AdamConfig, DiffConfig, DiffShaders, DiffTracer, DiffTracerDesc, MaterialParamFlags,
+    MaterialParams, StepConfig,
 };
 
 const SIZE: gpu::Extent = gpu::Extent {
@@ -11,6 +12,14 @@ const SIZE: gpu::Extent = gpu::Extent {
     height: 32,
     depth: 1,
 };
+/// Spheres span more pixels than texels of `CHECKER`.
+const TEXTURED_SIZE: gpu::Extent = gpu::Extent {
+    width: 80,
+    height: 64,
+    depth: 1,
+};
+const CHECKER_SIZE: u32 = 4;
+const CHECKER: [[u8; 4]; 2] = [[230, 70, 40, 255], [40, 130, 220, 255]];
 // Different from any frame index the gradients are taken at.
 const TARGET_FRAMES: std::ops::Range<u32> = 1_000_000..1_000_032;
 const CONVERGED_FRAMES: std::ops::Range<u32> = 3_000_000..3_000_064;
@@ -52,7 +61,9 @@ struct DiffScene {
 }
 
 impl DiffScene {
-    fn new(cache_name: &str) -> Option<Self> {
+    /// The material grid under `sky_texels`, with the `CHECKER` texture
+    /// for the base color of the dielectric row if `textured`.
+    fn new(cache_name: &str, textured: bool) -> Option<Self> {
         if cfg!(target_os = "macos") && std::env::var_os("CI").is_some() {
             println!("Skipping: ray tracing is not supported on macOS CI");
             return None;
@@ -99,7 +110,7 @@ impl DiffScene {
             harness.shaders.clone(),
             &harness.asset_hub.shaders,
             &blade_render::RenderConfig {
-                surface_size: SIZE,
+                surface_size: if textured { TEXTURED_SIZE } else { SIZE },
                 surface_info: gpu::SurfaceInfo {
                     format: gpu::TextureFormat::Rgba32Float,
                     alpha: gpu::AlphaMode::Ignored,
@@ -108,8 +119,30 @@ impl DiffScene {
                 max_debug_lines: 16,
             },
         );
+        let mut model = harness
+            .asset_hub
+            .models
+            .baker
+            .create_model("diff-grid", pbr_scene::material_grid([0.3, 1.0]));
+        if textured {
+            let texels = (0..CHECKER_SIZE * CHECKER_SIZE)
+                .map(|i| CHECKER[((i / CHECKER_SIZE + i % CHECKER_SIZE) % 2) as usize])
+                .collect::<Vec<_>>();
+            let checker = harness.asset_hub.textures.baker.create_texture(
+                "diff-checker",
+                CHECKER_SIZE,
+                CHECKER_SIZE,
+                &texels,
+            );
+            let checker = harness.asset_hub.textures.insert(checker);
+            for geometry in &model.geometries[..pbr_scene::COLUMNS] {
+                let material = &mut model.materials[geometry.material_index];
+                material.base_color_texture = Some(checker);
+                material.base_color_factor = [1.0; 4];
+            }
+        }
         let mut objects = vec![blade_render::Object::from(
-            harness.create_grid_model([0.3, 1.0]),
+            harness.asset_hub.models.insert(model),
         )];
         let sky = harness.asset_hub.textures.baker.create_texture(
             "diff-sky",
@@ -132,8 +165,9 @@ impl DiffScene {
             &mut encoder,
             &context,
             &diff_shaders,
-            &harness.asset_hub.shaders,
+            &harness.asset_hub,
             &renderer,
+            &DiffTracerDesc { textures: textured },
         );
         let mut scene = Self {
             harness,
@@ -223,6 +257,47 @@ impl DiffScene {
         );
     }
 
+    /// Read `count` texels of a parameter buffer.
+    fn download(&mut self, piece: gpu::BufferPiece, count: usize) -> Vec<[f32; 4]> {
+        let context = std::sync::Arc::clone(&self.harness.context);
+        let bytes = (count * 16) as u64;
+        let staging = context.create_buffer(gpu::BufferDesc {
+            name: "diff-download",
+            size: bytes,
+            memory: gpu::Memory::Shared,
+        });
+        self.encoder
+            .transfer("diff-download")
+            .copy_buffer_to_buffer(piece, staging.into(), bytes);
+        self.submit();
+        let texels =
+            unsafe { std::slice::from_raw_parts(staging.data() as *const [f32; 4], count) }
+                .to_vec();
+        context.destroy_buffer(staging);
+        texels
+    }
+
+    /// Write texels into a parameter buffer.
+    fn upload(&mut self, piece: gpu::BufferPiece, texels: &[[f32; 4]]) {
+        let context = std::sync::Arc::clone(&self.harness.context);
+        let bytes = (texels.len() * 16) as u64;
+        let staging = context.create_buffer(gpu::BufferDesc {
+            name: "diff-upload",
+            size: bytes,
+            memory: gpu::Memory::Shared,
+        });
+        unsafe {
+            std::slice::from_raw_parts_mut(staging.data() as *mut [f32; 4], texels.len())
+                .copy_from_slice(texels);
+        }
+        context.sync_buffer(staging.into(), bytes, gpu::BufferTarget::Data);
+        self.encoder
+            .transfer("diff-upload")
+            .copy_buffer_to_buffer(staging.into(), piece, bytes);
+        self.submit();
+        context.destroy_buffer(staging);
+    }
+
     fn destroy(mut self) {
         let context = std::sync::Arc::clone(&self.harness.context);
         self.diff.destroy(&context);
@@ -249,7 +324,7 @@ type Component = fn(&mut MaterialParams) -> &mut f32;
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_material_gradients_match_finite_differences() {
-    let Some(mut scene) = DiffScene::new("diff-gradients") else {
+    let Some(mut scene) = DiffScene::new("diff-gradients", false) else {
         return;
     };
     scene.capture_target();
@@ -305,7 +380,7 @@ fn diff_material_gradients_match_finite_differences() {
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_recovers_base_colors() {
-    let Some(mut scene) = DiffScene::new("diff-recovery") else {
+    let Some(mut scene) = DiffScene::new("diff-recovery", false) else {
         return;
     };
     scene.capture_target();
@@ -334,8 +409,10 @@ fn diff_recovers_base_colors() {
         scene.backward(iteration, 2, 2);
         scene.diff.step(
             &mut scene.encoder,
-            Some((adam, MaterialParamFlags::BASE_COLOR)),
-            None,
+            &StepConfig {
+                materials: Some((adam, MaterialParamFlags::BASE_COLOR)),
+                ..Default::default()
+            },
         );
         scene.submit();
     }
@@ -378,53 +455,23 @@ fn diff_recovers_base_colors() {
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_recovers_environment() {
     const STEPS: u32 = 150;
-    let Some(mut scene) = DiffScene::new("diff-environment") else {
+    let Some(mut scene) = DiffScene::new("diff-environment", false) else {
         return;
     };
     scene.capture_target();
     let size = scene.diff.environment_size();
     assert_eq!([size.width, size.height], SKY_SIZE);
     let texel_count = (size.width * size.height) as usize;
-    let bytes = (texel_count * 16) as u64;
-    let context = std::sync::Arc::clone(&scene.harness.context);
-    let staging = context.create_buffer(gpu::BufferDesc {
-        name: "diff-environment",
-        size: bytes,
-        memory: gpu::Memory::Shared,
-    });
-    let texels = |staging: &gpu::Buffer| unsafe {
-        std::slice::from_raw_parts_mut(staging.data() as *mut [f32; 4], texel_count)
-    };
-    let download = |scene: &mut DiffScene| {
-        scene
-            .encoder
-            .transfer("diff-environment")
-            .copy_buffer_to_buffer(scene.diff.environment_params(), staging.into(), bytes);
-        scene.submit();
-        texels(&staging).to_vec()
-    };
-    let truth = download(&mut scene);
+    let params = scene.diff.environment_params();
+    let truth = scene.download(params, texel_count);
     for (texel, expected) in truth.iter().zip(sky_texels()) {
         for c in 0..4 {
             assert!((texel[c] - f32::from(expected[c]) / 255.0).abs() < 1.0e-6);
         }
     }
     // Flatten the sky into its average.
-    let mut average = [0.0; 3];
-    for texel in &truth {
-        for c in 0..3 {
-            average[c] += texel[c] / texel_count as f32;
-        }
-    }
-    for texel in texels(&staging).iter_mut() {
-        *texel = [average[0], average[1], average[2], 1.0];
-    }
-    context.sync_buffer(staging.into(), bytes, gpu::BufferTarget::Data);
-    scene
-        .encoder
-        .transfer("diff-environment")
-        .copy_buffer_to_buffer(staging.into(), scene.diff.environment_params(), bytes);
-    scene.submit();
+    let average = average_color(&truth);
+    scene.upload(params, &vec![average; texel_count]);
 
     // The camera looks down -Z, at the seam of the map, and its field of
     // view stays within the two middle rows.
@@ -439,7 +486,7 @@ fn diff_recovers_environment() {
         }
         max
     };
-    let initial_error = error(&download(&mut scene));
+    let initial_error = error(&scene.download(params, texel_count));
     let initial_loss = scene.converged_loss(CONVERGED_FRAMES);
     let adam = AdamConfig {
         learning_rate: 0.05,
@@ -447,10 +494,16 @@ fn diff_recovers_environment() {
     };
     for iteration in 0..STEPS {
         scene.backward(iteration, 2, 2);
-        scene.diff.step(&mut scene.encoder, None, Some(adam));
+        scene.diff.step(
+            &mut scene.encoder,
+            &StepConfig {
+                environment: Some(adam),
+                ..Default::default()
+            },
+        );
         scene.submit();
     }
-    let recovered = download(&mut scene);
+    let recovered = scene.download(params, texel_count);
     let final_error = error(&recovered);
     let final_loss = scene.converged_loss(CONVERGED_FRAMES);
     println!(
@@ -473,6 +526,118 @@ fn diff_recovers_environment() {
     );
     // Untouched by the optimizer.
     assert!(recovered.iter().all(|texel| texel[3] == 1.0));
-    context.destroy_buffer(staging);
+    scene.destroy();
+}
+
+fn average_color(texels: &[[f32; 4]]) -> [f32; 4] {
+    let mut average = [0.0, 0.0, 0.0, 1.0];
+    for texel in texels {
+        for c in 0..3 {
+            average[c] += texel[c] / texels.len() as f32;
+        }
+    }
+    average
+}
+
+/// The gradient by a texel agrees with central differences, and optimizing
+/// the texture recovers the texels that the camera sees.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_recovers_texture() {
+    let Some(mut scene) = DiffScene::new("diff-texture", true) else {
+        return;
+    };
+    // The sky is the environment, not a material texture.
+    let textures = scene.diff.textures().to_vec();
+    assert_eq!(textures.len(), 1);
+    assert_eq!([textures[0].width, textures[0].height], [CHECKER_SIZE; 2]);
+    let texel_count = (CHECKER_SIZE * CHECKER_SIZE) as usize;
+    let params = scene.diff.texture_params();
+    scene.capture_target();
+    let truth = scene.download(params, texel_count);
+    let size = CHECKER_SIZE as usize;
+    for (i, texel) in truth.iter().enumerate() {
+        let expected = CHECKER[(i / size + i % size) % 2];
+        for c in 0..4 {
+            assert!((texel[c] - f32::from(expected[c]) / 255.0).abs() < 1.0e-6);
+        }
+    }
+    let flat = vec![average_color(&truth); texel_count];
+    scene.upload(params, &flat);
+
+    // The front of the spheres shows the first half of the columns, and
+    // the middle rows face the camera the most.
+    let visible = [size, size + 1, 2 * size, 2 * size + 1];
+
+    const ITERATIONS: u32 = 64;
+    for iteration in 0..ITERATIONS {
+        scene.backward(iteration, 8, 4);
+    }
+    let grads = scene.download(scene.diff.texture_grads(), texel_count);
+    const H: f32 = 0.05;
+    let frames = 2_000_000..2_000_256;
+    for &(index, channel) in &[(visible[1], 0), (visible[2], 2)] {
+        let analytic = grads[index][channel] / ITERATIONS as f32;
+        let mut texels = flat.clone();
+        texels[index][channel] += H;
+        scene.upload(params, &texels);
+        let above = scene.converged_loss(frames.clone());
+        texels[index][channel] -= 2.0 * H;
+        scene.upload(params, &texels);
+        let below = scene.converged_loss(frames.clone());
+        let numeric = (above - below) / (2.0 * H);
+        println!(
+            "d loss / d texel {index}.{channel}: gradient {analytic:e}, central difference {numeric:e}"
+        );
+        assert!(
+            analytic * numeric > 0.0 && (analytic - numeric).abs() <= 0.25 * numeric.abs(),
+            "d loss / d texel {index}.{channel}: gradient {analytic:e} disagrees with {numeric:e}"
+        );
+    }
+
+    scene.upload(params, &flat);
+    // Drop the gradients of the check.
+    scene.diff.step(&mut scene.encoder, &StepConfig::default());
+    let error = |texels: &[[f32; 4]]| {
+        let mut max: f32 = 0.0;
+        for &index in &visible {
+            for c in 0..3 {
+                max = max.max((texels[index][c] - truth[index][c]).abs());
+            }
+        }
+        max
+    };
+    let initial_error = error(&flat);
+    let adam = AdamConfig {
+        learning_rate: 0.03,
+        ..Default::default()
+    };
+    for iteration in 0..100 {
+        scene.backward(ITERATIONS + iteration, 2, 2);
+        scene.diff.step(
+            &mut scene.encoder,
+            &StepConfig {
+                textures: Some(adam),
+                ..Default::default()
+            },
+        );
+        scene.submit();
+    }
+    let recovered = scene.download(params, texel_count);
+    let final_error = error(&recovered);
+    println!("visible texel error {initial_error:.3} -> {final_error:.3}");
+    for &index in &visible {
+        println!(
+            "  {:?} for {:?}",
+            &recovered[index][..3],
+            &truth[index][..3]
+        );
+    }
+    assert!(
+        final_error < 0.25 * initial_error,
+        "the visible texel error only went from {initial_error} to {final_error}"
+    );
+    // Untouched by the optimizer.
+    assert!(recovered.iter().all(|texel| texel[3] == 1.0));
     scene.destroy();
 }
