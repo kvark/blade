@@ -131,6 +131,8 @@ struct HitSurface {
     flat_normal: vec3<f32>,
     // Interpolated normal with the normal map applied.
     normal: vec3<f32>,
+    // Takes the normal map to world space, with the interpolated normal in Z.
+    tangent_space: mat3x3<f32>,
 }
 
 //Note: this is the leaner sibling of the body of "fill-gbuf.wgsl",
@@ -169,5 +171,6 @@ fn resolve_hit_surface(intersection: RayIntersection, lod: f32) -> HitSurface {
     surface.flat_normal = hit_winding(entry) * normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
     let normal_local = sample_hit_normal_map(entry, tex_coords, lod, 0u);
     surface.normal = normalize(tangent_space_world * normal_local);
+    surface.tangent_space = tangent_space_world;
     return surface;
 }
