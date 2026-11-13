@@ -12,8 +12,10 @@ const SIZE: gpu::Extent = gpu::Extent {
     height: 32,
     depth: 1,
 };
-/// Spheres span more pixels than texels of `CHECKER`.
-const TEXTURED_SIZE: gpu::Extent = gpu::Extent {
+/// For textures, spheres span more pixels than texels of `CHECKER`, and for
+/// geometry, silhouettes move across enough samples of each pixel for
+/// central differences to be accurate.
+const DETAILED_SIZE: gpu::Extent = gpu::Extent {
     width: 80,
     height: 64,
     depth: 1,
@@ -21,27 +23,50 @@ const TEXTURED_SIZE: gpu::Extent = gpu::Extent {
 const CHECKER_SIZE: u32 = 4;
 const CHECKER: [[u8; 4]; 2] = [[230, 70, 40, 255], [40, 130, 220, 255]];
 
-/// A texture for the dielectric row of the grid.
+/// What the scene is made of, and what is differentiated.
 #[derive(Clone, Copy, PartialEq)]
-enum Texturing {
-    None,
-    /// `CHECKER` as the base color.
-    BaseColor,
+enum SceneKind {
+    /// The material grid, as one object.
+    Grid,
+    /// Every sphere of the grid as an object of its own, whose translations
+    /// are parameters.
+    Spheres,
+    /// A quad past the edges of the view, with its normals tilted outwards,
+    /// whose translation is a parameter. Nothing in view is a discontinuity,
+    /// so only the interpolated normals move the image.
+    Bowl,
+    /// A flat-shaded cube, whose translation is a parameter. Flat faces only
+    /// move the image at their edges.
+    Cube,
+    /// A large dielectric sphere on its own, whose translation is a parameter.
+    Ball,
+    /// `CHECKER` as the base color of the dielectric row.
+    BaseColorTexture,
     /// Normals tilted four ways, at a unit normal scale, on a quad facing
-    /// the camera instead of the grid. Spheres turn the normals away from
-    /// the view at their silhouettes, where the BSDF is cut off, which the
-    /// gradient doesn't account for.
-    Normal,
+    /// the camera instead of the grid, so that all of the texels are seen.
+    NormalMap,
 }
 
-impl Texturing {
+impl SceneKind {
+    /// Whether the scene is made of the spheres of the grid.
+    fn is_grid(self) -> bool {
+        matches!(self, Self::Grid | Self::Spheres | Self::BaseColorTexture)
+    }
+
+    /// Whether translations are parameters.
+    fn moves(self) -> bool {
+        matches!(self, Self::Spheres | Self::Bowl | Self::Cube | Self::Ball)
+    }
+
     fn texels(self) -> Vec<[u8; 4]> {
         let size = CHECKER_SIZE as usize;
         (0..size * size)
             .map(|i| match self {
-                Self::None => unreachable!(),
-                Self::BaseColor => CHECKER[(i / size + i % size) % 2],
-                Self::Normal => [
+                Self::Grid | Self::Spheres | Self::Bowl | Self::Cube | Self::Ball => {
+                    unreachable!()
+                }
+                Self::BaseColorTexture => CHECKER[(i / size + i % size) % 2],
+                Self::NormalMap => [
                     [200, 128, 255, 255],
                     [128, 200, 255, 255],
                     [56, 128, 255, 255],
@@ -88,14 +113,15 @@ struct DiffScene {
     temp: blade_render::FrameResources,
     diff: DiffTracer,
     camera: blade_render::Camera,
+    sky: blade_asset::Handle<blade_render::Texture>,
     config: DiffConfig,
 }
 
 impl DiffScene {
     /// The material grid under `sky_texels`, with the textures that
-    /// `texturing` asks for, which are then parameters.
-    fn new(cache_name: &str, texturing: Texturing) -> Option<Self> {
-        let textured = texturing != Texturing::None;
+    /// `kind` asks for, which are then parameters.
+    fn new(cache_name: &str, kind: SceneKind) -> Option<Self> {
+        let textured = matches!(kind, SceneKind::BaseColorTexture | SceneKind::NormalMap);
         if cfg!(target_os = "macos") && std::env::var_os("CI").is_some() {
             println!("Skipping: ray tracing is not supported on macOS CI");
             return None;
@@ -142,7 +168,11 @@ impl DiffScene {
             harness.shaders.clone(),
             &harness.asset_hub.shaders,
             &blade_render::RenderConfig {
-                surface_size: if textured { TEXTURED_SIZE } else { SIZE },
+                surface_size: if textured || kind.moves() {
+                    DETAILED_SIZE
+                } else {
+                    SIZE
+                },
                 surface_info: gpu::SurfaceInfo {
                     format: gpu::TextureFormat::Rgba32Float,
                     alpha: gpu::AlphaMode::Ignored,
@@ -151,39 +181,60 @@ impl DiffScene {
                 max_debug_lines: 16,
             },
         );
-        let geometries = if texturing == Texturing::Normal {
-            vec![quad()]
-        } else {
+        let mut objects = if kind == SceneKind::Spheres {
             pbr_scene::material_grid([0.3, 1.0])
-        };
-        let mut model = harness
-            .asset_hub
-            .models
-            .baker
-            .create_model("diff-scene", geometries);
-        if textured {
-            let texture = harness.asset_hub.textures.baker.create_texture(
-                "diff-texture",
-                CHECKER_SIZE,
-                CHECKER_SIZE,
-                &texturing.texels(),
-            );
-            let texture = harness.asset_hub.textures.insert(texture);
-            let count = model.geometries.len().min(pbr_scene::COLUMNS);
-            for geometry in &model.geometries[..count] {
-                let material = &mut model.materials[geometry.material_index];
-                if texturing == Texturing::BaseColor {
-                    material.base_color_texture = Some(texture);
-                    material.base_color_factor = [1.0; 4];
-                } else {
-                    material.normal_texture = Some(texture);
-                    material.normal_scale = 1.0;
+                .into_iter()
+                .enumerate()
+                .map(|(i, geometry)| {
+                    let model = harness
+                        .asset_hub
+                        .models
+                        .baker
+                        .create_model(&format!("diff-sphere-{i}"), vec![geometry]);
+                    blade_render::Object::from(harness.asset_hub.models.insert(model))
+                })
+                .collect()
+        } else {
+            let geometries = if kind == SceneKind::NormalMap {
+                vec![quad()]
+            } else if kind == SceneKind::Bowl {
+                vec![bowl()]
+            } else if kind == SceneKind::Cube {
+                vec![cube()]
+            } else if kind == SceneKind::Ball {
+                vec![ball()]
+            } else {
+                pbr_scene::material_grid([0.3, 1.0])
+            };
+            let mut model = harness
+                .asset_hub
+                .models
+                .baker
+                .create_model("diff-scene", geometries);
+            if textured {
+                let texture = harness.asset_hub.textures.baker.create_texture(
+                    "diff-texture",
+                    CHECKER_SIZE,
+                    CHECKER_SIZE,
+                    &kind.texels(),
+                );
+                let texture = harness.asset_hub.textures.insert(texture);
+                let count = model.geometries.len().min(pbr_scene::COLUMNS);
+                for geometry in &model.geometries[..count] {
+                    let material = &mut model.materials[geometry.material_index];
+                    if kind == SceneKind::BaseColorTexture {
+                        material.base_color_texture = Some(texture);
+                        material.base_color_factor = [1.0; 4];
+                    } else {
+                        material.normal_texture = Some(texture);
+                        material.normal_scale = 1.0;
+                    }
                 }
             }
-        }
-        let mut objects = vec![blade_render::Object::from(
-            harness.asset_hub.models.insert(model),
-        )];
+            vec![blade_render::Object::from(
+                harness.asset_hub.models.insert(model),
+            )]
+        };
         let sky = harness.asset_hub.textures.baker.create_texture(
             "diff-sky",
             SKY_SIZE[0],
@@ -207,7 +258,10 @@ impl DiffScene {
             &diff_shaders,
             &harness.asset_hub,
             &renderer,
-            &DiffTracerDesc { textures: textured },
+            &DiffTracerDesc {
+                textures: textured,
+                geometry: kind.moves(),
+            },
         );
         let mut scene = Self {
             harness,
@@ -217,6 +271,7 @@ impl DiffScene {
             temp,
             diff,
             camera: pbr_scene::camera(),
+            sky,
             config: DiffConfig {
                 num_environment_samples: 1,
                 samples_per_pixel: 2,
@@ -225,7 +280,7 @@ impl DiffScene {
             },
         };
         scene.submit();
-        if texturing != Texturing::Normal {
+        if kind.is_grid() {
             assert_eq!(
                 scene.diff.material_count(),
                 pbr_scene::COLUMNS * pbr_scene::ROWS
@@ -301,7 +356,7 @@ impl DiffScene {
 
     /// Material parameters and their gradients, after the submitted work.
     fn read_materials(&mut self) -> (Vec<MaterialParams>, Vec<MaterialParams>) {
-        self.diff.read_back_materials(&mut self.encoder);
+        self.diff.read_back(&mut self.encoder);
         self.submit();
         (
             self.diff.material_params().to_vec(),
@@ -313,6 +368,31 @@ impl DiffScene {
         let context = std::sync::Arc::clone(&self.harness.context);
         self.diff
             .write_materials(&mut self.encoder, &context, params, &mut self.temp);
+        self.submit();
+    }
+
+    /// Translate every sphere and the camera from where they started, and
+    /// build the scene again.
+    fn move_geometry(&mut self, translations: &[[f32; 3]], camera: [f32; 3]) {
+        let context = std::sync::Arc::clone(&self.harness.context);
+        for (object, translation) in self.objects.iter_mut().zip(translations) {
+            object.transform = gpu::IDENTITY_TRANSFORM;
+            object.transform.x.w = translation[0];
+            object.transform.y.w = translation[1];
+            object.transform.z.w = translation[2];
+        }
+        let base = pbr_scene::camera().pos;
+        self.camera.pos = [base.x + camera[0], base.y + camera[1], base.z + camera[2]].into();
+        self.renderer.build_scene(
+            &mut self.encoder,
+            &mut self.objects,
+            Some(self.sky),
+            &self.harness.asset_hub,
+            &context,
+            &mut self.temp,
+        );
+        self.diff
+            .update_geometry(&mut self.encoder, &context, &self.renderer, &mut self.temp);
         self.submit();
     }
 
@@ -383,7 +463,7 @@ type Component = fn(&mut MaterialParams) -> &mut f32;
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_material_gradients_match_finite_differences() {
-    let Some(mut scene) = DiffScene::new("diff-gradients", Texturing::None) else {
+    let Some(mut scene) = DiffScene::new("diff-gradients", SceneKind::Grid) else {
         return;
     };
     scene.capture_target();
@@ -443,7 +523,7 @@ fn diff_material_gradients_match_finite_differences() {
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_recovers_base_colors() {
-    let Some(mut scene) = DiffScene::new("diff-recovery", Texturing::None) else {
+    let Some(mut scene) = DiffScene::new("diff-recovery", SceneKind::Grid) else {
         return;
     };
     scene.capture_target();
@@ -515,7 +595,7 @@ fn diff_recovers_base_colors() {
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_recovers_environment() {
     const STEPS: u32 = 150;
-    let Some(mut scene) = DiffScene::new("diff-environment", Texturing::None) else {
+    let Some(mut scene) = DiffScene::new("diff-environment", SceneKind::Grid) else {
         return;
     };
     scene.capture_target();
@@ -615,6 +695,85 @@ fn quad() -> blade_render::ProceduralGeometry {
     }
 }
 
+/// A quad larger than the view, with normals tilted outwards at the corners.
+fn bowl() -> blade_render::ProceduralGeometry {
+    let mut geometry = quad();
+    for vertex in &mut geometry.vertices {
+        vertex.position[0] *= 2.0;
+        vertex.position[1] *= 2.0;
+        let [x, y, _] = vertex.position;
+        let normal = [0.15 * x, 0.15 * y, 1.0];
+        let length = (normal[0] * normal[0] + normal[1] * normal[1] + 1.0).sqrt();
+        vertex.normal = pbr_scene::encode_normal(normal.map(|c| c / length));
+    }
+    geometry
+}
+
+/// A cube with a vertex per corner of every face, so that its faces are flat,
+/// turned so that the camera sees three of them.
+fn cube() -> blade_render::ProceduralGeometry {
+    let (sin_y, cos_y) = 0.6f32.sin_cos();
+    let (sin_x, cos_x) = 0.4f32.sin_cos();
+    let turn = |v: [f32; 3]| {
+        let [x, y, z] = v;
+        let (x, z) = (x * cos_y + z * sin_y, -x * sin_y + z * cos_y);
+        let (y, z) = (y * cos_x - z * sin_x, y * sin_x + z * cos_x);
+        [x, y, z]
+    };
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for axis in 0..3 {
+        for sign in [1.0f32, -1.0] {
+            let mut normal = [0.0; 3];
+            normal[axis] = sign;
+            let mut u = [0.0; 3];
+            u[(axis + 1) % 3] = 1.0;
+            let mut v = [0.0; 3];
+            v[(axis + 2) % 3] = sign;
+            let base = vertices.len() as u32;
+            for [a, b] in [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]] {
+                let position = [0, 1, 2].map(|i| 1.2 * (normal[i] + a * u[i] + b * v[i]));
+                vertices.push(blade_render::Vertex {
+                    position: turn(position),
+                    bitangent_sign: 1.0,
+                    tex_coords: [0.5 * (a + 1.0), 0.5 * (b + 1.0)],
+                    normal: pbr_scene::encode_normal(turn(normal)),
+                    tangent: pbr_scene::encode_normal(turn(u)),
+                });
+            }
+            // Counter-clockwise, seen from outside.
+            indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+    blade_render::ProceduralGeometry {
+        name: "cube".to_string(),
+        vertices,
+        indices,
+        base_color_factor: [0.8, 0.5, 0.3, 1.0],
+        metalness: 0.0,
+        roughness: 0.5,
+        emissive_factor: [0.0; 3],
+    }
+}
+
+/// The dielectric sphere of the grid, three times larger, at the center.
+fn ball() -> blade_render::ProceduralGeometry {
+    let mut geometry = pbr_scene::material_grid([0.3, 1.0]).swap_remove(DIELECTRIC);
+    let count = geometry.vertices.len() as f32;
+    let mut center = [0.0; 3];
+    for vertex in &geometry.vertices {
+        for (sum, &c) in center.iter_mut().zip(&vertex.position) {
+            *sum += c / count;
+        }
+    }
+    for vertex in &mut geometry.vertices {
+        for (c, &mid) in vertex.position.iter_mut().zip(&center) {
+            *c = 3.0 * (*c - mid);
+        }
+    }
+    geometry
+}
+
 fn average_color(texels: &[[f32; 4]]) -> [f32; 4] {
     let mut average = [0.0, 0.0, 0.0, 1.0];
     for texel in texels {
@@ -630,24 +789,24 @@ fn average_color(texels: &[[f32; 4]]) -> [f32; 4] {
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_recovers_texture() {
-    check_texture(Texturing::BaseColor, &[(5, 0), (8, 2)], 3);
+    check_texture(SceneKind::BaseColorTexture, &[(5, 0), (8, 2)], 3);
 }
 
 /// The same for a normal map, which only has red and green.
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_recovers_normal_map() {
-    check_texture(Texturing::Normal, &[(5, 0), (8, 1)], 2);
+    check_texture(SceneKind::NormalMap, &[(5, 0), (8, 1)], 2);
 }
 
 /// Check the gradient by some `(texel, channel)` pairs, and recover the first
 /// `channels` channels of the texels that the camera sees from their average.
-fn check_texture(texturing: Texturing, checks: &[(usize, usize)], channels: usize) {
-    let name = match texturing {
-        Texturing::BaseColor => "diff-texture",
+fn check_texture(kind: SceneKind, checks: &[(usize, usize)], channels: usize) {
+    let name = match kind {
+        SceneKind::BaseColorTexture => "diff-texture",
         _ => "diff-normal-map",
     };
-    let Some(mut scene) = DiffScene::new(name, texturing) else {
+    let Some(mut scene) = DiffScene::new(name, kind) else {
         return;
     };
     // The sky is the environment, not a material texture.
@@ -659,7 +818,7 @@ fn check_texture(texturing: Texturing, checks: &[(usize, usize)], channels: usiz
     scene.capture_target();
     let truth = scene.download(params, texel_count);
     let size = CHECKER_SIZE as usize;
-    for (texel, expected) in truth.iter().zip(texturing.texels()) {
+    for (texel, expected) in truth.iter().zip(kind.texels()) {
         for c in 0..4 {
             assert!((texel[c] - f32::from(expected[c]) / 255.0).abs() < 1.0e-6);
         }
@@ -667,7 +826,7 @@ fn check_texture(texturing: Texturing, checks: &[(usize, usize)], channels: usiz
     let flat = vec![average_color(&truth); texel_count];
     scene.upload(params, &flat);
 
-    let visible = if texturing == Texturing::Normal {
+    let visible = if kind == SceneKind::NormalMap {
         // The whole quad is in view.
         (0..texel_count).collect::<Vec<_>>()
     } else {
@@ -719,8 +878,8 @@ fn check_texture(texturing: Texturing, checks: &[(usize, usize)], channels: usiz
     };
     let initial_error = error(&flat);
     // Normals change the image less than colors, so they get more steps.
-    let (learning_rate, steps) = match texturing {
-        Texturing::Normal => (0.05, 200),
+    let (learning_rate, steps) = match kind {
+        SceneKind::NormalMap => (0.05, 200),
         _ => (0.03, 100),
     };
     let adam = AdamConfig {
@@ -755,9 +914,158 @@ fn check_texture(texturing: Texturing, checks: &[(usize, usize)], channels: usiz
     // Untouched by the optimizer, and without a gradient for normal maps.
     for texel in &recovered {
         assert_eq!(texel[3], 1.0);
-        if texturing == Texturing::Normal {
+        if kind == SceneKind::NormalMap {
             assert!((texel[2] - 1.0).abs() < 1.0e-6);
         }
+    }
+    scene.destroy();
+}
+
+/// Row 0 column 0: the leftmost dielectric sphere, at the edge of the grid.
+const EDGE_SPHERE: usize = 0;
+
+/// Optimizing the translation of a displaced sphere brings it back.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_recovers_translation() {
+    let Some(mut scene) = DiffScene::new("diff-translation", SceneKind::Spheres) else {
+        return;
+    };
+    let sphere_count = pbr_scene::COLUMNS * pbr_scene::ROWS;
+    scene.config.edge_samples = 2;
+    scene.capture_target();
+    let displacement = [0.25, -0.2, 0.0];
+    let adam = AdamConfig {
+        learning_rate: 0.02,
+        ..Default::default()
+    };
+    let mut offsets = vec![[0.0; 3]; sphere_count];
+    for iteration in 0..160 {
+        // The parameters are offsets from the displaced position.
+        let mut translations = offsets.clone();
+        for c in 0..3 {
+            translations[EDGE_SPHERE][c] += displacement[c];
+        }
+        scene.move_geometry(&translations, [0.0; 3]);
+        scene.backward(iteration, 4, 2);
+        scene.diff.step(
+            &mut scene.encoder,
+            &StepConfig {
+                translations: Some(adam),
+                ..Default::default()
+            },
+        );
+        scene.diff.read_back(&mut scene.encoder);
+        scene.submit();
+        for (offset, t) in offsets.iter_mut().zip(scene.diff.translations()) {
+            *offset = [t[0], t[1], t[2]];
+        }
+    }
+    // Moving towards the camera mostly scales the silhouette, which is
+    // barely distinguishable from the rest, so Z is only kept in check.
+    let lateral_error = |offset: [f32; 3]| {
+        let d = [offset[0] + displacement[0], offset[1] + displacement[1]];
+        (d[0] * d[0] + d[1] * d[1]).sqrt()
+    };
+    let initial_error = lateral_error([0.0; 3]);
+    let offset = offsets[EDGE_SPHERE];
+    let final_error = lateral_error(offset);
+    println!("sphere displacement {initial_error:.3} -> {final_error:.3}, offset {offset:?}");
+    assert!(
+        final_error < 0.35 * initial_error,
+        "the displacement only went from {initial_error} to {final_error}"
+    );
+    assert!(
+        offset[2].abs() < 0.3,
+        "the sphere moved {} along Z",
+        offset[2]
+    );
+    // The other spheres stay about where they are, across the view.
+    for (i, offset) in offsets.iter().enumerate() {
+        println!("  sphere {i}: {offset:?}");
+        if i != EDGE_SPHERE {
+            let lateral = (offset[0] * offset[0] + offset[1] * offset[1]).sqrt();
+            assert!(lateral < 0.15, "sphere {i} wandered off to {offset:?}");
+            assert!(
+                offset[2].abs() < 0.4,
+                "sphere {i} wandered off to {offset:?}"
+            );
+        }
+    }
+    scene.destroy();
+}
+
+/// The interior part of the gradient by the translations: moving a surface
+/// with interpolated normals under a fixed view.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_interpolated_normal_gradients_match_finite_differences() {
+    check_single_translation(SceneKind::Bowl, "diff-bowl");
+}
+
+/// The boundary part of the gradient by the translations: moving the
+/// silhouette and the creases of a flat-shaded cube.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_edge_gradients_match_finite_differences() {
+    check_single_translation(SceneKind::Cube, "diff-cube");
+}
+
+/// The gradient by the translation of a smooth sphere, which moves both
+/// its silhouette and its shading.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_sphere_translation_gradients_match_finite_differences() {
+    check_single_translation(SceneKind::Ball, "diff-ball");
+}
+
+/// Check the gradient by the translation of the only object in X and Y, and
+/// of the camera in Z.
+fn check_single_translation(kind: SceneKind, cache_name: &str) {
+    let Some(mut scene) = DiffScene::new(cache_name, kind) else {
+        return;
+    };
+    scene.config.edge_samples = 4;
+    scene.capture_target();
+    // Off along Z too, or the gradient by Z would be about zero.
+    let translation = [0.3, -0.2, 0.6];
+    scene.move_geometry(&[translation], [0.0; 3]);
+    const ITERATIONS: u32 = 64;
+    for iteration in 0..ITERATIONS {
+        scene.backward(iteration, 8, 4);
+    }
+    scene.diff.read_back(&mut scene.encoder);
+    scene.submit();
+    let grad = scene.diff.translation_grads()[0];
+    let camera_grad = scene.diff.camera_offset_grad();
+    const H: f32 = 0.05;
+    let frames = 2_000_000..2_000_128;
+    // The object along X and Y, and the camera along Z.
+    for (axis, is_camera) in [(0, false), (1, false), (2, true)] {
+        let analytic = if is_camera {
+            camera_grad[axis]
+        } else {
+            grad[axis]
+        } / ITERATIONS as f32;
+        let mut losses = [0.0; 2];
+        for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
+            let mut t = translation;
+            let mut c = [0.0; 3];
+            if is_camera {
+                c[axis] += sign * H;
+            } else {
+                t[axis] += sign * H;
+            }
+            scene.move_geometry(&[t], c);
+            *loss = scene.converged_loss(frames.clone());
+        }
+        let numeric = (losses[0] - losses[1]) / (2.0 * H);
+        let name = if is_camera { "camera" } else { "object" };
+        println!("d loss / d {name} {axis}: gradient {analytic:e}, central difference {numeric:e}");
+        assert!(
+            analytic * numeric > 0.0 && (analytic - numeric).abs() <= 0.25 * numeric.abs(),
+            "d loss / d {name} {axis}: gradient {analytic:e} disagrees with {numeric:e}"
+        );
     }
     scene.destroy();
 }

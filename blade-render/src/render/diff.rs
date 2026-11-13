@@ -13,7 +13,12 @@
 //!   - optionally, the texels of the base color, metallic-roughness,
 //!     emissive, and normal textures (see [`DiffTracerDesc::textures`]).
 //!
-//! Geometry and the camera are fixed.
+//!   - optionally, the translations of the objects and of the camera (see
+//!     [`DiffTracerDesc::geometry`]).
+//!
+//! Shading normals that face away from the view are bent towards it, which
+//! is the only difference from the reference path tracer. That one cuts the
+//! BSDF off there, which would be a discontinuity for the gradient to miss.
 
 use std::{collections::HashMap, mem, path::Path, slice};
 
@@ -74,7 +79,11 @@ pub struct DiffConfig {
     /// gradient stays unbiased as the environment changes, since only the
     /// sampling, and not the estimate, depends on them.
     pub environment_importance_sampling: bool,
+    /// Has to be on for the gradient of the geometry.
     pub jitter_primary_rays: bool,
+    /// Samples along every edge of every triangle, for the gradient of
+    /// the geometry.
+    pub edge_samples: u32,
 }
 
 impl Default for DiffConfig {
@@ -86,6 +95,7 @@ impl Default for DiffConfig {
             t_start: 0.01,
             environment_importance_sampling: false,
             jitter_primary_rays: true,
+            edge_samples: 1,
         }
     }
 }
@@ -114,12 +124,21 @@ pub struct DiffTracerDesc {
     /// Make the texels of the base color, metallic-roughness, emissive, and
     /// normal textures of the scene parameters, at their top mip level.
     ///
-    /// Normal maps take the gradient of the shading normal, but not the
-    /// discontinuity of the BSDF where the normal turns away from the view.
-    ///
     /// Each texel takes four floats in device memory, for the parameter,
     /// its gradient, and the two moments of the optimizer.
     pub textures: bool,
+    /// Differentiate translations of every object and of the camera.
+    ///
+    /// They are offsets that the caller applies, by adding them to the
+    /// object transforms and the camera position, building the scene again,
+    /// and passing it to [`DiffTracer::update_geometry`].
+    ///
+    /// The gradient accounts for edges of triangles moving across the image,
+    /// and for the interpolated normal of the primary hits moving with it.
+    /// It leaves out how shadows, reflections, and lighting move, and how
+    /// texture coordinates do. Meshes need to be closed, since each edge is
+    /// sampled by one of the two triangles that it is shared by.
+    pub geometry: bool,
 }
 
 /// A texture whose texels are parameters, see [`DiffTracer::textures`].
@@ -141,6 +160,10 @@ pub struct StepConfig {
     /// RGB of the texture texels, which stay in the unit interval. Normal
     /// maps only use red and green, so blue doesn't get a gradient.
     pub textures: Option<AdamConfig>,
+    /// Translations of the objects, which are unbounded.
+    pub translations: Option<AdamConfig>,
+    /// Translation of the camera, which is unbounded.
+    pub camera_position: Option<AdamConfig>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -171,6 +194,19 @@ struct DiffParams {
     environment_importance_sampling: u32,
     accumulated_frames: u32,
     jitter_primary_rays: u32,
+    geometry: u32,
+    instance_count: u32,
+    triangle_count: u32,
+    edge_samples: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct EdgeEntry {
+    hit_entry: u32,
+    instance: u32,
+    first_triangle: u32,
+    triangle_count: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -197,6 +233,10 @@ struct DiffTraceData<'a> {
     texture_grads: blade_graphics::BufferPiece,
     init_material_params: blade_graphics::BufferPiece,
     init_env_params: blade_graphics::BufferPiece,
+    edge_entries: blade_graphics::BufferPiece,
+    instance_transforms: blade_graphics::BufferPiece,
+    translation_grads: blade_graphics::BufferPiece,
+    camera_grads: blade_graphics::BufferPiece,
 }
 
 #[repr(C)]
@@ -343,14 +383,24 @@ pub struct DiffTracer {
     textures: ParamGroup,
     texture_list: Vec<DiffTexture>,
     texture_regions: blade_graphics::Buffer,
-    /// Kept until the regions are uploaded, i.e. until destruction.
-    texture_regions_staging: blade_graphics::Buffer,
+    edges_pipeline: blade_graphics::ComputePipeline,
+    geometry: bool,
+    /// Translations of the instances, in XYZ of 4 floats.
+    translations: ParamGroup,
+    camera_position: ParamGroup,
+    edge_entries: blade_graphics::Buffer,
+    instance_transforms: blade_graphics::Buffer,
+    instance_count: u32,
+    triangle_count: u32,
+    /// Uploaded at creation, and kept until destruction.
+    staging: Vec<blade_graphics::Buffer>,
     image_size: blade_graphics::Extent,
     image: blade_graphics::Buffer,
     target: blade_graphics::Buffer,
     image_adjoint: blade_graphics::Buffer,
     loss: blade_graphics::Buffer,
-    /// Material parameters and gradients, for the host to read.
+    /// Parameters and gradients of the materials and the geometry,
+    /// for the host to read.
     readback: blade_graphics::Buffer,
     accumulated_frames: u32,
 }
@@ -380,6 +430,7 @@ impl DiffTracer {
         sh_trace.check_struct_size::<super::HitEntry>();
         sh_trace.check_struct_size::<TextureRegion>();
         sh_trace.check_struct_size::<TextureInit>();
+        sh_trace.check_struct_size::<EdgeEntry>();
         let sh_optimize = shader_man[shaders.optimize].raw.as_ref().unwrap();
         sh_optimize.check_struct_size::<LossParams>();
         sh_optimize.check_struct_size::<AdamParams>();
@@ -396,6 +447,7 @@ impl DiffTracer {
         let adjoint_pipeline = trace_pipeline("diff-adjoint", "adjoint");
         let init_materials_pipeline = trace_pipeline("diff-init-materials", "init_materials");
         let init_environment_pipeline = trace_pipeline("diff-init-environment", "init_environment");
+        let edges_pipeline = trace_pipeline("diff-edges", "edges");
         let texture_init_layout = super::ray_data_layout::<TextureInitData>(gpu);
         let init_texture_pipeline =
             gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
@@ -511,6 +563,58 @@ impl DiffTracer {
             .copy_from_slice(&region_table);
         }
 
+        // Every triangle of the scene, in the order of the hit entries.
+        let mut edge_table = Vec::new();
+        let mut triangle_count = 0;
+        if desc.geometry {
+            for (instance, &model) in ray_tracer.scene_models.iter().enumerate() {
+                for geometry in &asset_hub.models[model].geometries {
+                    edge_table.push(EdgeEntry {
+                        hit_entry: edge_table.len() as u32,
+                        instance: instance as u32,
+                        first_triangle: triangle_count,
+                        triangle_count: geometry.triangle_count,
+                    });
+                    triangle_count += geometry.triangle_count;
+                }
+            }
+        }
+        let instance_count = if desc.geometry {
+            ray_tracer.scene_models.len() as u32
+        } else {
+            0
+        };
+        let upload = |name: &str, bytes: &[u8]| {
+            let size = bytes.len().max(16) as u64;
+            let buffer = gpu.create_buffer(blade_graphics::BufferDesc {
+                name,
+                size,
+                memory: blade_graphics::Memory::Device,
+            });
+            let staging = gpu.create_buffer(blade_graphics::BufferDesc {
+                name: &format!("{name} staging"),
+                size,
+                memory: blade_graphics::Memory::Upload,
+            });
+            unsafe {
+                slice::from_raw_parts_mut(staging.data(), bytes.len()).copy_from_slice(bytes);
+            }
+            (buffer, staging, size)
+        };
+        let (edge_entries, edge_staging, edge_bytes) =
+            upload("diff edge entries", bytemuck::cast_slice(&edge_table));
+        let transforms = if desc.geometry {
+            instance_transform_data(ray_tracer)
+        } else {
+            Vec::new()
+        };
+        let (instance_transforms, transform_staging, transform_bytes) = upload(
+            "diff instance transforms",
+            bytemuck::cast_slice(&transforms),
+        );
+        let translations = ParamGroup::new("diff translations", instance_count * 4, gpu);
+        let camera_position = ParamGroup::new("diff camera position", 4, gpu);
+
         let image_size = ray_tracer.surface_size;
         let image_bytes = u64::from(image_size.width * image_size.height) * 16;
         let image_buffer = |name| {
@@ -534,7 +638,15 @@ impl DiffTracer {
             textures,
             texture_list: texture_list.iter().map(|&(_, texture)| texture).collect(),
             texture_regions,
-            texture_regions_staging,
+            edges_pipeline,
+            geometry: desc.geometry,
+            translations,
+            camera_position,
+            edge_entries,
+            instance_transforms,
+            instance_count,
+            triangle_count,
+            staging: vec![texture_regions_staging, edge_staging, transform_staging],
             image_size,
             image: image_buffer("diff image"),
             target: image_buffer("diff target"),
@@ -547,8 +659,8 @@ impl DiffTracer {
             readback: gpu.create_buffer(blade_graphics::BufferDesc {
                 name: "diff readback",
                 size: 2
-                    * u64::from(material_count.max(1))
-                    * mem::size_of::<MaterialParams>() as u64,
+                    * (u64::from(material_count) * mem::size_of::<MaterialParams>() as u64
+                        + u64::from(instance_count + 1) * 16),
                 memory: blade_graphics::Memory::Download,
             }),
             accumulated_frames: 0,
@@ -557,6 +669,8 @@ impl DiffTracer {
         this.materials.clear(encoder);
         this.environment.clear(encoder);
         this.textures.clear(encoder);
+        this.translations.clear(encoder);
+        this.camera_position.clear(encoder);
         {
             let mut transfer = encoder.transfer("diff-init");
             transfer.fill_buffer(this.image_adjoint.into(), image_bytes, 0);
@@ -564,6 +678,23 @@ impl DiffTracer {
                 texture_regions_staging.into(),
                 texture_regions.into(),
                 region_bytes,
+            );
+            transfer.copy_buffer_to_buffer(edge_staging.into(), edge_entries.into(), edge_bytes);
+            transfer.copy_buffer_to_buffer(
+                transform_staging.into(),
+                instance_transforms.into(),
+                transform_bytes,
+            );
+            // The offsets start at zero.
+            transfer.fill_buffer(
+                this.translations.params.into(),
+                this.translations.params.size(),
+                0,
+            );
+            transfer.fill_buffer(
+                this.camera_position.params.into(),
+                this.camera_position.params.size(),
+                0,
             );
         }
         let camera = crate::CameraParams::default();
@@ -613,6 +744,40 @@ impl DiffTracer {
         this
     }
 
+    /// Take the instance transforms of the scene that `ray_tracer` built
+    /// last, which has to have the same objects and models as when this was
+    /// created. The staging buffer goes to `temp`.
+    pub fn update_geometry(
+        &self,
+        encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+        ray_tracer: &super::RayTracer,
+        temp: &mut crate::FrameResources,
+    ) {
+        if !self.geometry {
+            return;
+        }
+        assert_eq!(
+            ray_tracer.instance_transforms.len(),
+            self.instance_count as usize
+        );
+        let transforms = instance_transform_data(ray_tracer);
+        let bytes = (transforms.len() * mem::size_of::<[f32; 16]>()) as u64;
+        let staging = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "diff instance transforms staging",
+            size: bytes,
+            memory: blade_graphics::Memory::Upload,
+        });
+        unsafe {
+            slice::from_raw_parts_mut(staging.data() as *mut [f32; 16], transforms.len())
+                .copy_from_slice(&transforms);
+        }
+        encoder
+            .transfer("diff-instance-transforms")
+            .copy_buffer_to_buffer(staging.into(), self.instance_transforms.into(), bytes);
+        temp.buffers.push(staging);
+    }
+
     fn trace_data<'a>(
         &self,
         ray_tracer: &'a super::RayTracer,
@@ -642,6 +807,10 @@ impl DiffTracer {
             texture_grads: self.textures.grads.into(),
             init_material_params: self.materials.params.into(),
             init_env_params: self.environment.params.into(),
+            edge_entries: self.edge_entries.into(),
+            instance_transforms: self.instance_transforms.into(),
+            translation_grads: self.translations.grads.into(),
+            camera_grads: self.camera_position.grads.into(),
         }
     }
 
@@ -659,6 +828,10 @@ impl DiffTracer {
             environment_importance_sampling: config.environment_importance_sampling as u32,
             accumulated_frames: self.accumulated_frames,
             jitter_primary_rays: config.jitter_primary_rays as u32,
+            geometry: self.geometry as u32,
+            instance_count: self.instance_count,
+            triangle_count: self.triangle_count,
+            edge_samples: config.edge_samples,
         }
     }
 
@@ -679,40 +852,74 @@ impl DiffTracer {
         self.image_size
     }
 
-    /// Copy the material parameters and their gradients, as they are at
-    /// this point of the `encoder`, to where [`Self::material_params`] and
-    /// [`Self::material_grads`] read them once the work is done.
-    pub fn read_back_materials(&self, encoder: &mut blade_graphics::CommandEncoder) {
-        let bytes = self.material_bytes();
-        let mut transfer = encoder.transfer("diff-read-back-materials");
-        transfer.copy_buffer_to_buffer(self.materials.params.into(), self.readback.at(0), bytes);
-        transfer.copy_buffer_to_buffer(self.materials.grads.into(), self.readback.at(bytes), bytes);
+    /// Copy the parameters and the gradients of the materials and of the
+    /// geometry, as they are at this point of the `encoder`, to where
+    /// [`Self::material_params`] and the like read them once the work is done.
+    pub fn read_back(&self, encoder: &mut blade_graphics::CommandEncoder) {
+        let mut transfer = encoder.transfer("diff-read-back");
+        let mut offset = 0;
+        for group in [&self.materials, &self.translations, &self.camera_position] {
+            let bytes = u64::from(group.count) * 4;
+            for buffer in [group.params, group.grads] {
+                if bytes != 0 {
+                    transfer.copy_buffer_to_buffer(buffer.into(), self.readback.at(offset), bytes);
+                }
+                offset += bytes;
+            }
+        }
     }
 
     fn material_bytes(&self) -> u64 {
         (self.material_count() * mem::size_of::<MaterialParams>()) as u64
     }
 
-    fn read_back(&self, offset: u64) -> &[MaterialParams] {
+    fn read_back_slice<T: bytemuck::Pod>(&self, offset: u64, count: usize) -> &[T] {
         unsafe {
-            slice::from_raw_parts(
-                self.readback.data().add(offset as usize) as *const MaterialParams,
-                self.material_count(),
-            )
+            slice::from_raw_parts(self.readback.data().add(offset as usize) as *const T, count)
         }
     }
 
-    /// The material parameters, as of the last [`Self::read_back_materials`],
-    /// once its work is done.
+    /// The material parameters, as of the last [`Self::read_back`], once its
+    /// work is done.
     pub fn material_params(&self) -> &[MaterialParams] {
-        self.read_back(0)
+        self.read_back_slice(0, self.material_count())
     }
 
     /// Derivative of the loss by the material parameters, accumulated by
     /// [`Self::backward`] since the last [`Self::step`], as of the last
-    /// [`Self::read_back_materials`], once its work is done.
+    /// [`Self::read_back`], once its work is done.
     pub fn material_grads(&self) -> &[MaterialParams] {
-        self.read_back(self.material_bytes())
+        self.read_back_slice(self.material_bytes(), self.material_count())
+    }
+
+    fn geometry_offset(&self) -> u64 {
+        2 * self.material_bytes()
+    }
+
+    /// Translation offset of every object, in XYZ, as of the last
+    /// [`Self::read_back`]. See [`DiffTracerDesc::geometry`].
+    pub fn translations(&self) -> &[[f32; 4]] {
+        self.read_back_slice(self.geometry_offset(), self.instance_count as usize)
+    }
+
+    /// Derivative of the loss by [`Self::translations`].
+    pub fn translation_grads(&self) -> &[[f32; 4]] {
+        let offset = self.geometry_offset() + u64::from(self.instance_count) * 16;
+        self.read_back_slice(offset, self.instance_count as usize)
+    }
+
+    /// Translation offset of the camera, as of the last [`Self::read_back`].
+    pub fn camera_offset(&self) -> [f32; 3] {
+        let offset = self.geometry_offset() + u64::from(self.instance_count) * 32;
+        let [x, y, z, _] = self.read_back_slice::<[f32; 4]>(offset, 1)[0];
+        [x, y, z]
+    }
+
+    /// Derivative of the loss by [`Self::camera_offset`].
+    pub fn camera_offset_grad(&self) -> [f32; 3] {
+        let offset = self.geometry_offset() + u64::from(self.instance_count) * 32 + 16;
+        let [x, y, z, _] = self.read_back_slice::<[f32; 4]>(offset, 1)[0];
+        [x, y, z]
     }
 
     /// Replace the material parameters at this point of the `encoder`.
@@ -750,6 +957,12 @@ impl DiffTracer {
     /// The rendered image: `Rgba32Float` radiance, row by row.
     pub fn image(&self) -> blade_graphics::BufferPiece {
         self.image.into()
+    }
+
+    /// Derivative of the loss by [`Self::image`], in the same layout, which
+    /// [`Self::evaluate_loss`] fills in and [`Self::backpropagate`] reads.
+    pub fn image_adjoint(&self) -> blade_graphics::BufferPiece {
+        self.image_adjoint.into()
     }
 
     /// The target that [`Self::backward`] compares the image with,
@@ -857,15 +1070,41 @@ impl DiffTracer {
         frame_index: u32,
     ) {
         self.evaluate_loss(encoder);
+        self.backpropagate(encoder, ray_tracer, camera, config, frame_index);
+    }
+
+    /// Add the derivative by the parameters of whatever loss
+    /// [`Self::image_adjoint`] is the derivative of, by the image, to the
+    /// gradients. [`Self::backward`] does this for the L2 loss against the
+    /// target, and this is the way to use another loss.
+    pub fn backpropagate(
+        &mut self,
+        encoder: &mut blade_graphics::CommandEncoder,
+        ray_tracer: &super::RayTracer,
+        camera: &crate::Camera,
+        config: &DiffConfig,
+        frame_index: u32,
+    ) {
         let data = self.trace_data(
             ray_tracer,
             self.make_camera(camera),
             self.make_params(config, frame_index),
         );
         let mut pass = encoder.compute("diff-adjoint");
-        let mut pc = pass.with(&self.adjoint_pipeline);
-        pc.bind(0, &data);
-        pc.dispatch(self.adjoint_pipeline.get_dispatch_for(self.image_size));
+        {
+            let mut pc = pass.with(&self.adjoint_pipeline);
+            pc.bind(0, &data);
+            pc.dispatch(self.adjoint_pipeline.get_dispatch_for(self.image_size));
+        }
+        if self.geometry && self.triangle_count != 0 {
+            assert!(
+                config.jitter_primary_rays,
+                "the gradient of the geometry needs jittered primary rays"
+            );
+            let mut pc = pass.with(&self.edges_pipeline);
+            pc.bind(0, &data);
+            pc.dispatch(flat_dispatch(self.triangle_count));
+        }
     }
 
     /// Update the parameters along the gradients accumulated since the last
@@ -882,7 +1121,9 @@ impl DiffTracer {
                 &adam,
                 MATERIAL_PARAM_COUNT,
                 flags.bits(),
-                BOUNDED_MATERIAL_PARAMS.bits(),
+                Bounds::NonNegative {
+                    upper_mask: BOUNDED_MATERIAL_PARAMS.bits(),
+                },
             ),
             None => self.materials.clear_grads(encoder),
         }
@@ -894,7 +1135,7 @@ impl DiffTracer {
                 &adam,
                 ENV_PARAM_COUNT,
                 0x7,
-                0,
+                Bounds::NonNegative { upper_mask: 0 },
             ),
             None => self.environment.clear_grads(encoder),
         }
@@ -906,9 +1147,26 @@ impl DiffTracer {
                 &adam,
                 TEXTURE_PARAM_COUNT,
                 0x7,
-                0x7,
+                Bounds::NonNegative { upper_mask: 0x7 },
             ),
             None => self.textures.clear_grads(encoder),
+        }
+        for (group, adam) in [
+            (&mut self.translations, config.translations),
+            (&mut self.camera_position, config.camera_position),
+        ] {
+            match adam {
+                Some(adam) => adam_step(
+                    &self.adam_pipeline,
+                    encoder,
+                    group,
+                    &adam,
+                    4,
+                    0x7,
+                    Bounds::Unbounded,
+                ),
+                None => group.clear_grads(encoder),
+            }
         }
     }
 
@@ -920,17 +1178,34 @@ impl DiffTracer {
         gpu.destroy_compute_pipeline(&mut self.init_texture_pipeline);
         gpu.destroy_compute_pipeline(&mut self.loss_pipeline);
         gpu.destroy_compute_pipeline(&mut self.adam_pipeline);
+        gpu.destroy_compute_pipeline(&mut self.edges_pipeline);
+        self.translations.destroy(gpu);
+        self.camera_position.destroy(gpu);
+        gpu.destroy_buffer(self.edge_entries);
+        gpu.destroy_buffer(self.instance_transforms);
+        for buffer in self.staging.drain(..) {
+            gpu.destroy_buffer(buffer);
+        }
         self.materials.destroy(gpu);
         self.environment.destroy(gpu);
         self.textures.destroy(gpu);
         gpu.destroy_buffer(self.texture_regions);
-        gpu.destroy_buffer(self.texture_regions_staging);
         gpu.destroy_buffer(self.image);
         gpu.destroy_buffer(self.target);
         gpu.destroy_buffer(self.image_adjoint);
         gpu.destroy_buffer(self.loss);
         gpu.destroy_buffer(self.readback);
     }
+}
+
+/// Bounds of the parameters in [`adam_step`].
+#[derive(Clone, Copy)]
+enum Bounds {
+    /// Non-negative, and those with a bit in the mask at most 1.
+    NonNegative {
+        upper_mask: u32,
+    },
+    Unbounded,
 }
 
 fn adam_step(
@@ -940,8 +1215,12 @@ fn adam_step(
     config: &AdamConfig,
     period: u32,
     mask: u32,
-    upper_mask: u32,
+    bounds: Bounds,
 ) {
+    let (lower, upper_mask) = match bounds {
+        Bounds::NonNegative { upper_mask } => (0.0, upper_mask),
+        Bounds::Unbounded => (f32::MIN, 0),
+    };
     group.step += 1;
     let step = group.step as i32;
     let mut pass = encoder.compute("diff-adam");
@@ -956,7 +1235,7 @@ fn adam_step(
                 epsilon: config.epsilon,
                 bias_correction1: 1.0 - config.beta1.powi(step),
                 bias_correction2: 1.0 - config.beta2.powi(step),
-                lower: 0.0,
+                lower,
                 upper: 1.0,
                 count: group.count,
                 period,
@@ -991,4 +1270,13 @@ mod tests {
             assert!(covered - u64::from(count) <= u64::from(x * super::FLAT_WORKGROUP_SIZE));
         }
     }
+}
+
+/// Instance transforms laid out like `mat4x3<f32>`.
+fn instance_transform_data(ray_tracer: &super::RayTracer) -> Vec<[f32; 16]> {
+    ray_tracer
+        .instance_transforms
+        .iter()
+        .map(|t| super::mat4_transform(t).to_cols_array())
+        .collect()
 }

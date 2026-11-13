@@ -16,8 +16,14 @@
 //
 // Only the integrand is differentiated. Sampling decisions, densities, MIS
 // weights and roulette are held fixed, which keeps the gradient unbiased as
-// long as they remain valid. None of the parameters move geometry, so
-// visibility has no discontinuities to account for.
+// long as they remain valid.
+//
+// Translating objects and the camera also moves what the camera sees, which
+// `edges` and `scatter_primary_geometry_grad` differentiate: the first moves
+// the discontinuities of the image along triangle edges, and the second the
+// interpolated normal of each primary hit. Everything past the primary hit
+// is held fixed, which leaves out how shadows, reflections, and the lighting
+// at the primary hit move with the geometry.
 enable wgpu_ray_query;
 enable wgpu_binding_array;
 #include "quaternion.inc.wgsl"
@@ -55,6 +61,20 @@ struct DiffParams {
     // Frames already averaged into `image`, which `primal` adds to.
     accumulated_frames: u32,
     jitter_primary_rays: u32,
+    // Differentiate translations of the instances and the camera.
+    geometry: u32,
+    instance_count: u32,
+    triangle_count: u32,
+    edge_samples: u32,
+}
+
+// Has to match the host!
+// Triangles of one hit entry, for sampling their edges.
+struct EdgeEntry {
+    hit_entry: u32,
+    instance: u32,
+    first_triangle: u32,
+    triangle_count: u32,
 }
 
 // Has to match the host!
@@ -108,6 +128,12 @@ var<storage, read_write> init_material_params: array<MaterialParams>;
 var<storage, read_write> init_env_params: array<vec4<f32>>;
 var<storage, read_write> init_texture_params: array<vec4<f32>>;
 var<uniform> texture_init: TextureInit;
+// Sorted by `first_triangle`.
+var<storage, read> edge_entries: array<EdgeEntry>;
+var<storage, read> instance_transforms: array<mat4x3<f32>>;
+// By the translation of each instance, and of the camera, in XYZ of 4 floats.
+var<storage, read_write> translation_grads: array<atomic<f32>>;
+var<storage, read_write> camera_grads: array<atomic<f32>>;
 
 fn trace_ray(position: vec3<f32>, direction: vec3<f32>, t_min: f32) -> RayIntersection {
     var rq: ray_query;
@@ -357,6 +383,114 @@ fn scatter_material_grad(v: DiffVertex, grad: MaterialGrad) {
     }
 }
 
+fn add_instance_grad(instance: u32, grad: vec3<f32>) {
+    for (var c = 0u; c < 3u; c += 1u) {
+        if (grad[c] != 0.0) {
+            atomicAdd(&translation_grads[instance * 4u + c], grad[c]);
+        }
+    }
+}
+
+fn add_camera_grad(grad: vec3<f32>) {
+    for (var c = 0u; c < 3u; c += 1u) {
+        if (grad[c] != 0.0) {
+            atomicAdd(&camera_grads[c], grad[c]);
+        }
+    }
+}
+
+// The interpolated normal of a primary hit moves as the camera or the hit
+// instance translate, since another point of the triangle comes under the
+// pixel. Carry the derivative of the loss by the shading normal, `d_normal`,
+// to both translations through it.
+//
+// The tangent frame is taken to turn with the normal, which is exact without
+// a normal map, and the texture coordinates are taken to stay.
+fn scatter_primary_geometry_grad(intersection: RayIntersection, direction: vec3<f32>, v: DiffVertex, d_normal: vec3<f32>) {
+    if (all(d_normal == vec3<f32>(0.0))) {
+        return;
+    }
+    let entry = v.surface.entry;
+    let indices = fetch_triangle_indices(entry, intersection.primitive_index);
+    let vptr = &vertex_buffers[entry.vertex_buf].data;
+    let vertices = array<Vertex, 3>((*vptr)[indices.x], (*vptr)[indices.y], (*vptr)[indices.z]);
+    let to_world = intersection.object_to_world;
+    let p0 = to_world * vec4<f32>(entry.geometry_to_object * vec4<f32>(vertices[0].position, 1.0), 1.0);
+    let p1 = to_world * vec4<f32>(entry.geometry_to_object * vec4<f32>(vertices[1].position, 1.0), 1.0);
+    let p2 = to_world * vec4<f32>(entry.geometry_to_object * vec4<f32>(vertices[2].position, 1.0), 1.0);
+
+    // The hit satisfies `p0 + b1 * e1 + b2 * e2 = origin + t * direction`,
+    // so moving the origin by `d` moves `(b1, b2, t)` by the inverse of
+    // `[e1, e2, -direction]` applied to `d`, whose rows are these.
+    let e1 = p1 - p0;
+    let e2 = p2 - p0;
+    let row1 = cross(e2, -direction);
+    let row2 = cross(-direction, e1);
+    let det = dot(e1, row1);
+    if (abs(det) < 1.0e-12) {
+        return;
+    }
+
+    // Back through `normalize(tangent_space * normal_local)`, to the normal
+    // of the tangent space, which is `transform_normal` of the interpolated
+    // vertex normals: `normalize(cofactor * sum)`.
+    let shading = v.surface.tangent_space * v.normal_local;
+    let shading_length = length(shading);
+    let shading_normal = shading / shading_length;
+    let d_shading = (d_normal - shading_normal * dot(shading_normal, d_normal)) / shading_length;
+    let d_geometric = v.normal_local.z * d_shading;
+    let linear = affine_linear(to_world) * affine_linear(entry.geometry_to_object);
+    let cofactor = mat3x3<f32>(
+        cross(linear[1], linear[2]), cross(linear[2], linear[0]), cross(linear[0], linear[1]),
+    ) * sign(dot(linear[0], cross(linear[1], linear[2])));
+    let n0 = decode_normal(vertices[0].normal);
+    let n1 = decode_normal(vertices[1].normal);
+    let n2 = decode_normal(vertices[2].normal);
+    let b = make_barycentrics(intersection.barycentrics);
+    let transformed = cofactor * (b.x * n0 + b.y * n1 + b.z * n2);
+    let transformed_length = length(transformed);
+    let geometric = transformed / transformed_length;
+    let d_transformed = (d_geometric - geometric * dot(geometric, d_geometric)) / transformed_length;
+    let d_sum = transpose(cofactor) * d_transformed;
+    let d_b1 = dot(d_sum, n1 - n0);
+    let d_b2 = dot(d_sum, n2 - n0);
+
+    let d_camera = (d_b1 * row1 + d_b2 * row2) / det;
+    add_camera_grad(d_camera);
+    // Moving the triangle is moving the camera the other way.
+    add_instance_grad(intersection.instance_index, -d_camera);
+}
+
+// Interpolated and mapped normals can face away from the view where the
+// surface doesn't, and the BSDF is black there, which makes the radiance
+// jump across the curve where they turn. Nothing samples that curve, so
+// instead the normal is bent towards the view, continuously, before it
+// gets there. This is the only place where this tracer differs from
+// "path-trace.wgsl", which shows those parts black.
+const MIN_SHADING_COSINE: f32 = 0.02;
+
+fn bend_normal(normal: vec3<f32>, view_dir: vec3<f32>) -> vec3<f32> {
+    let cosine = dot(normal, view_dir);
+    if (cosine >= MIN_SHADING_COSINE) {
+        return normal;
+    }
+    return normalize(normal + (MIN_SHADING_COSINE - cosine) * view_dir);
+}
+
+// Derivative of the loss by the normal given to `bend_normal`, from the one
+// by what it returned.
+fn bend_normal_grad(normal: vec3<f32>, view_dir: vec3<f32>, d_bent: vec3<f32>) -> vec3<f32> {
+    let cosine = dot(normal, view_dir);
+    if (cosine >= MIN_SHADING_COSINE) {
+        return d_bent;
+    }
+    let unnormalized = normal + (MIN_SHADING_COSINE - cosine) * view_dir;
+    let magnitude = length(unnormalized);
+    let bent = unnormalized / magnitude;
+    let d_unnormalized = (d_bent - bent * dot(bent, d_bent)) / magnitude;
+    return d_unnormalized - view_dir * dot(view_dir, d_unnormalized);
+}
+
 // What the first walk of a path learns about each of its vertices.
 struct PathRecord {
     // Radiance found at the vertex: its emission, the lights it connects to,
@@ -427,8 +561,10 @@ fn walk_path(
             break;
         }
 
-        let v = resolve_vertex(intersection);
+        var v = resolve_vertex(intersection);
         let view_dir = -direction;
+        let unbent_normal = v.surface.normal;
+        v.surface.normal = bend_normal(unbent_normal, view_dir);
         let normal = v.surface.normal;
         let flat_normal = v.surface.flat_normal;
         // Derivative of the loss by everything found at this vertex.
@@ -491,7 +627,12 @@ fn walk_path(
             }
         }
         if (replay) {
+            grad.normal = bend_normal_grad(unbent_normal, view_dir, grad.normal);
+            v.surface.normal = unbent_normal;
             scatter_material_grad(v, grad);
+            if (bounce == 0u && parameters.geometry != 0u) {
+                scatter_primary_geometry_grad(intersection, start_dir, v, grad.normal);
+            }
         } else {
             (*record).weight[bounce] = weight;
         }
@@ -606,4 +747,145 @@ fn init_texture(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     let index = texture_init.offset + global_id.y * texture_init.width + global_id.x;
     init_texture_params[index] = textureLoad(textures[texture_init.texture_index], global_id.xy, 0);
+}
+
+// The camera position moves the pixel of a point the other way, so this is
+// minus the derivative of `get_projected_pixel_float` by the camera position.
+// Columns are by world axis.
+fn projection_jacobian(cp: CameraParams, point: vec3<f32>) -> mat3x2<f32> {
+    let to_local = qinv(cp.orientation);
+    let local = qrot(to_local, point - cp.position);
+    let depth = -local.z;
+    let scale = 0.5 * vec2<f32>(cp.target_size) * VFLIP / tan(0.5 * cp.fov);
+    var jacobian: mat3x2<f32>;
+    for (var axis = 0u; axis < 3u; axis += 1u) {
+        var world = vec3<f32>(0.0);
+        world[axis] = 1.0;
+        let d_local = qrot(to_local, world);
+        jacobian[axis] = scale * (d_local.xy / depth + local.xy * d_local.z / (depth * depth));
+    }
+    return jacobian;
+}
+
+fn is_in_front(cp: CameraParams, point: vec3<f32>) -> bool {
+    return qrot(qinv(cp.orientation), point - cp.position).z < 0.0;
+}
+
+// Lexicographic order of positions, for the triangles on both sides of an
+// edge to agree on which of them samples it.
+fn precedes(a: vec3<f32>, b: vec3<f32>) -> bool {
+    if (a.x != b.x) {
+        return a.x < b.x;
+    }
+    if (a.y != b.y) {
+        return a.y < b.y;
+    }
+    return a.z < b.z;
+}
+
+// Sample the boundary term along the segment from `a` to `b` of `instance`.
+//
+// Wherever the segment is a discontinuity of the image, moving it by `dx`
+// pixels across turns `dx` of the pixel on the side it moves to into what
+// the other side shows. The radiance is estimated on both sides with the
+// same random numbers, so that it cancels out where the segment is not
+// a discontinuity, such as between two triangles of a smooth surface.
+fn sample_edge(a: vec3<f32>, b: vec3<f32>, instance: u32, rng: ptr<function, RandomState>) {
+    if (!is_in_front(camera, a) || !is_in_front(camera, b)) {
+        return;
+    }
+    let pa = get_projected_pixel_float(camera, a);
+    let pb = get_projected_pixel_float(camera, b);
+    let segment = pb - pa;
+    let segment_length = length(segment);
+    if (segment_length < 1.0e-6) {
+        return;
+    }
+    let across = vec2<f32>(-segment.y, segment.x) / segment_length;
+    let size = vec2<f32>(camera.target_size);
+    let samples = max(parameters.edge_samples, 1u);
+    var record: PathRecord;
+    var incident: array<vec3<f32>, PATH_LENGTH>;
+    for (var i = 0u; i < samples; i += 1u) {
+        let t = (f32(i) + random_gen(rng)) / f32(samples);
+        let p = mix(pa, pb, t);
+        if (any(p < vec2<f32>(0.0)) || any(p >= size)) {
+            continue;
+        }
+        let pixel = vec2<u32>(p);
+        let d_pixel = image_adjoint[pixel.y * camera.target_size.x + pixel.x].xyz;
+        if (all(d_pixel == vec3<f32>(0.0))) {
+            continue;
+        }
+        let offset = 1.0e-3 * across;
+        var side_rng = *rng;
+        let below = walk_path(get_ray_direction_at(camera, p - offset), &side_rng, &record, false, vec3<f32>(0.0), &incident);
+        side_rng = *rng;
+        let above = walk_path(get_ray_direction_at(camera, p + offset), &side_rng, &record, false, vec3<f32>(0.0), &incident);
+        *rng = side_rng;
+        let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
+            - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
+        let weight = dot(d_pixel, jump) * segment_length / f32(samples);
+        if (weight == 0.0) {
+            continue;
+        }
+
+        // The point of the segment that is seen through `p`.
+        let dir = get_ray_direction_at(camera, p);
+        let along = b - a;
+        let to_a = a - camera.position;
+        let aa = dot(along, along);
+        let ad = dot(along, dir);
+        let denom = aa - ad * ad;
+        let s = clamp(select(0.0, (ad * dot(dir, to_a) - dot(along, to_a)) / denom, denom > 0.0), 0.0, 1.0);
+        let jacobian = projection_jacobian(camera, a + s * along);
+        let velocity = vec3<f32>(dot(across, jacobian[0]), dot(across, jacobian[1]), dot(across, jacobian[2]));
+        add_instance_grad(instance, weight * velocity);
+        add_camera_grad(-weight * velocity);
+    }
+}
+
+// The boundary term of the translations, sampled along the edges of every
+// triangle in the scene. Requires jittered primary rays, i.e. a box filter
+// over each pixel, for the image to change continuously as edges move.
+@compute @workgroup_size(64)
+fn edges(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+) {
+    let triangle = global_id.y * num_workgroups.x * 64u + global_id.x;
+    if (triangle >= parameters.triangle_count) {
+        return;
+    }
+    var lo = 0u;
+    var hi = arrayLength(&edge_entries);
+    while (hi - lo > 1u) {
+        let mid = (lo + hi) / 2u;
+        if (edge_entries[mid].first_triangle <= triangle) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let edge_entry = edge_entries[lo];
+    let entry = hit_entries[edge_entry.hit_entry];
+    let indices = fetch_triangle_indices(entry, triangle - edge_entry.first_triangle);
+    let vptr = &vertex_buffers[entry.vertex_buf].data;
+    let local = entry.geometry_to_object * mat3x4<f32>(
+        vec4<f32>((*vptr)[indices.x].position, 1.0),
+        vec4<f32>((*vptr)[indices.y].position, 1.0),
+        vec4<f32>((*vptr)[indices.z].position, 1.0),
+    );
+    let to_world = instance_transforms[edge_entry.instance];
+    var rng = random_init(triangle, parameters.frame_index);
+    for (var i = 0u; i < 3u; i += 1u) {
+        let a = local[i];
+        let b = local[(i + 1u) % 3u];
+        // Each edge of a closed mesh is shared with a triangle that goes
+        // along it the other way, which takes it instead.
+        if (!precedes(a, b)) {
+            continue;
+        }
+        sample_edge(to_world * vec4<f32>(a, 1.0), to_world * vec4<f32>(b, 1.0), edge_entry.instance, &rng);
+    }
 }
