@@ -120,3 +120,54 @@ fn sample_hit_normal_map(entry: HitEntry, tex_coords: vec2<f32>, lod: f32, ignor
     let n_xy = entry.normal_scale * (2.0 * raw_unorm - 1.0);
     return vec3<f32>(n_xy, sqrt(max(0.0, 1.0 - dot(n_xy, n_xy))));
 }
+
+// Geometry of a ray hit, with the normal map applied.
+struct HitSurface {
+    entry_index: u32,
+    entry: HitEntry,
+    tex_coords: vec2<f32>,
+    position: vec3<f32>,
+    // Normal of the triangle, pointing outwards.
+    flat_normal: vec3<f32>,
+    // Interpolated normal with the normal map applied.
+    normal: vec3<f32>,
+}
+
+//Note: this is the leaner sibling of the body of "fill-gbuf.wgsl",
+// which additionally needs the tangent space and the motion vectors.
+fn resolve_hit_surface(intersection: RayIntersection, lod: f32) -> HitSurface {
+    let entry_index = intersection.instance_custom_data + intersection.geometry_index;
+    let entry = hit_entries[entry_index];
+    let indices = fetch_triangle_indices(entry, intersection.primitive_index);
+    let vptr = &vertex_buffers[entry.vertex_buf].data;
+    let vertices = array<Vertex, 3>(
+        (*vptr)[indices.x],
+        (*vptr)[indices.y],
+        (*vptr)[indices.z],
+    );
+
+    let positions_object = entry.geometry_to_object * mat3x4(
+        vec4<f32>(vertices[0].position, 1.0), vec4<f32>(vertices[1].position, 1.0), vec4<f32>(vertices[2].position, 1.0)
+    );
+    let positions = intersection.object_to_world * mat3x4(
+        vec4<f32>(positions_object[0], 1.0), vec4<f32>(positions_object[1], 1.0), vec4<f32>(positions_object[2], 1.0)
+    );
+
+    let barycentrics = make_barycentrics(intersection.barycentrics);
+    let tex_coords = mat3x2(vertices[0].tex_coords, vertices[1].tex_coords, vertices[2].tex_coords) * barycentrics;
+    let normal_geo = normalize(mat3x3(decode_normal(vertices[0].normal), decode_normal(vertices[1].normal), decode_normal(vertices[2].normal)) * barycentrics);
+    let tangent_geo = normalize(mat3x3(decode_normal(vertices[0].tangent), decode_normal(vertices[1].tangent), decode_normal(vertices[2].tangent)) * barycentrics);
+    let tangent_space_world = hit_tangent_space(
+        entry, intersection.object_to_world, normal_geo, tangent_geo, vertices[0].bitangent_sign,
+    );
+
+    var surface: HitSurface;
+    surface.entry_index = entry_index;
+    surface.entry = entry;
+    surface.tex_coords = tex_coords;
+    surface.position = positions * barycentrics;
+    surface.flat_normal = hit_winding(entry) * normalize(cross(positions[1].xyz - positions[0].xyz, positions[2].xyz - positions[0].xyz));
+    let normal_local = sample_hit_normal_map(entry, tex_coords, lod, 0u);
+    surface.normal = normalize(tangent_space_world * normal_local);
+    return surface;
+}

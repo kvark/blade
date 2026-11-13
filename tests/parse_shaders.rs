@@ -36,7 +36,8 @@ fn validate_shader(
             | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY
             | naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY_NON_UNIFORM_INDEXING
             | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING
-            | naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32,
+            | naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32
+            | naga::valid::Capabilities::SHADER_FLOAT32_ATOMIC,
     )
     .validate(&module)
     .unwrap_or_else(|e| {

@@ -9,6 +9,8 @@ use std::slice;
 mod bunnymark_example;
 #[cfg(not(gles))]
 mod denoiser;
+#[cfg(not(gles))]
+mod diff;
 mod pbr_scene;
 #[cfg(not(gles))]
 #[path = "../examples/ray-query/example.rs"]
@@ -712,6 +714,140 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     context.destroy_compute_pipeline(&mut pipeline);
     context.destroy_buffer(output);
     context.destroy_buffer(input);
+}
+
+/// The analytic BSDF derivatives used by the differentiable path tracer
+/// must agree with central differences of the BSDF itself.
+#[test]
+#[ignore = "requires a working GPU context"]
+fn bsdf_gradient_gpu_test() {
+    const COUNT: usize = 256;
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    if !context.capabilities().compute {
+        println!("Skipping: compute is not supported");
+        return;
+    }
+    let output = context.create_buffer(gpu::BufferDesc {
+        name: "bsdf-gradient-output",
+        size: (COUNT * 32) as u64,
+        memory: gpu::Memory::Shared,
+    });
+    let source = [
+        include_str!("../blade-render/code/brdf.inc.wgsl"),
+        include_str!("../blade-render/code/brdf-grad.inc.wgsl"),
+        r#"
+struct Check {
+    analytic: vec4<f32>,
+    numeric: vec4<f32>,
+}
+var<storage, read_write> output: array<Check>;
+
+// The same as `evaluate_bsdf`, without the sampling include.
+fn reference_bsdf(mat: Material, normal: vec3<f32>, view_dir: vec3<f32>, light_dir: vec3<f32>) -> vec3<f32> {
+    let brdf = evaluate_brdf(mat, normal, view_dir, light_dir);
+    return mat.diffuse_albedo * brdf.diffuse + brdf.specular;
+}
+
+fn direction(theta: f32, phi: f32) -> vec3<f32> {
+    return vec3<f32>(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    // Low discrepancy, and away from the grazing and clamped ranges.
+    let i = f32(id.x) + 1.0;
+    let u = fract(i * vec4<f32>(0.6180340, 0.7548777, 0.5698403, 0.4142136));
+    let w = fract(i * vec4<f32>(0.3247180, 0.8191725, 0.2207440, 0.6823278));
+    let normal = vec3<f32>(0.0, 0.0, 1.0);
+    let view_dir = direction(0.1 + 1.2 * u.x, 6.2 * u.y);
+    let light_dir = direction(0.1 + 1.2 * u.z, 6.2 * u.w);
+    var mat: Material;
+    mat.diffuse_albedo = 0.1 + 0.8 * w.xyz;
+    mat.specular_f0 = 0.02 + 0.9 * w.yzx;
+    mat.roughness = 0.15 + 0.8 * w.w;
+
+    let grad = evaluate_bsdf_gradient(mat, normal, view_dir, light_dir);
+    let h = 1.0e-3;
+    var a = mat;
+    var b = mat;
+    a.diffuse_albedo.x += h;
+    b.diffuse_albedo.x -= h;
+    let d_albedo = (reference_bsdf(a, normal, view_dir, light_dir) - reference_bsdf(b, normal, view_dir, light_dir)) / (2.0 * h);
+    a = mat;
+    b = mat;
+    a.specular_f0.y += h;
+    b.specular_f0.y -= h;
+    let d_f0 = (reference_bsdf(a, normal, view_dir, light_dir) - reference_bsdf(b, normal, view_dir, light_dir)) / (2.0 * h);
+    a = mat;
+    b = mat;
+    a.roughness += h;
+    b.roughness -= h;
+    let d_roughness = (reference_bsdf(a, normal, view_dir, light_dir) - reference_bsdf(b, normal, view_dir, light_dir)) / (2.0 * h);
+
+    let value = reference_bsdf(mat, normal, view_dir, light_dir);
+    output[id.x] = Check(
+        vec4<f32>(grad.d_diffuse_albedo.x, grad.d_specular_f0.y, grad.d_roughness.x, grad.value.z),
+        vec4<f32>(d_albedo.x, d_f0.y, d_roughness.x, value.z),
+    );
+}
+"#,
+    ]
+    .concat();
+    let shader = context.create_shader(gpu::ShaderDesc {
+        source: &source,
+        naga_module: None,
+    });
+    let global_layout = DispatchGlobals::layout();
+    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        name: "bsdf-gradient-test",
+        data_layouts: &[&global_layout],
+        compute: shader.at("main"),
+    });
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "bsdf-gradient-test",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    encoder.start();
+    if let mut compute = encoder.compute("bsdf-gradient")
+        && let mut pass = compute.with(&pipeline)
+    {
+        pass.bind(
+            0,
+            &DispatchGlobals {
+                input: output.into(),
+                output: output.into(),
+            },
+        );
+        pass.dispatch([(COUNT / 64) as u32, 1, 1]);
+    }
+    let sync_point = context.submit(&mut encoder);
+    assert!(context.wait_for(&sync_point, 2000).unwrap());
+
+    let checks = unsafe { slice::from_raw_parts(output.data() as *const [[f32; 4]; 2], COUNT) };
+    let mut nonzero = 0;
+    for (index, [analytic, numeric]) in checks.iter().enumerate() {
+        let names = ["albedo", "f0", "roughness", "value"];
+        for ((name, &a), &n) in names.iter().zip(analytic).zip(numeric) {
+            let tolerance = 1.0e-3 + 1.0e-2 * a.abs().max(n.abs());
+            assert!(
+                (a - n).abs() <= tolerance,
+                "configuration {index}: d/d{name} is {a}, central difference is {n}"
+            );
+        }
+        if analytic[2] != 0.0 {
+            nonzero += 1;
+        }
+    }
+    // Most configurations face both directions away from the surface.
+    assert!(
+        nonzero > COUNT / 2,
+        "only {nonzero} configurations were lit"
+    );
+
+    context.destroy_command_encoder(&mut encoder);
+    context.destroy_compute_pipeline(&mut pipeline);
+    context.destroy_buffer(output);
 }
 
 #[cfg(not(gles))]

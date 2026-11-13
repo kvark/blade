@@ -1,4 +1,5 @@
 mod debug;
+pub mod diff;
 
 use crate::{
     CameraParams, DebugLine, DummyResources, EnvironmentMap, RenderConfig, Shaders,
