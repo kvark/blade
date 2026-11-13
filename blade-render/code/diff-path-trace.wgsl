@@ -1,8 +1,9 @@
 // Differentiable path tracer.
 //
-// A sibling of "path-trace.wgsl" whose material factors and environment
-// radiance come from storage buffers, so that an optimizer can change them,
-// and which propagates a loss gradient back to them:
+// A sibling of "path-trace.wgsl" whose material factors, environment
+// radiance, and optionally material textures come from storage buffers,
+// so that an optimizer can change them, and which propagates a loss
+// gradient back to them:
 //   - `primal` renders the image with the current parameters,
 //   - `adjoint` takes dLoss/dImage and accumulates dLoss/dParameters.
 //
@@ -39,6 +40,9 @@ const MAX_RADIANCE: f32 = 1.0e6;
 const MATERIAL_PARAM_COUNT: u32 = 8u;
 // Floats per environment texel in `env_params` and `env_grads`.
 const ENV_PARAM_COUNT: u32 = 4u;
+// Floats per material texture texel in `texture_params` and `texture_grads`.
+const TEXTURE_PARAM_COUNT: u32 = 4u;
+const NO_TEXTURE_REGION: u32 = ~0u;
 
 // Has to match the host!
 struct DiffParams {
@@ -51,6 +55,24 @@ struct DiffParams {
     // Frames already averaged into `image`, which `primal` adds to.
     accumulated_frames: u32,
     jitter_primary_rays: u32,
+}
+
+// Has to match the host!
+// Where the texels of a texture of the binding array are in `texture_params`.
+struct TextureRegion {
+    // In texels, or `NO_TEXTURE_REGION` for a texture that is sampled as is.
+    offset: u32,
+    width: u32,
+    height: u32,
+    _pad: u32,
+}
+
+// Has to match the host!
+struct TextureInit {
+    texture_index: u32,
+    offset: u32,
+    width: u32,
+    height: u32,
 }
 
 // Has to match the host!
@@ -77,9 +99,15 @@ var<storage, read_write> image: array<vec4<f32>>;
 var<storage, read> image_adjoint: array<vec4<f32>>;
 var<storage, read_write> material_grads: array<atomic<f32>>;
 var<storage, read_write> env_grads: array<atomic<f32>>;
+// One per texture of the binding array, or fewer.
+var<storage, read> texture_regions: array<TextureRegion>;
+var<storage, read> texture_params: array<vec4<f32>>;
+var<storage, read_write> texture_grads: array<atomic<f32>>;
 // The same buffers as the parameters, for the initialization.
 var<storage, read_write> init_material_params: array<MaterialParams>;
 var<storage, read_write> init_env_params: array<vec4<f32>>;
+var<storage, read_write> init_texture_params: array<vec4<f32>>;
+var<uniform> texture_init: TextureInit;
 
 fn trace_ray(position: vec3<f32>, direction: vec3<f32>, t_min: f32) -> RayIntersection {
     var rq: ray_query;
@@ -154,6 +182,70 @@ fn sample_environment(importance: bool, rng: ptr<function, RandomState>) -> EnvS
     return EnvSample(dir, 1.0 / (4.0 * PI), env_texel_at(dir));
 }
 
+fn texture_region(texture_index: u32) -> TextureRegion {
+    if (texture_index >= arrayLength(&texture_regions)) {
+        return TextureRegion(NO_TEXTURE_REGION, 0u, 0u, 0u);
+    }
+    return texture_regions[texture_index];
+}
+
+// Texels of a bilinear tap, with their weights, for `sampler_linear`:
+// linear filtering with repeating coordinates, at the top mip level.
+struct BilinearTaps {
+    indices: vec4<u32>,
+    weights: vec4<f32>,
+}
+
+fn bilinear_taps(region: TextureRegion, tex_coords: vec2<f32>) -> BilinearTaps {
+    let size = vec2<i32>(i32(region.width), i32(region.height));
+    let pos = tex_coords * vec2<f32>(size) - 0.5;
+    let corner = floor(pos);
+    let f = pos - corner;
+    let x0 = vec2<i32>(corner) % size;
+    // Repeat, for negative coordinates as well.
+    let lo = select(x0, x0 + size, x0 < vec2<i32>(0));
+    let hi = select(lo + 1, vec2<i32>(0), lo + 1 >= size);
+    let row_lo = region.offset + u32(lo.y) * region.width;
+    let row_hi = region.offset + u32(hi.y) * region.width;
+    var taps: BilinearTaps;
+    taps.indices = vec4<u32>(row_lo + u32(lo.x), row_lo + u32(hi.x), row_hi + u32(lo.x), row_hi + u32(hi.x));
+    taps.weights = vec4<f32>((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+    return taps;
+}
+
+// Sample a material texture, from its parameters when it has them.
+fn sample_material_texture(texture_index: u32, tex_coords: vec2<f32>, lod: f32) -> vec4<f32> {
+    let region = texture_region(texture_index);
+    if (region.offset == NO_TEXTURE_REGION) {
+        return textureSampleLevel(textures[texture_index], sampler_linear, tex_coords, lod);
+    }
+    let taps = bilinear_taps(region, tex_coords);
+    var value = vec4<f32>(0.0);
+    for (var i = 0u; i < 4u; i += 1u) {
+        value += taps.weights[i] * texture_params[taps.indices[i]];
+    }
+    return value;
+}
+
+// Add the derivative of the loss by a sample of a material texture
+// to the gradients of the texels it was filtered from.
+fn scatter_texture_grad(texture_index: u32, tex_coords: vec2<f32>, grad: vec4<f32>) {
+    let region = texture_region(texture_index);
+    if (region.offset == NO_TEXTURE_REGION || all(grad == vec4<f32>(0.0))) {
+        return;
+    }
+    let taps = bilinear_taps(region, tex_coords);
+    for (var i = 0u; i < 4u; i += 1u) {
+        let base = taps.indices[i] * TEXTURE_PARAM_COUNT;
+        for (var c = 0u; c < 4u; c += 1u) {
+            let value = taps.weights[i] * grad[c];
+            if (value != 0.0) {
+                atomicAdd(&texture_grads[base + c], value);
+            }
+        }
+    }
+}
+
 struct DiffVertex {
     surface: HitSurface,
     material: Material,
@@ -172,11 +264,11 @@ fn resolve_vertex(intersection: RayIntersection) -> DiffVertex {
     let entry = v.surface.entry;
     let tc = v.surface.tex_coords;
     let params = material_params[v.surface.entry_index];
-    v.base_color_texel = textureSampleLevel(textures[entry.base_color_texture], sampler_linear, tc, lod).xyz;
-    let mr = textureSampleLevel(textures[entry.metallic_roughness_texture], sampler_linear, tc, lod);
+    v.base_color_texel = sample_material_texture(entry.base_color_texture, tc, lod).xyz;
+    let mr = sample_material_texture(entry.metallic_roughness_texture, tc, lod);
     v.roughness_texel = mr.y;
     v.metalness_texel = mr.z;
-    v.emissive_texel = textureSampleLevel(textures[entry.emissive_texture], sampler_linear, tc, lod).xyz;
+    v.emissive_texel = sample_material_texture(entry.emissive_texture, tc, lod).xyz;
     v.material = material_from_metallic_roughness(
         params.base_color * v.base_color_texel,
         params.metalness * v.metalness_texel,
@@ -207,7 +299,8 @@ fn add_material_grad(index: u32, component: u32, value: f32) {
     }
 }
 
-// Carry a vertex's gradient through `resolve_vertex` to the factors.
+// Carry a vertex's gradient through `resolve_vertex` to the factors
+// and the textures.
 fn scatter_material_grad(v: DiffVertex, grad: MaterialGrad) {
     let params = material_params[v.surface.entry_index];
     let base_color = params.base_color * v.base_color_texel;
@@ -228,6 +321,13 @@ fn scatter_material_grad(v: DiffVertex, grad: MaterialGrad) {
     add_material_grad(index, 5u, d_emissive_factor.y);
     add_material_grad(index, 6u, d_emissive_factor.z);
     add_material_grad(index, 7u, grad.roughness * v.roughness_texel);
+
+    let entry = v.surface.entry;
+    let tc = v.surface.tex_coords;
+    scatter_texture_grad(entry.base_color_texture, tc, vec4<f32>(d_base_color * params.base_color, 0.0));
+    scatter_texture_grad(entry.metallic_roughness_texture, tc, vec4<f32>(
+        0.0, grad.roughness * params.roughness, d_metalness * params.metalness, 0.0));
+    scatter_texture_grad(entry.emissive_texture, tc, vec4<f32>(grad.emissive * params.emissive, 0.0));
 }
 
 // What the first walk of a path learns about each of its vertices.
@@ -469,4 +569,14 @@ fn init_environment(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     init_env_params[global_id.y * dim.x + global_id.x] = textureLoad(env_map, global_id.xy, 0);
+}
+
+// Copy the top mip level of `texture_init.texture_index` into the parameters.
+@compute @workgroup_size(8, 8)
+fn init_texture(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    if (global_id.x >= texture_init.width || global_id.y >= texture_init.height) {
+        return;
+    }
+    let index = texture_init.offset + global_id.y * texture_init.width + global_id.x;
+    init_texture_params[index] = textureLoad(textures[texture_init.texture_index], global_id.xy, 0);
 }

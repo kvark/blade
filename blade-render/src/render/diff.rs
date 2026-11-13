@@ -9,11 +9,13 @@
 //! What is differentiated:
 //!   - the glTF factors of every hit entry, which multiply its textures
 //!     (see [`MaterialParams`]),
-//!   - the radiance of every environment map texel.
+//!   - the radiance of every environment map texel,
+//!   - optionally, the texels of the base color, metallic-roughness, and
+//!     emissive textures (see [`DiffTracerDesc::textures`]).
 //!
-//! Geometry, the camera, and the textures themselves are fixed.
+//! Geometry, the camera, and normal maps are fixed.
 
-use std::{mem, path::Path, slice};
+use std::{collections::HashMap, mem, path::Path, slice};
 
 /// Longest path the differentiable tracer follows.
 pub const MAX_DIFF_BOUNCES: u32 = 8;
@@ -35,6 +37,13 @@ pub struct MaterialParams {
 const MATERIAL_PARAM_COUNT: u32 = (mem::size_of::<MaterialParams>() / 4) as u32;
 // Floats per environment texel.
 const ENV_PARAM_COUNT: u32 = 4;
+// Floats per material texture texel.
+const TEXTURE_PARAM_COUNT: u32 = 4;
+const NO_TEXTURE_REGION: u32 = !0;
+// Workgroup size of the passes over flat arrays.
+const FLAT_WORKGROUP_SIZE: u32 = 64;
+// Rows of workgroups stay within the dispatch limit of every backend.
+const MAX_FLAT_WORKGROUPS_PER_ROW: u32 = 32768;
 
 bitflags::bitflags! {
     /// Which of the [`MaterialParams`] an optimizer step changes.
@@ -100,6 +109,36 @@ impl Default for AdamConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DiffTracerDesc {
+    /// Make the texels of the base color, metallic-roughness, and emissive
+    /// textures of the scene parameters, at their top mip level.
+    ///
+    /// Each texel takes four floats in device memory, for the parameter,
+    /// its gradient, and the two moments of the optimizer.
+    pub textures: bool,
+}
+
+/// A texture whose texels are parameters, see [`DiffTracer::textures`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DiffTexture {
+    pub texture: blade_asset::Handle<crate::Texture>,
+    /// Offset of its texels in [`DiffTracer::texture_params`].
+    pub offset: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// What an optimizer step changes. Every kind of parameters left as `None`
+/// stays as it is.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StepConfig {
+    pub materials: Option<(AdamConfig, MaterialParamFlags)>,
+    pub environment: Option<AdamConfig>,
+    /// RGB of the texture texels, which stay in the unit interval.
+    pub textures: Option<AdamConfig>,
+}
+
 #[derive(Clone, PartialEq)]
 pub struct DiffShaders {
     path_trace: blade_asset::Handle<crate::Shader>,
@@ -149,8 +188,36 @@ struct DiffTraceData<'a> {
     image_adjoint: blade_graphics::BufferPiece,
     material_grads: blade_graphics::BufferPiece,
     env_grads: blade_graphics::BufferPiece,
+    texture_regions: blade_graphics::BufferPiece,
+    texture_params: blade_graphics::BufferPiece,
+    texture_grads: blade_graphics::BufferPiece,
     init_material_params: blade_graphics::BufferPiece,
     init_env_params: blade_graphics::BufferPiece,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct TextureRegion {
+    offset: u32,
+    width: u32,
+    height: u32,
+    _pad: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct TextureInit {
+    texture_index: u32,
+    offset: u32,
+    width: u32,
+    height: u32,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct TextureInitData<'a> {
+    texture_init: TextureInit,
+    textures: &'a blade_graphics::TextureArray<{ super::MAX_RESOURCES }>,
+    init_texture_params: blade_graphics::BufferPiece,
 }
 
 #[repr(C)]
@@ -267,11 +334,17 @@ pub struct DiffTracer {
     adjoint_pipeline: blade_graphics::ComputePipeline,
     init_materials_pipeline: blade_graphics::ComputePipeline,
     init_environment_pipeline: blade_graphics::ComputePipeline,
+    init_texture_pipeline: blade_graphics::ComputePipeline,
     loss_pipeline: blade_graphics::ComputePipeline,
     adam_pipeline: blade_graphics::ComputePipeline,
     materials: ParamGroup,
     environment: ParamGroup,
     environment_size: blade_graphics::Extent,
+    textures: ParamGroup,
+    texture_list: Vec<DiffTexture>,
+    texture_regions: blade_graphics::Buffer,
+    /// Kept until the regions are uploaded, i.e. until destruction.
+    texture_regions_staging: blade_graphics::Buffer,
     image_size: blade_graphics::Extent,
     image: blade_graphics::Buffer,
     target: blade_graphics::Buffer,
@@ -289,9 +362,11 @@ impl DiffTracer {
         encoder: &mut blade_graphics::CommandEncoder,
         gpu: &blade_graphics::Context,
         shaders: &DiffShaders,
-        shader_man: &blade_asset::AssetManager<crate::shader::Baker>,
+        asset_hub: &crate::AssetHub,
         ray_tracer: &super::RayTracer,
+        desc: &DiffTracerDesc,
     ) -> Self {
+        let shader_man = &asset_hub.shaders;
         assert!(
             gpu.capabilities().shader_float32_atomic,
             "differentiable rendering needs float32 atomics"
@@ -301,6 +376,8 @@ impl DiffTracer {
         sh_trace.check_struct_size::<DiffParams>();
         sh_trace.check_struct_size::<MaterialParams>();
         sh_trace.check_struct_size::<super::HitEntry>();
+        sh_trace.check_struct_size::<TextureRegion>();
+        sh_trace.check_struct_size::<TextureInit>();
         let sh_optimize = shader_man[shaders.optimize].raw.as_ref().unwrap();
         sh_optimize.check_struct_size::<LossParams>();
         sh_optimize.check_struct_size::<AdamParams>();
@@ -317,6 +394,13 @@ impl DiffTracer {
         let adjoint_pipeline = trace_pipeline("diff-adjoint", "adjoint");
         let init_materials_pipeline = trace_pipeline("diff-init-materials", "init_materials");
         let init_environment_pipeline = trace_pipeline("diff-init-environment", "init_environment");
+        let texture_init_layout = super::ray_data_layout::<TextureInitData>(gpu);
+        let init_texture_pipeline =
+            gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+                name: "diff-init-texture",
+                data_layouts: &[&texture_init_layout],
+                compute: sh_trace.at("init_texture"),
+            });
         let loss_layout = <LossData as blade_graphics::ShaderData>::layout();
         let loss_pipeline = gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "diff-loss",
@@ -354,6 +438,86 @@ impl DiffTracer {
             gpu,
         );
 
+        // The textures that the materials of the scene sample, by their
+        // index in the binding array of the ray tracer.
+        let mut texture_list = Vec::new();
+        let mut texture_count = 0;
+        let mut region_table = vec![
+            TextureRegion {
+                offset: NO_TEXTURE_REGION,
+                width: 0,
+                height: 0,
+                _pad: 0,
+            };
+            1
+        ];
+        if desc.textures {
+            let resource_indices = ray_tracer
+                .texture_resource_lookup
+                .iter()
+                .map(|(&index, &handle)| (handle, index))
+                .collect::<HashMap<_, _>>();
+            for &model in &ray_tracer.scene_models {
+                for material in &asset_hub.models[model].materials {
+                    for handle in [
+                        material.base_color_texture,
+                        material.metallic_roughness_texture,
+                        material.emissive_texture,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        let index = resource_indices[&handle] as usize;
+                        if index >= region_table.len() {
+                            region_table.resize(index + 1, region_table[0]);
+                        }
+                        if region_table[index].offset != NO_TEXTURE_REGION {
+                            continue;
+                        }
+                        let extent = asset_hub.textures[handle].extent;
+                        let texture = DiffTexture {
+                            texture: handle,
+                            offset: texture_count,
+                            width: extent.width,
+                            height: extent.height,
+                        };
+                        region_table[index] = TextureRegion {
+                            offset: texture.offset,
+                            width: texture.width,
+                            height: texture.height,
+                            _pad: 0,
+                        };
+                        texture_count += texture.width * texture.height;
+                        texture_list.push((index as u32, texture));
+                    }
+                }
+            }
+        }
+        let textures = ParamGroup::new(
+            "diff textures",
+            texture_count * TEXTURE_PARAM_COUNT,
+            false,
+            gpu,
+        );
+        let region_bytes = (region_table.len() * mem::size_of::<TextureRegion>()) as u64;
+        let texture_regions = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "diff texture regions",
+            size: region_bytes,
+            memory: blade_graphics::Memory::Device,
+        });
+        let texture_regions_staging = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "diff texture regions staging",
+            size: region_bytes,
+            memory: blade_graphics::Memory::Upload,
+        });
+        unsafe {
+            slice::from_raw_parts_mut(
+                texture_regions_staging.data() as *mut TextureRegion,
+                region_table.len(),
+            )
+            .copy_from_slice(&region_table);
+        }
+
         let image_size = ray_tracer.surface_size;
         let image_bytes = u64::from(image_size.width * image_size.height) * 16;
         let image_buffer = |name| {
@@ -368,11 +532,16 @@ impl DiffTracer {
             adjoint_pipeline,
             init_materials_pipeline,
             init_environment_pipeline,
+            init_texture_pipeline,
             loss_pipeline,
             adam_pipeline,
             materials,
             environment,
             environment_size,
+            textures,
+            texture_list: texture_list.iter().map(|&(_, texture)| texture).collect(),
+            texture_regions,
+            texture_regions_staging,
             image_size,
             image: image_buffer("diff image"),
             target: image_buffer("diff target"),
@@ -387,9 +556,15 @@ impl DiffTracer {
 
         this.materials.clear(encoder);
         this.environment.clear(encoder);
+        this.textures.clear(encoder);
         {
             let mut transfer = encoder.transfer("diff-init");
             transfer.fill_buffer(this.image_adjoint.into(), image_bytes, 0);
+            transfer.copy_buffer_to_buffer(
+                texture_regions_staging.into(),
+                texture_regions.into(),
+                region_bytes,
+            );
         }
         let camera = crate::CameraParams::default();
         let parameters = bytemuck::Zeroable::zeroed();
@@ -407,6 +582,32 @@ impl DiffTracer {
                 this.init_environment_pipeline
                     .get_dispatch_for(environment_size),
             );
+        }
+        if !texture_list.is_empty() {
+            let mut pc = pass.with(&this.init_texture_pipeline);
+            for &(texture_index, texture) in &texture_list {
+                pc.bind(
+                    0,
+                    &TextureInitData {
+                        texture_init: TextureInit {
+                            texture_index,
+                            offset: texture.offset,
+                            width: texture.width,
+                            height: texture.height,
+                        },
+                        textures: &ray_tracer.textures,
+                        init_texture_params: this.textures.params.into(),
+                    },
+                );
+                pc.dispatch(
+                    this.init_texture_pipeline
+                        .get_dispatch_for(blade_graphics::Extent {
+                            width: texture.width,
+                            height: texture.height,
+                            depth: 1,
+                        }),
+                );
+            }
         }
         drop(pass);
         this
@@ -436,6 +637,9 @@ impl DiffTracer {
             image_adjoint: self.image_adjoint.into(),
             material_grads: self.materials.grads.into(),
             env_grads: self.environment.grads.into(),
+            texture_regions: self.texture_regions.into(),
+            texture_params: self.textures.params.into(),
+            texture_grads: self.textures.grads.into(),
             init_material_params: self.materials.params.into(),
             init_env_params: self.environment.params.into(),
         }
@@ -528,6 +732,25 @@ impl DiffTracer {
         self.target.into()
     }
 
+    /// The textures whose texels are parameters, which
+    /// [`DiffTracerDesc::textures`] asks for.
+    pub fn textures(&self) -> &[DiffTexture] {
+        &self.texture_list
+    }
+
+    /// Texels of all the [`Self::textures`] as `Rgba32Float`, each texture
+    /// row by row, starting at its [`DiffTexture::offset`]. Like the
+    /// textures, they are linear: sRGB textures are decoded.
+    pub fn texture_params(&self) -> blade_graphics::BufferPiece {
+        self.textures.params.into()
+    }
+
+    /// Derivative of the loss by [`Self::texture_params`], accumulated by
+    /// [`Self::backward`] since the last [`Self::step`].
+    pub fn texture_grads(&self) -> blade_graphics::BufferPiece {
+        self.textures.grads.into()
+    }
+
     /// Environment radiance as `Rgba32Float` texels, row by row.
     pub fn environment_params(&self) -> blade_graphics::BufferPiece {
         self.environment.params.into()
@@ -591,8 +814,7 @@ impl DiffTracer {
                 loss: self.loss.into(),
             },
         );
-        let wg = self.loss_pipeline.get_workgroup_size();
-        pc.dispatch([pixel_count.div_ceil(wg[0]), 1, 1]);
+        pc.dispatch(flat_dispatch(pixel_count));
     }
 
     /// Compute the loss of the current image against the target, and add
@@ -621,39 +843,46 @@ impl DiffTracer {
     }
 
     /// Update the parameters along the gradients accumulated since the last
-    /// step, and clear them. `None` keeps a kind of parameters as it is.
+    /// step, and clear the gradients.
     ///
-    /// Every parameter stays non-negative, and those of the materials that
-    /// are fractions stay in the unit interval.
-    pub fn step(
-        &mut self,
-        encoder: &mut blade_graphics::CommandEncoder,
-        materials: Option<(AdamConfig, MaterialParamFlags)>,
-        environment: Option<AdamConfig>,
-    ) {
-        match materials {
-            Some((config, flags)) => adam_step(
+    /// Every parameter stays non-negative, and those that are fractions
+    /// stay in the unit interval.
+    pub fn step(&mut self, encoder: &mut blade_graphics::CommandEncoder, config: &StepConfig) {
+        match config.materials {
+            Some((adam, flags)) => adam_step(
                 &self.adam_pipeline,
                 encoder,
                 &mut self.materials,
-                &config,
+                &adam,
                 MATERIAL_PARAM_COUNT,
                 flags.bits(),
                 BOUNDED_MATERIAL_PARAMS.bits(),
             ),
             None => self.materials.clear_grads(encoder),
         }
-        match environment {
-            Some(config) => adam_step(
+        match config.environment {
+            Some(adam) => adam_step(
                 &self.adam_pipeline,
                 encoder,
                 &mut self.environment,
-                &config,
+                &adam,
                 ENV_PARAM_COUNT,
                 0x7,
                 0,
             ),
             None => self.environment.clear_grads(encoder),
+        }
+        match config.textures {
+            Some(adam) => adam_step(
+                &self.adam_pipeline,
+                encoder,
+                &mut self.textures,
+                &adam,
+                TEXTURE_PARAM_COUNT,
+                0x7,
+                0x7,
+            ),
+            None => self.textures.clear_grads(encoder),
         }
     }
 
@@ -662,10 +891,14 @@ impl DiffTracer {
         gpu.destroy_compute_pipeline(&mut self.adjoint_pipeline);
         gpu.destroy_compute_pipeline(&mut self.init_materials_pipeline);
         gpu.destroy_compute_pipeline(&mut self.init_environment_pipeline);
+        gpu.destroy_compute_pipeline(&mut self.init_texture_pipeline);
         gpu.destroy_compute_pipeline(&mut self.loss_pipeline);
         gpu.destroy_compute_pipeline(&mut self.adam_pipeline);
         self.materials.destroy(gpu);
         self.environment.destroy(gpu);
+        self.textures.destroy(gpu);
+        gpu.destroy_buffer(self.texture_regions);
+        gpu.destroy_buffer(self.texture_regions_staging);
         gpu.destroy_buffer(self.image);
         gpu.destroy_buffer(self.target);
         gpu.destroy_buffer(self.image_adjoint);
@@ -708,6 +941,27 @@ fn adam_step(
             moments: group.moments.into(),
         },
     );
-    let wg = pipeline.get_workgroup_size();
-    pc.dispatch([group.count.div_ceil(wg[0]).max(1), 1, 1]);
+    pc.dispatch(flat_dispatch(group.count));
+}
+
+/// Workgroups covering `count` elements of a flat array, in rows.
+fn flat_dispatch(count: u32) -> [u32; 3] {
+    let groups = count.div_ceil(FLAT_WORKGROUP_SIZE).max(1);
+    let row = groups.min(MAX_FLAT_WORKGROUPS_PER_ROW);
+    [row, groups.div_ceil(row), 1]
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn flat_dispatch_covers_long_arrays() {
+        for count in [0, 1, 64, 65, 64 * 32768, 64 * 32768 + 1, 4096 * 4096 * 4] {
+            let [x, y, z] = super::flat_dispatch(count);
+            assert!(x <= super::MAX_FLAT_WORKGROUPS_PER_ROW && y <= 65535 && z == 1);
+            let covered = u64::from(x) * u64::from(y) * u64::from(super::FLAT_WORKGROUP_SIZE);
+            assert!(covered >= u64::from(count), "{count} elements");
+            // Only the last row is partial.
+            assert!(covered - u64::from(count) <= u64::from(x * super::FLAT_WORKGROUP_SIZE));
+        }
+    }
 }

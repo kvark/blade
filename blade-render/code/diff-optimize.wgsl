@@ -1,4 +1,13 @@
 // Loss and optimizer of the differentiable path tracer.
+//
+// Both go over flat arrays that can be longer than one dimension of
+// workgroups can cover, so they are dispatched in rows of workgroups.
+
+const WORKGROUP_SIZE: u32 = 64u;
+
+fn flat_index(global_id: vec3<u32>, num_workgroups: vec3<u32>) -> u32 {
+    return global_id.y * num_workgroups.x * WORKGROUP_SIZE + global_id.x;
+}
 
 // Has to match the host!
 struct LossParams {
@@ -21,9 +30,10 @@ var<workgroup> partial_loss: array<f32, 64>;
 @compute @workgroup_size(64)
 fn loss_l2(
     @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
     @builtin(local_invocation_index) local_index: u32,
 ) {
-    let index = global_id.x;
+    let index = flat_index(global_id, num_workgroups);
     var error = 0.0;
     if (index < loss_params.pixel_count) {
         let scale = 1.0 / (3.0 * f32(loss_params.pixel_count));
@@ -74,8 +84,11 @@ var<storage, read_write> grads: array<f32>;
 var<storage, read_write> moments: array<vec2<f32>>;
 
 @compute @workgroup_size(64)
-fn adam_step(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let index = global_id.x;
+fn adam_step(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+) {
+    let index = flat_index(global_id, num_workgroups);
     if (index >= adam.count) {
         return;
     }
