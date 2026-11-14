@@ -133,6 +133,10 @@ var<storage, read> edge_entries: array<EdgeEntry>;
 var<storage, read> instance_transforms: array<mat4x3<f32>>;
 // By the translation of each instance, and of the camera, in XYZ of 4 floats.
 var<storage, read_write> translation_grads: array<atomic<f32>>;
+// By the rotation of each instance about its origin, as an axis times the
+// angle, in XYZ of 4 floats.
+var<storage, read_write> rotation_grads: array<atomic<f32>>;
+var<storage, read> rotation_params: array<vec4<f32>>;
 var<storage, read_write> camera_grads: array<atomic<f32>>;
 
 fn trace_ray(position: vec3<f32>, direction: vec3<f32>, t_min: f32) -> RayIntersection {
@@ -320,6 +324,8 @@ struct MaterialGrad {
     emissive: vec3<f32>,
     // By the shading normal, in world space, before its normalization.
     normal: vec3<f32>,
+    // By the normal of the triangle, through `horizon_weight`.
+    flat_normal: vec3<f32>,
 }
 
 // Add the BSDF's share, given the derivative of the loss by its value.
@@ -383,12 +389,39 @@ fn scatter_material_grad(v: DiffVertex, grad: MaterialGrad) {
     }
 }
 
-fn add_instance_grad(instance: u32, grad: vec3<f32>) {
+// `grad` is by turning the instance a little more, from where its rotation
+// `r` turns it, which is `exp(d) * exp(r)` for a small `d`. The parameter is
+// `r` itself, so `exp(r + dr) = exp(J * dr) * exp(r)`, where `J` is the
+// left Jacobian of the exponential map, and the gradient is `J^T * grad`.
+fn add_rotation_grad(instance: u32, grad: vec3<f32>) {
+    let r = rotation_params[instance].xyz;
+    let angle = length(r);
+    var param_grad = grad;
+    if (angle > 1.0e-4) {
+        let a = (1.0 - cos(angle)) / (angle * angle);
+        let b = (angle - sin(angle)) / (angle * angle * angle);
+        // `J^T = I - a [r]x + b [r]x^2`, since `[r]x` is antisymmetric.
+        let rg = cross(r, grad);
+        param_grad = grad - a * rg + b * cross(r, rg);
+    }
+    for (var c = 0u; c < 3u; c += 1u) {
+        if (param_grad[c] != 0.0) {
+            atomicAdd(&rotation_grads[instance * 4u + c], param_grad[c]);
+        }
+    }
+}
+
+// Add the derivative of the loss by moving `point` of `instance` to the
+// translation of the instance, and to its rotation: turning by a small
+// `angle` about its origin moves the point by `cross(angle, point - origin)`.
+fn add_instance_grad(instance: u32, point: vec3<f32>, grad: vec3<f32>) {
     for (var c = 0u; c < 3u; c += 1u) {
         if (grad[c] != 0.0) {
             atomicAdd(&translation_grads[instance * 4u + c], grad[c]);
         }
     }
+    let origin = instance_transforms[instance][3];
+    add_rotation_grad(instance, cross(point - origin, grad));
 }
 
 fn add_camera_grad(grad: vec3<f32>) {
@@ -400,9 +433,9 @@ fn add_camera_grad(grad: vec3<f32>) {
 }
 
 // The interpolated normal of a primary hit moves as the camera or the hit
-// instance translate, since another point of the triangle comes under the
-// pixel. Carry the derivative of the loss by the shading normal, `d_normal`,
-// to both translations through it.
+// instance move, since another point of the triangle comes under the pixel.
+// Carry the derivative of the loss by the shading normal, `d_normal`, to the
+// translations through it, and to the rotation, which also turns the normal.
 //
 // The tangent frame is taken to turn with the normal, which is exact without
 // a normal map, and the texture coordinates are taken to stay.
@@ -457,8 +490,10 @@ fn scatter_primary_geometry_grad(intersection: RayIntersection, direction: vec3<
 
     let d_camera = (d_b1 * row1 + d_b2 * row2) / det;
     add_camera_grad(d_camera);
-    // Moving the triangle is moving the camera the other way.
-    add_instance_grad(intersection.instance_index, -d_camera);
+    // Moving the triangle is moving the camera the other way. Turning it
+    // moves the hit, like translating it there would, and turns the normal.
+    add_instance_grad(intersection.instance_index, v.surface.position, -d_camera);
+    add_rotation_grad(intersection.instance_index, cross(shading_normal, d_normal));
 }
 
 // Interpolated and mapped normals can face away from the view where the
@@ -489,6 +524,22 @@ fn bend_normal_grad(normal: vec3<f32>, view_dir: vec3<f32>, d_bent: vec3<f32>) -
     let bent = unnormalized / magnitude;
     let d_unnormalized = (d_bent - bent * dot(bent, d_bent)) / magnitude;
     return d_unnormalized - view_dir * dot(view_dir, d_unnormalized);
+}
+
+// Light is only taken from above the triangle, so that it doesn't leak
+// through the surface where the shading normal leans past it. Cutting it off
+// at the horizon would be a discontinuity that moves as the triangle turns,
+// with smooth shading, so it fades in over a band above the horizon instead.
+const HORIZON_BAND: f32 = 0.05;
+
+fn horizon_weight(cosine: f32) -> f32 {
+    let t = clamp(cosine / HORIZON_BAND, 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+fn horizon_weight_grad(cosine: f32) -> f32 {
+    let t = cosine / HORIZON_BAND;
+    return select(0.0, 6.0 * t * (1.0 - t) / HORIZON_BAND, t > 0.0 && t < 1.0);
 }
 
 // What the first walk of a path learns about each of its vertices.
@@ -569,7 +620,7 @@ fn walk_path(
         let flat_normal = v.surface.flat_normal;
         // Derivative of the loss by everything found at this vertex.
         let d_found = adjoint * throughput;
-        var grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found, vec3<f32>(0.0));
+        var grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found, vec3<f32>(0.0), vec3<f32>(0.0));
         var found = v.emissive;
         position = v.surface.position;
         t_min = parameters.t_start;
@@ -584,17 +635,22 @@ fn walk_path(
                 continue;
             }
             let bsdf = evaluate_bsdf_gradient(v.material, normal, view_dir, ls.dir);
-            if (dot(ls.dir, flat_normal) <= 0.0 || all(bsdf.value <= vec3<f32>(0.0))
+            let horizon_cosine = dot(ls.dir, flat_normal);
+            let horizon = horizon_weight(horizon_cosine);
+            if (horizon <= 0.0 || all(bsdf.value <= vec3<f32>(0.0))
                 || is_occluded(position, ls.dir)) {
                 continue;
             }
             let other_pdf = compute_bsdf_pdf(v.material, normal, view_dir, ls.dir);
-            let weight = mis_weight(num_light, ls.pdf, bsdf_count, other_pdf) / (num_light * ls.pdf);
+            let unfaded = mis_weight(num_light, ls.pdf, bsdf_count, other_pdf) / (num_light * ls.pdf);
+            let weight = unfaded * horizon;
             let light = env_radiance(ls.texel);
             found += bsdf.value * light * weight;
             if (replay) {
                 add_bsdf_grad(&grad, bsdf, v.material, d_found * light * weight);
                 scatter_env_grad(ls.texel, d_found * bsdf.value * weight);
+                grad.flat_normal += dot(d_found, bsdf.value * light) * unfaded
+                    * horizon_weight_grad(horizon_cosine) * ls.dir;
             }
         }
         radiance += throughput * found;
@@ -607,9 +663,11 @@ fn walk_path(
         var weight = vec3<f32>(0.0);
         if (will_extend) {
             let bs = sample_bsdf(v.material, normal, view_dir, rng);
-            if (bs.pdf > 0.0 && dot(bs.dir, flat_normal) > 0.0) {
+            let horizon_cosine = dot(bs.dir, flat_normal);
+            let horizon = horizon_weight(horizon_cosine);
+            if (bs.pdf > 0.0 && horizon > 0.0) {
                 let bsdf = evaluate_bsdf_gradient(v.material, normal, view_dir, bs.dir);
-                var scale = 1.0 / bs.pdf;
+                var scale = horizon / bs.pdf;
                 var survives = true;
                 if (bounce >= ROULETTE_START) {
                     let probability = clamp(compute_luminocity(throughput * bsdf.value * scale), 0.05, 1.0);
@@ -619,7 +677,10 @@ fn walk_path(
                 if (survives) {
                     weight = bsdf.value * scale;
                     if (replay) {
-                        add_bsdf_grad(&grad, bsdf, v.material, d_found * (*incident)[bounce] * scale);
+                        let d_value = d_found * (*incident)[bounce] * scale;
+                        add_bsdf_grad(&grad, bsdf, v.material, d_value);
+                        grad.flat_normal += dot(d_value, bsdf.value) / horizon
+                            * horizon_weight_grad(horizon_cosine) * bs.dir;
                     }
                     bsdf_pdf = bs.pdf;
                     direction = bs.dir;
@@ -632,6 +693,8 @@ fn walk_path(
             scatter_material_grad(v, grad);
             if (bounce == 0u && parameters.geometry != 0u) {
                 scatter_primary_geometry_grad(intersection, start_dir, v, grad.normal);
+                // The triangle turns with the instance.
+                add_rotation_grad(intersection.instance_index, cross(flat_normal, grad.flat_normal));
             }
         } else {
             (*record).weight[bounce] = weight;
@@ -838,9 +901,10 @@ fn sample_edge(a: vec3<f32>, b: vec3<f32>, instance: u32, rng: ptr<function, Ran
         let ad = dot(along, dir);
         let denom = aa - ad * ad;
         let s = clamp(select(0.0, (ad * dot(dir, to_a) - dot(along, to_a)) / denom, denom > 0.0), 0.0, 1.0);
-        let jacobian = projection_jacobian(camera, a + s * along);
+        let point = a + s * along;
+        let jacobian = projection_jacobian(camera, point);
         let velocity = vec3<f32>(dot(across, jacobian[0]), dot(across, jacobian[1]), dot(across, jacobian[2]));
-        add_instance_grad(instance, weight * velocity);
+        add_instance_grad(instance, point, weight * velocity);
         add_camera_grad(-weight * velocity);
     }
 }
