@@ -80,6 +80,12 @@ struct EdgeEntry {
     instance: u32,
     first_triangle: u32,
     triangle_count: u32,
+    // Where the vertices of the hit entry start in `vertex_slots`, if the
+    // positions of vertices are parameters, or `~0u`.
+    vertex_base: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 // Has to match the host!
@@ -146,6 +152,14 @@ var<storage, read> rotation_params: array<vec4<f32>>;
 // positions of their ends, with the number of triangles along each.
 // The length is a power of two, and empty keys are zero.
 var<storage, read_write> edge_keys: array<atomic<u32>>;
+// The parameter of every vertex of the models, which copies of a vertex
+// along a seam share, and its gradient: the offset of the position in the
+// space of the model, in XYZ of 4 floats.
+var<storage, read> vertex_slots: array<u32>;
+var<storage, read_write> vertex_grads: array<atomic<f32>>;
+// By the normal of every slot, in the space of its model, which a pass
+// before every step carries to the positions around the slot.
+var<storage, read_write> normal_grads: array<atomic<f32>>;
 var<storage, read_write> edge_counts: array<atomic<u32>>;
 var<storage, read_write> camera_grads: array<atomic<f32>>;
 
@@ -424,6 +438,50 @@ fn add_rotation_grad(instance: u32, grad: vec3<f32>) {
 // Add the derivative of the loss by moving `point` of `instance` to the
 // translation of the instance, and to its rotation: turning by a small
 // `angle` about its origin moves the point by `cross(angle, point - origin)`.
+fn vertex_slots_of(vertex_base: u32, indices: vec3<u32>) -> vec3<u32> {
+    if (vertex_base == ~0u) {
+        return vec3<u32>(~0u);
+    }
+    return vec3<u32>(
+        vertex_slots[vertex_base + indices.x],
+        vertex_slots[vertex_base + indices.y],
+        vertex_slots[vertex_base + indices.z],
+    );
+}
+
+// Add the derivative of the loss by moving a vertex in world space, `grad`,
+// to the parameter of its position, through `linear`.
+fn add_vertex_grad(slot: u32, linear: mat3x3<f32>, grad: vec3<f32>) {
+    if (slot == ~0u) {
+        return;
+    }
+    let local = transpose(linear) * grad;
+    for (var c = 0u; c < 3u; c += 1u) {
+        if (local[c] != 0.0) {
+            atomicAdd(&vertex_grads[slot * 4u + c], local[c]);
+        }
+    }
+}
+
+fn add_normal_grad(slot: u32, grad: vec3<f32>) {
+    if (slot == ~0u) {
+        return;
+    }
+    for (var c = 0u; c < 3u; c += 1u) {
+        if (grad[c] != 0.0) {
+            atomicAdd(&normal_grads[slot * 4u + c], grad[c]);
+        }
+    }
+}
+
+// Derivative of the loss by the corners of a triangle, from the one by
+// the cross product of its edges from the first corner.
+fn cross_grad(e1: vec3<f32>, e2: vec3<f32>, d_cross: vec3<f32>) -> mat3x3<f32> {
+    let d1 = cross(e2, d_cross);
+    let d2 = cross(d_cross, e1);
+    return mat3x3<f32>(-d1 - d2, d1, d2);
+}
+
 fn add_instance_grad(instance: u32, point: vec3<f32>, grad: vec3<f32>) {
     for (var c = 0u; c < 3u; c += 1u) {
         if (grad[c] != 0.0) {
@@ -481,8 +539,14 @@ fn make_primary_vertex(
 //
 // The tangent frame is taken to turn with the normal, which is exact without
 // a normal map, and the texture coordinates are taken to stay.
-fn scatter_primary_geometry_grad(intersection: RayIntersection, direction: vec3<f32>, v: DiffVertex, d_normal: vec3<f32>) {
-    if (all(d_normal == vec3<f32>(0.0))) {
+fn scatter_primary_geometry_grad(
+    intersection: RayIntersection,
+    direction: vec3<f32>,
+    v: DiffVertex,
+    d_normal: vec3<f32>,
+    d_flat_normal: vec3<f32>,
+) {
+    if (all(d_normal == vec3<f32>(0.0)) && all(d_flat_normal == vec3<f32>(0.0))) {
         return;
     }
     let entry = v.surface.entry;
@@ -535,6 +599,30 @@ fn scatter_primary_geometry_grad(intersection: RayIntersection, direction: vec3<
     // Moving the triangle is moving the camera the other way. Turning it
     // moves the hit, like translating it there would, and turns the normal.
     add_instance_grad(intersection.instance_index, v.surface.position, -d_camera);
+    // Moving its vertices moves the hit by their mix. The normals are taken
+    // to stay, though they follow the positions when those are applied.
+    let entry_index = intersection.instance_custom_data + intersection.geometry_index;
+    let slots = vertex_slots_of(edge_entries[entry_index].vertex_base, indices);
+    add_vertex_grad(slots.x, linear, -b.x * d_camera);
+    add_vertex_grad(slots.y, linear, -b.y * d_camera);
+    add_vertex_grad(slots.z, linear, -b.z * d_camera);
+    if (slots.x != ~0u) {
+        // The vertex normals follow the positions around the vertices.
+        add_normal_grad(slots.x, b.x * d_sum);
+        add_normal_grad(slots.y, b.y * d_sum);
+        add_normal_grad(slots.z, b.z * d_sum);
+        // The normal of the triangle, for its horizon, follows its corners.
+        let face = cross(e1, e2);
+        let face_length = length(face);
+        if (face_length > 0.0) {
+            let unit = face / face_length;
+            let d_face = hit_winding(entry) * (d_flat_normal - unit * dot(unit, d_flat_normal)) / face_length;
+            let d_corners = cross_grad(e1, e2, d_face);
+            add_vertex_grad(slots.x, linear, d_corners[0]);
+            add_vertex_grad(slots.y, linear, d_corners[1]);
+            add_vertex_grad(slots.z, linear, d_corners[2]);
+        }
+    }
     add_rotation_grad(intersection.instance_index, cross(shading_normal, d_normal));
 }
 
@@ -762,7 +850,7 @@ fn walk_path(
             v.surface.normal = unbent_normal;
             scatter_material_grad(v, grad);
             if (bounce == 0u && parameters.geometry != 0u) {
-                scatter_primary_geometry_grad(intersection, start_dir, v, grad.normal);
+                scatter_primary_geometry_grad(intersection, start_dir, v, grad.normal, grad.flat_normal);
                 if (parameters.secondary_edge_samples != 0u) {
                     (*record).primary = make_primary_vertex(intersection, start_dir, v, normal, flat_normal, d_found);
                 }
@@ -959,7 +1047,14 @@ fn precedes(a: vec3<f32>, b: vec3<f32>) -> bool {
 // the other side shows. The radiance is estimated on both sides with the
 // same random numbers, so that it cancels out where the segment is not
 // a discontinuity, such as between two triangles of a smooth surface.
-fn sample_edge(a: vec3<f32>, b: vec3<f32>, instance: u32, rng: ptr<function, RandomState>) {
+fn sample_edge(
+    a: vec3<f32>,
+    b: vec3<f32>,
+    instance: u32,
+    slots: vec2<u32>,
+    linear: mat3x3<f32>,
+    rng: ptr<function, RandomState>,
+) {
     if (!is_in_front(camera, a) || !is_in_front(camera, b)) {
         return;
     }
@@ -1011,6 +1106,8 @@ fn sample_edge(a: vec3<f32>, b: vec3<f32>, instance: u32, rng: ptr<function, Ran
         let velocity = vec3<f32>(dot(across, jacobian[0]), dot(across, jacobian[1]), dot(across, jacobian[2]));
         add_instance_grad(instance, point, weight * velocity);
         add_camera_grad(-weight * velocity);
+        add_vertex_grad(slots.x, linear, (1.0 - s) * weight * velocity);
+        add_vertex_grad(slots.y, linear, s * weight * velocity);
     }
 }
 
@@ -1039,7 +1136,8 @@ fn edges(
         if (count == 0u || (count >= 2u && !precedes(a, b))) {
             continue;
         }
-        sample_edge(to_world * vec4<f32>(a, 1.0), to_world * vec4<f32>(b, 1.0), edges.instance, &rng);
+        let slots = vec2<u32>(edges.slots[i], edges.slots[(i + 1u) % 3u]);
+        sample_edge(to_world * vec4<f32>(a, 1.0), to_world * vec4<f32>(b, 1.0), edges.instance, slots, edges.linear, &rng);
     }
 }
 
@@ -1097,6 +1195,10 @@ struct TriangleEdges {
     instance: u32,
     // The corners in the space of the instance.
     local: mat3x3<f32>,
+    // Parameters of the corners, or `~0u`.
+    slots: vec3<u32>,
+    // Takes offsets of the vertices to world space.
+    linear: mat3x3<f32>,
 }
 
 fn triangle_edges(triangle: u32) -> TriangleEdges {
@@ -1116,6 +1218,8 @@ fn triangle_edges(triangle: u32) -> TriangleEdges {
     let vptr = &vertex_buffers[entry.vertex_buf].data;
     var edges: TriangleEdges;
     edges.instance = edge_entry.instance;
+    edges.slots = vertex_slots_of(edge_entry.vertex_base, indices);
+    edges.linear = affine_linear(instance_transforms[edge_entry.instance]) * affine_linear(entry.geometry_to_object);
     edges.local = entry.geometry_to_object * mat3x4<f32>(
         vec4<f32>((*vptr)[indices.x].position, 1.0),
         vec4<f32>((*vptr)[indices.y].position, 1.0),
@@ -1237,11 +1341,269 @@ fn sample_secondary_edges(pv: PrimaryVertex, rng: ptr<function, RandomState>) {
         // `dot(across, u) / distance`, and moving the hit does the opposite.
         let grad = weight * across / distance;
         add_instance_grad(edges.instance, point, grad);
+        add_vertex_grad(edges.slots[corner], edges.linear, (1.0 - t) * grad);
+        add_vertex_grad(edges.slots[(corner + 1u) % 3u], edges.linear, t * grad);
         // The hit slides along the camera ray as the camera, or the hit
         // instance, move it.
         let d_hit = -grad;
         let slide = dot(d_hit, pv.ray_dir);
         add_camera_grad(d_hit + slide * pv.depth_row);
         add_instance_grad(pv.instance, pv.position, -slide * pv.depth_row);
+    }
+}
+
+// Passes over the vertices and the triangles of a model whose positions are
+// parameters, which `vertex_pass` describes.
+
+// Has to match the host!
+struct VertexPass {
+    // Where the vertices of the model start in `pass_vertex_slots`.
+    first_vertex: u32,
+    vertex_count: u32,
+    model: u32,
+    // A geometry of the model, for the passes over triangles: its first
+    // index in `mesh_indices`, which counts from its first vertex.
+    first_index: u32,
+    geometry_vertex_start: u32,
+    triangle_count: u32,
+    smoothness: f32,
+    slot_count: u32,
+}
+
+var<uniform> vertex_pass: VertexPass;
+// The vertex buffer of the model, which the passes write the positions to.
+var<storage, read_write> mesh_vertices: array<Vertex>;
+// The vertices of the model as it was loaded.
+var<storage, read> base_vertices: array<Vertex>;
+var<storage, read> mesh_indices: array<u32>;
+var<storage, read_write> weld_keys: array<atomic<u32>>;
+// Where the vertex of every slot was, as loaded.
+var<storage, read_write> slot_positions: array<vec4<f32>>;
+var<storage, read_write> pass_vertex_slots: array<u32>;
+var<storage, read> vertex_offsets: array<vec4<f32>>;
+var<storage, read_write> normal_sums: array<atomic<f32>>;
+// The sum of the offsets of the neighbors of every slot, and their count.
+var<storage, read_write> neighbor_sums: array<atomic<f32>>;
+var<storage, read_write> smooth_grads: array<f32>;
+var<storage, read_write> vertex_pass_grads: array<atomic<f32>>;
+var<storage, read_write> pass_normal_grads: array<f32>;
+
+fn vertex_pass_index(global_id: vec3<u32>, num_workgroups: vec3<u32>) -> u32 {
+    return global_id.y * num_workgroups.x * 64u + global_id.x;
+}
+
+// Give every vertex the slot of its position, which its copies share.
+@compute @workgroup_size(64)
+fn weld_vertices(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+) {
+    let index = vertex_pass_index(global_id, num_workgroups);
+    if (index >= vertex_pass.vertex_count) {
+        return;
+    }
+    let position = base_vertices[index].position;
+    let q = quantize_position(position);
+    var key = hash_jenkins(vertex_pass.model);
+    key = hash_combine(key, bitcast<u32>(q.x));
+    key = hash_combine(key, bitcast<u32>(q.y));
+    key = hash_combine(key, bitcast<u32>(q.z));
+    key = max(key, 1u);
+    let mask = arrayLength(&weld_keys) - 1u;
+    var slot = ~0u;
+    var probe = 0u;
+    loop {
+        if (probe > mask) {
+            break;
+        }
+        let candidate = (key + probe) & mask;
+        let result = atomicCompareExchangeWeak(&weld_keys[candidate], 0u, key);
+        if (result.exchanged || result.old_value == key) {
+            slot = candidate;
+            break;
+        }
+        if (result.old_value != 0u) {
+            probe += 1u;
+        }
+    }
+    pass_vertex_slots[vertex_pass.first_vertex + index] = slot;
+    if (slot != ~0u) {
+        slot_positions[slot] = vec4<f32>(position, 1.0);
+    }
+}
+
+fn offset_position(slot: u32) -> vec3<f32> {
+    return slot_positions[slot].xyz + vertex_offsets[slot].xyz;
+}
+
+// Write the positions with their offsets into the vertex buffer.
+@compute @workgroup_size(64)
+fn apply_vertices(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+) {
+    let index = vertex_pass_index(global_id, num_workgroups);
+    if (index >= vertex_pass.vertex_count) {
+        return;
+    }
+    let slot = pass_vertex_slots[vertex_pass.first_vertex + index];
+    if (slot != ~0u) {
+        mesh_vertices[index].position = base_vertices[index].position + vertex_offsets[slot].xyz;
+    }
+}
+
+fn triangle_slots(triangle: u32) -> vec3<u32> {
+    let base = vertex_pass.first_index + 3u * triangle;
+    let start = vertex_pass.first_vertex + vertex_pass.geometry_vertex_start;
+    return vec3<u32>(
+        pass_vertex_slots[start + mesh_indices[base]],
+        pass_vertex_slots[start + mesh_indices[base + 1u]],
+        pass_vertex_slots[start + mesh_indices[base + 2u]],
+    );
+}
+
+// Add the normals of the triangles to the slots of their corners, by area.
+@compute @workgroup_size(64)
+fn sum_normals(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+) {
+    let triangle = vertex_pass_index(global_id, num_workgroups);
+    if (triangle >= vertex_pass.triangle_count) {
+        return;
+    }
+    let slots = triangle_slots(triangle);
+    if (any(slots == vec3<u32>(~0u))) {
+        return;
+    }
+    let p0 = offset_position(slots.x);
+    let normal = cross(offset_position(slots.y) - p0, offset_position(slots.z) - p0);
+    for (var i = 0u; i < 3u; i += 1u) {
+        for (var c = 0u; c < 3u; c += 1u) {
+            atomicAdd(&normal_sums[slots[i] * 4u + c], normal[c]);
+        }
+    }
+}
+
+@compute @workgroup_size(64)
+fn write_normals(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+) {
+    let index = vertex_pass_index(global_id, num_workgroups);
+    if (index >= vertex_pass.vertex_count) {
+        return;
+    }
+    let slot = pass_vertex_slots[vertex_pass.first_vertex + index];
+    if (slot == ~0u) {
+        return;
+    }
+    let sum = vec3<f32>(
+        atomicLoad(&normal_sums[slot * 4u]),
+        atomicLoad(&normal_sums[slot * 4u + 1u]),
+        atomicLoad(&normal_sums[slot * 4u + 2u]),
+    );
+    if (dot(sum, sum) > 0.0) {
+        mesh_vertices[index].normal = pack4x8snorm(vec4<f32>(normalize(sum), 0.0));
+    }
+}
+
+// Add the offsets of the neighbors of every slot along the triangles.
+@compute @workgroup_size(64)
+fn sum_neighbors(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+) {
+    let triangle = vertex_pass_index(global_id, num_workgroups);
+    if (triangle >= vertex_pass.triangle_count) {
+        return;
+    }
+    let slots = triangle_slots(triangle);
+    if (any(slots == vec3<u32>(~0u))) {
+        return;
+    }
+    for (var i = 0u; i < 3u; i += 1u) {
+        for (var j = 1u; j < 3u; j += 1u) {
+            let target_slot = slots[i];
+            let neighbor = slots[(i + j) % 3u];
+            let offset = vertex_offsets[neighbor].xyz;
+            for (var c = 0u; c < 3u; c += 1u) {
+                atomicAdd(&neighbor_sums[target_slot * 4u + c], offset[c]);
+            }
+            atomicAdd(&neighbor_sums[target_slot * 4u + 3u], 1.0);
+        }
+    }
+}
+
+// Pull the offset of every vertex towards the mean of those of its
+// neighbors, by adding the gradient of `smoothness / 2` times the squared
+// distance to it. Offsets are smoothed rather than positions, which would
+// shrink every curved surface, so it changes smoothly, from whatever shape.
+@compute @workgroup_size(64)
+fn add_smoothness(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+) {
+    let slot = vertex_pass_index(global_id, num_workgroups);
+    if (slot >= vertex_pass.slot_count) {
+        return;
+    }
+    let count = atomicLoad(&neighbor_sums[slot * 4u + 3u]);
+    if (count <= 0.0) {
+        return;
+    }
+    let mean = vec3<f32>(
+        atomicLoad(&neighbor_sums[slot * 4u]),
+        atomicLoad(&neighbor_sums[slot * 4u + 1u]),
+        atomicLoad(&neighbor_sums[slot * 4u + 2u]),
+    ) / count;
+    let pull = vertex_pass.smoothness * (vertex_offsets[slot].xyz - mean);
+    for (var c = 0u; c < 3u; c += 1u) {
+        smooth_grads[slot * 4u + c] += pull[c];
+    }
+}
+
+// Carry the gradients by the normals of the slots, which are normalized sums
+// of the cross products of the edges of the triangles around them, to the
+// corners of those triangles.
+@compute @workgroup_size(64)
+fn normals_to_positions(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+) {
+    let triangle = vertex_pass_index(global_id, num_workgroups);
+    if (triangle >= vertex_pass.triangle_count) {
+        return;
+    }
+    let slots = triangle_slots(triangle);
+    if (any(slots == vec3<u32>(~0u))) {
+        return;
+    }
+    var d_face = vec3<f32>(0.0);
+    for (var i = 0u; i < 3u; i += 1u) {
+        let slot = slots[i];
+        let sum = vec3<f32>(
+            atomicLoad(&normal_sums[slot * 4u]),
+            atomicLoad(&normal_sums[slot * 4u + 1u]),
+            atomicLoad(&normal_sums[slot * 4u + 2u]),
+        );
+        let sum_length = length(sum);
+        if (sum_length <= 0.0) {
+            continue;
+        }
+        let normal = sum / sum_length;
+        let d_normal = vec3<f32>(
+            pass_normal_grads[slot * 4u],
+            pass_normal_grads[slot * 4u + 1u],
+            pass_normal_grads[slot * 4u + 2u],
+        );
+        d_face += (d_normal - normal * dot(normal, d_normal)) / sum_length;
+    }
+    let p0 = offset_position(slots.x);
+    let d_corners = cross_grad(offset_position(slots.y) - p0, offset_position(slots.z) - p0, d_face);
+    for (var i = 0u; i < 3u; i += 1u) {
+        for (var c = 0u; c < 3u; c += 1u) {
+            atomicAdd(&vertex_pass_grads[slots[i] * 4u + c], d_corners[i][c]);
+        }
     }
 }

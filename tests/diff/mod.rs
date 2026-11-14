@@ -40,6 +40,8 @@ enum SceneKind {
     Cube,
     /// A large dielectric sphere on its own, whose translation is a parameter.
     Ball,
+    /// The same sphere, with the positions of its vertices as parameters.
+    Blob,
     /// A sphere just above the view, in front of a wall that it shades from
     /// part of the sky. The camera only sees it in the shadow, and the
     /// translations of both are parameters.
@@ -64,7 +66,13 @@ impl SceneKind {
     fn moves(self) -> bool {
         matches!(
             self,
-            Self::Spheres | Self::Bowl | Self::Cube | Self::Ball | Self::Panel | Self::Shadow
+            Self::Spheres
+                | Self::Bowl
+                | Self::Cube
+                | Self::Ball
+                | Self::Blob
+                | Self::Panel
+                | Self::Shadow
         )
     }
 
@@ -222,7 +230,7 @@ impl DiffScene {
                 vec![bowl()]
             } else if kind == SceneKind::Cube {
                 vec![cube()]
-            } else if kind == SceneKind::Ball {
+            } else if kind == SceneKind::Ball || kind == SceneKind::Blob {
                 vec![ball()]
             } else if kind == SceneKind::Panel {
                 vec![panel()]
@@ -284,6 +292,7 @@ impl DiffScene {
             &DiffTracerDesc {
                 textures: textured,
                 geometry: kind.moves(),
+                vertices: kind == SceneKind::Blob,
             },
         );
         let mut scene = Self {
@@ -405,6 +414,47 @@ impl DiffScene {
             .write_geometry_offsets(&mut self.encoder, &context, offsets, &mut self.temp);
         self.base
             .apply(offsets, &mut self.objects, &mut self.camera);
+        self.diff.rebuild_scene(
+            &mut self.encoder,
+            &context,
+            &mut self.renderer,
+            &mut self.objects,
+            Some(self.sky),
+            &self.harness.asset_hub,
+            &mut self.temp,
+        );
+        self.submit();
+    }
+
+    /// Offset the vertex slots of the blob by `offset` of their positions
+    /// from where they were loaded, apply them, and build the scene again.
+    fn shape_blob(&mut self, offset: impl Fn([f32; 3]) -> [f32; 3]) -> Vec<[f32; 4]> {
+        self.diff.read_back_vertices(&mut self.encoder);
+        self.submit();
+        let offsets = self
+            .diff
+            .vertex_bases()
+            .iter()
+            .map(|base| {
+                if base[3] == 0.0 {
+                    return [0.0; 4];
+                }
+                let [x, y, z] = offset([base[0], base[1], base[2]]);
+                [x, y, z, 0.0]
+            })
+            .collect::<Vec<_>>();
+        let context = std::sync::Arc::clone(&self.harness.context);
+        self.diff
+            .write_vertex_offsets(&mut self.encoder, &context, &offsets, &mut self.temp);
+        self.apply_vertices();
+        offsets
+    }
+
+    /// Write the offsets of the vertices into the model, and build the scene
+    /// again.
+    fn apply_vertices(&mut self) {
+        let context = std::sync::Arc::clone(&self.harness.context);
+        self.diff.apply_vertices(&mut self.encoder);
         self.diff.rebuild_scene(
             &mut self.encoder,
             &context,
@@ -1276,5 +1326,116 @@ fn diff_shadow_gradients_match_finite_differences() {
             "d loss / d ball {axis}: {without:e} without shadows, against {numeric:e}"
         );
     }
+    scene.destroy();
+}
+
+/// Scale the blob about its center along X by `stretch`, as offsets.
+fn stretch(stretch: f32) -> impl Fn([f32; 3]) -> [f32; 3] {
+    move |[x, _, _]| [x * stretch, 0.0, 0.0]
+}
+
+/// The gradient by the positions of the vertices agrees with central
+/// differences, along the direction of stretching the blob.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_vertex_gradients_match_finite_differences() {
+    let Some(mut scene) = DiffScene::new("diff-blob", SceneKind::Blob) else {
+        return;
+    };
+    scene.config.edge_samples = 4;
+    scene.capture_target();
+    const STRETCH: f32 = 0.15;
+    let direction = scene.shape_blob(stretch(1.0));
+    scene.shape_blob(stretch(STRETCH));
+    const ITERATIONS: u32 = 128;
+    for iteration in 0..ITERATIONS {
+        scene.backward(iteration, 8, 4);
+    }
+    scene.diff.gather_vertex_grads(&mut scene.encoder);
+    scene.diff.read_back_vertices(&mut scene.encoder);
+    scene.submit();
+    // Along the stretch, by its amount.
+    let analytic = scene
+        .diff
+        .vertex_grads()
+        .iter()
+        .zip(&direction)
+        .map(|(g, d)| g[0] * d[0] + g[1] * d[1] + g[2] * d[2])
+        .sum::<f32>()
+        / ITERATIONS as f32;
+    // The normals are stored in 8 bits, which a step has to be well past.
+    const H: f32 = 0.05;
+    let frames = 2_000_000..2_000_128;
+    let mut losses = [0.0; 2];
+    for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
+        scene.shape_blob(stretch(STRETCH + sign * H));
+        *loss = scene.converged_loss(frames.clone());
+    }
+    let numeric = (losses[0] - losses[1]) / (2.0 * H);
+    println!("d loss / d stretch: gradient {analytic:e}, central difference {numeric:e}");
+    assert!(
+        analytic * numeric > 0.0 && (analytic - numeric).abs() <= 0.25 * numeric.abs(),
+        "d loss / d stretch: gradient {analytic:e} disagrees with {numeric:e}"
+    );
+    scene.destroy();
+}
+
+/// Optimizing the positions of the vertices brings a stretched blob back to
+/// the sphere that it was.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_recovers_shape() {
+    let Some(mut scene) = DiffScene::new("diff-shape", SceneKind::Blob) else {
+        return;
+    };
+    scene.config.edge_samples = 2;
+    scene.capture_target();
+    const STRETCH: f32 = 0.25;
+    scene.shape_blob(stretch(STRETCH));
+    // How far the vertices are from the sphere of the target, on average.
+    // Sliding along the surface barely changes the image, so that isn't
+    // held against them.
+    let measure = |scene: &mut DiffScene| {
+        scene.diff.read_back_vertices(&mut scene.encoder);
+        scene.submit();
+        let (mut sum, mut count) = (0.0, 0.0);
+        for (base, offset) in scene
+            .diff
+            .vertex_bases()
+            .iter()
+            .zip(scene.diff.vertex_offsets())
+        {
+            if base[3] != 0.0 {
+                let p = [0, 1, 2].map(|c| base[c] + offset[c]);
+                let radius = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+                let target = (base[0] * base[0] + base[1] * base[1] + base[2] * base[2]).sqrt();
+                sum += (radius - target).abs();
+                count += 1.0;
+            }
+        }
+        sum / count
+    };
+    let initial = measure(&mut scene);
+    for iteration in 0..120 {
+        scene.backward(iteration, 4, 2);
+        let adam = AdamConfig {
+            learning_rate: 0.01 * 0.98f32.powi(iteration as i32),
+            ..Default::default()
+        };
+        scene.diff.step(
+            &mut scene.encoder,
+            &StepConfig {
+                vertices: Some((adam, 1.0e-2)),
+                ..Default::default()
+            },
+        );
+        scene.apply_vertices();
+    }
+    let error = measure(&mut scene);
+    println!("distance from the sphere {initial:.4} -> {error:.4}");
+    assert!(
+        error < 0.3 * initial,
+        "the distance from the sphere only went from {initial} to {error}"
+    );
     scene.destroy();
 }
