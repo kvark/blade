@@ -247,6 +247,15 @@ pub fn offset_transform(
     }
 }
 
+/// A geometry of a model, as [`DiffTracer::current_meshes`] reads it back.
+#[derive(Clone, Debug)]
+pub struct CurrentMesh {
+    pub model: blade_asset::Handle<crate::Model>,
+    /// Index of the geometry in the model.
+    pub geometry: usize,
+    pub mesh: super::remesh::Mesh,
+}
+
 /// A texture whose texels are parameters, see [`DiffTracer::textures`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DiffTexture {
@@ -357,6 +366,9 @@ struct VertexPassData {
 
 /// A model whose vertex positions are parameters.
 struct VertexModel {
+    model: blade_asset::Handle<crate::Model>,
+    /// Where its indices start in the mesh readback, and their count.
+    index_readback: (u64, u64),
     vertex_buffer: blade_graphics::Buffer,
     index_buffer: blade_graphics::Buffer,
     acceleration_structure: blade_graphics::AccelerationStructure,
@@ -389,6 +401,9 @@ struct VertexParams {
     neighbor_sums: blade_graphics::Buffer,
     /// The positions and offsets of the slots, for the host to read.
     readback: blade_graphics::Buffer,
+    /// The slots of the vertices, then the indices of every model.
+    mesh_readback: blade_graphics::Buffer,
+    vertex_count: u32,
     weld_pipeline: blade_graphics::ComputePipeline,
     apply_pipeline: blade_graphics::ComputePipeline,
     sum_normals_pipeline: blade_graphics::ComputePipeline,
@@ -508,6 +523,7 @@ impl VertexParams {
             self.normal_grads,
             self.neighbor_sums,
             self.readback,
+            self.mesh_readback,
         ] {
             gpu.destroy_buffer(buffer);
         }
@@ -954,6 +970,7 @@ impl DiffTracer {
                 memory: blade_graphics::Memory::Device,
             })
         };
+        let mut index_readback_end = 4 * u64::from(vertex_count);
         let vertex_params = VertexParams {
             models: vertex_models
                 .iter()
@@ -961,7 +978,17 @@ impl DiffTracer {
                     let model = &asset_hub.models[handle];
                     let meshes = VertexParams::model_meshes(model);
                     let sizes = gpu.get_bottom_level_acceleration_structure_sizes(&meshes);
+                    let index_bytes = model
+                        .geometries
+                        .iter()
+                        .map(|g| g.index_offset + 12 * u64::from(g.triangle_count))
+                        .max()
+                        .unwrap_or(0);
+                    let index_readback = (index_readback_end, index_bytes);
+                    index_readback_end += index_bytes;
                     VertexModel {
+                        model: handle,
+                        index_readback,
                         vertex_buffer: model.vertex_buffer,
                         index_buffer: model.index_buffer,
                         acceleration_structure: model.acceleration_structure,
@@ -1005,6 +1032,12 @@ impl DiffTracer {
                 size: 48 * u64::from(slot_count),
                 memory: blade_graphics::Memory::Download,
             }),
+            mesh_readback: gpu.create_buffer(blade_graphics::BufferDesc {
+                name: "diff mesh readback",
+                size: index_readback_end.max(16),
+                memory: blade_graphics::Memory::Download,
+            }),
+            vertex_count,
             weld_pipeline: vertex_pipeline("diff-weld-vertices", "weld_vertices"),
             apply_pipeline: vertex_pipeline("diff-apply-vertices", "apply_vertices"),
             sum_normals_pipeline: vertex_pipeline("diff-sum-normals", "sum_normals"),
@@ -1586,6 +1619,76 @@ impl DiffTracer {
         transfer.copy_buffer_to_buffer(vp.slot_positions.into(), vp.readback.at(0), bytes);
         transfer.copy_buffer_to_buffer(vp.group.params.into(), vp.readback.at(bytes), bytes);
         transfer.copy_buffer_to_buffer(vp.group.grads.into(), vp.readback.at(2 * bytes), bytes);
+    }
+
+    /// Copy what [`Self::current_meshes`] needs to the host, which includes
+    /// [`Self::read_back_vertices`].
+    pub fn read_back_meshes(&self, encoder: &mut blade_graphics::CommandEncoder) {
+        self.read_back_vertices(encoder);
+        let vp = &self.vertex_params;
+        let mut transfer = encoder.transfer("diff-read-back-meshes");
+        if vp.vertex_count != 0 {
+            transfer.copy_buffer_to_buffer(
+                vp.vertex_slots.into(),
+                vp.mesh_readback.at(0),
+                4 * u64::from(vp.vertex_count),
+            );
+        }
+        for vm in &vp.models {
+            let (offset, bytes) = vm.index_readback;
+            if bytes != 0 {
+                transfer.copy_buffer_to_buffer(
+                    vm.index_buffer.at(0),
+                    vp.mesh_readback.at(offset),
+                    bytes,
+                );
+            }
+        }
+    }
+
+    /// The geometries of the models whose vertices are parameters, as they
+    /// are now, with the copies of every vertex as one, as of the last
+    /// [`Self::read_back_meshes`]. They are what remeshing starts from, see
+    /// [`super::remesh`].
+    pub fn current_meshes(&self, asset_hub: &crate::AssetHub) -> Vec<CurrentMesh> {
+        let vp = &self.vertex_params;
+        let data = vp.mesh_readback.data();
+        let slots = unsafe { slice::from_raw_parts(data as *const u32, vp.vertex_count as usize) };
+        let bases = self.vertex_bases();
+        let offsets = self.vertex_offsets();
+        let mut meshes = Vec::new();
+        for vm in &vp.models {
+            let (offset, bytes) = vm.index_readback;
+            let indices = unsafe {
+                slice::from_raw_parts(data.add(offset as usize) as *const u32, bytes as usize / 4)
+            };
+            for (geometry_index, geometry) in
+                asset_hub.models[vm.model].geometries.iter().enumerate()
+            {
+                let mut compact = HashMap::<u32, u32>::new();
+                let mut mesh = super::remesh::Mesh::default();
+                let first = (geometry.index_offset / 4) as usize;
+                for triangle in 0..geometry.triangle_count as usize {
+                    let corners = [0, 1, 2].map(|k| {
+                        let local = indices[first + 3 * triangle + k];
+                        let slot =
+                            slots[(vm.first_vertex + geometry.vertex_range.start + local) as usize];
+                        *compact.entry(slot).or_insert_with(|| {
+                            let (b, o) = (bases[slot as usize], offsets[slot as usize]);
+                            mesh.positions.push([b[0] + o[0], b[1] + o[1], b[2] + o[2]]);
+                            (mesh.positions.len() - 1) as u32
+                        })
+                    });
+                    mesh.triangles.push(corners);
+                }
+                meshes.push(CurrentMesh {
+                    model: vm.model,
+                    geometry: geometry_index,
+                    mesh,
+                });
+            }
+        }
+        meshes
     }
 
     /// Derivative of the loss by [`Self::vertex_offsets`], accumulated since
