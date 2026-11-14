@@ -1367,14 +1367,27 @@ fn check_single_object(kind: SceneKind, cache_name: &str, moves: &[Move], rotati
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_shadow_gradients_match_finite_differences() {
-    let Some(mut scene) = DiffScene::new("diff-shadow", SceneKind::Shadow) else {
+    // Direct light only.
+    check_shadow_gradients("diff-shadow", 0, 1);
+}
+
+/// With bounces, the light that the sphere reflects onto the wall moves
+/// with it too, along with the shadows that it casts on what the wall
+/// reflects.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_indirect_gradients_match_finite_differences() {
+    check_shadow_gradients("diff-indirect", 2, 2);
+}
+
+fn check_shadow_gradients(cache_name: &str, bounces: u32, depth: u32) {
+    let Some(mut scene) = DiffScene::new(cache_name, SceneKind::Shadow) else {
         return;
     };
     const BALL: usize = 1;
     scene.config.edge_samples = 4;
-    // Direct light only: with bounces, the light that the sphere reflects
-    // onto the wall changes too, which the gradient leaves out.
-    scene.config.max_bounces = 0;
+    scene.config.max_bounces = bounces;
+    scene.config.secondary_edge_depth = depth;
     scene.capture_target();
     let mut start = GeometryOffsets {
         translations: vec![[0.0; 3]; 2],
@@ -1422,14 +1435,24 @@ fn diff_shadow_gradients_match_finite_differences() {
     // which leaves this noisier than the others, about the same for both
     // axes, so the smaller one is also held to the size of the larger.
     let largest = results.iter().map(|r| r.3.abs()).fold(0.0, f32::max);
+    let mut interreflection = 0.0f32;
     for (axis, without, with, numeric) in results {
         assert!(
             (with - numeric).abs() <= 0.3 * numeric.abs() + 0.1 * largest,
             "d loss / d ball {axis}: gradient {with:e} disagrees with {numeric:e}"
         );
+        // With bounces, the light that the sphere reflects moves with it
+        // without the edges.
         assert!(
-            without.abs() < 0.1 * numeric.abs(),
+            bounces > 0 || without.abs() < 0.1 * numeric.abs(),
             "d loss / d ball {axis}: {without:e} without shadows, against {numeric:e}"
+        );
+        interreflection = interreflection.max(without.abs() / largest);
+    }
+    if bounces > 0 {
+        assert!(
+            interreflection > 0.2,
+            "the light reflected by the sphere barely moves with it"
         );
     }
     scene.destroy();

@@ -91,6 +91,11 @@ pub struct DiffConfig {
     /// The edges come from the whole scene, and few of them are silhouettes
     /// from a given point, so this takes many samples.
     pub secondary_edge_samples: u32,
+    /// The hits of a path, from the primary one, at which
+    /// [`Self::secondary_edge_samples`] are drawn: 1 for the shadows and
+    /// reflections that the camera sees, and more for those that are seen
+    /// in reflections themselves.
+    pub secondary_edge_depth: u32,
 }
 
 impl Default for DiffConfig {
@@ -104,6 +109,7 @@ impl Default for DiffConfig {
             jitter_primary_rays: true,
             edge_samples: 1,
             secondary_edge_samples: 0,
+            secondary_edge_depth: 1,
         }
     }
 }
@@ -326,7 +332,8 @@ struct DiffParams {
     triangle_count: u32,
     edge_samples: u32,
     secondary_edge_samples: u32,
-    _pad: [u32; 3],
+    secondary_edge_depth: u32,
+    _pad: [u32; 2],
 }
 
 #[repr(C)]
@@ -1409,7 +1416,8 @@ impl DiffTracer {
             } else {
                 0
             },
-            _pad: [0; 3],
+            secondary_edge_depth: config.secondary_edge_depth,
+            _pad: [0; 2],
         }
     }
 
