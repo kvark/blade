@@ -40,6 +40,9 @@ enum SceneKind {
     Cube,
     /// A large dielectric sphere on its own, whose translation is a parameter.
     Ball,
+    /// A small quad, an open mesh, whose translation is a parameter. Its
+    /// silhouette is its boundary, whose edges only have one triangle.
+    Panel,
     /// `CHECKER` as the base color of the dielectric row.
     BaseColorTexture,
     /// Normals tilted four ways, at a unit normal scale, on a quad facing
@@ -55,14 +58,17 @@ impl SceneKind {
 
     /// Whether translations are parameters.
     fn moves(self) -> bool {
-        matches!(self, Self::Spheres | Self::Bowl | Self::Cube | Self::Ball)
+        matches!(
+            self,
+            Self::Spheres | Self::Bowl | Self::Cube | Self::Ball | Self::Panel
+        )
     }
 
     fn texels(self) -> Vec<[u8; 4]> {
         let size = CHECKER_SIZE as usize;
         (0..size * size)
             .map(|i| match self {
-                Self::Grid | Self::Spheres | Self::Bowl | Self::Cube | Self::Ball => {
+                Self::Grid | Self::Spheres | Self::Bowl | Self::Cube | Self::Ball | Self::Panel => {
                     unreachable!()
                 }
                 Self::BaseColorTexture => CHECKER[(i / size + i % size) % 2],
@@ -204,6 +210,8 @@ impl DiffScene {
                 vec![cube()]
             } else if kind == SceneKind::Ball {
                 vec![ball()]
+            } else if kind == SceneKind::Panel {
+                vec![panel()]
             } else {
                 pbr_scene::material_grid([0.3, 1.0])
             };
@@ -707,6 +715,28 @@ fn quad() -> blade_render::ProceduralGeometry {
     }
 }
 
+/// A quad that leaves the sky around it in view, turned a little.
+///
+/// Its edges are slanted in the image: an edge along the pixel grid keeps
+/// the same place within the pixels it crosses, all along, and then the loss
+/// changes its slope every time the edge moves across a pixel, which central
+/// differences over a step close to a pixel average out.
+fn panel() -> blade_render::ProceduralGeometry {
+    let mut geometry = quad();
+    let (sin_z, cos_z) = 0.35f32.sin_cos();
+    let (sin_y, cos_y) = 0.3f32.sin_cos();
+    let turn = |[x, y, z]: [f32; 3]| {
+        let (x, y) = (x * cos_z - y * sin_z, x * sin_z + y * cos_z);
+        [x * cos_y + z * sin_y, y, -x * sin_y + z * cos_y]
+    };
+    for vertex in &mut geometry.vertices {
+        vertex.position = turn(vertex.position.map(|c| 0.4 * c));
+        vertex.normal = pbr_scene::encode_normal(turn([0.0, 0.0, 1.0]));
+        vertex.tangent = pbr_scene::encode_normal(turn([1.0, 0.0, 0.0]));
+    }
+    geometry
+}
+
 /// A quad larger than the view, with normals tilted outwards at the corners.
 fn bowl() -> blade_render::ProceduralGeometry {
     let mut geometry = quad();
@@ -891,7 +921,7 @@ fn check_texture(kind: SceneKind, checks: &[(usize, usize)], channels: usize) {
     let initial_error = error(&flat);
     // Normals change the image less than colors, so they get more steps.
     let (learning_rate, steps) = match kind {
-        SceneKind::NormalMap => (0.05, 200),
+        SceneKind::NormalMap => (0.05, 320),
         _ => (0.03, 100),
     };
     let adam = AdamConfig {
@@ -1022,6 +1052,15 @@ fn diff_edge_gradients_match_finite_differences() {
     // From a turned start, the cube is 10-30% off along some axes, which
     // remains to be explained, so it starts from its target rotation.
     check_single_object(SceneKind::Cube, "diff-cube", &ALL_MOVES, [0.0; 3]);
+}
+
+/// The boundary edges of an open mesh have one triangle each, which has to
+/// sample them.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_open_mesh_gradients_match_finite_differences() {
+    // The camera along Z barely changes the loss here.
+    check_single_object(SceneKind::Panel, "diff-panel", &ALL_MOVES[..4], [0.0; 3]);
 }
 
 /// The gradient by the translation of a smooth sphere, which moves both
