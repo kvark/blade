@@ -780,13 +780,41 @@ fn walk_path(
     return radiance;
 }
 
+// Offset from the center of a pixel, with the density of the tent filter.
+fn sample_tent(random: f32) -> f32 {
+    if (random < 0.5) {
+        return sqrt(2.0 * random) - 1.0;
+    }
+    return 1.0 - sqrt(2.0 - 2.0 * random);
+}
+
+// Pixels are tent filtered, over the area of the four pixels around their
+// centers. With a box filter, an edge that moves across a pixel changes it
+// with a kink every time that it passes a corner, which leaves the loss with
+// kinks all over, and a tent filter smooths these out.
 fn primary_direction(pixel: vec2<u32>, rng: ptr<function, RandomState>) -> vec3<f32> {
-    let jitter = select(
-        vec2<f32>(0.5),
-        vec2<f32>(random_gen(rng), random_gen(rng)),
-        parameters.jitter_primary_rays != 0u,
-    );
+    var jitter = vec2<f32>(0.5);
+    if (parameters.jitter_primary_rays != 0u) {
+        jitter += vec2<f32>(sample_tent(random_gen(rng)), sample_tent(random_gen(rng)));
+    }
     return get_ray_direction_at(camera, vec2<f32>(pixel) + jitter);
+}
+
+// Derivative of the loss by the radiance at a point of the film, through
+// the tent filter of the pixels around it.
+fn film_adjoint(p: vec2<f32>) -> vec3<f32> {
+    let corner = floor(p - vec2<f32>(0.5));
+    var sum = vec3<f32>(0.0);
+    for (var i = 0u; i < 4u; i += 1u) {
+        let pixel = corner + vec2<f32>(f32(i & 1u), f32(i >> 1u));
+        if (any(pixel < vec2<f32>(0.0)) || any(pixel >= vec2<f32>(camera.target_size))) {
+            continue;
+        }
+        let weight = max(vec2<f32>(0.0), vec2<f32>(1.0) - abs(p - pixel - vec2<f32>(0.5)));
+        let index = u32(pixel.y) * camera.target_size.x + u32(pixel.x);
+        sum += weight.x * weight.y * image_adjoint[index].xyz;
+    }
+    return sum;
 }
 
 // How much of a path's radiance is kept, like in "path-trace.wgsl":
@@ -953,8 +981,7 @@ fn sample_edge(a: vec3<f32>, b: vec3<f32>, instance: u32, rng: ptr<function, Ran
         if (any(p < vec2<f32>(0.0)) || any(p >= size)) {
             continue;
         }
-        let pixel = vec2<u32>(p);
-        let d_pixel = image_adjoint[pixel.y * camera.target_size.x + pixel.x].xyz;
+        let d_pixel = film_adjoint(p);
         if (all(d_pixel == vec3<f32>(0.0))) {
             continue;
         }
@@ -988,8 +1015,8 @@ fn sample_edge(a: vec3<f32>, b: vec3<f32>, instance: u32, rng: ptr<function, Ran
 }
 
 // The boundary term of the translations, sampled along the edges of every
-// triangle in the scene. Requires jittered primary rays, i.e. a box filter
-// over each pixel, for the image to change continuously as edges move.
+// triangle in the scene. Requires jittered primary rays, i.e. filtered
+// pixels, for the image to change continuously as edges move.
 @compute @workgroup_size(64)
 fn edges(
     @builtin(global_invocation_id) global_id: vec3<u32>,
