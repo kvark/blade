@@ -141,6 +141,91 @@ pub struct DiffTracerDesc {
     pub geometry: bool,
 }
 
+/// Offsets of the geometry from where an optimization started, as
+/// [`DiffTracer::geometry_offsets`] reads them back.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GeometryOffsets {
+    /// Translation of every object.
+    pub translations: Vec<[f32; 3]>,
+    /// Rotation of every object about its origin, as an axis times the
+    /// angle in radians.
+    pub rotations: Vec<[f32; 3]>,
+    /// Translation of the camera.
+    pub camera: [f32; 3],
+}
+
+/// Where the objects and the camera were when an optimization started,
+/// which the [`GeometryOffsets`] are relative to.
+///
+/// A step of optimizing the geometry goes like this:
+///   1. [`DiffTracer::step`], then [`DiffTracer::read_back`], and waiting
+///      for the work,
+///   2. [`GeometryBase::apply`] of [`DiffTracer::geometry_offsets`],
+///   3. [`DiffTracer::rebuild_scene`] with the moved objects.
+#[derive(Clone, Debug)]
+pub struct GeometryBase {
+    pub transforms: Vec<blade_graphics::Transform>,
+    pub camera_position: mint::Vector3<f32>,
+}
+
+impl GeometryBase {
+    pub fn new(objects: &[crate::Object], camera: &crate::Camera) -> Self {
+        Self {
+            transforms: objects.iter().map(|object| object.transform).collect(),
+            camera_position: camera.pos,
+        }
+    }
+
+    /// Move `objects` and `camera` by `offsets` from where they started.
+    pub fn apply(
+        &self,
+        offsets: &GeometryOffsets,
+        objects: &mut [crate::Object],
+        camera: &mut crate::Camera,
+    ) {
+        assert_eq!(objects.len(), self.transforms.len());
+        for (i, (object, base)) in objects.iter_mut().zip(&self.transforms).enumerate() {
+            let translation = offsets.translations.get(i).copied().unwrap_or_default();
+            let rotation = offsets.rotations.get(i).copied().unwrap_or_default();
+            object.transform = offset_transform(base, translation, rotation);
+        }
+        let p = self.camera_position;
+        let c = offsets.camera;
+        camera.pos = [p.x + c[0], p.y + c[1], p.z + c[2]].into();
+    }
+}
+
+/// Turn `base` by `rotation` about its origin, then translate it.
+pub fn offset_transform(
+    base: &blade_graphics::Transform,
+    translation: [f32; 3],
+    rotation: [f32; 3],
+) -> blade_graphics::Transform {
+    let rotation = glam::Vec3::from(rotation);
+    let angle = rotation.length();
+    let turn = if angle > 0.0 {
+        glam::Mat3::from_axis_angle(rotation / angle, angle)
+    } else {
+        glam::Mat3::IDENTITY
+    };
+    let rows = [base.x, base.y, base.z];
+    let linear = glam::Mat3::from_cols(
+        glam::Vec3::new(rows[0].x, rows[1].x, rows[2].x),
+        glam::Vec3::new(rows[0].y, rows[1].y, rows[2].y),
+        glam::Vec3::new(rows[0].z, rows[1].z, rows[2].z),
+    );
+    let turned = turn * linear;
+    let row = |i: usize, origin: f32| -> mint::Vector4<f32> {
+        let r = turned.row(i);
+        [r.x, r.y, r.z, origin + translation[i]].into()
+    };
+    blade_graphics::Transform {
+        x: row(0, rows[0].w),
+        y: row(1, rows[1].w),
+        z: row(2, rows[2].w),
+    }
+}
+
 /// A texture whose texels are parameters, see [`DiffTracer::textures`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DiffTexture {
@@ -162,6 +247,8 @@ pub struct StepConfig {
     pub textures: Option<AdamConfig>,
     /// Translations of the objects, which are unbounded.
     pub translations: Option<AdamConfig>,
+    /// Rotations of the objects, which are unbounded.
+    pub rotations: Option<AdamConfig>,
     /// Translation of the camera, which is unbounded.
     pub camera_position: Option<AdamConfig>,
 }
@@ -236,6 +323,8 @@ struct DiffTraceData<'a> {
     edge_entries: blade_graphics::BufferPiece,
     instance_transforms: blade_graphics::BufferPiece,
     translation_grads: blade_graphics::BufferPiece,
+    rotation_grads: blade_graphics::BufferPiece,
+    rotation_params: blade_graphics::BufferPiece,
     camera_grads: blade_graphics::BufferPiece,
 }
 
@@ -387,6 +476,8 @@ pub struct DiffTracer {
     geometry: bool,
     /// Translations of the instances, in XYZ of 4 floats.
     translations: ParamGroup,
+    /// Rotations of the instances about their origins, as axis times angle.
+    rotations: ParamGroup,
     camera_position: ParamGroup,
     edge_entries: blade_graphics::Buffer,
     instance_transforms: blade_graphics::Buffer,
@@ -613,6 +704,7 @@ impl DiffTracer {
             bytemuck::cast_slice(&transforms),
         );
         let translations = ParamGroup::new("diff translations", instance_count * 4, gpu);
+        let rotations = ParamGroup::new("diff rotations", instance_count * 4, gpu);
         let camera_position = ParamGroup::new("diff camera position", 4, gpu);
 
         let image_size = ray_tracer.surface_size;
@@ -641,6 +733,7 @@ impl DiffTracer {
             edges_pipeline,
             geometry: desc.geometry,
             translations,
+            rotations,
             camera_position,
             edge_entries,
             instance_transforms,
@@ -660,7 +753,7 @@ impl DiffTracer {
                 name: "diff readback",
                 size: 2
                     * (u64::from(material_count) * mem::size_of::<MaterialParams>() as u64
-                        + u64::from(instance_count + 1) * 16),
+                        + u64::from(2 * instance_count + 1) * 16),
                 memory: blade_graphics::Memory::Download,
             }),
             accumulated_frames: 0,
@@ -670,6 +763,7 @@ impl DiffTracer {
         this.environment.clear(encoder);
         this.textures.clear(encoder);
         this.translations.clear(encoder);
+        this.rotations.clear(encoder);
         this.camera_position.clear(encoder);
         {
             let mut transfer = encoder.transfer("diff-init");
@@ -686,11 +780,9 @@ impl DiffTracer {
                 transform_bytes,
             );
             // The offsets start at zero.
-            transfer.fill_buffer(
-                this.translations.params.into(),
-                this.translations.params.size(),
-                0,
-            );
+            for group in [&this.translations, &this.rotations] {
+                transfer.fill_buffer(group.params.into(), group.params.size(), 0);
+            }
             transfer.fill_buffer(
                 this.camera_position.params.into(),
                 this.camera_position.params.size(),
@@ -810,6 +902,8 @@ impl DiffTracer {
             edge_entries: self.edge_entries.into(),
             instance_transforms: self.instance_transforms.into(),
             translation_grads: self.translations.grads.into(),
+            rotation_grads: self.rotations.grads.into(),
+            rotation_params: self.rotations.params.into(),
             camera_grads: self.camera_position.grads.into(),
         }
     }
@@ -858,7 +952,12 @@ impl DiffTracer {
     pub fn read_back(&self, encoder: &mut blade_graphics::CommandEncoder) {
         let mut transfer = encoder.transfer("diff-read-back");
         let mut offset = 0;
-        for group in [&self.materials, &self.translations, &self.camera_position] {
+        for group in [
+            &self.materials,
+            &self.translations,
+            &self.rotations,
+            &self.camera_position,
+        ] {
             let bytes = u64::from(group.count) * 4;
             for buffer in [group.params, group.grads] {
                 if bytes != 0 {
@@ -908,18 +1007,99 @@ impl DiffTracer {
         self.read_back_slice(offset, self.instance_count as usize)
     }
 
+    /// Rotation offset of every object about its origin, as an axis times
+    /// the angle in radians, as of the last [`Self::read_back`].
+    pub fn rotations(&self) -> &[[f32; 4]] {
+        let offset = self.geometry_offset() + u64::from(self.instance_count) * 32;
+        self.read_back_slice(offset, self.instance_count as usize)
+    }
+
+    /// Derivative of the loss by [`Self::rotations`].
+    pub fn rotation_grads(&self) -> &[[f32; 4]] {
+        let offset = self.geometry_offset() + u64::from(self.instance_count) * 48;
+        self.read_back_slice(offset, self.instance_count as usize)
+    }
+
     /// Translation offset of the camera, as of the last [`Self::read_back`].
     pub fn camera_offset(&self) -> [f32; 3] {
-        let offset = self.geometry_offset() + u64::from(self.instance_count) * 32;
+        let offset = self.geometry_offset() + u64::from(self.instance_count) * 64;
         let [x, y, z, _] = self.read_back_slice::<[f32; 4]>(offset, 1)[0];
         [x, y, z]
     }
 
     /// Derivative of the loss by [`Self::camera_offset`].
     pub fn camera_offset_grad(&self) -> [f32; 3] {
-        let offset = self.geometry_offset() + u64::from(self.instance_count) * 32 + 16;
+        let offset = self.geometry_offset() + u64::from(self.instance_count) * 64 + 16;
         let [x, y, z, _] = self.read_back_slice::<[f32; 4]>(offset, 1)[0];
         [x, y, z]
+    }
+
+    /// All the offsets of the geometry, as of the last [`Self::read_back`].
+    pub fn geometry_offsets(&self) -> GeometryOffsets {
+        let xyz = |v: &[f32; 4]| [v[0], v[1], v[2]];
+        GeometryOffsets {
+            translations: self.translations().iter().map(xyz).collect(),
+            rotations: self.rotations().iter().map(xyz).collect(),
+            camera: self.camera_offset(),
+        }
+    }
+
+    /// Replace the offsets of the geometry at this point of the `encoder`,
+    /// such as to start from a guess. The staging buffer goes to `temp`.
+    pub fn write_geometry_offsets(
+        &self,
+        encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+        offsets: &GeometryOffsets,
+        temp: &mut crate::FrameResources,
+    ) {
+        let count = self.instance_count as usize;
+        assert_eq!(offsets.translations.len(), count);
+        assert_eq!(offsets.rotations.len(), count);
+        let xyzw = |v: &[f32; 3]| [v[0], v[1], v[2], 0.0];
+        let mut data = Vec::with_capacity(2 * count + 1);
+        data.extend(offsets.translations.iter().map(xyzw));
+        data.extend(offsets.rotations.iter().map(xyzw));
+        data.push(xyzw(&offsets.camera));
+        let staging = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "diff geometry staging",
+            size: (data.len() * 16) as u64,
+            memory: blade_graphics::Memory::Upload,
+        });
+        unsafe {
+            slice::from_raw_parts_mut(staging.data() as *mut [f32; 4], data.len())
+                .copy_from_slice(&data);
+        }
+        let bytes = (count * 16) as u64;
+        let mut transfer = encoder.transfer("diff-write-geometry");
+        if count != 0 {
+            transfer.copy_buffer_to_buffer(staging.at(0), self.translations.params.into(), bytes);
+            transfer.copy_buffer_to_buffer(staging.at(bytes), self.rotations.params.into(), bytes);
+        }
+        transfer.copy_buffer_to_buffer(
+            staging.at(2 * bytes),
+            self.camera_position.params.into(),
+            16,
+        );
+        temp.buffers.push(staging);
+    }
+
+    /// Build the scene of `ray_tracer` again, with `objects` as they are now,
+    /// and take their transforms for the geometry. This is the way to move
+    /// the objects between the steps of an optimization, see [`GeometryBase`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn rebuild_scene(
+        &self,
+        encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+        ray_tracer: &mut super::RayTracer,
+        objects: &mut [crate::Object],
+        env_map: Option<blade_asset::Handle<crate::Texture>>,
+        asset_hub: &crate::AssetHub,
+        temp: &mut crate::FrameResources,
+    ) {
+        ray_tracer.build_scene(encoder, objects, env_map, asset_hub, gpu, temp);
+        self.update_geometry(encoder, gpu, ray_tracer, temp);
     }
 
     /// Replace the material parameters at this point of the `encoder`.
@@ -1153,6 +1333,7 @@ impl DiffTracer {
         }
         for (group, adam) in [
             (&mut self.translations, config.translations),
+            (&mut self.rotations, config.rotations),
             (&mut self.camera_position, config.camera_position),
         ] {
             match adam {
@@ -1180,6 +1361,7 @@ impl DiffTracer {
         gpu.destroy_compute_pipeline(&mut self.adam_pipeline);
         gpu.destroy_compute_pipeline(&mut self.edges_pipeline);
         self.translations.destroy(gpu);
+        self.rotations.destroy(gpu);
         self.camera_position.destroy(gpu);
         gpu.destroy_buffer(self.edge_entries);
         gpu.destroy_buffer(self.instance_transforms);
@@ -1259,6 +1441,27 @@ fn flat_dispatch(count: u32) -> [u32; 3] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn offset_transforms_turn_about_the_origin() {
+        let mut base = blade_graphics::IDENTITY_TRANSFORM;
+        base.x.w = 1.0;
+        base.y.w = 2.0;
+        let quarter = std::f32::consts::FRAC_PI_2;
+        let t = super::offset_transform(&base, [0.0, 0.0, 3.0], [0.0, 0.0, quarter]);
+        // The X axis turns into Y about Z, and the origin only moves.
+        let m = super::super::mat4_transform(&t);
+        let p = m.transform_point3(glam::Vec3::new(1.0, 0.0, 0.0));
+        assert!(
+            (p - glam::Vec3::new(1.0, 3.0, 3.0)).length() < 1.0e-5,
+            "{p}"
+        );
+        let o = m.transform_point3(glam::Vec3::ZERO);
+        assert!(
+            (o - glam::Vec3::new(1.0, 2.0, 3.0)).length() < 1.0e-5,
+            "{o}"
+        );
+    }
+
     #[test]
     fn flat_dispatch_covers_long_arrays() {
         for count in [0, 1, 64, 65, 64 * 32768, 64 * 32768 + 1, 4096 * 4096 * 4] {
