@@ -1871,3 +1871,100 @@ fn diff_large_steps_fit_closer() {
         adam.loss
     );
 }
+
+/// Drawing the edges for shadows by a guide made of what they brought
+/// before gets the same gradient as drawing them uniformly, with less
+/// noise, since few of the edges cast the shadow.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_guided_edges_reduce_variance() {
+    let Some(mut scene) = DiffScene::new("diff-guided", SceneKind::Shadow) else {
+        return;
+    };
+    const BALL: usize = 1;
+    const BATCHES: usize = 16;
+    const BATCH: u32 = 8;
+    scene.config.edge_samples = 4;
+    scene.config.max_bounces = 0;
+    scene.config.secondary_edge_samples = 8;
+    scene.capture_target();
+    let mut start = GeometryOffsets {
+        translations: vec![[0.0; 3]; 2],
+        rotations: vec![[0.0; 3]; 2],
+        camera: [0.0; 3],
+    };
+    start.translations[BALL] = [0.3, 0.25, 0.0];
+    scene.move_geometry(&start);
+
+    let mut iteration = 0;
+    let mut stats = Vec::new();
+    for guided in [false, true] {
+        scene.config.guided_edges = guided;
+        if guided {
+            for _ in 0..4 {
+                for _ in 0..BATCH {
+                    scene.backward(iteration, 4, 2);
+                    iteration += 1;
+                }
+                scene.diff.step(&mut scene.encoder, &StepConfig::default());
+                scene
+                    .diff
+                    .refresh_edge_guide(&mut scene.encoder, &scene.renderer);
+            }
+        }
+        let mut batches = Vec::new();
+        for _ in 0..BATCHES {
+            for _ in 0..BATCH {
+                scene.backward(iteration, 4, 2);
+                iteration += 1;
+            }
+            scene.diff.read_back(&mut scene.encoder);
+            scene.submit();
+            let grad = scene.diff.translation_grads()[BALL];
+            batches.push([grad[0] / BATCH as f32, grad[1] / BATCH as f32]);
+            scene.diff.step(&mut scene.encoder, &StepConfig::default());
+            if guided {
+                scene
+                    .diff
+                    .refresh_edge_guide(&mut scene.encoder, &scene.renderer);
+            }
+        }
+        let mut mean = [0.0f32; 2];
+        let mut variance = [0.0f32; 2];
+        for axis in 0..2 {
+            mean[axis] = batches.iter().map(|b| b[axis]).sum::<f32>() / BATCHES as f32;
+            variance[axis] = batches
+                .iter()
+                .map(|b| (b[axis] - mean[axis]).powi(2))
+                .sum::<f32>()
+                / (BATCHES - 1) as f32;
+        }
+        println!(
+            "{}: mean {mean:?}, deviation {:?}",
+            if guided { "guided" } else { "uniform" },
+            variance.map(f32::sqrt)
+        );
+        stats.push((mean, variance));
+    }
+    let [
+        (uniform_mean, uniform_variance),
+        (guided_mean, guided_variance),
+    ] = [stats[0], stats[1]];
+    for axis in 0..2 {
+        let error = ((uniform_variance[axis] + guided_variance[axis]) / BATCHES as f32).sqrt();
+        assert!(
+            (uniform_mean[axis] - guided_mean[axis]).abs() < 3.0 * error,
+            "axis {axis}: the guided mean {} is off the uniform {}",
+            guided_mean[axis],
+            uniform_mean[axis]
+        );
+    }
+    let total = |v: [f32; 2]| v[0] + v[1];
+    assert!(
+        total(guided_variance) < 0.5 * total(uniform_variance),
+        "the variance went from {} to {} with the guide",
+        total(uniform_variance),
+        total(guided_variance)
+    );
+    scene.destroy();
+}

@@ -71,7 +71,9 @@ struct DiffParams {
     // of a path, for its incident light.
     secondary_edge_samples: u32,
     secondary_edge_depth: u32,
-    _pad1: u32,
+    // Draw the secondary edges by `edge_guide`, and record what they bring
+    // in `edge_hits`.
+    guided_edges: u32,
     _pad2: u32,
 }
 
@@ -163,6 +165,11 @@ var<storage, read_write> vertex_grads: array<atomic<f32>>;
 // before every step carries to the positions around the slot.
 var<storage, read_write> normal_grads: array<atomic<f32>>;
 var<storage, read_write> edge_counts: array<atomic<u32>>;
+// What the secondary edges drawn from every edge brought, since the last
+// `guide_edges`, and the importance and the distribution that it makes.
+var<storage, read_write> edge_hits: array<atomic<f32>>;
+var<storage, read_write> edge_importance: array<f32>;
+var<storage, read_write> edge_guide: array<f32>;
 var<storage, read_write> camera_grads: array<atomic<f32>>;
 
 fn trace_ray(position: vec3<f32>, direction: vec3<f32>, t_min: f32) -> RayIntersection {
@@ -1326,8 +1333,9 @@ fn sample_secondary_edges(pv: PathVertex, depth: u32, rng: ptr<function, RandomS
     var record: PathRecord;
     var incident: array<vec3<f32>, PATH_LENGTH>;
     for (var k = 0u; k < samples; k += 1u) {
-        let triangle = min(u32(random_gen(rng) * f32(triangle_count)), triangle_count - 1u);
-        let corner = min(u32(random_gen(rng) * 3.0), 2u);
+        let drawn = draw_edge(random_gen(rng));
+        let triangle = drawn.edge / 3u;
+        let corner = drawn.edge % 3u;
         let t = random_gen(rng);
         let edges = triangle_edges(triangle);
         let la = edges.local[corner];
@@ -1372,11 +1380,13 @@ fn sample_secondary_edges(pv: PathVertex, depth: u32, rng: ptr<function, RandomS
         *rng = side_rng;
         let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
             - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
-        // Each edge is drawn with the density of `1 / (3 * triangle_count)`.
-        let weight = dot(pv.d_found, bsdf * horizon * jump) * speed
-            * f32(3u * triangle_count) / f32(samples);
-        if (weight == 0.0) {
+        let contribution = dot(pv.d_found, bsdf * horizon * jump) * speed / f32(samples);
+        if (contribution == 0.0) {
             continue;
+        }
+        let weight = contribution / drawn.probability;
+        if (parameters.guided_edges != 0u) {
+            atomicAdd(&edge_hits[drawn.edge], abs(weight) / distance);
         }
         // Moving the point by `u` turns its direction across the edge by
         // `dot(across, u) / distance`, and moving the hit does the opposite.
@@ -1387,6 +1397,93 @@ fn sample_secondary_edges(pv: PathVertex, depth: u32, rng: ptr<function, RandomS
         d_hit -= grad;
     }
     return d_hit;
+}
+
+// Of the edges that secondary edges are drawn from, which are the corners
+// of the triangles, this fraction is drawn uniformly, and the rest by
+// `edge_guide`, so that every edge keeps being drawn.
+const UNIFORM_EDGE_FRACTION: f32 = 0.25;
+
+struct DrawnEdge {
+    // `3 * triangle + corner`, for the edge from the corner to the next.
+    edge: u32,
+    probability: f32,
+}
+
+fn draw_edge(random: f32) -> DrawnEdge {
+    let count = 3u * parameters.triangle_count;
+    let uniform = 1.0 / f32(count);
+    if (parameters.guided_edges == 0u) {
+        return DrawnEdge(min(u32(random * f32(count)), count - 1u), uniform);
+    }
+    var edge = 0u;
+    if (random < UNIFORM_EDGE_FRACTION) {
+        edge = min(u32(random / UNIFORM_EDGE_FRACTION * f32(count)), count - 1u);
+    } else {
+        // The first edge whose cumulative probability exceeds the number.
+        let target_value = (random - UNIFORM_EDGE_FRACTION) / (1.0 - UNIFORM_EDGE_FRACTION);
+        var low = 0u;
+        var high = count - 1u;
+        while (low < high) {
+            let middle = (low + high) / 2u;
+            if (edge_guide[middle] > target_value) {
+                high = middle;
+            } else {
+                low = middle + 1u;
+            }
+        }
+        edge = low;
+    }
+    let below = select(0.0, edge_guide[max(edge, 1u) - 1u], edge > 0u);
+    let guided = edge_guide[edge] - below;
+    return DrawnEdge(edge, UNIFORM_EDGE_FRACTION * uniform + (1.0 - UNIFORM_EDGE_FRACTION) * guided);
+}
+
+var<workgroup> guide_sums: array<f32, 256>;
+
+// Take what the edges brought since the last time into their importance,
+// which halves every time, and make `edge_guide` the cumulative distribution
+// of it. One workgroup does all, in chunks of consecutive edges.
+@compute @workgroup_size(256)
+fn guide_edges(@builtin(local_invocation_index) local_index: u32) {
+    let count = 3u * parameters.triangle_count;
+    let chunk = (count + 255u) / 256u;
+    let start = min(local_index * chunk, count);
+    let end = min(start + chunk, count);
+    var sum = 0.0;
+    for (var i = start; i < end; i += 1u) {
+        let hits = atomicLoad(&edge_hits[i]);
+        atomicStore(&edge_hits[i], 0.0);
+        let importance = 0.5 * edge_importance[i] + select(0.0, hits, hits == hits && hits < 1.0e30);
+        edge_importance[i] = importance;
+        sum += importance;
+    }
+    guide_sums[local_index] = sum;
+    workgroupBarrier();
+    // Inclusive prefix sums of the chunks.
+    for (var stride = 1u; stride < 256u; stride *= 2u) {
+        var other = 0.0;
+        if (local_index >= stride) {
+            other = guide_sums[local_index - stride];
+        }
+        workgroupBarrier();
+        guide_sums[local_index] += other;
+        workgroupBarrier();
+    }
+    let total = guide_sums[255];
+    var running = guide_sums[local_index] - sum;
+    for (var i = start; i < end; i += 1u) {
+        running += edge_importance[i];
+        if (total > 0.0) {
+            edge_guide[i] = running / total;
+        } else {
+            edge_guide[i] = f32(i + 1u) / f32(count);
+        }
+    }
+    if (end == count && end > start) {
+        // Free of rounding.
+        edge_guide[count - 1u] = 1.0;
+    }
 }
 
 // A hit slides along its ray as the origin of the ray moves, which is the

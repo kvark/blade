@@ -96,6 +96,11 @@ pub struct DiffConfig {
     /// reflections that the camera sees, and more for those that are seen
     /// in reflections themselves.
     pub secondary_edge_depth: u32,
+    /// Draw the secondary edges by how much they brought before, once
+    /// [`DiffTracer::refresh_edge_guide`] made a guide of it, mixed with
+    /// drawing them uniformly, which keeps the gradient unbiased. This
+    /// also records what they bring for the next guide.
+    pub guided_edges: bool,
 }
 
 impl Default for DiffConfig {
@@ -110,6 +115,7 @@ impl Default for DiffConfig {
             edge_samples: 1,
             secondary_edge_samples: 0,
             secondary_edge_depth: 1,
+            guided_edges: false,
         }
     }
 }
@@ -333,7 +339,8 @@ struct DiffParams {
     edge_samples: u32,
     secondary_edge_samples: u32,
     secondary_edge_depth: u32,
-    _pad: [u32; 2],
+    guided_edges: u32,
+    _pad: u32,
 }
 
 #[repr(C)]
@@ -586,6 +593,9 @@ struct DiffTraceData<'a> {
     camera_grads: blade_graphics::BufferPiece,
     edge_keys: blade_graphics::BufferPiece,
     edge_counts: blade_graphics::BufferPiece,
+    edge_hits: blade_graphics::BufferPiece,
+    edge_importance: blade_graphics::BufferPiece,
+    edge_guide: blade_graphics::BufferPiece,
     vertex_slots: blade_graphics::BufferPiece,
     vertex_grads: blade_graphics::BufferPiece,
     normal_grads: blade_graphics::BufferPiece,
@@ -742,6 +752,13 @@ pub struct DiffTracer {
     /// Hash table of the edges, with the triangles along each.
     edge_keys: blade_graphics::Buffer,
     edge_counts: blade_graphics::Buffer,
+    /// What the secondary edges drawn from every triangle corner brought,
+    /// their importance, and its cumulative distribution.
+    edge_hits: blade_graphics::Buffer,
+    edge_importance: blade_graphics::Buffer,
+    edge_guide: blade_graphics::Buffer,
+    edge_guide_ready: bool,
+    guide_edges_pipeline: blade_graphics::ComputePipeline,
     /// Translations of the instances, in XYZ of 4 floats.
     translations: ParamGroup,
     /// Rotations of the instances about their origins, as axis times angle.
@@ -816,6 +833,7 @@ impl DiffTracer {
         let init_environment_pipeline = trace_pipeline("diff-init-environment", "init_environment");
         let edges_pipeline = trace_pipeline("diff-edges", "edges");
         let count_edges_pipeline = trace_pipeline("diff-count-edges", "count_edges");
+        let guide_edges_pipeline = trace_pipeline("diff-guide-edges", "guide_edges");
         let texture_init_layout = super::ray_data_layout::<TextureInitData>(gpu);
         let init_texture_pipeline =
             gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
@@ -1114,6 +1132,16 @@ impl DiffTracer {
         };
         let edge_keys = edge_table("diff edge keys");
         let edge_counts = edge_table("diff edge counts");
+        let edge_array = |name| {
+            gpu.create_buffer(blade_graphics::BufferDesc {
+                name,
+                size: 4 * u64::from(3 * triangle_count).max(1),
+                memory: blade_graphics::Memory::Device,
+            })
+        };
+        let edge_hits = edge_array("diff edge hits");
+        let edge_importance = edge_array("diff edge importance");
+        let edge_guide = edge_array("diff edge guide");
         let translations = ParamGroup::new("diff translations", instance_count * 4, gpu);
         let rotations = ParamGroup::new("diff rotations", instance_count * 4, gpu);
         let camera_position = ParamGroup::new("diff camera position", 4, gpu);
@@ -1149,6 +1177,11 @@ impl DiffTracer {
             geometry: desc.geometry,
             edge_keys,
             edge_counts,
+            edge_hits,
+            edge_importance,
+            edge_guide,
+            edge_guide_ready: false,
+            guide_edges_pipeline,
             translations,
             rotations,
             camera_position,
@@ -1214,6 +1247,9 @@ impl DiffTracer {
                 transfer.fill_buffer(buffer.into(), buffer.size(), 0);
             }
             transfer.fill_buffer(edge_counts.into(), edge_counts.size(), 0);
+            for buffer in [edge_hits, edge_importance, edge_guide] {
+                transfer.fill_buffer(buffer.into(), buffer.size(), 0);
+            }
             transfer.copy_buffer_to_buffer(
                 transform_staging.into(),
                 instance_transforms.into(),
@@ -1350,6 +1386,30 @@ impl DiffTracer {
         }
     }
 
+    /// Make a guide for drawing secondary edges from what they brought since
+    /// the last one, with [`DiffConfig::guided_edges`], along with half of
+    /// the importance of the edges of that one. Calling this every few
+    /// steps keeps the guide up with the geometry.
+    pub fn refresh_edge_guide(
+        &mut self,
+        encoder: &mut blade_graphics::CommandEncoder,
+        ray_tracer: &super::RayTracer,
+    ) {
+        if !self.geometry || self.triangle_count == 0 {
+            return;
+        }
+        let mut pass = encoder.compute("diff-guide-edges");
+        let mut pc = pass.with(&self.guide_edges_pipeline);
+        let mut parameters: DiffParams = bytemuck::Zeroable::zeroed();
+        parameters.triangle_count = self.triangle_count;
+        pc.bind(
+            0,
+            &self.trace_data(ray_tracer, crate::CameraParams::default(), parameters),
+        );
+        pc.dispatch([1, 1, 1]);
+        self.edge_guide_ready = true;
+    }
+
     fn trace_data<'a>(
         &self,
         ray_tracer: &'a super::RayTracer,
@@ -1387,6 +1447,9 @@ impl DiffTracer {
             camera_grads: self.camera_position.grads.into(),
             edge_keys: self.edge_keys.into(),
             edge_counts: self.edge_counts.into(),
+            edge_hits: self.edge_hits.into(),
+            edge_importance: self.edge_importance.into(),
+            edge_guide: self.edge_guide.into(),
             vertex_slots: self.vertex_params.vertex_slots.into(),
             vertex_grads: self.vertex_params.group.grads.into(),
             normal_grads: self.vertex_params.normal_grads.into(),
@@ -1417,7 +1480,8 @@ impl DiffTracer {
                 0
             },
             secondary_edge_depth: config.secondary_edge_depth,
-            _pad: [0; 2],
+            guided_edges: (config.guided_edges && self.edge_guide_ready) as u32,
+            _pad: 0,
         }
     }
 
@@ -2197,6 +2261,10 @@ impl DiffTracer {
         gpu.destroy_compute_pipeline(&mut self.count_edges_pipeline);
         gpu.destroy_buffer(self.edge_keys);
         gpu.destroy_buffer(self.edge_counts);
+        gpu.destroy_compute_pipeline(&mut self.guide_edges_pipeline);
+        gpu.destroy_buffer(self.edge_hits);
+        gpu.destroy_buffer(self.edge_importance);
+        gpu.destroy_buffer(self.edge_guide);
         self.vertex_params.destroy(gpu);
         self.translations.destroy(gpu);
         self.rotations.destroy(gpu);
