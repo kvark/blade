@@ -1182,6 +1182,7 @@ impl DiffTracer {
                 vp.slot_positions,
                 vp.group.params,
                 vp.normal_grads,
+                vp.normal_sums,
             ] {
                 transfer.fill_buffer(buffer.into(), buffer.size(), 0);
             }
@@ -1257,6 +1258,15 @@ impl DiffTracer {
             "diff-weld-vertices",
             &this.vertex_params.weld_pipeline,
             false,
+            0.0,
+        );
+        // The step reads the normals of the slots, which the vertices only
+        // get as offsets are applied, so start them from where they are.
+        this.vertex_params.dispatch(
+            encoder,
+            "diff-sum-normals",
+            &this.vertex_params.sum_normals_pipeline,
+            true,
             0.0,
         );
         this
