@@ -150,6 +150,16 @@ pub struct DiffTracerDesc {
     /// ends, rounded to 1/65536 in the space of their object, so that copies
     /// of a vertex along a seam count as one.
     pub geometry: bool,
+    /// Differentiate the positions of the vertices of every model in the
+    /// scene, as offsets from where they were loaded, which
+    /// [`DiffTracer::apply_vertices`] writes into the models. Copies of a
+    /// vertex along seams share an offset. Requires `geometry`.
+    ///
+    /// The gradient goes through what moves with the triangles, like that of
+    /// the translations, and takes the shading normals as they are. Those
+    /// follow the positions as they are applied, as the normalized sums of
+    /// the normals of the triangles around each vertex.
+    pub vertices: bool,
 }
 
 /// Offsets of the geometry from where an optimization started, as
@@ -260,6 +270,10 @@ pub struct StepConfig {
     pub translations: Option<AdamConfig>,
     /// Rotations of the objects, which are unbounded.
     pub rotations: Option<AdamConfig>,
+    /// Offsets of the vertices, which are unbounded, with the weight of
+    /// pulling the offset of every vertex towards the mean of those of its
+    /// neighbors, which keeps the surface from crumpling.
+    pub vertices: Option<(AdamConfig, f32)>,
     /// Translation of the camera, which is unbounded.
     pub camera_position: Option<AdamConfig>,
 }
@@ -307,6 +321,208 @@ struct EdgeEntry {
     instance: u32,
     first_triangle: u32,
     triangle_count: u32,
+    vertex_base: u32,
+    _pad: [u32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+struct VertexPass {
+    first_vertex: u32,
+    vertex_count: u32,
+    model: u32,
+    first_index: u32,
+    geometry_vertex_start: u32,
+    triangle_count: u32,
+    smoothness: f32,
+    slot_count: u32,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct VertexPassData {
+    vertex_pass: VertexPass,
+    mesh_vertices: blade_graphics::BufferPiece,
+    base_vertices: blade_graphics::BufferPiece,
+    mesh_indices: blade_graphics::BufferPiece,
+    weld_keys: blade_graphics::BufferPiece,
+    slot_positions: blade_graphics::BufferPiece,
+    pass_vertex_slots: blade_graphics::BufferPiece,
+    vertex_offsets: blade_graphics::BufferPiece,
+    normal_sums: blade_graphics::BufferPiece,
+    neighbor_sums: blade_graphics::BufferPiece,
+    smooth_grads: blade_graphics::BufferPiece,
+    vertex_pass_grads: blade_graphics::BufferPiece,
+    pass_normal_grads: blade_graphics::BufferPiece,
+}
+
+/// A model whose vertex positions are parameters.
+struct VertexModel {
+    vertex_buffer: blade_graphics::Buffer,
+    index_buffer: blade_graphics::Buffer,
+    acceleration_structure: blade_graphics::AccelerationStructure,
+    meshes: Vec<blade_graphics::AccelerationStructureMesh>,
+    /// First index, first vertex, and triangle count of every geometry.
+    geometries: Vec<(u32, u32, u32)>,
+    /// Where its vertices start in the slot table.
+    first_vertex: u32,
+    vertex_count: u32,
+    /// Its vertices as they were loaded.
+    base: blade_graphics::Buffer,
+    /// For building its acceleration structure again.
+    scratch: blade_graphics::Buffer,
+}
+
+/// The positions of the vertices of models, as parameters.
+struct VertexParams {
+    models: Vec<VertexModel>,
+    /// Offsets of the slots, which copies of a vertex share.
+    group: ParamGroup,
+    slot_count: u32,
+    /// The slot of every vertex.
+    vertex_slots: blade_graphics::Buffer,
+    weld_keys: blade_graphics::Buffer,
+    /// Where the vertex of every slot was loaded, with 1 in W, or zeros.
+    slot_positions: blade_graphics::Buffer,
+    normal_sums: blade_graphics::Buffer,
+    /// By the normal of every slot, until the step carries it to positions.
+    normal_grads: blade_graphics::Buffer,
+    neighbor_sums: blade_graphics::Buffer,
+    /// The positions and offsets of the slots, for the host to read.
+    readback: blade_graphics::Buffer,
+    weld_pipeline: blade_graphics::ComputePipeline,
+    apply_pipeline: blade_graphics::ComputePipeline,
+    sum_normals_pipeline: blade_graphics::ComputePipeline,
+    write_normals_pipeline: blade_graphics::ComputePipeline,
+    sum_neighbors_pipeline: blade_graphics::ComputePipeline,
+    smoothness_pipeline: blade_graphics::ComputePipeline,
+    normals_to_positions_pipeline: blade_graphics::ComputePipeline,
+}
+
+impl VertexParams {
+    fn pass_data(&self, vertex_pass: VertexPass, model: Option<&VertexModel>) -> VertexPassData {
+        let (mesh_vertices, base_vertices, mesh_indices) = match model {
+            Some(vm) => (
+                vm.vertex_buffer.into(),
+                vm.base.into(),
+                vm.index_buffer.into(),
+            ),
+            None => (
+                self.slot_positions.into(),
+                self.slot_positions.into(),
+                self.vertex_slots.into(),
+            ),
+        };
+        VertexPassData {
+            vertex_pass,
+            mesh_vertices,
+            base_vertices,
+            mesh_indices,
+            weld_keys: self.weld_keys.into(),
+            slot_positions: self.slot_positions.into(),
+            pass_vertex_slots: self.vertex_slots.into(),
+            vertex_offsets: self.group.params.into(),
+            normal_sums: self.normal_sums.into(),
+            neighbor_sums: self.neighbor_sums.into(),
+            smooth_grads: self.group.grads.into(),
+            vertex_pass_grads: self.group.grads.into(),
+            pass_normal_grads: self.normal_grads.into(),
+        }
+    }
+
+    /// Run `pipeline` over the vertices of every model, or with
+    /// `per_geometry`, over the triangles of every geometry.
+    fn dispatch(
+        &self,
+        encoder: &mut blade_graphics::CommandEncoder,
+        label: &str,
+        pipeline: &blade_graphics::ComputePipeline,
+        per_geometry: bool,
+        smoothness: f32,
+    ) {
+        let mut pass = encoder.compute(label);
+        let mut pc = pass.with(pipeline);
+        for (index, vm) in self.models.iter().enumerate() {
+            let base = VertexPass {
+                first_vertex: vm.first_vertex,
+                vertex_count: vm.vertex_count,
+                model: index as u32,
+                smoothness,
+                slot_count: self.slot_count,
+                ..Default::default()
+            };
+            if per_geometry {
+                for &(first_index, geometry_vertex_start, triangle_count) in &vm.geometries {
+                    let vertex_pass = VertexPass {
+                        first_index,
+                        geometry_vertex_start,
+                        triangle_count,
+                        ..base
+                    };
+                    pc.bind(0, &self.pass_data(vertex_pass, Some(vm)));
+                    pc.dispatch(flat_dispatch(triangle_count));
+                }
+            } else {
+                pc.bind(0, &self.pass_data(base, Some(vm)));
+                pc.dispatch(flat_dispatch(vm.vertex_count));
+            }
+        }
+    }
+
+    fn model_meshes(model: &crate::Model) -> Vec<blade_graphics::AccelerationStructureMesh> {
+        let stride = mem::size_of::<crate::Vertex>() as u32;
+        model
+            .geometries
+            .iter()
+            .enumerate()
+            .map(
+                |(index, geometry)| blade_graphics::AccelerationStructureMesh {
+                    vertex_data: model
+                        .vertex_buffer
+                        .at(u64::from(geometry.vertex_range.start) * u64::from(stride)),
+                    vertex_format: blade_graphics::VertexFormat::F32Vec3,
+                    vertex_stride: stride,
+                    vertex_count: geometry.vertex_range.end - geometry.vertex_range.start,
+                    index_data: model.index_buffer.at(geometry.index_offset),
+                    index_type: geometry.index_type,
+                    triangle_count: geometry.triangle_count,
+                    transform_data: model.transform_buffer.at((index
+                        * mem::size_of::<blade_graphics::AccelerationStructureTransform>())
+                        as u64),
+                    is_opaque: !model.materials[geometry.material_index].transparent,
+                },
+            )
+            .collect()
+    }
+
+    fn destroy(&mut self, gpu: &blade_graphics::Context) {
+        for vm in self.models.drain(..) {
+            gpu.destroy_buffer(vm.base);
+            gpu.destroy_buffer(vm.scratch);
+        }
+        self.group.destroy(gpu);
+        for buffer in [
+            self.vertex_slots,
+            self.weld_keys,
+            self.slot_positions,
+            self.normal_sums,
+            self.normal_grads,
+            self.neighbor_sums,
+            self.readback,
+        ] {
+            gpu.destroy_buffer(buffer);
+        }
+        for pipeline in [
+            &mut self.weld_pipeline,
+            &mut self.apply_pipeline,
+            &mut self.sum_normals_pipeline,
+            &mut self.write_normals_pipeline,
+            &mut self.sum_neighbors_pipeline,
+            &mut self.smoothness_pipeline,
+            &mut self.normals_to_positions_pipeline,
+        ] {
+            gpu.destroy_compute_pipeline(pipeline);
+        }
+    }
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -341,6 +557,9 @@ struct DiffTraceData<'a> {
     camera_grads: blade_graphics::BufferPiece,
     edge_keys: blade_graphics::BufferPiece,
     edge_counts: blade_graphics::BufferPiece,
+    vertex_slots: blade_graphics::BufferPiece,
+    vertex_grads: blade_graphics::BufferPiece,
+    normal_grads: blade_graphics::BufferPiece,
 }
 
 #[repr(C)]
@@ -489,6 +708,7 @@ pub struct DiffTracer {
     texture_regions: blade_graphics::Buffer,
     edges_pipeline: blade_graphics::ComputePipeline,
     count_edges_pipeline: blade_graphics::ComputePipeline,
+    vertex_params: VertexParams,
     geometry: bool,
     /// Hash table of the edges, with the triangles along each.
     edge_keys: blade_graphics::Buffer,
@@ -674,22 +894,128 @@ impl DiffTracer {
             .copy_from_slice(&region_table);
         }
 
+        assert!(
+            desc.geometry || !desc.vertices,
+            "vertex positions need the gradient of the geometry"
+        );
+        // The models whose vertices are parameters, once each.
+        let mut vertex_models = Vec::<(blade_asset::Handle<crate::Model>, u32, u32)>::new();
+        let mut vertex_count = 0;
+        if desc.vertices {
+            for &handle in &ray_tracer.scene_models {
+                if vertex_models.iter().all(|&(h, _, _)| h != handle) {
+                    let count = asset_hub.models[handle]
+                        .geometries
+                        .iter()
+                        .map(|g| g.vertex_range.end)
+                        .max()
+                        .unwrap_or(0);
+                    vertex_models.push((handle, vertex_count, count));
+                    vertex_count += count;
+                }
+            }
+        }
         // Every triangle of the scene, in the order of the hit entries.
         let mut edge_table = Vec::new();
         let mut triangle_count = 0;
         if desc.geometry {
             for (instance, &model) in ray_tracer.scene_models.iter().enumerate() {
+                let first_vertex = vertex_models
+                    .iter()
+                    .find(|&&(h, _, _)| h == model)
+                    .map(|&(_, first, _)| first);
                 for geometry in &asset_hub.models[model].geometries {
                     edge_table.push(EdgeEntry {
                         hit_entry: edge_table.len() as u32,
                         instance: instance as u32,
                         first_triangle: triangle_count,
                         triangle_count: geometry.triangle_count,
+                        vertex_base: first_vertex
+                            .map_or(!0, |first| first + geometry.vertex_range.start),
+                        _pad: [0; 3],
                     });
                     triangle_count += geometry.triangle_count;
                 }
             }
         }
+        let slot_count = (2 * vertex_count).max(64).next_power_of_two();
+        let vertex_layout = <VertexPassData as blade_graphics::ShaderData>::layout();
+        let vertex_pipeline = |name, entry| {
+            gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+                name,
+                data_layouts: &[&vertex_layout],
+                compute: sh_trace.at(entry),
+            })
+        };
+        let device_buffer = |name: &str, size: u64| {
+            gpu.create_buffer(blade_graphics::BufferDesc {
+                name,
+                size,
+                memory: blade_graphics::Memory::Device,
+            })
+        };
+        let vertex_params = VertexParams {
+            models: vertex_models
+                .iter()
+                .map(|&(handle, first_vertex, count)| {
+                    let model = &asset_hub.models[handle];
+                    let meshes = VertexParams::model_meshes(model);
+                    let sizes = gpu.get_bottom_level_acceleration_structure_sizes(&meshes);
+                    VertexModel {
+                        vertex_buffer: model.vertex_buffer,
+                        index_buffer: model.index_buffer,
+                        acceleration_structure: model.acceleration_structure,
+                        meshes,
+                        geometries: model
+                            .geometries
+                            .iter()
+                            .map(|g| {
+                                assert_eq!(
+                                    g.index_type,
+                                    Some(blade_graphics::IndexType::U32),
+                                    "vertex positions need 32-bit indices"
+                                );
+                                (
+                                    (g.index_offset / 4) as u32,
+                                    g.vertex_range.start,
+                                    g.triangle_count,
+                                )
+                            })
+                            .collect(),
+                        first_vertex,
+                        vertex_count: count,
+                        base: device_buffer(
+                            "diff base vertices",
+                            (u64::from(count) * mem::size_of::<crate::Vertex>() as u64).max(16),
+                        ),
+                        scratch: device_buffer("diff BLAS scratch", sizes.scratch.max(16)),
+                    }
+                })
+                .collect(),
+            group: ParamGroup::new("diff vertices", slot_count * 4, gpu),
+            slot_count,
+            vertex_slots: device_buffer("diff vertex slots", 4 * u64::from(vertex_count.max(4))),
+            weld_keys: device_buffer("diff weld keys", 4 * u64::from(slot_count)),
+            slot_positions: device_buffer("diff slot positions", 16 * u64::from(slot_count)),
+            normal_sums: device_buffer("diff normal sums", 16 * u64::from(slot_count)),
+            normal_grads: device_buffer("diff normal grads", 16 * u64::from(slot_count)),
+            neighbor_sums: device_buffer("diff neighbor sums", 16 * u64::from(slot_count)),
+            readback: gpu.create_buffer(blade_graphics::BufferDesc {
+                name: "diff vertex readback",
+                size: 48 * u64::from(slot_count),
+                memory: blade_graphics::Memory::Download,
+            }),
+            weld_pipeline: vertex_pipeline("diff-weld-vertices", "weld_vertices"),
+            apply_pipeline: vertex_pipeline("diff-apply-vertices", "apply_vertices"),
+            sum_normals_pipeline: vertex_pipeline("diff-sum-normals", "sum_normals"),
+            write_normals_pipeline: vertex_pipeline("diff-write-normals", "write_normals"),
+            sum_neighbors_pipeline: vertex_pipeline("diff-sum-neighbors", "sum_neighbors"),
+            smoothness_pipeline: vertex_pipeline("diff-add-smoothness", "add_smoothness"),
+            normals_to_positions_pipeline: vertex_pipeline(
+                "diff-normals-to-positions",
+                "normals_to_positions",
+            ),
+        };
         let instance_count = if desc.geometry {
             ray_tracer.scene_models.len() as u32
         } else {
@@ -763,6 +1089,7 @@ impl DiffTracer {
             texture_regions,
             edges_pipeline,
             count_edges_pipeline,
+            vertex_params,
             geometry: desc.geometry,
             edge_keys,
             edge_counts,
@@ -799,6 +1126,7 @@ impl DiffTracer {
         this.translations.clear(encoder);
         this.rotations.clear(encoder);
         this.camera_position.clear(encoder);
+        this.vertex_params.group.clear(encoder);
         {
             let mut transfer = encoder.transfer("diff-init");
             transfer.fill_buffer(this.image_adjoint.into(), image_bytes, 0);
@@ -809,6 +1137,21 @@ impl DiffTracer {
             );
             transfer.copy_buffer_to_buffer(edge_staging.into(), edge_entries.into(), edge_bytes);
             transfer.fill_buffer(edge_keys.into(), edge_keys.size(), 0);
+            let vp = &this.vertex_params;
+            for vm in &vp.models {
+                let bytes = u64::from(vm.vertex_count) * mem::size_of::<crate::Vertex>() as u64;
+                if bytes != 0 {
+                    transfer.copy_buffer_to_buffer(vm.vertex_buffer.at(0), vm.base.at(0), bytes);
+                }
+            }
+            for buffer in [
+                vp.weld_keys,
+                vp.slot_positions,
+                vp.group.params,
+                vp.normal_grads,
+            ] {
+                transfer.fill_buffer(buffer.into(), buffer.size(), 0);
+            }
             transfer.fill_buffer(edge_counts.into(), edge_counts.size(), 0);
             transfer.copy_buffer_to_buffer(
                 transform_staging.into(),
@@ -876,6 +1219,13 @@ impl DiffTracer {
             }
         }
         drop(pass);
+        this.vertex_params.dispatch(
+            encoder,
+            "diff-weld-vertices",
+            &this.vertex_params.weld_pipeline,
+            false,
+            0.0,
+        );
         this
     }
 
@@ -911,6 +1261,23 @@ impl DiffTracer {
             .transfer("diff-instance-transforms")
             .copy_buffer_to_buffer(staging.into(), self.instance_transforms.into(), bytes);
         temp.buffers.push(staging);
+        // The edges are told apart by their positions, which the vertices
+        // move, so they are counted again for where they are now.
+        if !self.vertex_params.models.is_empty() && self.triangle_count != 0 {
+            let mut transfer = encoder.transfer("diff-clear-edges");
+            transfer.fill_buffer(self.edge_keys.into(), self.edge_keys.size(), 0);
+            transfer.fill_buffer(self.edge_counts.into(), self.edge_counts.size(), 0);
+            drop(transfer);
+            let mut pass = encoder.compute("diff-count-edges");
+            let mut pc = pass.with(&self.count_edges_pipeline);
+            let mut parameters: DiffParams = bytemuck::Zeroable::zeroed();
+            parameters.triangle_count = self.triangle_count;
+            pc.bind(
+                0,
+                &self.trace_data(ray_tracer, crate::CameraParams::default(), parameters),
+            );
+            pc.dispatch(flat_dispatch(self.triangle_count));
+        }
     }
 
     fn trace_data<'a>(
@@ -950,6 +1317,9 @@ impl DiffTracer {
             camera_grads: self.camera_position.grads.into(),
             edge_keys: self.edge_keys.into(),
             edge_counts: self.edge_counts.into(),
+            vertex_slots: self.vertex_params.vertex_slots.into(),
+            vertex_grads: self.vertex_params.group.grads.into(),
+            normal_grads: self.vertex_params.normal_grads.into(),
         }
     }
 
@@ -1132,6 +1502,147 @@ impl DiffTracer {
             self.camera_position.params.into(),
             16,
         );
+        temp.buffers.push(staging);
+    }
+
+    /// Write the positions of the vertices, offset by their parameters, and
+    /// the normals that follow from them, into the models, and build their
+    /// acceleration structures again. [`Self::rebuild_scene`] has to follow
+    /// before tracing, for the scene to take them.
+    pub fn apply_vertices(&self, encoder: &mut blade_graphics::CommandEncoder) {
+        let vp = &self.vertex_params;
+        if vp.models.is_empty() {
+            return;
+        }
+        vp.dispatch(
+            encoder,
+            "diff-apply-vertices",
+            &vp.apply_pipeline,
+            false,
+            0.0,
+        );
+        encoder.transfer("diff-clear-normals").fill_buffer(
+            vp.normal_sums.into(),
+            vp.normal_sums.size(),
+            0,
+        );
+        vp.dispatch(
+            encoder,
+            "diff-sum-normals",
+            &vp.sum_normals_pipeline,
+            true,
+            0.0,
+        );
+        vp.dispatch(
+            encoder,
+            "diff-write-normals",
+            &vp.write_normals_pipeline,
+            false,
+            0.0,
+        );
+        let mut pass = encoder.acceleration_structure("diff-vertex-BLAS");
+        for vm in &vp.models {
+            pass.build_bottom_level(vm.acceleration_structure, &vm.meshes, vm.scratch.into());
+        }
+    }
+
+    /// Number of vertex slots, which [`Self::vertex_bases`] and
+    /// [`Self::vertex_offsets`] have, used or not.
+    pub fn vertex_slot_count(&self) -> usize {
+        if self.vertex_params.models.is_empty() {
+            0
+        } else {
+            self.vertex_params.slot_count as usize
+        }
+    }
+
+    /// Carry the gradients by the normals of the vertices to their positions,
+    /// which [`Self::step`] does by itself.
+    pub fn gather_vertex_grads(&self, encoder: &mut blade_graphics::CommandEncoder) {
+        let vp = &self.vertex_params;
+        if vp.models.is_empty() {
+            return;
+        }
+        vp.dispatch(
+            encoder,
+            "diff-normals-to-positions",
+            &vp.normals_to_positions_pipeline,
+            true,
+            0.0,
+        );
+        encoder.transfer("diff-clear-normal-grads").fill_buffer(
+            vp.normal_grads.into(),
+            vp.normal_grads.size(),
+            0,
+        );
+    }
+
+    /// Copy the positions, the offsets, and the gradients of the vertex
+    /// slots to where [`Self::vertex_bases`] and the like read them.
+    pub fn read_back_vertices(&self, encoder: &mut blade_graphics::CommandEncoder) {
+        let vp = &self.vertex_params;
+        let bytes = 16 * u64::from(vp.slot_count);
+        let mut transfer = encoder.transfer("diff-read-back-vertices");
+        transfer.copy_buffer_to_buffer(vp.slot_positions.into(), vp.readback.at(0), bytes);
+        transfer.copy_buffer_to_buffer(vp.group.params.into(), vp.readback.at(bytes), bytes);
+        transfer.copy_buffer_to_buffer(vp.group.grads.into(), vp.readback.at(2 * bytes), bytes);
+    }
+
+    /// Derivative of the loss by [`Self::vertex_offsets`], accumulated since
+    /// the last [`Self::step`], as of [`Self::read_back_vertices`]. The part
+    /// through the normals only joins at the step, or with
+    /// [`Self::gather_vertex_grads`].
+    pub fn vertex_grads(&self) -> &[[f32; 4]] {
+        self.vertex_readback(32 * u64::from(self.vertex_params.slot_count))
+    }
+
+    fn vertex_readback(&self, offset: u64) -> &[[f32; 4]] {
+        unsafe {
+            slice::from_raw_parts(
+                self.vertex_params.readback.data().add(offset as usize) as *const [f32; 4],
+                self.vertex_slot_count(),
+            )
+        }
+    }
+
+    /// Where the vertex of every slot was loaded, in the space of its model,
+    /// with 1 in W for the slots in use, as of [`Self::read_back_vertices`].
+    pub fn vertex_bases(&self) -> &[[f32; 4]] {
+        self.vertex_readback(0)
+    }
+
+    /// Offset of the vertex of every slot, as of [`Self::read_back_vertices`].
+    pub fn vertex_offsets(&self) -> &[[f32; 4]] {
+        self.vertex_readback(16 * u64::from(self.vertex_params.slot_count))
+    }
+
+    /// Replace the offsets of the vertex slots, one for each of
+    /// [`Self::vertex_slot_count`]. The staging buffer goes to `temp`.
+    pub fn write_vertex_offsets(
+        &self,
+        encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+        offsets: &[[f32; 4]],
+        temp: &mut crate::FrameResources,
+    ) {
+        assert_eq!(offsets.len(), self.vertex_slot_count());
+        let bytes = (offsets.len() * 16) as u64;
+        let staging = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "diff vertex staging",
+            size: bytes,
+            memory: blade_graphics::Memory::Upload,
+        });
+        unsafe {
+            slice::from_raw_parts_mut(staging.data() as *mut [f32; 4], offsets.len())
+                .copy_from_slice(offsets);
+        }
+        encoder
+            .transfer("diff-write-vertices")
+            .copy_buffer_to_buffer(
+                staging.into(),
+                self.vertex_params.group.params.into(),
+                bytes,
+            );
         temp.buffers.push(staging);
     }
 
@@ -1382,6 +1893,66 @@ impl DiffTracer {
             ),
             None => self.textures.clear_grads(encoder),
         }
+        match config.vertices {
+            Some((adam, smoothness)) => {
+                let vp = &mut self.vertex_params;
+                if !vp.models.is_empty() {
+                    vp.dispatch(
+                        encoder,
+                        "diff-normals-to-positions",
+                        &vp.normals_to_positions_pipeline,
+                        true,
+                        0.0,
+                    );
+                    encoder.transfer("diff-clear-normal-grads").fill_buffer(
+                        vp.normal_grads.into(),
+                        vp.normal_grads.size(),
+                        0,
+                    );
+                }
+                if smoothness > 0.0 && !vp.models.is_empty() {
+                    encoder.transfer("diff-clear-neighbors").fill_buffer(
+                        vp.neighbor_sums.into(),
+                        vp.neighbor_sums.size(),
+                        0,
+                    );
+                    vp.dispatch(
+                        encoder,
+                        "diff-sum-neighbors",
+                        &vp.sum_neighbors_pipeline,
+                        true,
+                        smoothness,
+                    );
+                    let mut pass = encoder.compute("diff-add-smoothness");
+                    let mut pc = pass.with(&vp.smoothness_pipeline);
+                    let vertex_pass = VertexPass {
+                        smoothness,
+                        slot_count: vp.slot_count,
+                        ..Default::default()
+                    };
+                    pc.bind(0, &vp.pass_data(vertex_pass, None));
+                    pc.dispatch(flat_dispatch(vp.slot_count));
+                }
+                adam_step(
+                    &self.adam_pipeline,
+                    encoder,
+                    &mut vp.group,
+                    &adam,
+                    4,
+                    0x7,
+                    Bounds::Unbounded,
+                );
+            }
+            None => {
+                let vp = &self.vertex_params;
+                vp.group.clear_grads(encoder);
+                encoder.transfer("diff-clear-normal-grads").fill_buffer(
+                    vp.normal_grads.into(),
+                    vp.normal_grads.size(),
+                    0,
+                );
+            }
+        }
         for (group, adam) in [
             (&mut self.translations, config.translations),
             (&mut self.rotations, config.rotations),
@@ -1414,6 +1985,7 @@ impl DiffTracer {
         gpu.destroy_compute_pipeline(&mut self.count_edges_pipeline);
         gpu.destroy_buffer(self.edge_keys);
         gpu.destroy_buffer(self.edge_counts);
+        self.vertex_params.destroy(gpu);
         self.translations.destroy(gpu);
         self.rotations.destroy(gpu);
         self.camera_position.destroy(gpu);
