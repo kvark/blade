@@ -132,6 +132,8 @@ struct DiffScene {
     sky: blade_asset::Handle<blade_render::Texture>,
     base: GeometryBase,
     config: DiffConfig,
+    diff_shaders: DiffShaders,
+    desc: DiffTracerDesc,
 }
 
 impl DiffScene {
@@ -283,17 +285,18 @@ impl DiffScene {
             &context,
             &mut temp,
         );
+        let desc = DiffTracerDesc {
+            textures: textured,
+            geometry: kind.moves(),
+            vertices: kind == SceneKind::Blob,
+        };
         let diff = DiffTracer::new(
             &mut encoder,
             &context,
             &diff_shaders,
             &harness.asset_hub,
             &renderer,
-            &DiffTracerDesc {
-                textures: textured,
-                geometry: kind.moves(),
-                vertices: kind == SceneKind::Blob,
-            },
+            &desc,
         );
         let mut scene = Self {
             harness,
@@ -305,6 +308,8 @@ impl DiffScene {
             camera: pbr_scene::camera(),
             sky,
             base: GeometryBase::new(&[], &pbr_scene::camera()),
+            diff_shaders,
+            desc,
             config: DiffConfig {
                 num_environment_samples: 1,
                 samples_per_pixel: 2,
@@ -448,6 +453,65 @@ impl DiffScene {
             .write_vertex_offsets(&mut self.encoder, &context, &offsets, &mut self.temp);
         self.apply_vertices();
         offsets
+    }
+
+    /// Replace the model of the only object by `mesh`, with the same
+    /// material, and start a tracer for it, which keeps the target.
+    fn set_mesh(&mut self, mesh: &blade_render::remesh::Mesh) {
+        let context = std::sync::Arc::clone(&self.harness.context);
+        let old = self.objects[0].model;
+        let material = &self.harness.asset_hub.models[old].materials[0];
+        let mut geometry = mesh.to_geometry("diff-remeshed");
+        geometry.base_color_factor = material.base_color_factor;
+        geometry.metalness = material.metalness;
+        geometry.roughness = material.roughness;
+        geometry.emissive_factor = material.emissive_factor;
+        let model = self
+            .harness
+            .asset_hub
+            .models
+            .baker
+            .create_model("diff-remeshed", vec![geometry]);
+        self.objects[0].model = self.harness.asset_hub.models.insert(model);
+        self.harness
+            .asset_hub
+            .flush(&mut self.encoder, &mut self.temp.buffers);
+        self.renderer.build_scene(
+            &mut self.encoder,
+            &mut self.objects,
+            Some(self.sky),
+            &self.harness.asset_hub,
+            &context,
+            &mut self.temp,
+        );
+        let diff = DiffTracer::new(
+            &mut self.encoder,
+            &context,
+            &self.diff_shaders,
+            &self.harness.asset_hub,
+            &self.renderer,
+            &self.desc,
+        );
+        let size = diff.image_size();
+        self.encoder
+            .transfer("diff-keep-target")
+            .copy_buffer_to_buffer(
+                self.diff.target(),
+                diff.target(),
+                u64::from(size.width * size.height) * 16,
+            );
+        self.submit();
+        let mut old_diff = std::mem::replace(&mut self.diff, diff);
+        old_diff.destroy(&context);
+    }
+
+    /// The mesh of the only object, as it is now.
+    fn current_mesh(&mut self) -> blade_render::remesh::Mesh {
+        self.diff.read_back_meshes(&mut self.encoder);
+        self.submit();
+        let mut meshes = self.diff.current_meshes(&self.harness.asset_hub);
+        assert_eq!(meshes.len(), 1);
+        meshes.pop().unwrap().mesh
     }
 
     /// Write the offsets of the vertices into the model, and build the scene
@@ -1438,4 +1502,131 @@ fn diff_recovers_shape() {
         "the distance from the sphere only went from {initial} to {error}"
     );
     scene.destroy();
+}
+
+/// How far the outline of `mesh`, its extents across the view as the camera
+/// sees them, is from that of the ellipsoid that `stretch` makes of the
+/// blob, on average, in the units of the scene at its center. A single view
+/// leaves the depth of the shape, and its back, to the smoothness.
+fn outline_error(mesh: &blade_render::remesh::Mesh, stretch: f32) -> f32 {
+    const RADIUS: f32 = 1.5;
+    let distance = pbr_scene::camera().pos.z;
+    let extents = |points: &mut dyn Iterator<Item = [f32; 3]>| {
+        let mut extents = [f32::MIN; 4];
+        for p in points {
+            let scale = distance / (distance - p[2]);
+            let projected = [p[0] * scale, p[1] * scale];
+            extents[0] = extents[0].max(projected[0]);
+            extents[1] = extents[1].max(-projected[0]);
+            extents[2] = extents[2].max(projected[1]);
+            extents[3] = extents[3].max(-projected[1]);
+        }
+        extents
+    };
+    let target = extents(&mut (0..64 * 128).map(|i| {
+        let theta = std::f32::consts::PI * ((i / 128) as f32 + 0.5) / 64.0;
+        let phi = std::f32::consts::TAU * (i % 128) as f32 / 128.0;
+        [
+            RADIUS * (1.0 + stretch) * theta.sin() * phi.cos(),
+            RADIUS * theta.cos(),
+            RADIUS * theta.sin() * phi.sin(),
+        ]
+    }));
+    let current = extents(&mut mesh.positions.iter().copied());
+    (0..4).map(|i| (current[i] - target[i]).abs()).sum::<f32>() / 4.0
+}
+
+/// The result of fitting a mesh to the stretched blob.
+struct Fit {
+    loss: f32,
+    outline: f32,
+    triangles: usize,
+}
+
+/// Fit an icosahedron to a stretched sphere, remeshing it between rounds of
+/// optimizing its vertices to each of `edge_lengths`, or not at all.
+fn fit_icosahedron(cache_name: &str, edge_lengths: &[f32]) -> Option<Fit> {
+    const STRETCH: f32 = 0.3;
+    let mut scene = DiffScene::new(cache_name, SceneKind::Blob)?;
+    scene.config.edge_samples = 4;
+    scene.shape_blob(stretch(STRETCH));
+    scene.capture_target();
+    scene.set_mesh(&blade_render::remesh::icosahedron(1.5));
+    let mut iteration = 0;
+    // Steps that are a fraction of the edges, which get shorter.
+    let mut rate = 0.02;
+    for round in 0..=edge_lengths.len() {
+        if round > 0 {
+            let length = edge_lengths[round - 1];
+            let mesh = scene.current_mesh().remesh(length, 4);
+            assert!(mesh.is_manifold());
+            scene.set_mesh(&mesh);
+            rate = 0.025 * length;
+        }
+        for step in 0..40 {
+            scene.backward(iteration, 8, 4);
+            iteration += 1;
+            // Every remeshing starts the optimizer over, whose first steps go
+            // as far as later ones on less of a gradient, so they ramp up.
+            let warm_up = ((step + 1) as f32 / 10.0).min(1.0);
+            let adam = AdamConfig {
+                learning_rate: rate * warm_up * 0.96f32.powi(step),
+                ..Default::default()
+            };
+            scene.diff.step(
+                &mut scene.encoder,
+                &StepConfig {
+                    vertices: Some((adam, 1.0e-2)),
+                    ..Default::default()
+                },
+            );
+            scene.apply_vertices();
+        }
+    }
+    let loss = scene.converged_loss(3_000_000..3_000_064);
+    let mesh = scene.current_mesh();
+    let fit = Fit {
+        loss,
+        outline: outline_error(&mesh, STRETCH),
+        triangles: mesh.triangles.len(),
+    };
+    scene.destroy();
+    Some(fit)
+}
+
+/// Remeshing between rounds of optimization lets a coarse mesh refine as it
+/// takes the shape, which it can't with its own few triangles.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_remeshing_refines_the_fit() {
+    let start = outline_error(&blade_render::remesh::icosahedron(1.5), 0.3);
+    let Some(fixed) = fit_icosahedron("diff-fit-fixed", &[]) else {
+        return;
+    };
+    // The same number of steps, in rounds between remeshing.
+    let Some(remeshed) = fit_icosahedron("diff-fit-remeshed", &[0.8, 0.5, 0.35, 0.35]) else {
+        return;
+    };
+    println!(
+        "outline {start:.3} at the start; fixed: loss {:e}, outline {:.3}, {} triangles; \
+         remeshed: loss {:e}, outline {:.3}, {} triangles",
+        fixed.loss,
+        fixed.outline,
+        fixed.triangles,
+        remeshed.loss,
+        remeshed.outline,
+        remeshed.triangles,
+    );
+    assert!(
+        remeshed.loss < 0.6 * fixed.loss,
+        "remeshing only got the loss to {}, against {} without",
+        remeshed.loss,
+        fixed.loss
+    );
+    assert!(
+        remeshed.outline < 0.3 * start,
+        "the outline only went from {start} to {}",
+        remeshed.outline
+    );
+    assert!(remeshed.triangles > 10 * fixed.triangles);
 }

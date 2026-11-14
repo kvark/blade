@@ -92,7 +92,10 @@ fn adam_step(
     if (index >= adam.count) {
         return;
     }
-    let grad = grads[index];
+    // A gradient that isn't finite would make the parameter NaN for good,
+    // through its moments.
+    let raw = grads[index];
+    let grad = select(0.0, raw, raw == raw && abs(raw) < 1.0e30);
     grads[index] = 0.0;
     let bit = 1u << (index % adam.period);
     if ((adam.mask & bit) == 0u) {
