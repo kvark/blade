@@ -18,12 +18,13 @@
 // weights and roulette are held fixed, which keeps the gradient unbiased as
 // long as they remain valid.
 //
-// Translating objects and the camera also moves what the camera sees, which
-// `edges` and `scatter_primary_geometry_grad` differentiate: the first moves
+// Moving the geometry and the camera also moves what the camera sees, which
+// `edges` and `scatter_hit_geometry_grad` differentiate: the first moves
 // the discontinuities of the image along triangle edges, and the second the
-// interpolated normal of each primary hit. Everything past the primary hit
-// is held fixed, which leaves out how shadows, reflections, and the lighting
-// at the primary hit move with the geometry.
+// interpolated normal of every hit, as the hit slides along its ray, which
+// `scatter_hit_motion` carries back along the path. The directions of the
+// path are held fixed, like the rest of the sampling. Shadows and reflected
+// silhouettes move with the edges that `sample_secondary_edges` draws.
 enable wgpu_ray_query;
 enable wgpu_binding_array;
 #include "quaternion.inc.wgsl"
@@ -66,9 +67,10 @@ struct DiffParams {
     instance_count: u32,
     triangle_count: u32,
     edge_samples: u32,
-    // Edges sampled at every primary hit, for its incident light.
+    // Edges sampled at every hit of the first `secondary_edge_depth` ones
+    // of a path, for its incident light.
     secondary_edge_samples: u32,
-    _pad0: u32,
+    secondary_edge_depth: u32,
     _pad1: u32,
     _pad2: u32,
 }
@@ -500,15 +502,15 @@ fn add_camera_grad(grad: vec3<f32>) {
     }
 }
 
-fn make_primary_vertex(
+fn make_path_vertex(
     intersection: RayIntersection,
     direction: vec3<f32>,
     v: DiffVertex,
     normal: vec3<f32>,
     flat_normal: vec3<f32>,
     d_found: vec3<f32>,
-) -> PrimaryVertex {
-    var pv: PrimaryVertex;
+) -> PathVertex {
+    var pv: PathVertex;
     let entry = v.surface.entry;
     let indices = fetch_triangle_indices(entry, intersection.primitive_index);
     let vptr = &vertex_buffers[entry.vertex_buf].data;
@@ -529,25 +531,32 @@ fn make_primary_vertex(
     pv.depth_row = cross(e1, e2) / det;
     pv.ray_dir = direction;
     pv.d_found = d_found;
+    let entry_index = intersection.instance_custom_data + intersection.geometry_index;
+    pv.slots = vertex_slots_of(edge_entries[entry_index].vertex_base, indices);
+    pv.barycentrics = make_barycentrics(intersection.barycentrics);
+    let linear = affine_linear(to_world) * affine_linear(entry.geometry_to_object);
+    pv.local_depth_row = transpose(linear) * pv.depth_row;
     return pv;
 }
 
 // The interpolated normal of a primary hit moves as the camera or the hit
-// instance move, since another point of the triangle comes under the pixel.
-// Carry the derivative of the loss by the shading normal, `d_normal`, to the
-// translations through it, and to the rotation, which also turns the normal.
+// instance move, since another point of the triangle comes under the pixel,
+// and so does that of any hit, as the origin of its ray moves. Carry the
+// derivative of the loss by the shading normal, `d_normal`, to the
+// translations through it, and to the rotation, which also turns the normal,
+// and return the part of it that is by moving the origin of the ray.
 //
 // The tangent frame is taken to turn with the normal, which is exact without
 // a normal map, and the texture coordinates are taken to stay.
-fn scatter_primary_geometry_grad(
+fn scatter_hit_geometry_grad(
     intersection: RayIntersection,
     direction: vec3<f32>,
     v: DiffVertex,
     d_normal: vec3<f32>,
     d_flat_normal: vec3<f32>,
-) {
+) -> vec3<f32> {
     if (all(d_normal == vec3<f32>(0.0)) && all(d_flat_normal == vec3<f32>(0.0))) {
-        return;
+        return vec3<f32>(0.0);
     }
     let entry = v.surface.entry;
     let indices = fetch_triangle_indices(entry, intersection.primitive_index);
@@ -567,7 +576,7 @@ fn scatter_primary_geometry_grad(
     let row2 = cross(-direction, e1);
     let det = dot(e1, row1);
     if (abs(det) < 1.0e-12) {
-        return;
+        return vec3<f32>(0.0);
     }
 
     // Back through `normalize(tangent_space * normal_local)`, to the normal
@@ -595,7 +604,6 @@ fn scatter_primary_geometry_grad(
     let d_b2 = dot(d_sum, n2 - n0);
 
     let d_camera = (d_b1 * row1 + d_b2 * row2) / det;
-    add_camera_grad(d_camera);
     // Moving the triangle is moving the camera the other way. Turning it
     // moves the hit, like translating it there would, and turns the normal.
     add_instance_grad(intersection.instance_index, v.surface.position, -d_camera);
@@ -624,6 +632,7 @@ fn scatter_primary_geometry_grad(
         }
     }
     add_rotation_grad(intersection.instance_index, cross(shading_normal, d_normal));
+    return d_camera;
 }
 
 // Interpolated and mapped normals can face away from the view where the
@@ -672,8 +681,9 @@ fn horizon_weight_grad(cosine: f32) -> f32 {
     return select(0.0, 6.0 * t * (1.0 - t) / HORIZON_BAND, t > 0.0 && t < 1.0);
 }
 
-// What the replay keeps of the primary hit, for `sample_secondary_edges`.
-struct PrimaryVertex {
+// What the replay keeps of every hit of a path, for `sample_secondary_edges`
+// and for moving the hit with the geometry, see `scatter_hit_motion`.
+struct PathVertex {
     valid: bool,
     instance: u32,
     position: vec3<f32>,
@@ -687,6 +697,11 @@ struct PrimaryVertex {
     depth_row: vec3<f32>,
     ray_dir: vec3<f32>,
     d_found: vec3<f32>,
+    // The vertex slots of the corners, and the weights of the hit.
+    slots: vec3<u32>,
+    barycentrics: vec3<f32>,
+    // `depth_row` in the space of the vertex positions.
+    local_depth_row: vec3<f32>,
 }
 
 // What the first walk of a path learns about each of its vertices.
@@ -698,7 +713,11 @@ struct PathRecord {
     // Multiplier of the throughput from the vertex to the next one.
     weight: array<vec3<f32>, PATH_LENGTH>,
     length: u32,
-    primary: PrimaryVertex,
+    // The hits of the replay, which are the first `hit_count` of the
+    // vertices, along with the derivative of the loss by their positions.
+    hits: array<PathVertex, PATH_LENGTH>,
+    hit_count: u32,
+    d_hits: array<vec3<f32>, PATH_LENGTH>,
 }
 
 // Radiance arriving at each vertex of a recorded path through the direction
@@ -746,7 +765,9 @@ fn walk_path(
     var bsdf_pdf = -1.0;
     var t_min = start_t_min;
     (*record).length = 0u;
-    (*record).primary.valid = false;
+    if (replay) {
+        (*record).hit_count = 0u;
+    }
 
     for (var bounce = 0u; bounce <= max_bounces; bounce += 1u) {
         let intersection = trace_ray(position, direction, t_min);
@@ -849,11 +870,18 @@ fn walk_path(
             grad.normal = bend_normal_grad(unbent_normal, view_dir, grad.normal);
             v.surface.normal = unbent_normal;
             scatter_material_grad(v, grad);
-            if (bounce == 0u && parameters.geometry != 0u) {
-                scatter_primary_geometry_grad(intersection, start_dir, v, grad.normal, grad.flat_normal);
-                if (parameters.secondary_edge_samples != 0u) {
-                    (*record).primary = make_primary_vertex(intersection, start_dir, v, normal, flat_normal, d_found);
+            if (parameters.geometry != 0u) {
+                // Only a path from the camera, whose origin is the previous hit.
+                let ray_dir = select(start_dir, -view_dir, bounce > 0u);
+                let d_origin = scatter_hit_geometry_grad(intersection, ray_dir, v, grad.normal, grad.flat_normal);
+                if (bounce == 0u) {
+                    add_camera_grad(d_origin);
+                } else {
+                    (*record).d_hits[bounce - 1u] += d_origin;
                 }
+                (*record).hits[bounce] = make_path_vertex(intersection, ray_dir, v, normal, flat_normal, d_found);
+                (*record).d_hits[bounce] = vec3<f32>(0.0);
+                (*record).hit_count = bounce + 1u;
                 // The triangle turns with the instance.
                 add_rotation_grad(intersection.instance_index, cross(flat_normal, grad.flat_normal));
             }
@@ -964,11 +992,20 @@ fn adjoint(@builtin(global_invocation_id) global_id: vec3<u32>) {
         incident = compute_incident_radiance(&record);
         let adjoint = d_pixel * radiance_scale(radiance);
         walk_path(camera.position, 0.0, i32(parameters.max_bounces), dir, &replay_rng, &record, true, adjoint, &incident);
-        if (record.primary.valid) {
+        if (parameters.geometry == 0u) {
+            continue;
+        }
+        if (parameters.secondary_edge_samples != 0u) {
             // Other random numbers than the paths of the pixel.
             var edge_rng = random_init(pixel_index ^ 0x5bd1e995u, parameters.frame_index + i);
-            sample_secondary_edges(record.primary, &edge_rng);
+            let depth = min(record.hit_count, parameters.secondary_edge_depth);
+            for (var k = 0u; k < depth; k += 1u) {
+                if (record.hits[k].valid) {
+                    record.d_hits[k] += sample_secondary_edges(record.hits[k], k, &edge_rng);
+                }
+            }
         }
+        scatter_hit_motion(&record);
     }
 }
 
@@ -1276,11 +1313,15 @@ fn count_edges(
 // and a point uniformly along each, and the light on both sides of where it
 // is seen from the hit is traced with the same random numbers, so that it
 // cancels out for the many edges that aren't silhouettes from there.
-fn sample_secondary_edges(pv: PrimaryVertex, rng: ptr<function, RandomState>) {
+//
+// Returns the derivative of the loss by moving the hit, which
+// `scatter_hit_motion` takes on from there.
+fn sample_secondary_edges(pv: PathVertex, depth: u32, rng: ptr<function, RandomState>) -> vec3<f32> {
     let triangle_count = parameters.triangle_count;
     let samples = parameters.secondary_edge_samples;
+    var d_hit = vec3<f32>(0.0);
     if (triangle_count == 0u) {
-        return;
+        return d_hit;
     }
     var record: PathRecord;
     var incident: array<vec3<f32>, PATH_LENGTH>;
@@ -1324,7 +1365,7 @@ fn sample_secondary_edges(pv: PrimaryVertex, rng: ptr<function, RandomState>) {
         let spread = 1.0e-4;
         var side_rng = *rng;
         // The light arriving at the hit, with the bounces left after it.
-        let budget = i32(parameters.max_bounces) - 1;
+        let budget = i32(parameters.max_bounces) - i32(depth) - 1;
         let below = walk_path(pv.position, parameters.t_start, budget, normalize(dir - spread * across), &side_rng, &record, false, vec3<f32>(0.0), &incident);
         side_rng = *rng;
         let above = walk_path(pv.position, parameters.t_start, budget, normalize(dir + spread * across), &side_rng, &record, false, vec3<f32>(0.0), &incident);
@@ -1343,12 +1384,46 @@ fn sample_secondary_edges(pv: PrimaryVertex, rng: ptr<function, RandomState>) {
         add_instance_grad(edges.instance, point, grad);
         add_vertex_grad(edges.slots[corner], edges.linear, (1.0 - t) * grad);
         add_vertex_grad(edges.slots[(corner + 1u) % 3u], edges.linear, t * grad);
-        // The hit slides along the camera ray as the camera, or the hit
-        // instance, move it.
-        let d_hit = -grad;
+        d_hit -= grad;
+    }
+    return d_hit;
+}
+
+// A hit slides along its ray as the origin of the ray moves, which is the
+// previous hit or the camera, and as the triangle moves: moving the origin
+// by `d` moves the hit by `d + dot(depth_row, d) * ray_dir`, and moving the
+// triangle by `d` at the hit moves it by `-dot(depth_row, d) * ray_dir`.
+// Carry the derivatives of the loss by the hits of a replayed path back
+// along it, to the geometry and the camera.
+fn scatter_hit_motion(record: ptr<function, PathRecord>) {
+    var d_next = vec3<f32>(0.0);
+    for (var i = (*record).hit_count; i > 0u; i -= 1u) {
+        let pv = (*record).hits[i - 1u];
+        let d_hit = (*record).d_hits[i - 1u] + d_next;
+        d_next = vec3<f32>(0.0);
+        if (!pv.valid || all(d_hit == vec3<f32>(0.0))) {
+            continue;
+        }
         let slide = dot(d_hit, pv.ray_dir);
-        add_camera_grad(d_hit + slide * pv.depth_row);
         add_instance_grad(pv.instance, pv.position, -slide * pv.depth_row);
+        for (var c = 0u; c < 3u; c += 1u) {
+            let slot = pv.slots[c];
+            if (slot == ~0u) {
+                continue;
+            }
+            let local = -slide * pv.barycentrics[c] * pv.local_depth_row;
+            for (var k = 0u; k < 3u; k += 1u) {
+                if (local[k] != 0.0) {
+                    atomicAdd(&vertex_grads[slot * 4u + k], local[k]);
+                }
+            }
+        }
+        let d_origin = d_hit + slide * pv.depth_row;
+        if (i == 1u) {
+            add_camera_grad(d_origin);
+        } else {
+            d_next = d_origin;
+        }
     }
 }
 
