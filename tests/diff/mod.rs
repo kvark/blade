@@ -40,6 +40,10 @@ enum SceneKind {
     Cube,
     /// A large dielectric sphere on its own, whose translation is a parameter.
     Ball,
+    /// A sphere just above the view, in front of a wall that it shades from
+    /// part of the sky. The camera only sees it in the shadow, and the
+    /// translations of both are parameters.
+    Shadow,
     /// A small quad, an open mesh, whose translation is a parameter. Its
     /// silhouette is its boundary, whose edges only have one triangle.
     Panel,
@@ -60,7 +64,7 @@ impl SceneKind {
     fn moves(self) -> bool {
         matches!(
             self,
-            Self::Spheres | Self::Bowl | Self::Cube | Self::Ball | Self::Panel
+            Self::Spheres | Self::Bowl | Self::Cube | Self::Ball | Self::Panel | Self::Shadow
         )
     }
 
@@ -68,9 +72,6 @@ impl SceneKind {
         let size = CHECKER_SIZE as usize;
         (0..size * size)
             .map(|i| match self {
-                Self::Grid | Self::Spheres | Self::Bowl | Self::Cube | Self::Ball | Self::Panel => {
-                    unreachable!()
-                }
                 Self::BaseColorTexture => CHECKER[(i / size + i % size) % 2],
                 Self::NormalMap => [
                     [200, 128, 255, 255],
@@ -78,6 +79,7 @@ impl SceneKind {
                     [56, 128, 255, 255],
                     [128, 56, 255, 255],
                 ][(i / size + i % size) % 4],
+                _ => unreachable!("the scene has no texture"),
             })
             .collect()
     }
@@ -188,7 +190,19 @@ impl DiffScene {
                 max_debug_lines: 16,
             },
         );
-        let mut objects = if kind == SceneKind::Spheres {
+        let mut objects = if kind == SceneKind::Shadow {
+            [("diff-wall", wall()), ("diff-shading-ball", small_ball())]
+                .into_iter()
+                .map(|(name, geometry)| {
+                    let model = harness
+                        .asset_hub
+                        .models
+                        .baker
+                        .create_model(name, vec![geometry]);
+                    blade_render::Object::from(harness.asset_hub.models.insert(model))
+                })
+                .collect()
+        } else if kind == SceneKind::Spheres {
             pbr_scene::material_grid([0.3, 1.0])
                 .into_iter()
                 .enumerate()
@@ -754,8 +768,39 @@ fn bowl() -> blade_render::ProceduralGeometry {
 /// A cube with a vertex per corner of every face, so that its faces are flat,
 /// turned so that the camera sees three of them.
 fn cube() -> blade_render::ProceduralGeometry {
-    let (sin_y, cos_y) = 0.6f32.sin_cos();
-    let (sin_x, cos_x) = 0.4f32.sin_cos();
+    cuboid([1.2; 3], [0.0; 3], [0.6, 0.4], [0.8, 0.5, 0.3, 1.0])
+}
+
+/// A wall behind the middle of the view, facing the camera.
+fn wall() -> blade_render::ProceduralGeometry {
+    cuboid(
+        [4.0, 3.0, 0.2],
+        [0.0, 0.0, -1.6],
+        [0.0, 0.0],
+        [0.7, 0.7, 0.7, 1.0],
+    )
+}
+
+/// The dielectric sphere of the grid, a little larger, above the view and
+/// close to the top of the wall.
+fn small_ball() -> blade_render::ProceduralGeometry {
+    let mut geometry = ball();
+    for vertex in &mut geometry.vertices {
+        let [x, y, z] = vertex.position.map(|c| c * 0.5);
+        vertex.position = [x, y + 4.2, z - 0.8];
+    }
+    geometry
+}
+
+/// A box with flat faces, turned about Y and then X by `turn`.
+fn cuboid(
+    half: [f32; 3],
+    center: [f32; 3],
+    turn: [f32; 2],
+    color: [f32; 4],
+) -> blade_render::ProceduralGeometry {
+    let (sin_y, cos_y) = turn[0].sin_cos();
+    let (sin_x, cos_x) = turn[1].sin_cos();
     let turn = |v: [f32; 3]| {
         let [x, y, z] = v;
         let (x, z) = (x * cos_y + z * sin_y, -x * sin_y + z * cos_y);
@@ -774,9 +819,10 @@ fn cube() -> blade_render::ProceduralGeometry {
             v[(axis + 2) % 3] = sign;
             let base = vertices.len() as u32;
             for [a, b] in [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]] {
-                let position = [0, 1, 2].map(|i| 1.2 * (normal[i] + a * u[i] + b * v[i]));
+                let position = [0, 1, 2].map(|i| half[i] * (normal[i] + a * u[i] + b * v[i]));
+                let [x, y, z] = turn(position);
                 vertices.push(blade_render::Vertex {
-                    position: turn(position),
+                    position: [x + center[0], y + center[1], z + center[2]],
                     bitangent_sign: 1.0,
                     tex_coords: [0.5 * (a + 1.0), 0.5 * (b + 1.0)],
                     normal: pbr_scene::encode_normal(turn(normal)),
@@ -788,10 +834,10 @@ fn cube() -> blade_render::ProceduralGeometry {
         }
     }
     blade_render::ProceduralGeometry {
-        name: "cube".to_string(),
+        name: "cuboid".to_string(),
         vertices,
         indices,
-        base_color_factor: [0.8, 0.5, 0.3, 1.0],
+        base_color_factor: color,
         metalness: 0.0,
         roughness: 0.5,
         emissive_factor: [0.0; 3],
@@ -1138,6 +1184,74 @@ fn check_single_object(kind: SceneKind, cache_name: &str, moves: &[Move], rotati
         assert!(
             analytic * numeric > 0.0 && (analytic - numeric).abs() <= 0.25 * numeric.abs(),
             "d loss / d {movement:?}: gradient {analytic:e} disagrees with {numeric:e}"
+        );
+    }
+    scene.destroy();
+}
+
+/// Moving a sphere that the camera doesn't see only moves the shadow that it
+/// casts on a wall, which takes sampling the edges that the light at the
+/// wall comes past.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_shadow_gradients_match_finite_differences() {
+    let Some(mut scene) = DiffScene::new("diff-shadow", SceneKind::Shadow) else {
+        return;
+    };
+    const BALL: usize = 1;
+    scene.config.edge_samples = 4;
+    // Direct light only: with bounces, the light that the sphere reflects
+    // onto the wall changes too, which the gradient leaves out.
+    scene.config.max_bounces = 0;
+    scene.capture_target();
+    let mut start = GeometryOffsets {
+        translations: vec![[0.0; 3]; 2],
+        rotations: vec![[0.0; 3]; 2],
+        camera: [0.0; 3],
+    };
+    start.translations[BALL] = [0.3, 0.25, 0.0];
+    scene.move_geometry(&start);
+
+    const ITERATIONS: u32 = 256;
+    let mut grads = Vec::new();
+    for secondary in [0, 32] {
+        scene.config.secondary_edge_samples = secondary;
+        for iteration in 0..ITERATIONS {
+            scene.backward(iteration, 8, 4);
+        }
+        scene.diff.read_back(&mut scene.encoder);
+        scene.submit();
+        grads.push(scene.diff.translation_grads()[BALL]);
+        // Clear the gradients for the next round.
+        scene.diff.step(&mut scene.encoder, &StepConfig::default());
+    }
+
+    const H: f32 = 0.05;
+    let frames = 2_000_000..2_000_256;
+    let [without_grad, with_grad] = [grads[0], grads[1]];
+    for axis in 0..2 {
+        let mut losses = [0.0; 2];
+        for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
+            let mut offsets = start.clone();
+            offsets.translations[BALL][axis] += sign * H;
+            scene.move_geometry(&offsets);
+            *loss = scene.converged_loss(frames.clone());
+        }
+        let numeric = (losses[0] - losses[1]) / (2.0 * H);
+        let without = without_grad[axis] / ITERATIONS as f32;
+        let with = with_grad[axis] / ITERATIONS as f32;
+        println!(
+            "d loss / d ball {axis}: {without:e} without shadows, {with:e} with, central difference {numeric:e}"
+        );
+        // Few of the edges drawn from the scene are silhouettes from the
+        // wall, which leaves this noisier than the others.
+        assert!(
+            with * numeric > 0.0 && (with - numeric).abs() <= 0.3 * numeric.abs(),
+            "d loss / d ball {axis}: gradient {with:e} disagrees with {numeric:e}"
+        );
+        assert!(
+            without.abs() < 0.1 * numeric.abs(),
+            "d loss / d ball {axis}: {without:e} without shadows, against {numeric:e}"
         );
     }
     scene.destroy();

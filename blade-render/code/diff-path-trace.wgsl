@@ -66,6 +66,11 @@ struct DiffParams {
     instance_count: u32,
     triangle_count: u32,
     edge_samples: u32,
+    // Edges sampled at every primary hit, for its incident light.
+    secondary_edge_samples: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 // Has to match the host!
@@ -437,6 +442,38 @@ fn add_camera_grad(grad: vec3<f32>) {
     }
 }
 
+fn make_primary_vertex(
+    intersection: RayIntersection,
+    direction: vec3<f32>,
+    v: DiffVertex,
+    normal: vec3<f32>,
+    flat_normal: vec3<f32>,
+    d_found: vec3<f32>,
+) -> PrimaryVertex {
+    var pv: PrimaryVertex;
+    let entry = v.surface.entry;
+    let indices = fetch_triangle_indices(entry, intersection.primitive_index);
+    let vptr = &vertex_buffers[entry.vertex_buf].data;
+    let to_world = intersection.object_to_world;
+    let p0 = to_world * vec4<f32>(entry.geometry_to_object * vec4<f32>((*vptr)[indices.x].position, 1.0), 1.0);
+    let p1 = to_world * vec4<f32>(entry.geometry_to_object * vec4<f32>((*vptr)[indices.y].position, 1.0), 1.0);
+    let p2 = to_world * vec4<f32>(entry.geometry_to_object * vec4<f32>((*vptr)[indices.z].position, 1.0), 1.0);
+    let e1 = p1 - p0;
+    let e2 = p2 - p0;
+    let det = dot(e1, cross(e2, -direction));
+    pv.valid = abs(det) > 1.0e-12;
+    pv.instance = intersection.instance_index;
+    pv.position = v.surface.position;
+    pv.normal = normal;
+    pv.flat_normal = flat_normal;
+    pv.view_dir = -direction;
+    pv.material = v.material;
+    pv.depth_row = cross(e1, e2) / det;
+    pv.ray_dir = direction;
+    pv.d_found = d_found;
+    return pv;
+}
+
 // The interpolated normal of a primary hit moves as the camera or the hit
 // instance move, since another point of the triangle comes under the pixel.
 // Carry the derivative of the loss by the shading normal, `d_normal`, to the
@@ -547,6 +584,23 @@ fn horizon_weight_grad(cosine: f32) -> f32 {
     return select(0.0, 6.0 * t * (1.0 - t) / HORIZON_BAND, t > 0.0 && t < 1.0);
 }
 
+// What the replay keeps of the primary hit, for `sample_secondary_edges`.
+struct PrimaryVertex {
+    valid: bool,
+    instance: u32,
+    position: vec3<f32>,
+    // The normals as the BSDF and the horizon take them.
+    normal: vec3<f32>,
+    flat_normal: vec3<f32>,
+    view_dir: vec3<f32>,
+    material: Material,
+    // Moving the origin of the camera ray by `d` moves the hit along the
+    // ray by `dot(depth_row, d)` times its direction.
+    depth_row: vec3<f32>,
+    ray_dir: vec3<f32>,
+    d_found: vec3<f32>,
+}
+
 // What the first walk of a path learns about each of its vertices.
 struct PathRecord {
     // Radiance found at the vertex: its emission, the lights it connects to,
@@ -556,6 +610,7 @@ struct PathRecord {
     // Multiplier of the throughput from the vertex to the next one.
     weight: array<vec3<f32>, PATH_LENGTH>,
     length: u32,
+    primary: PrimaryVertex,
 }
 
 // Radiance arriving at each vertex of a recorded path through the direction
@@ -576,7 +631,13 @@ fn compute_incident_radiance(record: ptr<function, PathRecord>) -> array<vec3<f3
 // replay of the recorded one, given the same random state, and it scatters
 // the gradient of the loss, of which `adjoint` is the derivative by the
 // radiance, using the radiance arriving at every vertex from `incident`.
+// `bounce_budget` is the number of bounces, after the first hit, that the
+// path may take: `parameters.max_bounces` for a camera path, which lights
+// the first hit, while a negative budget only takes the emission there.
 fn walk_path(
+    origin: vec3<f32>,
+    start_t_min: f32,
+    bounce_budget: i32,
     start_dir: vec3<f32>,
     rng: ptr<function, RandomState>,
     record: ptr<function, PathRecord>,
@@ -586,15 +647,18 @@ fn walk_path(
 ) -> vec3<f32> {
     let importance = parameters.environment_importance_sampling != 0u;
     let num_light = f32(parameters.num_environment_samples);
-    let max_bounces = min(parameters.max_bounces, MAX_DIFF_BOUNCES);
+    let max_bounces = u32(clamp(bounce_budget, 0, i32(MAX_DIFF_BOUNCES)));
+    let light_hits = bounce_budget >= 0;
     var radiance = vec3<f32>(0.0);
     var throughput = vec3<f32>(1.0);
-    var position = camera.position;
+    var position = origin;
     var direction = start_dir;
-    // Negative for the camera ray, like in "path-trace.wgsl".
+    // Negative for the first ray, like for the camera in "path-trace.wgsl",
+    // since it takes in all the light.
     var bsdf_pdf = -1.0;
-    var t_min = 0.0;
+    var t_min = start_t_min;
     (*record).length = 0u;
+    (*record).primary.valid = false;
 
     for (var bounce = 0u; bounce <= max_bounces; bounce += 1u) {
         let intersection = trace_ray(position, direction, t_min);
@@ -631,10 +695,11 @@ fn walk_path(
         t_min = parameters.t_start;
 
         // Each sample is a separate path here, so the path always goes on.
-        let will_extend = bounce < max_bounces;
+        let will_extend = bounce < max_bounces && light_hits;
         let bsdf_count = select(0.0, 1.0, will_extend);
 
-        for (var i = 0u; i < parameters.num_environment_samples; i += 1u) {
+        let light_count = select(0u, parameters.num_environment_samples, light_hits);
+        for (var i = 0u; i < light_count; i += 1u) {
             let ls = sample_environment(importance, rng);
             if (ls.pdf <= 0.0) {
                 continue;
@@ -698,6 +763,9 @@ fn walk_path(
             scatter_material_grad(v, grad);
             if (bounce == 0u && parameters.geometry != 0u) {
                 scatter_primary_geometry_grad(intersection, start_dir, v, grad.normal);
+                if (parameters.secondary_edge_samples != 0u) {
+                    (*record).primary = make_primary_vertex(intersection, start_dir, v, normal, flat_normal, d_found);
+                }
                 // The triangle turns with the instance.
                 add_rotation_grad(intersection.instance_index, cross(flat_normal, grad.flat_normal));
             }
@@ -743,7 +811,7 @@ fn primal(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let num_paths = max(parameters.samples_per_pixel, 1u);
     for (var i = 0u; i < num_paths; i += 1u) {
         let dir = primary_direction(global_id.xy, &rng);
-        let radiance = walk_path(dir, &rng, &record, false, vec3<f32>(0.0), &incident);
+        let radiance = walk_path(camera.position, 0.0, i32(parameters.max_bounces), dir, &rng, &record, false, vec3<f32>(0.0), &incident);
         sum += select(vec3<f32>(0.0), radiance * radiance_scale(radiance), all(radiance == radiance));
     }
     let mean = sum / f32(num_paths);
@@ -773,13 +841,18 @@ fn adjoint(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var i = 0u; i < num_paths; i += 1u) {
         let dir = primary_direction(global_id.xy, &rng);
         var replay_rng = rng;
-        let radiance = walk_path(dir, &rng, &record, false, vec3<f32>(0.0), &incident);
+        let radiance = walk_path(camera.position, 0.0, i32(parameters.max_bounces), dir, &rng, &record, false, vec3<f32>(0.0), &incident);
         if (!all(radiance == radiance)) {
             continue;
         }
         incident = compute_incident_radiance(&record);
         let adjoint = d_pixel * radiance_scale(radiance);
-        walk_path(dir, &replay_rng, &record, true, adjoint, &incident);
+        walk_path(camera.position, 0.0, i32(parameters.max_bounces), dir, &replay_rng, &record, true, adjoint, &incident);
+        if (record.primary.valid) {
+            // Other random numbers than the paths of the pixel.
+            var edge_rng = random_init(pixel_index ^ 0x5bd1e995u, parameters.frame_index + i);
+            sample_secondary_edges(record.primary, &edge_rng);
+        }
     }
 }
 
@@ -887,9 +960,9 @@ fn sample_edge(a: vec3<f32>, b: vec3<f32>, instance: u32, rng: ptr<function, Ran
         }
         let offset = 1.0e-3 * across;
         var side_rng = *rng;
-        let below = walk_path(get_ray_direction_at(camera, p - offset), &side_rng, &record, false, vec3<f32>(0.0), &incident);
+        let below = walk_path(camera.position, 0.0, i32(parameters.max_bounces), get_ray_direction_at(camera, p - offset), &side_rng, &record, false, vec3<f32>(0.0), &incident);
         side_rng = *rng;
-        let above = walk_path(get_ray_direction_at(camera, p + offset), &side_rng, &record, false, vec3<f32>(0.0), &incident);
+        let above = walk_path(camera.position, 0.0, i32(parameters.max_bounces), get_ray_direction_at(camera, p + offset), &side_rng, &record, false, vec3<f32>(0.0), &incident);
         *rng = side_rng;
         let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
             - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
@@ -1061,5 +1134,87 @@ fn count_edges(
                 probe += 1u;
             }
         }
+    }
+}
+
+// The boundary term of the light arriving at a primary hit, from the edges
+// that occlude part of it: moving such an edge, or the hit, moves a shadow
+// or a reflected silhouette.
+//
+// The edges are drawn uniformly from all the triangle edges of the scene,
+// and a point uniformly along each, and the light on both sides of where it
+// is seen from the hit is traced with the same random numbers, so that it
+// cancels out for the many edges that aren't silhouettes from there.
+fn sample_secondary_edges(pv: PrimaryVertex, rng: ptr<function, RandomState>) {
+    let triangle_count = parameters.triangle_count;
+    let samples = parameters.secondary_edge_samples;
+    if (triangle_count == 0u) {
+        return;
+    }
+    var record: PathRecord;
+    var incident: array<vec3<f32>, PATH_LENGTH>;
+    for (var k = 0u; k < samples; k += 1u) {
+        let triangle = min(u32(random_gen(rng) * f32(triangle_count)), triangle_count - 1u);
+        let corner = min(u32(random_gen(rng) * 3.0), 2u);
+        let t = random_gen(rng);
+        let edges = triangle_edges(triangle);
+        let la = edges.local[corner];
+        let lb = edges.local[(corner + 1u) % 3u];
+        let count = edge_triangle_count(edge_key(edges.instance, la, lb));
+        if (count == 0u || (count >= 2u && !precedes(la, lb))) {
+            continue;
+        }
+        let to_world = instance_transforms[edges.instance];
+        let a = to_world * vec4<f32>(la, 1.0);
+        let b = to_world * vec4<f32>(lb, 1.0);
+        let point = mix(a, b, t);
+        let offset = point - pv.position;
+        let distance = length(offset);
+        if (distance < 1.0e-4) {
+            continue;
+        }
+        let dir = offset / distance;
+        let horizon = horizon_weight(dot(dir, pv.flat_normal));
+        if (horizon <= 0.0) {
+            continue;
+        }
+        let bsdf = evaluate_bsdf_gradient(pv.material, pv.normal, pv.view_dir, dir).value;
+        if (all(bsdf <= vec3<f32>(0.0))) {
+            continue;
+        }
+        // How the direction of the point turns along the edge, and across it.
+        let along = b - a;
+        let turn = (along - dir * dot(dir, along)) / distance;
+        let speed = length(turn);
+        if (speed < 1.0e-8) {
+            continue;
+        }
+        let across = normalize(cross(dir, turn));
+        let spread = 1.0e-4;
+        var side_rng = *rng;
+        // The light arriving at the hit, with the bounces left after it.
+        let budget = i32(parameters.max_bounces) - 1;
+        let below = walk_path(pv.position, parameters.t_start, budget, normalize(dir - spread * across), &side_rng, &record, false, vec3<f32>(0.0), &incident);
+        side_rng = *rng;
+        let above = walk_path(pv.position, parameters.t_start, budget, normalize(dir + spread * across), &side_rng, &record, false, vec3<f32>(0.0), &incident);
+        *rng = side_rng;
+        let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
+            - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
+        // Each edge is drawn with the density of `1 / (3 * triangle_count)`.
+        let weight = dot(pv.d_found, bsdf * horizon * jump) * speed
+            * f32(3u * triangle_count) / f32(samples);
+        if (weight == 0.0) {
+            continue;
+        }
+        // Moving the point by `u` turns its direction across the edge by
+        // `dot(across, u) / distance`, and moving the hit does the opposite.
+        let grad = weight * across / distance;
+        add_instance_grad(edges.instance, point, grad);
+        // The hit slides along the camera ray as the camera, or the hit
+        // instance, move it.
+        let d_hit = -grad;
+        let slide = dot(d_hit, pv.ray_dir);
+        add_camera_grad(d_hit + slide * pv.depth_row);
+        add_instance_grad(pv.instance, pv.position, -slide * pv.depth_row);
     }
 }

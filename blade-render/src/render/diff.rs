@@ -84,6 +84,13 @@ pub struct DiffConfig {
     /// Samples along every edge of every triangle, for the gradient of
     /// the geometry.
     pub edge_samples: u32,
+    /// Edges drawn at random for every primary hit, for the gradient of the
+    /// geometry by the light it receives: shadows and reflections move with
+    /// the silhouettes that cast them. Zero leaves it out.
+    ///
+    /// The edges come from the whole scene, and few of them are silhouettes
+    /// from a given point, so this takes many samples.
+    pub secondary_edge_samples: u32,
 }
 
 impl Default for DiffConfig {
@@ -96,6 +103,7 @@ impl Default for DiffConfig {
             environment_importance_sampling: false,
             jitter_primary_rays: true,
             edge_samples: 1,
+            secondary_edge_samples: 0,
         }
     }
 }
@@ -135,8 +143,10 @@ pub struct DiffTracerDesc {
     ///
     /// The gradient accounts for edges of triangles moving across the image,
     /// and for the interpolated normal of the primary hits moving with it.
-    /// It leaves out how shadows, reflections, and lighting move, and how
-    /// texture coordinates do. Edges are told apart by the positions of their
+    /// With [`DiffConfig::secondary_edge_samples`], it also accounts for
+    /// shadows and reflected silhouettes moving on the surfaces that the
+    /// camera sees. It leaves out how they move past those, how the lighting
+    /// changes between them, and how texture coordinates move. Edges are told apart by the positions of their
     /// ends, rounded to 1/65536 in the space of their object, so that copies
     /// of a vertex along a seam count as one.
     pub geometry: bool,
@@ -286,6 +296,8 @@ struct DiffParams {
     instance_count: u32,
     triangle_count: u32,
     edge_samples: u32,
+    secondary_edge_samples: u32,
+    _pad: [u32; 3],
 }
 
 #[repr(C)]
@@ -959,6 +971,12 @@ impl DiffTracer {
             instance_count: self.instance_count,
             triangle_count: self.triangle_count,
             edge_samples: config.edge_samples,
+            secondary_edge_samples: if self.geometry {
+                config.secondary_edge_samples
+            } else {
+                0
+            },
+            _pad: [0; 3],
         }
     }
 
