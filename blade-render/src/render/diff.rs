@@ -160,6 +160,12 @@ pub struct DiffTracerDesc {
     /// follow the positions as they are applied, as the normalized sums of
     /// the normals of the triangles around each vertex.
     pub vertices: bool,
+    /// Number of views, each with its own camera, image, and target, which
+    /// [`DiffTracer::select_view`] switches between. Zero counts as one.
+    ///
+    /// The gradients of every view add up until the step, which is how the
+    /// views constrain the scene together.
+    pub views: u32,
 }
 
 /// Offsets of the geometry from where an optimization started, as
@@ -748,8 +754,16 @@ pub struct DiffTracer {
     /// Parameters and gradients of the materials and the geometry,
     /// for the host to read.
     readback: blade_graphics::Buffer,
-    accumulated_frames: u32,
+    /// Frames already averaged into the image of every view.
+    accumulated_frames: Vec<u32>,
+    view: u32,
+    view_count: u32,
+    /// Bytes between the images of two views.
+    view_stride: u64,
 }
+
+/// Bytes between the losses of two views, for any storage offset alignment.
+const LOSS_STRIDE: u64 = 256;
 
 impl DiffTracer {
     /// Start from the scene of `ray_tracer`, which has to be built already,
@@ -1099,10 +1113,12 @@ impl DiffTracer {
 
         let image_size = ray_tracer.surface_size;
         let image_bytes = u64::from(image_size.width * image_size.height) * 16;
+        let view_count = desc.views.max(1);
+        let view_stride = image_bytes.next_multiple_of(256);
         let image_buffer = |name| {
             gpu.create_buffer(blade_graphics::BufferDesc {
                 name,
-                size: image_bytes,
+                size: view_stride * u64::from(view_count),
                 memory: blade_graphics::Memory::Device,
             })
         };
@@ -1140,7 +1156,7 @@ impl DiffTracer {
             image_adjoint: image_buffer("diff image adjoint"),
             loss: gpu.create_buffer(blade_graphics::BufferDesc {
                 name: "diff loss",
-                size: 4,
+                size: LOSS_STRIDE * u64::from(view_count),
                 memory: blade_graphics::Memory::Shared,
             }),
             readback: gpu.create_buffer(blade_graphics::BufferDesc {
@@ -1150,7 +1166,10 @@ impl DiffTracer {
                         + u64::from(2 * instance_count + 1) * 16),
                 memory: blade_graphics::Memory::Download,
             }),
-            accumulated_frames: 0,
+            accumulated_frames: vec![0; view_count as usize],
+            view: 0,
+            view_count,
+            view_stride,
         };
 
         this.materials.clear(encoder);
@@ -1162,7 +1181,8 @@ impl DiffTracer {
         this.vertex_params.group.clear(encoder);
         {
             let mut transfer = encoder.transfer("diff-init");
-            transfer.fill_buffer(this.image_adjoint.into(), image_bytes, 0);
+            transfer.fill_buffer(this.image_adjoint.into(), this.image_adjoint.size(), 0);
+            transfer.fill_buffer(this.loss.into(), this.loss.size(), 0);
             transfer.copy_buffer_to_buffer(
                 texture_regions_staging.into(),
                 texture_regions.into(),
@@ -1343,8 +1363,8 @@ impl DiffTracer {
             env_weights: ray_tracer.env_map.weight_view,
             material_params: self.materials.params.into(),
             env_params: self.environment.params.into(),
-            image: self.image.into(),
-            image_adjoint: self.image_adjoint.into(),
+            image: self.view_piece(self.image),
+            image_adjoint: self.view_piece(self.image_adjoint),
             material_grads: self.materials.grads.into(),
             env_grads: self.environment.grads.into(),
             texture_regions: self.texture_regions.into(),
@@ -1378,7 +1398,7 @@ impl DiffTracer {
             max_bounces: config.max_bounces,
             t_start: config.t_start,
             environment_importance_sampling: config.environment_importance_sampling as u32,
-            accumulated_frames: self.accumulated_frames,
+            accumulated_frames: self.accumulated_frames[self.view as usize],
             jitter_primary_rays: config.jitter_primary_rays as u32,
             geometry: self.geometry as u32,
             instance_count: self.instance_count,
@@ -1701,6 +1721,34 @@ impl DiffTracer {
         meshes
     }
 
+    /// The triangles of all the models whose vertices are parameters, by the
+    /// vertex slots of their corners, as of the last
+    /// [`Self::read_back_meshes`]. They tell which slots neighbor which, for
+    /// optimizing the offsets on the host, such as with
+    /// [`super::large_steps::LargeSteps`].
+    pub fn slot_triangles(&self, asset_hub: &crate::AssetHub) -> Vec<[u32; 3]> {
+        let vp = &self.vertex_params;
+        let data = vp.mesh_readback.data();
+        let slots = unsafe { slice::from_raw_parts(data as *const u32, vp.vertex_count as usize) };
+        let mut triangles = Vec::new();
+        for vm in &vp.models {
+            let (offset, bytes) = vm.index_readback;
+            let indices = unsafe {
+                slice::from_raw_parts(data.add(offset as usize) as *const u32, bytes as usize / 4)
+            };
+            for geometry in asset_hub.models[vm.model].geometries.iter() {
+                let first = (geometry.index_offset / 4) as usize;
+                for triangle in 0..geometry.triangle_count as usize {
+                    triangles.push([0, 1, 2].map(|k| {
+                        let local = indices[first + 3 * triangle + k];
+                        slots[(vm.first_vertex + geometry.vertex_range.start + local) as usize]
+                    }));
+                }
+            }
+        }
+        triangles
+    }
+
     /// Derivative of the loss by [`Self::vertex_offsets`], accumulated since
     /// the last [`Self::step`], as of [`Self::read_back_vertices`]. The part
     /// through the normals only joins at the step, or with
@@ -1804,26 +1852,69 @@ impl DiffTracer {
         temp.buffers.push(staging);
     }
 
-    /// The loss computed by the last [`Self::backward`], once it's done.
+    /// Sum of the losses of the views, each as of its last
+    /// [`Self::evaluate_loss`], which [`Self::backward`] includes, once the
+    /// work is done.
     pub fn loss(&self) -> f32 {
-        unsafe { *(self.loss.data() as *const f32) }
+        (0..self.view_count).map(|view| self.loss_of(view)).sum()
     }
 
-    /// The rendered image: `Rgba32Float` radiance, row by row.
+    /// The loss of the selected view alone, see [`Self::loss`].
+    pub fn view_loss(&self) -> f32 {
+        self.loss_of(self.view)
+    }
+
+    fn loss_of(&self, view: u32) -> f32 {
+        unsafe {
+            *(self
+                .loss
+                .data()
+                .add((LOSS_STRIDE * u64::from(view)) as usize) as *const f32)
+        }
+    }
+
+    /// Make `view` the one that the following calls render, compare, and
+    /// differentiate, and whose image and target they use.
+    pub fn select_view(&mut self, view: u32) {
+        assert!(
+            view < self.view_count,
+            "there are {} views",
+            self.view_count
+        );
+        self.view = view;
+    }
+
+    pub fn view_count(&self) -> u32 {
+        self.view_count
+    }
+
+    fn view_piece(&self, buffer: blade_graphics::Buffer) -> blade_graphics::BufferPiece {
+        buffer.at(self.view_stride * u64::from(self.view))
+    }
+
+    fn loss_piece(&self) -> blade_graphics::BufferPiece {
+        self.loss.at(LOSS_STRIDE * u64::from(self.view))
+    }
+
+    fn image_bytes(&self) -> u64 {
+        u64::from(self.image_size.width * self.image_size.height) * 16
+    }
+
+    /// The rendered image of the view: `Rgba32Float` radiance, row by row.
     pub fn image(&self) -> blade_graphics::BufferPiece {
-        self.image.into()
+        self.view_piece(self.image)
     }
 
     /// Derivative of the loss by [`Self::image`], in the same layout, which
     /// [`Self::evaluate_loss`] fills in and [`Self::backpropagate`] reads.
     pub fn image_adjoint(&self) -> blade_graphics::BufferPiece {
-        self.image_adjoint.into()
+        self.view_piece(self.image_adjoint)
     }
 
-    /// The target that [`Self::backward`] compares the image with,
-    /// in the same layout as [`Self::image`], for filling it in.
+    /// The target of the view that [`Self::backward`] compares the image
+    /// with, in the same layout as [`Self::image`], for filling it in.
     pub fn target(&self) -> blade_graphics::BufferPiece {
-        self.target.into()
+        self.view_piece(self.target)
     }
 
     /// The textures whose texels are parameters, which
@@ -1865,7 +1956,7 @@ impl DiffTracer {
         accumulate: bool,
     ) {
         if !accumulate {
-            self.accumulated_frames = 0;
+            self.accumulated_frames[self.view as usize] = 0;
         }
         let data = self.trace_data(
             ray_tracer,
@@ -1876,13 +1967,13 @@ impl DiffTracer {
         let mut pc = pass.with(&self.primal_pipeline);
         pc.bind(0, &data);
         pc.dispatch(self.primal_pipeline.get_dispatch_for(self.image_size));
-        self.accumulated_frames += 1;
+        self.accumulated_frames[self.view as usize] += 1;
     }
 
     /// Make the current image the target.
     pub fn capture_target(&self, encoder: &mut blade_graphics::CommandEncoder) {
         let mut transfer = encoder.transfer("diff-capture-target");
-        transfer.copy_buffer_to_buffer(self.image.into(), self.target.into(), self.image.size());
+        transfer.copy_buffer_to_buffer(self.image(), self.target(), self.image_bytes());
     }
 
     /// Compute the loss of the current image against the target, along with
@@ -1890,7 +1981,7 @@ impl DiffTracer {
     pub fn evaluate_loss(&mut self, encoder: &mut blade_graphics::CommandEncoder) {
         {
             let mut transfer = encoder.transfer("diff-loss-clear");
-            transfer.fill_buffer(self.loss.into(), 4, 0);
+            transfer.fill_buffer(self.loss_piece(), 4, 0);
         }
         let pixel_count = self.image_size.width * self.image_size.height;
         let mut pass = encoder.compute("diff-loss");
@@ -1902,10 +1993,10 @@ impl DiffTracer {
                     pixel_count,
                     _pad: [0; 3],
                 },
-                image: self.image.into(),
-                target_image: self.target.into(),
-                image_adjoint: self.image_adjoint.into(),
-                loss: self.loss.into(),
+                image: self.image(),
+                target_image: self.target(),
+                image_adjoint: self.image_adjoint(),
+                loss: self.loss_piece(),
             },
         );
         pc.dispatch(flat_dispatch(pixel_count));
@@ -2178,6 +2269,15 @@ fn flat_dispatch(count: u32) -> [u32; 3] {
     [row, groups.div_ceil(row), 1]
 }
 
+/// Instance transforms laid out like `mat4x3<f32>`.
+fn instance_transform_data(ray_tracer: &super::RayTracer) -> Vec<[f32; 16]> {
+    ray_tracer
+        .instance_transforms
+        .iter()
+        .map(|t| super::mat4_transform(t).to_cols_array())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -2212,13 +2312,4 @@ mod tests {
             assert!(covered - u64::from(count) <= u64::from(x * super::FLAT_WORKGROUP_SIZE));
         }
     }
-}
-
-/// Instance transforms laid out like `mat4x3<f32>`.
-fn instance_transform_data(ray_tracer: &super::RayTracer) -> Vec<[f32; 16]> {
-    ray_tracer
-        .instance_transforms
-        .iter()
-        .map(|t| super::mat4_transform(t).to_cols_array())
-        .collect()
 }
