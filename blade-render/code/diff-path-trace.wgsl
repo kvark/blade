@@ -74,7 +74,9 @@ struct DiffParams {
     // Draw the secondary edges by `edge_guide`, and record what they bring
     // in `edge_hits`.
     guided_edges: u32,
-    _pad2: u32,
+    // Pair every other path of the adjoint with the one before, see
+    // `sample_bsdf_turned`.
+    antithetic: u32,
 }
 
 // Has to match the host!
@@ -739,6 +741,31 @@ fn compute_incident_radiance(record: ptr<function, PathRecord>) -> array<vec3<f3
     return incident;
 }
 
+// Whether the walk turns the first direction that it samples from a BSDF,
+// see `sample_bsdf_turned`.
+var<private> turn_first_bsdf_sample: bool;
+
+// `sample_bsdf`, turned by half a turn about the normal if `turned`, which
+// is just as likely, as the lobes are symmetric about it. The derivative of
+// the BSDF by its normal tilts the lobe, which is mostly odd about the
+// normal, so a path and its turned twin have gradients that mostly cancel
+// where each alone has a large one, which is antithetic sampling, after
+// Zhang et al. "Antithetic Sampling for Monte Carlo Differentiable
+// Rendering" (2021).
+fn sample_bsdf_turned(mat: Material, normal: vec3<f32>, view_dir: vec3<f32>, turned: bool, rng: ptr<function, RandomState>) -> BsdfSample {
+    let frame = make_tangent_frame(normal);
+    let turn = select(vec3<f32>(1.0), vec3<f32>(-1.0, -1.0, 1.0), turned);
+    var dir: vec3<f32>;
+    if (random_gen(rng) < specular_sampling_ratio(mat)) {
+        let half_dir = frame * (turn * sample_ggx_half_dir(material_alpha(mat), rng));
+        dir = 2.0 * dot(view_dir, half_dir) * half_dir - view_dir;
+    } else {
+        dir = frame * (turn * sample_hemisphere_cosine(rng));
+    }
+    dir = normalize(dir);
+    return BsdfSample(dir, compute_bsdf_pdf(mat, normal, view_dir, dir));
+}
+
 // Walk one path and return its radiance.
 //
 // Without `adjoint`, the walk fills the `record`. With it, the walk is a
@@ -816,7 +843,13 @@ fn walk_path(
 
         let light_count = select(0u, parameters.num_environment_samples, light_hits);
         for (var i = 0u; i < light_count; i += 1u) {
-            let ls = sample_environment(importance, rng);
+            var ls = sample_environment(importance, rng);
+            if (bounce == 0u && turn_first_bsdf_sample && !importance) {
+                // Uniform directions are just as likely turned about the
+                // normal, which makes the light samples antithetic too.
+                ls.dir = 2.0 * dot(ls.dir, normal) * normal - ls.dir;
+                ls.texel = env_texel_at(ls.dir);
+            }
             if (ls.pdf <= 0.0) {
                 continue;
             }
@@ -848,7 +881,7 @@ fn walk_path(
 
         var weight = vec3<f32>(0.0);
         if (will_extend) {
-            let bs = sample_bsdf(v.material, normal, view_dir, rng);
+            let bs = sample_bsdf_turned(v.material, normal, view_dir, bounce == 0u && turn_first_bsdf_sample, rng);
             let horizon_cosine = dot(bs.dir, flat_normal);
             let horizon = horizon_weight(horizon_cosine);
             if (bs.pdf > 0.0 && horizon > 0.0) {
@@ -989,7 +1022,16 @@ fn adjoint(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var rng = random_init(pixel_index, parameters.frame_index);
     var record: PathRecord;
     var incident: array<vec3<f32>, PATH_LENGTH>;
+    var pair_rng = rng;
     for (var i = 0u; i < num_paths; i += 1u) {
+        // The twin of a path starts from the same random numbers, which
+        // also make the same point of the pixel.
+        turn_first_bsdf_sample = parameters.antithetic != 0u && (i & 1u) == 1u;
+        if (turn_first_bsdf_sample) {
+            rng = pair_rng;
+        } else {
+            pair_rng = rng;
+        }
         let dir = primary_direction(global_id.xy, &rng);
         var replay_rng = rng;
         let radiance = walk_path(camera.position, 0.0, i32(parameters.max_bounces), dir, &rng, &record, false, vec3<f32>(0.0), &incident);
@@ -999,6 +1041,7 @@ fn adjoint(@builtin(global_invocation_id) global_id: vec3<u32>) {
         incident = compute_incident_radiance(&record);
         let adjoint = d_pixel * radiance_scale(radiance);
         walk_path(camera.position, 0.0, i32(parameters.max_bounces), dir, &replay_rng, &record, true, adjoint, &incident);
+        turn_first_bsdf_sample = false;
         if (parameters.geometry == 0u) {
             continue;
         }
