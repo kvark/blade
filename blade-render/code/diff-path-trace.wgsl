@@ -137,6 +137,11 @@ var<storage, read_write> translation_grads: array<atomic<f32>>;
 // angle, in XYZ of 4 floats.
 var<storage, read_write> rotation_grads: array<atomic<f32>>;
 var<storage, read> rotation_params: array<vec4<f32>>;
+// Open addressing hash table of the edges, by their instance and the
+// positions of their ends, with the number of triangles along each.
+// The length is a power of two, and empty keys are zero.
+var<storage, read_write> edge_keys: array<atomic<u32>>;
+var<storage, read_write> edge_counts: array<atomic<u32>>;
 var<storage, read_write> camera_grads: array<atomic<f32>>;
 
 fn trace_ray(position: vec3<f32>, direction: vec3<f32>, t_min: f32) -> RayIntersection {
@@ -921,6 +926,80 @@ fn edges(
     if (triangle >= parameters.triangle_count) {
         return;
     }
+    let edges = triangle_edges(triangle);
+    let local = edges.local;
+    let to_world = instance_transforms[edges.instance];
+    var rng = random_init(triangle, parameters.frame_index);
+    for (var i = 0u; i < 3u; i += 1u) {
+        let a = local[i];
+        let b = local[(i + 1u) % 3u];
+        // An edge in the middle of a mesh is shared with a triangle that
+        // goes along it the other way, and only one of them takes it.
+        let count = edge_triangle_count(edge_key(edges.instance, a, b));
+        if (count == 0u || (count >= 2u && !precedes(a, b))) {
+            continue;
+        }
+        sample_edge(to_world * vec4<f32>(a, 1.0), to_world * vec4<f32>(b, 1.0), edges.instance, &rng);
+    }
+}
+
+// Positions on a grid fine enough to tell vertices apart, and coarse enough
+// for copies of a vertex along a seam to fall on the same point.
+fn quantize_position(p: vec3<f32>) -> vec3<i32> {
+    return vec3<i32>(round(clamp(p, vec3<f32>(-30000.0), vec3<f32>(30000.0)) * 65536.0));
+}
+
+fn hash_combine(hash: u32, value: u32) -> u32 {
+    return hash_jenkins(hash ^ (value + 0x9e3779b9u + (hash << 6u) + (hash >> 2u)));
+}
+
+// Key of the edge between `a` and `b` of `instance`, the same both ways.
+fn edge_key(instance: u32, a: vec3<f32>, b: vec3<f32>) -> u32 {
+    var qa = quantize_position(a);
+    var qb = quantize_position(b);
+    let swap = qb.x < qa.x || (qb.x == qa.x && (qb.y < qa.y || (qb.y == qa.y && qb.z < qa.z)));
+    if (swap) {
+        let q = qa;
+        qa = qb;
+        qb = q;
+    }
+    var hash = hash_jenkins(instance);
+    hash = hash_combine(hash, bitcast<u32>(qa.x));
+    hash = hash_combine(hash, bitcast<u32>(qa.y));
+    hash = hash_combine(hash, bitcast<u32>(qa.z));
+    hash = hash_combine(hash, bitcast<u32>(qb.x));
+    hash = hash_combine(hash, bitcast<u32>(qb.y));
+    hash = hash_combine(hash, bitcast<u32>(qb.z));
+    return max(hash, 1u);
+}
+
+fn edge_slot_mask() -> u32 {
+    return arrayLength(&edge_keys) - 1u;
+}
+
+// Number of triangles along an edge, which `count_edges` has found.
+fn edge_triangle_count(key: u32) -> u32 {
+    let mask = edge_slot_mask();
+    for (var probe = 0u; probe <= mask; probe += 1u) {
+        let slot = (key + probe) & mask;
+        let found = atomicLoad(&edge_keys[slot]);
+        if (found == key) {
+            return atomicLoad(&edge_counts[slot]);
+        }
+        if (found == 0u) {
+            break;
+        }
+    }
+    return 0u;
+}
+
+struct TriangleEdges {
+    instance: u32,
+    // The corners in the space of the instance.
+    local: mat3x3<f32>,
+}
+
+fn triangle_edges(triangle: u32) -> TriangleEdges {
     var lo = 0u;
     var hi = arrayLength(&edge_entries);
     while (hi - lo > 1u) {
@@ -935,21 +1014,52 @@ fn edges(
     let entry = hit_entries[edge_entry.hit_entry];
     let indices = fetch_triangle_indices(entry, triangle - edge_entry.first_triangle);
     let vptr = &vertex_buffers[entry.vertex_buf].data;
-    let local = entry.geometry_to_object * mat3x4<f32>(
+    var edges: TriangleEdges;
+    edges.instance = edge_entry.instance;
+    edges.local = entry.geometry_to_object * mat3x4<f32>(
         vec4<f32>((*vptr)[indices.x].position, 1.0),
         vec4<f32>((*vptr)[indices.y].position, 1.0),
         vec4<f32>((*vptr)[indices.z].position, 1.0),
     );
-    let to_world = instance_transforms[edge_entry.instance];
-    var rng = random_init(triangle, parameters.frame_index);
+    return edges;
+}
+
+// Count the triangles along every edge, to tell the edges in the middle of a
+// mesh from those on its boundary.
+@compute @workgroup_size(64)
+fn count_edges(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+) {
+    let triangle = global_id.y * num_workgroups.x * 64u + global_id.x;
+    if (triangle >= parameters.triangle_count) {
+        return;
+    }
+    let edges = triangle_edges(triangle);
+    let mask = edge_slot_mask();
     for (var i = 0u; i < 3u; i += 1u) {
-        let a = local[i];
-        let b = local[(i + 1u) % 3u];
-        // Each edge of a closed mesh is shared with a triangle that goes
-        // along it the other way, which takes it instead.
-        if (!precedes(a, b)) {
+        let a = edges.local[i];
+        let b = edges.local[(i + 1u) % 3u];
+        if (all(quantize_position(a) == quantize_position(b))) {
             continue;
         }
-        sample_edge(to_world * vec4<f32>(a, 1.0), to_world * vec4<f32>(b, 1.0), edge_entry.instance, &rng);
+        let key = edge_key(edges.instance, a, b);
+        var probe = 0u;
+        loop {
+            if (probe > mask) {
+                break;
+            }
+            let slot = (key + probe) & mask;
+            let result = atomicCompareExchangeWeak(&edge_keys[slot], 0u, key);
+            if (result.exchanged || result.old_value == key) {
+                atomicAdd(&edge_counts[slot], 1u);
+                break;
+            }
+            // A weak exchange can fail spuriously, and then the slot is
+            // still empty, so try it again.
+            if (result.old_value != 0u) {
+                probe += 1u;
+            }
+        }
     }
 }

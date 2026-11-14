@@ -136,8 +136,9 @@ pub struct DiffTracerDesc {
     /// The gradient accounts for edges of triangles moving across the image,
     /// and for the interpolated normal of the primary hits moving with it.
     /// It leaves out how shadows, reflections, and lighting move, and how
-    /// texture coordinates do. Meshes need to be closed, since each edge is
-    /// sampled by one of the two triangles that it is shared by.
+    /// texture coordinates do. Edges are told apart by the positions of their
+    /// ends, rounded to 1/65536 in the space of their object, so that copies
+    /// of a vertex along a seam count as one.
     pub geometry: bool,
 }
 
@@ -326,6 +327,8 @@ struct DiffTraceData<'a> {
     rotation_grads: blade_graphics::BufferPiece,
     rotation_params: blade_graphics::BufferPiece,
     camera_grads: blade_graphics::BufferPiece,
+    edge_keys: blade_graphics::BufferPiece,
+    edge_counts: blade_graphics::BufferPiece,
 }
 
 #[repr(C)]
@@ -473,7 +476,11 @@ pub struct DiffTracer {
     texture_list: Vec<DiffTexture>,
     texture_regions: blade_graphics::Buffer,
     edges_pipeline: blade_graphics::ComputePipeline,
+    count_edges_pipeline: blade_graphics::ComputePipeline,
     geometry: bool,
+    /// Hash table of the edges, with the triangles along each.
+    edge_keys: blade_graphics::Buffer,
+    edge_counts: blade_graphics::Buffer,
     /// Translations of the instances, in XYZ of 4 floats.
     translations: ParamGroup,
     /// Rotations of the instances about their origins, as axis times angle.
@@ -539,6 +546,7 @@ impl DiffTracer {
         let init_materials_pipeline = trace_pipeline("diff-init-materials", "init_materials");
         let init_environment_pipeline = trace_pipeline("diff-init-environment", "init_environment");
         let edges_pipeline = trace_pipeline("diff-edges", "edges");
+        let count_edges_pipeline = trace_pipeline("diff-count-edges", "count_edges");
         let texture_init_layout = super::ray_data_layout::<TextureInitData>(gpu);
         let init_texture_pipeline =
             gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
@@ -703,6 +711,17 @@ impl DiffTracer {
             "diff instance transforms",
             bytemuck::cast_slice(&transforms),
         );
+        // Half full at most, so that probing stays short.
+        let edge_slots = (6 * u64::from(triangle_count)).max(64).next_power_of_two();
+        let edge_table = |name| {
+            gpu.create_buffer(blade_graphics::BufferDesc {
+                name,
+                size: 4 * edge_slots,
+                memory: blade_graphics::Memory::Device,
+            })
+        };
+        let edge_keys = edge_table("diff edge keys");
+        let edge_counts = edge_table("diff edge counts");
         let translations = ParamGroup::new("diff translations", instance_count * 4, gpu);
         let rotations = ParamGroup::new("diff rotations", instance_count * 4, gpu);
         let camera_position = ParamGroup::new("diff camera position", 4, gpu);
@@ -731,7 +750,10 @@ impl DiffTracer {
             texture_list: texture_list.iter().map(|&(_, texture)| texture).collect(),
             texture_regions,
             edges_pipeline,
+            count_edges_pipeline,
             geometry: desc.geometry,
+            edge_keys,
+            edge_counts,
             translations,
             rotations,
             camera_position,
@@ -774,6 +796,8 @@ impl DiffTracer {
                 region_bytes,
             );
             transfer.copy_buffer_to_buffer(edge_staging.into(), edge_entries.into(), edge_bytes);
+            transfer.fill_buffer(edge_keys.into(), edge_keys.size(), 0);
+            transfer.fill_buffer(edge_counts.into(), edge_counts.size(), 0);
             transfer.copy_buffer_to_buffer(
                 transform_staging.into(),
                 instance_transforms.into(),
@@ -805,6 +829,13 @@ impl DiffTracer {
                 this.init_environment_pipeline
                     .get_dispatch_for(environment_size),
             );
+        }
+        if this.geometry && this.triangle_count != 0 {
+            let mut pc = pass.with(&this.count_edges_pipeline);
+            let mut parameters: DiffParams = bytemuck::Zeroable::zeroed();
+            parameters.triangle_count = this.triangle_count;
+            pc.bind(0, &this.trace_data(ray_tracer, camera, parameters));
+            pc.dispatch(flat_dispatch(this.triangle_count));
         }
         if !texture_list.is_empty() {
             let mut pc = pass.with(&this.init_texture_pipeline);
@@ -905,6 +936,8 @@ impl DiffTracer {
             rotation_grads: self.rotations.grads.into(),
             rotation_params: self.rotations.params.into(),
             camera_grads: self.camera_position.grads.into(),
+            edge_keys: self.edge_keys.into(),
+            edge_counts: self.edge_counts.into(),
         }
     }
 
@@ -1360,6 +1393,9 @@ impl DiffTracer {
         gpu.destroy_compute_pipeline(&mut self.loss_pipeline);
         gpu.destroy_compute_pipeline(&mut self.adam_pipeline);
         gpu.destroy_compute_pipeline(&mut self.edges_pipeline);
+        gpu.destroy_compute_pipeline(&mut self.count_edges_pipeline);
+        gpu.destroy_buffer(self.edge_keys);
+        gpu.destroy_buffer(self.edge_counts);
         self.translations.destroy(gpu);
         self.rotations.destroy(gpu);
         self.camera_position.destroy(gpu);
