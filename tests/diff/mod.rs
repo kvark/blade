@@ -6,6 +6,7 @@ use blade_render::diff::{
     AdamConfig, DiffConfig, DiffShaders, DiffTracer, DiffTracerDesc, GeometryBase, GeometryOffsets,
     MaterialParamFlags, MaterialParams, StepConfig,
 };
+use blade_render::large_steps::{LargeSteps, LargeStepsConfig};
 
 const SIZE: gpu::Extent = gpu::Extent {
     width: 40,
@@ -140,6 +141,10 @@ impl DiffScene {
     /// The material grid under `sky_texels`, with the textures that
     /// `kind` asks for, which are then parameters.
     fn new(cache_name: &str, kind: SceneKind) -> Option<Self> {
+        Self::with_views(cache_name, kind, 1)
+    }
+
+    fn with_views(cache_name: &str, kind: SceneKind, views: u32) -> Option<Self> {
         let textured = matches!(kind, SceneKind::BaseColorTexture | SceneKind::NormalMap);
         if cfg!(target_os = "macos") && std::env::var_os("CI").is_some() {
             println!("Skipping: ray tracing is not supported on macOS CI");
@@ -289,6 +294,7 @@ impl DiffScene {
             textures: textured,
             geometry: kind.moves(),
             vertices: kind == SceneKind::Blob,
+            views,
         };
         let diff = DiffTracer::new(
             &mut encoder,
@@ -360,7 +366,7 @@ impl DiffScene {
         self.render_converged(frames);
         self.diff.evaluate_loss(&mut self.encoder);
         self.submit();
-        self.diff.loss()
+        self.diff.view_loss()
     }
 
     /// One noisy loss and gradient evaluation, adding to the gradients.
@@ -529,6 +535,42 @@ impl DiffScene {
             &mut self.temp,
         );
         self.submit();
+    }
+
+    /// Step the offsets of the vertices by `optimizer`, on the host, which
+    /// starts from the offsets and the triangles as they are if it's `None`.
+    fn large_step(&mut self, optimizer: &mut Option<LargeSteps>, config: &LargeStepsConfig) {
+        self.diff.gather_vertex_grads(&mut self.encoder);
+        self.diff.read_back_meshes(&mut self.encoder);
+        self.submit();
+        let optimizer = optimizer.get_or_insert_with(|| {
+            let offsets = self
+                .diff
+                .vertex_offsets()
+                .iter()
+                .map(|o| glam::Vec3::new(o[0], o[1], o[2]))
+                .collect();
+            let triangles = self.diff.slot_triangles(&self.harness.asset_hub);
+            LargeSteps::new(offsets, &triangles, config.lambda)
+        });
+        let grads: Vec<_> = self
+            .diff
+            .vertex_grads()
+            .iter()
+            .map(|g| glam::Vec3::new(g[0], g[1], g[2]))
+            .collect();
+        optimizer.step(&grads, config);
+        let offsets: Vec<_> = optimizer
+            .offsets()
+            .iter()
+            .map(|o| [o.x, o.y, o.z, 0.0])
+            .collect();
+        // Clears the gradients.
+        self.diff.step(&mut self.encoder, &StepConfig::default());
+        let context = std::sync::Arc::clone(&self.harness.context);
+        self.diff
+            .write_vertex_offsets(&mut self.encoder, &context, &offsets, &mut self.temp);
+        self.apply_vertices();
     }
 
     /// Offsets of the only object.
@@ -1576,7 +1618,10 @@ fn fit_icosahedron(cache_name: &str, edge_lengths: &[f32]) -> Option<Fit> {
             scene.diff.step(
                 &mut scene.encoder,
                 &StepConfig {
-                    vertices: Some((adam, 1.0e-2)),
+                    vertices: Some((
+                        adam,
+                        std::env::var("DIFF_SMOOTH").map_or(1.0e-2, |v| v.parse().unwrap()),
+                    )),
                     ..Default::default()
                 },
             );
@@ -1629,4 +1674,177 @@ fn diff_remeshing_refines_the_fit() {
         remeshed.outline
     );
     assert!(remeshed.triangles > 10 * fixed.triangles);
+}
+
+/// The camera of the grid, and the same from the right and from above,
+/// all looking at the center.
+fn view_cameras() -> [blade_render::Camera; 3] {
+    let front = pbr_scene::camera();
+    let distance = front.pos.z;
+    let half = std::f32::consts::FRAC_1_SQRT_2;
+    let side = blade_render::Camera {
+        pos: [distance, 0.0, 0.0].into(),
+        rot: mint::Quaternion {
+            v: [0.0, half, 0.0].into(),
+            s: half,
+        },
+        ..front
+    };
+    let top = blade_render::Camera {
+        pos: [0.0, distance, 0.0].into(),
+        rot: mint::Quaternion {
+            v: [-half, 0.0, 0.0].into(),
+            s: half,
+        },
+        ..front
+    };
+    [front, side, top]
+}
+
+/// How the vertices of the blob are optimized by [`fit_depth`].
+#[derive(Clone, Copy, PartialEq)]
+enum VertexOptimizer {
+    /// Adam on every offset, with smoothness.
+    Adam,
+    /// [`LargeSteps`] on the host.
+    LargeSteps,
+}
+
+/// The outcome of [`fit_depth`].
+struct DepthFit {
+    /// How much deeper along Z the blob became, where the target is 0.3.
+    stretch: f32,
+    /// Sum of the losses of the views, of converged images.
+    loss: f32,
+}
+
+/// Fit the blob to itself stretched along the view of the front camera,
+/// from the first `views` of [`view_cameras`].
+fn fit_depth(cache_name: &str, views: u32, optimizer: VertexOptimizer) -> Option<DepthFit> {
+    const STRETCH: f32 = 0.3;
+    let mut scene = DiffScene::with_views(cache_name, SceneKind::Blob, views)?;
+    scene.config.edge_samples = 2;
+    let cameras = view_cameras();
+    scene.shape_blob(|[_, _, z]| [0.0, 0.0, z * STRETCH]);
+    for view in 0..views {
+        scene.diff.select_view(view);
+        scene.camera = cameras[view as usize];
+        scene.capture_target();
+    }
+    scene.shape_blob(|_| [0.0; 3]);
+    let mut large_steps = None;
+    for iteration in 0..160 {
+        for view in 0..views {
+            scene.diff.select_view(view);
+            scene.camera = cameras[view as usize];
+            scene.backward(iteration * views + view, 4, 2);
+        }
+        let decay = 0.985f32.powi(iteration as i32);
+        match optimizer {
+            VertexOptimizer::Adam => {
+                let adam = AdamConfig {
+                    learning_rate: 0.04 * decay,
+                    ..Default::default()
+                };
+                scene.diff.step(
+                    &mut scene.encoder,
+                    &StepConfig {
+                        vertices: Some((adam, 1.0e-2)),
+                        ..Default::default()
+                    },
+                );
+                scene.apply_vertices();
+            }
+            VertexOptimizer::LargeSteps => {
+                // The steps are of the largest change, which spreads.
+                let config = LargeStepsConfig {
+                    learning_rate: 0.2 * decay,
+                    ..Default::default()
+                };
+                scene.large_step(&mut large_steps, &config);
+            }
+        }
+    }
+    scene.diff.read_back_vertices(&mut scene.encoder);
+    scene.submit();
+    let stretch = depth_stretch(&scene.diff);
+    let mut loss = 0.0;
+    for view in 0..views {
+        scene.diff.select_view(view);
+        scene.camera = cameras[view as usize];
+        loss += scene.converged_loss(TARGET_FRAMES);
+    }
+    scene.destroy();
+    Some(DepthFit { stretch, loss })
+}
+
+/// How much deeper along Z the blob is than it was loaded.
+fn depth_stretch(diff: &DiffTracer) -> f32 {
+    let (mut near, mut far) = (f32::MAX, f32::MIN);
+    let (mut base_near, mut base_far) = (f32::MAX, f32::MIN);
+    for (base, offset) in diff.vertex_bases().iter().zip(diff.vertex_offsets()) {
+        if base[3] != 0.0 {
+            near = near.min(base[2] + offset[2]);
+            far = far.max(base[2] + offset[2]);
+            base_near = base_near.min(base[2]);
+            base_far = base_far.max(base[2]);
+        }
+    }
+    (far - near) / (base_far - base_near) - 1.0
+}
+
+/// One view can't tell how deep a shape is, which more views from around it
+/// can, with their gradients adding up.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_views_recover_depth() {
+    let Some(single) = fit_depth("diff-depth-single", 1, VertexOptimizer::Adam) else {
+        return;
+    };
+    let Some(multiple) = fit_depth("diff-depth-multiple", 3, VertexOptimizer::Adam) else {
+        return;
+    };
+    println!(
+        "stretch along the view of 0.3 found as {:.3} from one view, {:.3} from three",
+        single.stretch, multiple.stretch
+    );
+    assert!(
+        single.stretch.abs() < 0.05,
+        "one view found a stretch of {}",
+        single.stretch
+    );
+    assert!(
+        (multiple.stretch - 0.3).abs() < 0.1,
+        "three views found a stretch of {}",
+        multiple.stretch
+    );
+}
+
+/// The steps of [`LargeSteps`] move the whole surface smoothly, which gets
+/// closer to the target than Adam on every vertex, without smoothing that
+/// pulls the surface away from it.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_large_steps_fit_closer() {
+    let Some(adam) = fit_depth("diff-steps-adam", 3, VertexOptimizer::Adam) else {
+        return;
+    };
+    let Some(large) = fit_depth("diff-steps-large", 3, VertexOptimizer::LargeSteps) else {
+        return;
+    };
+    println!(
+        "stretch of 0.3 found as {:.3} by Adam, {:.3} by large steps, with losses {:.2e} and {:.2e}",
+        adam.stretch, large.stretch, adam.loss, large.loss
+    );
+    assert!(
+        (large.stretch - 0.3).abs() < 0.03,
+        "large steps found a stretch of {}",
+        large.stretch
+    );
+    assert!(
+        large.loss < 0.3 * adam.loss,
+        "large steps got to a loss of {}, against {} of Adam",
+        large.loss,
+        adam.loss
+    );
 }
