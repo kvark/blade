@@ -970,11 +970,12 @@ fn check_texture(kind: SceneKind, checks: &[(usize, usize)], channels: usize) {
         SceneKind::NormalMap => (0.05, 320),
         _ => (0.03, 100),
     };
-    let adam = AdamConfig {
-        learning_rate,
-        ..Default::default()
-    };
     for iteration in 0..steps {
+        // Noisy gradients keep a constant rate wandering about the optimum.
+        let adam = AdamConfig {
+            learning_rate: learning_rate * 0.99f32.powi(iteration as i32),
+            ..Default::default()
+        };
         scene.backward(ITERATIONS + iteration, 2, 2);
         scene.diff.step(
             &mut scene.encoder,
