@@ -101,6 +101,12 @@ pub struct DiffConfig {
     /// drawing them uniformly, which keeps the gradient unbiased. This
     /// also records what they bring for the next guide.
     pub guided_edges: bool,
+    /// Make every other path of the gradient the twin of the one before,
+    /// with the direction that it takes from the first hit turned by half a
+    /// turn about the normal there. Their gradients by the normal mostly
+    /// cancel, which takes much of the noise out of those by normal maps,
+    /// rotations and vertex positions on glossy surfaces.
+    pub antithetic: bool,
 }
 
 impl Default for DiffConfig {
@@ -116,6 +122,7 @@ impl Default for DiffConfig {
             secondary_edge_samples: 0,
             secondary_edge_depth: 1,
             guided_edges: false,
+            antithetic: false,
         }
     }
 }
@@ -340,7 +347,7 @@ struct DiffParams {
     secondary_edge_samples: u32,
     secondary_edge_depth: u32,
     guided_edges: u32,
-    _pad: u32,
+    antithetic: u32,
 }
 
 #[repr(C)]
@@ -1481,7 +1488,7 @@ impl DiffTracer {
             },
             secondary_edge_depth: config.secondary_edge_depth,
             guided_edges: (config.guided_edges && self.edge_guide_ready) as u32,
-            _pad: 0,
+            antithetic: config.antithetic as u32,
         }
     }
 

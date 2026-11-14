@@ -1968,3 +1968,79 @@ fn diff_guided_edges_reduce_variance() {
     );
     scene.destroy();
 }
+
+/// Pairing the paths with their twins turned about the normal at the first
+/// hit gets the same gradient by the texels of a normal map, with less
+/// noise for as many paths.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_antithetic_paths_reduce_variance() {
+    let Some(mut scene) = DiffScene::new("diff-antithetic", SceneKind::NormalMap) else {
+        return;
+    };
+    const BATCHES: usize = 16;
+    const BATCH: u32 = 4;
+    let texel_count = (CHECKER_SIZE * CHECKER_SIZE) as usize;
+    let params = scene.diff.texture_params();
+    scene.capture_target();
+    let truth = scene.download(params, texel_count);
+    scene.upload(params, &vec![average_color(&truth); texel_count]);
+
+    let mut iteration = 0;
+    let mut stats = Vec::new();
+    for antithetic in [false, true] {
+        scene.config.antithetic = antithetic;
+        let mut batches = Vec::new();
+        for _ in 0..BATCHES {
+            for _ in 0..BATCH {
+                scene.backward(iteration, 4, 2);
+                iteration += 1;
+            }
+            let grads = scene.download(scene.diff.texture_grads(), texel_count);
+            batches.push(grads.iter().flat_map(|g| [g[0], g[1]]).collect::<Vec<_>>());
+            scene.diff.step(&mut scene.encoder, &StepConfig::default());
+        }
+        let count = batches[0].len();
+        let mean: Vec<f32> = (0..count)
+            .map(|k| batches.iter().map(|b| b[k]).sum::<f32>() / BATCHES as f32)
+            .collect();
+        let variance: Vec<f32> = (0..count)
+            .map(|k| {
+                batches
+                    .iter()
+                    .map(|b| (b[k] - mean[k]).powi(2))
+                    .sum::<f32>()
+                    / (BATCHES - 1) as f32
+            })
+            .collect();
+        stats.push((mean, variance));
+    }
+    let (independent_mean, independent_variance) = &stats[0];
+    let (antithetic_mean, antithetic_variance) = &stats[1];
+    let total = |v: &[f32]| v.iter().sum::<f32>();
+    // How far the means are apart, in units of their expected spread.
+    let mut spread = 0.0;
+    let mut expected = 0.0;
+    for k in 0..independent_mean.len() {
+        spread += (independent_mean[k] - antithetic_mean[k]).powi(2);
+        expected += (independent_variance[k] + antithetic_variance[k]) / BATCHES as f32;
+    }
+    println!(
+        "variance of the texel gradients {:e} independent, {:e} antithetic; means apart by {:.2} of their spread",
+        total(independent_variance),
+        total(antithetic_variance),
+        spread / expected
+    );
+    assert!(
+        spread < 2.0 * expected,
+        "the means are apart by {} of their spread",
+        spread / expected
+    );
+    assert!(
+        total(antithetic_variance) < 0.7 * total(independent_variance),
+        "antithetic paths left the variance at {} from {}",
+        total(antithetic_variance),
+        total(independent_variance)
+    );
+    scene.destroy();
+}
