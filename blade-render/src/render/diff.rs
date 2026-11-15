@@ -1963,6 +1963,11 @@ impl DiffTracer {
         self.view = view;
     }
 
+    /// The view that [`Self::select_view`] selected last.
+    pub fn selected_view(&self) -> u32 {
+        self.view
+    }
+
     pub fn view_count(&self) -> u32 {
         self.view_count
     }

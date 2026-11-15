@@ -1134,9 +1134,51 @@ fn precedes(a: vec3<f32>, b: vec3<f32>) -> bool {
 // the other side shows. The radiance is estimated on both sides with the
 // same random numbers, so that it cancels out where the segment is not
 // a discontinuity, such as between two triangles of a smooth surface.
+// The directions from `eye` to just either side of the edge from `a` to `b`
+// of a triangle, whose third corner is `c`, at `point` on it: `below` on
+// the side opposite to `across`, which is perpendicular to the direction to
+// the point, and `above` on the side of `across`.
+//
+// The points are on the plane of the triangle, by a small fraction of its
+// size, which keeps them on either side of this edge, and of no other edge
+// of the mesh around it, however much the triangle leans away from the eye.
+// An offset of the direction by a fixed angle instead crosses the outline
+// of a mesh from many of the edges near it, where the mesh leans away the
+// most, and those add to the jump across the outline itself.
+struct EdgeSides {
+    below: vec3<f32>,
+    above: vec3<f32>,
+    valid: bool,
+}
+
+fn edge_sides(eye: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>, point: vec3<f32>, across: vec3<f32>) -> EdgeSides {
+    var sides: EdgeSides;
+    sides.valid = false;
+    let along = b - a;
+    let length_squared = dot(along, along);
+    var inward = c - point;
+    inward -= along * (dot(inward, along) / max(length_squared, 1.0e-20));
+    let height = length(inward);
+    if (height < 1.0e-8 || length_squared < 1.0e-16) {
+        return sides;
+    }
+    let step = 1.0e-3 * min(sqrt(length_squared), height) / height * inward;
+    let inside = normalize(point + step - eye);
+    let outside = normalize(point - step - eye);
+    let side = dot(inside - outside, across);
+    if (side == 0.0) {
+        return sides;
+    }
+    sides.valid = true;
+    sides.below = select(inside, outside, side > 0.0);
+    sides.above = select(outside, inside, side > 0.0);
+    return sides;
+}
+
 fn sample_edge(
     a: vec3<f32>,
     b: vec3<f32>,
+    c: vec3<f32>,
     instance: u32,
     slots: vec2<u32>,
     linear: mat3x3<f32>,
@@ -1167,19 +1209,6 @@ fn sample_edge(
         if (all(d_pixel == vec3<f32>(0.0))) {
             continue;
         }
-        let offset = 1.0e-3 * across;
-        var side_rng = *rng;
-        let below = walk_path(camera.position, 0.0, i32(parameters.max_bounces), get_ray_direction_at(camera, p - offset), &side_rng, &record, false, vec3<f32>(0.0), &incident);
-        side_rng = *rng;
-        let above = walk_path(camera.position, 0.0, i32(parameters.max_bounces), get_ray_direction_at(camera, p + offset), &side_rng, &record, false, vec3<f32>(0.0), &incident);
-        *rng = side_rng;
-        let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
-            - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
-        let weight = dot(d_pixel, jump) * segment_length / f32(samples);
-        if (weight == 0.0) {
-            continue;
-        }
-
         // The point of the segment that is seen through `p`.
         let dir = get_ray_direction_at(camera, p);
         let along = b - a;
@@ -1189,6 +1218,24 @@ fn sample_edge(
         let denom = aa - ad * ad;
         let s = clamp(select(0.0, (ad * dot(dir, to_a) - dot(along, to_a)) / denom, denom > 0.0), 0.0, 1.0);
         let point = a + s * along;
+        // `across` on the screen, as a direction in the world.
+        let ahead = get_ray_direction_at(camera, p + 1.0e-3 * across) - get_ray_direction_at(camera, p - 1.0e-3 * across);
+        let sides = edge_sides(camera.position, a, b, c, point, ahead);
+        if (!sides.valid) {
+            continue;
+        }
+        var side_rng = *rng;
+        let below = walk_path(camera.position, 0.0, i32(parameters.max_bounces), sides.below, &side_rng, &record, false, vec3<f32>(0.0), &incident);
+        side_rng = *rng;
+        let above = walk_path(camera.position, 0.0, i32(parameters.max_bounces), sides.above, &side_rng, &record, false, vec3<f32>(0.0), &incident);
+        *rng = side_rng;
+        let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
+            - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
+        let weight = dot(d_pixel, jump) * segment_length / f32(samples);
+        if (weight == 0.0) {
+            continue;
+        }
+
         let jacobian = projection_jacobian(camera, point);
         let velocity = vec3<f32>(dot(across, jacobian[0]), dot(across, jacobian[1]), dot(across, jacobian[2]));
         add_instance_grad(instance, point, weight * velocity);
@@ -1211,6 +1258,9 @@ fn edges(
         return;
     }
     let edges = triangle_edges(triangle);
+    if (edges.degenerate) {
+        return;
+    }
     let local = edges.local;
     let to_world = instance_transforms[edges.instance];
     var rng = random_init(triangle, parameters.frame_index);
@@ -1224,7 +1274,8 @@ fn edges(
             continue;
         }
         let slots = vec2<u32>(edges.slots[i], edges.slots[(i + 1u) % 3u]);
-        sample_edge(to_world * vec4<f32>(a, 1.0), to_world * vec4<f32>(b, 1.0), edges.instance, slots, edges.linear, &rng);
+        let c = to_world * vec4<f32>(local[(i + 2u) % 3u], 1.0);
+        sample_edge(to_world * vec4<f32>(a, 1.0), to_world * vec4<f32>(b, 1.0), c, edges.instance, slots, edges.linear, &rng);
     }
 }
 
@@ -1286,6 +1337,11 @@ struct TriangleEdges {
     slots: vec3<u32>,
     // Takes offsets of the vertices to world space.
     linear: mat3x3<f32>,
+    // Two of the corners are at the same point, like at the poles of a UV
+    // sphere. Such a triangle has no area, so it casts no silhouette, and
+    // its edges are left to the triangles around it, which would otherwise
+    // be counted twice, as both of its edges go along the same one.
+    degenerate: bool,
 }
 
 fn triangle_edges(triangle: u32) -> TriangleEdges {
@@ -1312,6 +1368,10 @@ fn triangle_edges(triangle: u32) -> TriangleEdges {
         vec4<f32>((*vptr)[indices.y].position, 1.0),
         vec4<f32>((*vptr)[indices.z].position, 1.0),
     );
+    let q0 = quantize_position(edges.local[0]);
+    let q1 = quantize_position(edges.local[1]);
+    let q2 = quantize_position(edges.local[2]);
+    edges.degenerate = all(q0 == q1) || all(q1 == q2) || all(q2 == q0);
     return edges;
 }
 
@@ -1327,13 +1387,13 @@ fn count_edges(
         return;
     }
     let edges = triangle_edges(triangle);
+    if (edges.degenerate) {
+        return;
+    }
     let mask = edge_slot_mask();
     for (var i = 0u; i < 3u; i += 1u) {
         let a = edges.local[i];
         let b = edges.local[(i + 1u) % 3u];
-        if (all(quantize_position(a) == quantize_position(b))) {
-            continue;
-        }
         let key = edge_key(edges.instance, a, b);
         var probe = 0u;
         loop {
@@ -1381,6 +1441,9 @@ fn sample_secondary_edges(pv: PathVertex, depth: u32, rng: ptr<function, RandomS
         let corner = drawn.edge % 3u;
         let t = random_gen(rng);
         let edges = triangle_edges(triangle);
+        if (edges.degenerate) {
+            continue;
+        }
         let la = edges.local[corner];
         let lb = edges.local[(corner + 1u) % 3u];
         let count = edge_triangle_count(edge_key(edges.instance, la, lb));
@@ -1413,13 +1476,17 @@ fn sample_secondary_edges(pv: PathVertex, depth: u32, rng: ptr<function, RandomS
             continue;
         }
         let across = normalize(cross(dir, turn));
-        let spread = 1.0e-4;
+        let c = to_world * vec4<f32>(edges.local[(corner + 2u) % 3u], 1.0);
+        let sides = edge_sides(pv.position, a, b, c, point, across);
+        if (!sides.valid) {
+            continue;
+        }
         var side_rng = *rng;
         // The light arriving at the hit, with the bounces left after it.
         let budget = i32(parameters.max_bounces) - i32(depth) - 1;
-        let below = walk_path(pv.position, parameters.t_start, budget, normalize(dir - spread * across), &side_rng, &record, false, vec3<f32>(0.0), &incident);
+        let below = walk_path(pv.position, parameters.t_start, budget, sides.below, &side_rng, &record, false, vec3<f32>(0.0), &incident);
         side_rng = *rng;
-        let above = walk_path(pv.position, parameters.t_start, budget, normalize(dir + spread * across), &side_rng, &record, false, vec3<f32>(0.0), &incident);
+        let above = walk_path(pv.position, parameters.t_start, budget, sides.above, &side_rng, &record, false, vec3<f32>(0.0), &incident);
         *rng = side_rng;
         let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
             - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
