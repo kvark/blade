@@ -2409,3 +2409,68 @@ fn diff_control_variate_reduces_variance() {
     assert!(errors[1] < 0.25 * error(&params));
     scene.destroy();
 }
+
+/// A panel that lets part of the sky behind it through, as a thin wall: the
+/// gradient by how much agrees with central differences, and optimizing it
+/// finds how much.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_recovers_transmission() {
+    let Some(mut scene) = DiffScene::new("diff-transmission", SceneKind::Panel) else {
+        return;
+    };
+    const TRUTH: f32 = 0.6;
+    let (mut params, _) = scene.read_materials();
+    params[0].transmission = TRUTH;
+    scene.write_materials(&params);
+    scene.capture_target();
+    params[0].transmission = 0.2;
+    scene.write_materials(&params);
+
+    const ITERATIONS: u32 = 128;
+    for iteration in 0..ITERATIONS {
+        scene.backward(iteration, 8, 4);
+    }
+    let (_, grads) = scene.read_materials();
+    let analytic = grads[0].transmission / ITERATIONS as f32;
+    const H: f32 = 0.05;
+    let frames = 2_000_000..2_000_256;
+    let mut losses = [0.0; 2];
+    for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
+        params[0].transmission = 0.2 + sign * H;
+        scene.write_materials(&params);
+        *loss = scene.converged_loss(frames.clone());
+    }
+    let numeric = (losses[0] - losses[1]) / (2.0 * H);
+    println!("d loss / d transmission: gradient {analytic:e}, central difference {numeric:e}");
+    assert!(
+        analytic * numeric > 0.0 && (analytic - numeric).abs() <= 0.15 * numeric.abs(),
+        "d loss / d transmission: gradient {analytic:e} disagrees with {numeric:e}"
+    );
+
+    params[0].transmission = 0.2;
+    scene.write_materials(&params);
+    // Clear the gradients.
+    scene.diff.step(&mut scene.encoder, &StepConfig::default());
+    for iteration in 0..100 {
+        scene.backward(ITERATIONS + iteration, 4, 2);
+        scene.diff.step(
+            &mut scene.encoder,
+            &StepConfig {
+                materials: Some((
+                    AdamConfig {
+                        learning_rate: 0.04 * 0.99f32.powi(iteration as i32),
+                        ..Default::default()
+                    },
+                    MaterialParamFlags::TRANSMISSION,
+                )),
+                ..Default::default()
+            },
+        );
+        scene.submit();
+    }
+    let (found, _) = scene.read_materials();
+    println!("transmission 0.2 -> {} for {TRUTH}", found[0].transmission);
+    assert!((found[0].transmission - TRUTH).abs() < 0.05);
+    scene.destroy();
+}

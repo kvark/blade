@@ -44,7 +44,7 @@ const PATH_LENGTH: u32 = MAX_DIFF_BOUNCES + 1u;
 const ROULETTE_START: u32 = 4u;
 const MAX_RADIANCE: f32 = 1.0e6;
 // Floats per `MaterialParams`, also the stride of `material_grads`.
-const MATERIAL_PARAM_COUNT: u32 = 8u;
+const MATERIAL_PARAM_COUNT: u32 = 12u;
 // Floats per environment texel in `env_params` and `env_grads`.
 const ENV_PARAM_COUNT: u32 = 4u;
 // Floats per material texture texel in `texture_params` and `texture_grads`.
@@ -124,6 +124,12 @@ struct MaterialParams {
     metalness: f32,
     emissive: vec3<f32>,
     roughness: f32,
+    // The part of the diffuse albedo that goes through the surface instead,
+    // see `evaluate_surface_gradient`.
+    transmission: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 var<uniform> camera: CameraParams;
@@ -325,6 +331,7 @@ struct DiffVertex {
     // The normal map, in tangent space.
     normal_local: vec3<f32>,
     material: Material,
+    transmission: f32,
     emissive: vec3<f32>,
     // Texture values that multiply the factors.
     base_color_texel: vec3<f32>,
@@ -356,6 +363,7 @@ fn resolve_vertex(intersection: RayIntersection) -> DiffVertex {
         params.roughness * v.roughness_texel,
     );
     v.emissive = params.emissive * v.emissive_texel;
+    v.transmission = params.transmission;
     return v;
 }
 
@@ -365,6 +373,7 @@ struct MaterialGrad {
     specular_f0: vec3<f32>,
     roughness: f32,
     emissive: vec3<f32>,
+    transmission: f32,
     // By the shading normal, in world space, before its normalization.
     normal: vec3<f32>,
     // By the normal of the triangle, through `horizon_weight`.
@@ -376,7 +385,8 @@ fn add_bsdf_grad(grad: ptr<function, MaterialGrad>, bsdf: BsdfGradient, mat: Mat
     (*grad).diffuse_albedo += d_value * bsdf.d_diffuse_albedo;
     (*grad).specular_f0 += d_value * bsdf.d_specular_f0;
     (*grad).roughness += dot(d_value, bsdf.d_roughness);
-    (*grad).normal += bsdf_normal_grad(bsdf, mat, d_value);
+    (*grad).transmission += dot(d_value, bsdf.d_transmission);
+    (*grad).normal += bsdf_normal_grad(bsdf, d_value);
 }
 
 fn add_material_grad(index: u32, component: u32, value: f32) {
@@ -407,6 +417,7 @@ fn scatter_material_grad(v: DiffVertex, grad: MaterialGrad) {
     add_material_grad(index, 5u, d_emissive_factor.y);
     add_material_grad(index, 6u, d_emissive_factor.z);
     add_material_grad(index, 7u, grad.roughness * v.roughness_texel);
+    add_material_grad(index, 8u, grad.transmission);
 
     let entry = v.surface.entry;
     let tc = v.surface.tex_coords;
@@ -545,6 +556,7 @@ fn make_path_vertex(
     pv.flat_normal = flat_normal;
     pv.view_dir = -direction;
     pv.material = v.material;
+    pv.transmission = v.transmission;
     pv.depth_row = cross(e1, e2) / det;
     pv.ray_dir = direction;
     pv.d_found = d_found;
@@ -693,6 +705,18 @@ fn horizon_weight(cosine: f32) -> f32 {
     return t * t * (3.0 - 2.0 * t);
 }
 
+// The cosine of `dir` with the normal of the triangle, on the side of the
+// shading normal that `dir` is on, for `horizon_weight`: light through a
+// transmissive surface has to come from below the triangle too.
+fn side_cosine(dir: vec3<f32>, normal: vec3<f32>, flat_normal: vec3<f32>) -> f32 {
+    return select(-1.0, 1.0, dot(dir, normal) >= 0.0) * dot(dir, flat_normal);
+}
+
+// Derivative of `side_cosine` by the normal of the triangle.
+fn side_cosine_grad(dir: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    return select(-1.0, 1.0, dot(dir, normal) >= 0.0) * dir;
+}
+
 fn horizon_weight_grad(cosine: f32) -> f32 {
     let t = cosine / HORIZON_BAND;
     return select(0.0, 6.0 * t * (1.0 - t) / HORIZON_BAND, t > 0.0 && t < 1.0);
@@ -709,6 +733,7 @@ struct PathVertex {
     flat_normal: vec3<f32>,
     view_dir: vec3<f32>,
     material: Material,
+    transmission: f32,
     // Moving the origin of the camera ray by `d` moves the hit along the
     // ray by `dot(depth_row, d)` times its direction.
     depth_row: vec3<f32>,
@@ -819,18 +844,26 @@ var<private> turn_first_bsdf_sample: bool;
 // where each alone has a large one, which is antithetic sampling, after
 // Zhang et al. "Antithetic Sampling for Monte Carlo Differentiable
 // Rendering" (2021).
-fn sample_bsdf_turned(mat: Material, normal: vec3<f32>, view_dir: vec3<f32>, turned: bool, rng: ptr<function, RandomState>) -> BsdfSample {
+fn sample_bsdf_turned(mat: Material, transmission: f32, normal: vec3<f32>, view_dir: vec3<f32>, turned: bool, rng: ptr<function, RandomState>) -> BsdfSample {
     let frame = make_tangent_frame(normal);
     let turn = select(vec3<f32>(1.0), vec3<f32>(-1.0, -1.0, 1.0), turned);
     var dir: vec3<f32>;
     if (random_gen(rng) < specular_sampling_ratio(mat)) {
         let half_dir = frame * (turn * sample_ggx_half_dir(material_alpha(mat), rng));
         dir = 2.0 * dot(view_dir, half_dir) * half_dir - view_dir;
+    } else if (transmission > 0.0 && random_gen(rng) < transmission) {
+        // The specular lobe, mirrored through the surface.
+        let half_dir = frame * (turn * sample_ggx_half_dir(material_alpha(mat), rng));
+        let reflected = 2.0 * dot(view_dir, half_dir) * half_dir - view_dir;
+        if (dot(reflected, normal) <= 0.0) {
+            return BsdfSample(normal, 0.0);
+        }
+        dir = reflected - 2.0 * dot(reflected, normal) * normal;
     } else {
         dir = frame * (turn * sample_hemisphere_cosine(rng));
     }
     dir = normalize(dir);
-    return BsdfSample(dir, compute_bsdf_pdf(mat, normal, view_dir, dir));
+    return BsdfSample(dir, surface_pdf(mat, transmission, normal, view_dir, dir));
 }
 
 // Walk one path and return its radiance.
@@ -893,10 +926,13 @@ fn walk_path(
 
         var v = resolve_vertex(intersection);
         let view_dir = -direction;
-        let unbent_normal = v.surface.normal;
+        // A transmissive surface is a thin wall, seen the same from both
+        // sides, so its normals face the ray.
+        let facing = select(1.0, -1.0, v.transmission > 0.0 && dot(v.surface.flat_normal, view_dir) < 0.0);
+        let unbent_normal = facing * v.surface.normal;
         v.surface.normal = bend_normal(unbent_normal, view_dir);
         let normal = v.surface.normal;
-        let flat_normal = v.surface.flat_normal;
+        let flat_normal = facing * v.surface.flat_normal;
         // Derivative of the loss by everything found at this vertex.
         let d_found = adjoint * throughput;
         // The emission is also found by drawing points on the emitters from
@@ -909,7 +945,7 @@ fn walk_path(
                 emission_weight = mis_weight(1.0, bsdf_pdf, f32(parameters.emitter_samples), light_pdf);
             }
         }
-        var grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found * emission_weight, vec3<f32>(0.0), vec3<f32>(0.0));
+        var grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found * emission_weight, 0.0, vec3<f32>(0.0), vec3<f32>(0.0));
         var found = v.emissive * emission_weight;
         position = v.surface.position;
         t_min = parameters.t_start;
@@ -930,14 +966,14 @@ fn walk_path(
             if (ls.pdf <= 0.0) {
                 continue;
             }
-            let bsdf = evaluate_bsdf_gradient(v.material, normal, view_dir, ls.dir);
-            let horizon_cosine = dot(ls.dir, flat_normal);
+            let bsdf = evaluate_surface_gradient(v.material, v.transmission, normal, view_dir, ls.dir);
+            let horizon_cosine = side_cosine(ls.dir, normal, flat_normal);
             let horizon = horizon_weight(horizon_cosine);
             if (horizon <= 0.0 || all(bsdf.value <= vec3<f32>(0.0))
                 || is_occluded(position, ls.dir)) {
                 continue;
             }
-            let other_pdf = compute_bsdf_pdf(v.material, normal, view_dir, ls.dir);
+            let other_pdf = surface_pdf(v.material, v.transmission, normal, view_dir, ls.dir);
             let unfaded = mis_weight(num_light, ls.pdf, bsdf_count, other_pdf) / (num_light * ls.pdf);
             let weight = unfaded * horizon;
             let light = env_radiance(ls.texel);
@@ -946,7 +982,7 @@ fn walk_path(
                 add_bsdf_grad(&grad, bsdf, v.material, d_found * light * weight);
                 scatter_env_grad(ls.texel, d_found * bsdf.value * weight);
                 grad.flat_normal += dot(d_found, bsdf.value * light) * unfaded
-                    * horizon_weight_grad(horizon_cosine) * ls.dir;
+                    * horizon_weight_grad(horizon_cosine) * side_cosine_grad(ls.dir, normal);
             }
         }
         // Points on the emitting triangles. Only their directions are drawn
@@ -968,12 +1004,12 @@ fn walk_path(
             }
             let dir = offset / distance;
             let light_pdf = emitter_pdf(triangle, dir, distance, emitters_drawn);
-            let horizon_cosine = dot(dir, flat_normal);
+            let horizon_cosine = side_cosine(dir, normal, flat_normal);
             let horizon = horizon_weight(horizon_cosine);
             if (light_pdf <= 0.0 || horizon <= 0.0) {
                 continue;
             }
-            let bsdf = evaluate_bsdf_gradient(v.material, normal, view_dir, dir);
+            let bsdf = evaluate_surface_gradient(v.material, v.transmission, normal, view_dir, dir);
             if (all(bsdf.value <= vec3<f32>(0.0))) {
                 continue;
             }
@@ -982,7 +1018,7 @@ fn walk_path(
                 continue;
             }
             let lamp = resolve_vertex(hit);
-            let other_pdf = compute_bsdf_pdf(v.material, normal, view_dir, dir);
+            let other_pdf = surface_pdf(v.material, v.transmission, normal, view_dir, dir);
             let samples = f32(parameters.emitter_samples);
             let unfaded = mis_weight(samples, light_pdf, bsdf_count, other_pdf) / (samples * light_pdf);
             let weight = unfaded * horizon;
@@ -990,8 +1026,8 @@ fn walk_path(
             if (replay) {
                 add_bsdf_grad(&grad, bsdf, v.material, d_found * lamp.emissive * weight);
                 grad.flat_normal += dot(d_found, bsdf.value * lamp.emissive) * unfaded
-                    * horizon_weight_grad(horizon_cosine) * dir;
-                var lamp_grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found * bsdf.value * weight, vec3<f32>(0.0), vec3<f32>(0.0));
+                    * horizon_weight_grad(horizon_cosine) * side_cosine_grad(dir, normal);
+                var lamp_grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found * bsdf.value * weight, 0.0, vec3<f32>(0.0), vec3<f32>(0.0));
                 scatter_material_grad(lamp, lamp_grad);
             }
         }
@@ -1004,11 +1040,11 @@ fn walk_path(
 
         var weight = vec3<f32>(0.0);
         if (will_extend) {
-            let bs = sample_bsdf_turned(v.material, normal, view_dir, bounce == 0u && turn_first_bsdf_sample, rng);
-            let horizon_cosine = dot(bs.dir, flat_normal);
+            let bs = sample_bsdf_turned(v.material, v.transmission, normal, view_dir, bounce == 0u && turn_first_bsdf_sample, rng);
+            let horizon_cosine = side_cosine(bs.dir, normal, flat_normal);
             let horizon = horizon_weight(horizon_cosine);
             if (bs.pdf > 0.0 && horizon > 0.0) {
-                let bsdf = evaluate_bsdf_gradient(v.material, normal, view_dir, bs.dir);
+                let bsdf = evaluate_surface_gradient(v.material, v.transmission, normal, view_dir, bs.dir);
                 var scale = horizon / bs.pdf;
                 var survives = true;
                 if (bounce >= ROULETTE_START) {
@@ -1022,7 +1058,7 @@ fn walk_path(
                         let d_value = d_found * (*incident)[bounce] * scale;
                         add_bsdf_grad(&grad, bsdf, v.material, d_value);
                         grad.flat_normal += dot(d_value, bsdf.value) / horizon
-                            * horizon_weight_grad(horizon_cosine) * bs.dir;
+                            * horizon_weight_grad(horizon_cosine) * side_cosine_grad(bs.dir, normal);
                     }
                     bsdf_pdf = bs.pdf;
                     direction = bs.dir;
@@ -1030,8 +1066,10 @@ fn walk_path(
             }
         }
         if (replay) {
-            grad.normal = bend_normal_grad(unbent_normal, view_dir, grad.normal);
-            v.surface.normal = unbent_normal;
+            // By the normals as they are, not as they face the ray.
+            grad.normal = facing * bend_normal_grad(unbent_normal, view_dir, grad.normal);
+            grad.flat_normal *= facing;
+            v.surface.normal = facing * unbent_normal;
             scatter_material_grad(v, grad);
             if (parameters.geometry != 0u) {
                 // Only a path from the camera, whose origin is the previous hit.
@@ -1046,7 +1084,7 @@ fn walk_path(
                 (*record).d_hits[bounce] = vec3<f32>(0.0);
                 (*record).hit_count = bounce + 1u;
                 // The triangle turns with the instance.
-                add_rotation_grad(intersection.instance_index, cross(flat_normal, grad.flat_normal));
+                add_rotation_grad(intersection.instance_index, cross(v.surface.flat_normal, grad.flat_normal));
             }
         } else {
             (*record).weight[bounce] = weight;
@@ -1194,6 +1232,7 @@ fn init_materials(@builtin(global_invocation_id) global_id: vec3<u32>) {
         entry.metalness,
         entry.emissive_factor.xyz,
         entry.roughness,
+        0.0, 0.0, 0.0, 0.0,
     );
 }
 
@@ -1586,11 +1625,11 @@ fn sample_secondary_edges(pv: PathVertex, depth: u32, rng: ptr<function, RandomS
             continue;
         }
         let dir = offset / distance;
-        let horizon = horizon_weight(dot(dir, pv.flat_normal));
+        let horizon = horizon_weight(side_cosine(dir, pv.normal, pv.flat_normal));
         if (horizon <= 0.0) {
             continue;
         }
-        let bsdf = evaluate_bsdf_gradient(pv.material, pv.normal, pv.view_dir, dir).value;
+        let bsdf = evaluate_surface_gradient(pv.material, pv.transmission, pv.normal, pv.view_dir, dir).value;
         if (all(bsdf <= vec3<f32>(0.0))) {
             continue;
         }
