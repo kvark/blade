@@ -3,8 +3,8 @@
 use super::{PbrHarness, SHADER_DIR, pbr_scene};
 use blade_graphics as gpu;
 use blade_render::diff::{
-    AdamConfig, DiffConfig, DiffShaders, DiffTracer, DiffTracerDesc, GeometryBase, GeometryOffsets,
-    MaterialParamFlags, MaterialParams, StepConfig,
+    AdamConfig, DiffConfig, DiffLight, DiffShaders, DiffTracer, DiffTracerDesc, GeometryBase,
+    GeometryOffsets, LightParamFlags, MaterialParamFlags, MaterialParams, StepConfig,
 };
 use blade_render::large_steps::{LargeSteps, LargeStepsConfig};
 use blade_render::marching::{SdfGrid, SdfOptimizer, SdfOptimizerConfig};
@@ -472,6 +472,30 @@ impl DiffScene {
             &mut self.temp,
         );
         self.submit();
+    }
+
+    fn set_lights(&mut self, lights: &[DiffLight]) {
+        let context = std::sync::Arc::clone(&self.harness.context);
+        self.diff
+            .set_lights(&mut self.encoder, &context, lights, &mut self.temp);
+        self.submit();
+    }
+
+    fn read_lights(&mut self) -> (Vec<DiffLight>, Vec<DiffLight>) {
+        self.diff.read_back_lights(&mut self.encoder);
+        self.submit();
+        (
+            self.diff.lights().to_vec(),
+            self.diff.light_grads().to_vec(),
+        )
+    }
+
+    /// Take the light of the sky out, leaving that of the lights.
+    fn darken_sky(&mut self) {
+        let size = self.diff.environment_size();
+        let count = (size.width * size.height) as usize;
+        let env = self.diff.environment_params();
+        self.upload(env, &vec![[0.0, 0.0, 0.0, 1.0]; count]);
     }
 
     /// Offset the vertex slots of the blob by `offset` of their positions
@@ -2698,5 +2722,241 @@ fn diff_control_variate_follows_motion() {
         apart / expected
     );
     assert!(total(control_variance) < 0.7 * total(plain_variance));
+    scene.destroy();
+}
+
+/// A parameter of the scene of the lights, for central differences.
+#[derive(Clone, Copy, Debug)]
+enum LightParam {
+    Ball(usize),
+    Position(usize),
+    Intensity,
+    Direction(usize),
+}
+
+/// The scene of the shadow, lit by `light` alone, which the sphere shades
+/// the wall from, with the sphere moved by `ball`.
+fn set_light_scene(scene: &mut DiffScene, ball: [f32; 3], light: DiffLight) {
+    let mut offsets = GeometryOffsets {
+        translations: vec![[0.0; 3]; 2],
+        rotations: vec![[0.0; 3]; 2],
+        camera: [0.0; 3],
+    };
+    offsets.translations[1] = ball;
+    scene.move_geometry(&offsets);
+    scene.set_lights(&[light]);
+}
+
+/// The gradients by the light, and by the sphere, which only moves the
+/// shadow that the light casts, against central differences of the loss.
+fn check_light_gradients(
+    scene: &mut DiffScene,
+    target: DiffLight,
+    start: DiffLight,
+    params: &[(LightParam, f32)],
+) {
+    const BALL: usize = 1;
+    scene.darken_sky();
+    set_light_scene(scene, [0.0; 3], target);
+    scene.capture_target();
+    let ball = [0.3, 0.25, 0.0];
+    set_light_scene(scene, ball, start);
+
+    const ITERATIONS: u32 = 256;
+    for iteration in 0..ITERATIONS {
+        scene.backward(iteration, 8, 4);
+    }
+    scene.diff.read_back(&mut scene.encoder);
+    scene.submit();
+    let ball_grad = scene.diff.translation_grads()[BALL];
+    let (_, light_grads) = scene.read_lights();
+    let light_grad = light_grads[0];
+
+    let frames = 2_000_000..2_002_048;
+    let mut results = Vec::new();
+    for &(param, h) in params {
+        let analytic = match param {
+            LightParam::Ball(axis) => ball_grad[axis],
+            LightParam::Position(axis) => light_grad.position[axis],
+            LightParam::Intensity => light_grad.intensity[0],
+            LightParam::Direction(axis) => light_grad.direction[axis],
+        } / ITERATIONS as f32;
+        let mut losses = [0.0; 2];
+        for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
+            let mut moved = ball;
+            let mut light = start;
+            match param {
+                LightParam::Ball(axis) => moved[axis] += sign * h,
+                LightParam::Position(axis) => light.position[axis] += sign * h,
+                LightParam::Intensity => light.intensity[0] += sign * h,
+                LightParam::Direction(axis) => light.direction[axis] += sign * h,
+            }
+            set_light_scene(scene, moved, light);
+            *loss = scene.unbiased_loss(frames.clone());
+        }
+        let numeric = (losses[0] - losses[1]) / (2.0 * h);
+        println!("d loss / d {param:?}: {analytic:e}, central difference {numeric:e}");
+        results.push((param, analytic, numeric));
+    }
+    let largest = results.iter().map(|r| r.2.abs()).fold(0.0, f32::max);
+    for (param, analytic, numeric) in results {
+        assert!(
+            (analytic - numeric).abs() <= 0.25 * numeric.abs() + 0.05 * largest,
+            "d loss / d {param:?}: gradient {analytic:e} disagrees with {numeric:e}"
+        );
+    }
+}
+
+/// A point light high above the wall, past the sphere, which the camera
+/// sees by the shadow on the wall alone. Moving the light or the sphere
+/// moves the shadow, and the light also lights the wall by its distance
+/// and its direction.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_point_light_gradients_match_finite_differences() {
+    let Some(mut scene) = DiffScene::new("diff-point-light", SceneKind::Shadow) else {
+        return;
+    };
+    scene.config.max_bounces = 0;
+    scene.config.edge_samples = 4;
+    check_light_gradients(
+        &mut scene,
+        DiffLight::point([0.0, 8.0, -0.2], [800.0; 3]),
+        DiffLight::point([0.3, 7.7, 0.1], [700.0, 800.0, 900.0]),
+        &[
+            (LightParam::Ball(0), 0.05),
+            (LightParam::Ball(1), 0.05),
+            (LightParam::Position(0), 0.1),
+            (LightParam::Position(1), 0.1),
+            (LightParam::Position(2), 0.1),
+            (LightParam::Intensity, 20.0),
+        ],
+    );
+    scene.destroy();
+}
+
+/// A spot light, whose cone fades out on the wall, through a bounce: moving
+/// it and turning it moves the cone and the shadow of the sphere, which
+/// also brings light to the wall from where the spot light lights it.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_spot_light_gradients_match_finite_differences() {
+    let Some(mut scene) = DiffScene::new("diff-spot-light", SceneKind::Shadow) else {
+        return;
+    };
+    scene.config.max_bounces = 1;
+    scene.config.edge_samples = 4;
+    scene.config.secondary_edge_samples = 8;
+    let spot = |position: [f32; 3], direction: [f32; 3]| {
+        DiffLight::spot(position, [800.0; 3], direction, 0.1, 0.25)
+    };
+    check_light_gradients(
+        &mut scene,
+        spot([0.0, 8.0, -0.2], [0.0, -7.6, -1.2]),
+        spot([0.2, 7.8, 0.0], [0.3, -7.6, -1.0]),
+        &[
+            (LightParam::Ball(0), 0.05),
+            (LightParam::Position(0), 0.1),
+            (LightParam::Position(1), 0.1),
+            (LightParam::Direction(0), 0.1),
+            (LightParam::Direction(2), 0.1),
+        ],
+    );
+    scene.destroy();
+}
+
+/// Optimizing the position and the intensity of a point light brings them
+/// back to those that lit the target, by the light on the wall and the
+/// shadow of the sphere on it.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_recovers_point_light() {
+    let Some(mut scene) = DiffScene::new("diff-recover-light", SceneKind::Shadow) else {
+        return;
+    };
+    scene.config.max_bounces = 0;
+    scene.config.edge_samples = 2;
+    scene.darken_sky();
+    let target = DiffLight::point([0.0, 8.0, -0.2], [800.0; 3]);
+    scene.set_lights(&[target]);
+    scene.capture_target();
+    let start = DiffLight::point([0.6, 7.4, 0.3], [600.0; 3]);
+    scene.set_lights(&[start]);
+    let distance = |light: &DiffLight| {
+        light
+            .position
+            .iter()
+            .zip(target.position)
+            .map(|(a, b)| (a - b) * (a - b))
+            .sum::<f32>()
+            .sqrt()
+    };
+    let step = StepConfig {
+        lights: Some((
+            AdamConfig {
+                learning_rate: 0.02,
+                ..Default::default()
+            },
+            LightParamFlags::POSITION,
+        )),
+        ..Default::default()
+    };
+    let intensity_step = StepConfig {
+        lights: Some((
+            AdamConfig {
+                learning_rate: 10.0,
+                ..Default::default()
+            },
+            LightParamFlags::INTENSITY,
+        )),
+        ..Default::default()
+    };
+    let mut first_loss = None;
+    for iteration in 0..200 {
+        scene.backward(iteration, 4, 2);
+        // Positions and intensities take steps of their own scales, on
+        // alternate iterations.
+        let config = if iteration % 2 == 0 {
+            &step
+        } else {
+            &intensity_step
+        };
+        scene.diff.step(&mut scene.encoder, config);
+        if iteration % 50 == 0 {
+            scene.submit();
+            let loss = scene.diff.loss();
+            first_loss.get_or_insert(loss);
+            let (lights, _) = scene.read_lights();
+            println!(
+                "iteration {iteration}: loss {loss:e}, light at {:?}, intensity {:?}",
+                lights[0].position, lights[0].intensity
+            );
+        }
+    }
+    scene.submit();
+    let loss = scene.diff.loss();
+    let (lights, _) = scene.read_lights();
+    let light = lights[0];
+    println!(
+        "final: loss {loss:e}, light at {:?}, intensity {:?}",
+        light.position, light.intensity
+    );
+    let start_distance = distance(&start);
+    assert!(
+        distance(&light) < 0.25 * start_distance,
+        "the light ended {} away, from {start_distance}",
+        distance(&light)
+    );
+    for c in 0..3 {
+        assert!(
+            (light.intensity[c] - target.intensity[c]).abs() < 0.1 * target.intensity[c],
+            "intensity {c} ended at {}",
+            light.intensity[c]
+        );
+    }
+    assert!(
+        loss < 0.1 * first_loss.unwrap(),
+        "the loss went from {first_loss:?} to {loss}"
+    );
     scene.destroy();
 }

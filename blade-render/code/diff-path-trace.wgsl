@@ -82,7 +82,8 @@ struct DiffParams {
     // Sample the edges that the camera sees by projecting the hits of the
     // paths onto them, see `sample_projective_edge`, instead of `edges`.
     projective_edges: u32,
-    _pad1: u32,
+    // Lights in `light_params`.
+    light_count: u32,
     _pad2: u32,
 }
 
@@ -195,6 +196,21 @@ var<storage, read_write> edge_guide: array<f32>;
 // The number of the triangles whose materials emit, and then their indices,
 // which `collect_emitters` fills in for every pass.
 var<storage, read_write> emitters: array<atomic<u32>>;
+
+// Has to match the host!
+// A point light, or a spot light, see `light_falloff`.
+struct DiffLight {
+    position: vec3<f32>,
+    cos_outer: f32,
+    intensity: vec3<f32>,
+    cos_inner: f32,
+    direction: vec3<f32>,
+    _pad: f32,
+}
+const LIGHT_PARAM_COUNT: u32 = 12u;
+var<storage, read> light_params: array<DiffLight>;
+// In the layout of `DiffLight`.
+var<storage, read_write> light_grads: array<atomic<f32>>;
 var<storage, read_write> camera_grads: array<atomic<f32>>;
 
 fn trace_ray(position: vec3<f32>, direction: vec3<f32>, t_min: f32) -> RayIntersection {
@@ -859,6 +875,42 @@ fn emitter_pdf(triangle: u32, direction: vec3<f32>, distance: f32, count: u32) -
     return distance * distance / (cosine * 0.5 * double_area * f32(count));
 }
 
+// How much of its intensity a light sends towards `-light_dir`: all of it
+// for a point light, and for a spot light, a smooth step from nothing at
+// `cos_outer` off its direction to all at `cos_inner`, which keeps the edge
+// of its cone from being a discontinuity. `y` is the derivative by the
+// cosine off the direction.
+fn light_falloff(light: DiffLight, light_dir: vec3<f32>) -> vec2<f32> {
+    if (light.cos_outer < -1.0) {
+        return vec2<f32>(1.0, 0.0);
+    }
+    let cosine = -dot(light_dir, normalize(light.direction));
+    let width = max(light.cos_inner - light.cos_outer, 1.0e-6);
+    let t = clamp((cosine - light.cos_outer) / width, 0.0, 1.0);
+    let d_t = select(0.0, 1.0 / width, t > 0.0 && t < 1.0);
+    return vec2<f32>(t * t * (3.0 - 2.0 * t), 6.0 * t * (1.0 - t) * d_t);
+}
+
+fn add_light_grad(index: u32, component: u32, grad: vec3<f32>) {
+    for (var k = 0u; k < 3u; k += 1u) {
+        if (grad[k] != 0.0) {
+            atomicAdd(&light_grads[index * LIGHT_PARAM_COUNT + component + k], grad[k]);
+        }
+    }
+}
+
+// Whether anything is between `position` and the point at `distance` along
+// `direction`.
+fn is_occluded_within(position: vec3<f32>, direction: vec3<f32>, distance: f32) -> bool {
+    var rq: ray_query;
+    let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
+    rayQueryInitialize(&rq, acc_struct,
+        RayDesc(flags, 0xFFu, parameters.t_start, distance * (1.0 - 1.0e-4), position, direction)
+    );
+    rayQueryProceed(&rq);
+    return rayQueryGetCommittedIntersection(&rq).kind != RAY_QUERY_INTERSECTION_NONE;
+}
+
 // Whether the walk turns the first direction that it samples from a BSDF,
 // see `sample_bsdf_turned`.
 var<private> turn_first_bsdf_sample: bool;
@@ -1042,6 +1094,55 @@ fn walk_path(
                 scatter_material_grad(lamp, lamp_grad);
             }
         }
+        // The point and spot lights, whose directions aren't drawn, so the
+        // BSDF moves with them, and with the hit, which the derivative by
+        // its position takes, see `scatter_hit_motion`.
+        var d_position = vec3<f32>(0.0);
+        for (var i = 0u; i < select(0u, parameters.light_count, light_hits); i += 1u) {
+            let light = light_params[i];
+            let offset = light.position - position;
+            let distance = length(offset);
+            if (distance < 1.0e-4) {
+                continue;
+            }
+            let dir = offset / distance;
+            let falloff = light_falloff(light, dir);
+            let horizon_cosine = side_cosine(dir, normal, flat_normal);
+            let horizon = horizon_weight(horizon_cosine);
+            if (horizon <= 0.0 || falloff.x <= 0.0) {
+                continue;
+            }
+            let bsdf = evaluate_surface_gradient(v.material, v.transmission, v.eta, normal, view_dir, dir);
+            if (all(bsdf.value <= vec3<f32>(0.0)) || is_occluded_within(position, dir, distance)) {
+                continue;
+            }
+            let arriving = light.intensity / (distance * distance);
+            found += bsdf.value * arriving * falloff.x * horizon;
+            if (replay) {
+                let d_value = d_found * arriving * falloff.x * horizon;
+                add_bsdf_grad(&grad, bsdf, v.material, d_value);
+                let d_horizon = dot(d_found, bsdf.value * arriving) * falloff.x;
+                grad.flat_normal += d_horizon * horizon_weight_grad(horizon_cosine) * side_cosine_grad(dir, normal);
+                add_light_grad(i, 4u, d_found * bsdf.value * falloff.x * horizon / (distance * distance));
+                // By the direction to the light, through the BSDF, the
+                // horizon, and the cone, and by the distance to it.
+                let d_cone = dot(d_found, bsdf.value * arriving) * horizon * falloff.y;
+                let spot_dir = normalize(light.direction);
+                // `side_cosine` by the direction is the normal of the
+                // triangle, on the side of the shading normal.
+                let side = select(-1.0, 1.0, dot(dir, normal) >= 0.0);
+                let d_dir = bsdf_light_grad(bsdf, d_value)
+                    + d_horizon * horizon_weight_grad(horizon_cosine) * side * flat_normal
+                    - d_cone * spot_dir;
+                let d_distance = -2.0 * dot(d_found, bsdf.value * arriving * falloff.x * horizon) / distance;
+                let d_light = (d_dir - dir * dot(dir, d_dir)) / distance + d_distance * dir;
+                add_light_grad(i, 0u, d_light);
+                if (light.cos_outer >= -1.0) {
+                    add_light_grad(i, 8u, -d_cone * (dir - spot_dir * dot(spot_dir, dir)) / length(light.direction));
+                }
+                d_position -= d_light;
+            }
+        }
         radiance += throughput * found;
         if (!replay) {
             (*record).found[bounce] = found;
@@ -1092,7 +1193,7 @@ fn walk_path(
                     (*record).d_hits[bounce - 1u] += d_origin;
                 }
                 (*record).hits[bounce] = make_path_vertex(intersection, ray_dir, v, normal, flat_normal, d_found);
-                (*record).d_hits[bounce] = vec3<f32>(0.0);
+                (*record).d_hits[bounce] = d_position;
                 (*record).hit_count = bounce + 1u;
                 // The triangle turns with the instance.
                 add_rotation_grad(intersection.instance_index, cross(v.surface.flat_normal, grad.flat_normal));
@@ -1252,6 +1353,14 @@ fn adjoint(@builtin(global_invocation_id) global_id: vec3<u32>) {
             for (var k = 0u; k < depth; k += 1u) {
                 if (record.hits[k].valid) {
                     record.d_hits[k] += sample_secondary_edges(record.hits[k], k, &edge_rng);
+                }
+            }
+        }
+        if (parameters.secondary_edge_samples != 0u && parameters.light_count != 0u) {
+            let depth = min(record.hit_count, parameters.secondary_edge_depth);
+            for (var k = 0u; k < depth; k += 1u) {
+                if (record.hits[k].valid) {
+                    record.d_hits[k] += sample_light_shadows(record.hits[k], k, &edge_rng);
                 }
             }
         }
@@ -1466,6 +1575,185 @@ fn sample_edge_at(
     add_vertex_grad(slots.y, linear, s * weight * velocity);
 }
 
+// The shadows of the point and spot lights: where the edge of a silhouette,
+// as the light sees it, casts the boundary of its shadow onto a receiver,
+// along which the light that the receiver sends is discontinuous. The
+// point `e` of the edge casts the point `y = light + k (e - light)` of the
+// boundary, on the plane of the receiver with the normal `n`, which moves
+// with the edge by `J = k (I - d n^T / dot(n, d))`, where `d = e - light`,
+// with the light by `(1 - k) / k` of that, and with the plane by
+// `d n^T / dot(n, d)`.
+struct ShadowPoint {
+    valid: bool,
+    point: vec3<f32>,
+    edge_point: vec3<f32>,
+    k: f32,
+    d: vec3<f32>,
+    receiver_normal: vec3<f32>,
+    denom: f32,
+    // A step across the boundary, into the shadow.
+    step: vec3<f32>,
+    triangle: u32,
+    barycentrics: vec3<f32>,
+}
+
+fn shadow_jacobian(sp: ShadowPoint, u: vec3<f32>) -> vec3<f32> {
+    return sp.k * (u - sp.d * dot(sp.receiver_normal, u) / sp.denom);
+}
+
+fn shadow_jacobian_transposed(sp: ShadowPoint, g: vec3<f32>) -> vec3<f32> {
+    return sp.k * (g - sp.receiver_normal * dot(sp.d, g) / sp.denom);
+}
+
+// The boundary that the point `t` along the edge from `corner` of the
+// triangle with the world `corners` casts from the light at `light`, if the
+// edge is a silhouette there: the light passes it on the outside of the
+// triangle, which `neighbors`, the triangles along the edge, don't cover.
+fn find_shadow_point(light: vec3<f32>, corners: mat3x3<f32>, corner: u32, t: f32, neighbors: vec2<u32>) -> ShadowPoint {
+    var sp: ShadowPoint;
+    sp.valid = false;
+    let a = corners[corner];
+    let b = corners[(corner + 1u) % 3u];
+    let c = corners[(corner + 2u) % 3u];
+    let e = mix(a, b, t);
+    let along = b - a;
+    let length_squared = dot(along, along);
+    var inward = c - e;
+    inward -= along * (dot(inward, along) / max(length_squared, 1.0e-20));
+    let height = length(inward);
+    if (height < 1.0e-8 || length_squared < 1.0e-16) {
+        return sp;
+    }
+    let step = 1.0e-3 * min(sqrt(length_squared), height) / height * inward;
+    let d = e - light;
+    let distance = length(d);
+    if (distance < 1.0e-4) {
+        return sp;
+    }
+    let outside = normalize(e - step - light);
+    let hit = trace_ray(light, outside, 0.0);
+    // Hidden from the light, or not a silhouette.
+    if (hit.kind == RAY_QUERY_INTERSECTION_NONE || hit.t <= distance * (1.0 + 1.0e-4)) {
+        return sp;
+    }
+    let triangle = hit_triangle(hit);
+    if (triangle == neighbors.x || triangle == neighbors.y) {
+        return sp;
+    }
+    let receiver = resolve_vertex(hit);
+    let n = receiver.surface.flat_normal;
+    let denom = dot(n, d);
+    if (abs(denom) < 1.0e-6 * distance) {
+        return sp;
+    }
+    sp.k = dot(n, light + hit.t * outside - light) / denom;
+    sp.point = light + sp.k * d;
+    sp.edge_point = e;
+    sp.d = d;
+    sp.receiver_normal = n;
+    sp.denom = denom;
+    sp.step = shadow_jacobian(sp, step);
+    sp.triangle = triangle;
+    sp.barycentrics = vec3<f32>(1.0 - hit.barycentrics.x - hit.barycentrics.y, hit.barycentrics);
+    sp.valid = true;
+    return sp;
+}
+
+// Whether the point `sp` of a receiver is what the ray from `eye` towards it
+// hits first.
+fn sees_shadow_point(eye: vec3<f32>, t_min: f32, sp: ShadowPoint) -> bool {
+    let offset = sp.point - eye;
+    let distance = length(offset);
+    let seen = trace_ray(eye, offset / distance, t_min);
+    return seen.kind != RAY_QUERY_INTERSECTION_NONE && hit_triangle(seen) == sp.triangle
+        && abs(seen.t - distance) <= 1.0e-3 * distance;
+}
+
+// Scatter the derivative `g` of the loss by moving the point of the boundary
+// to the edge, the light, and the receiver that make it.
+fn scatter_shadow_grad(sp: ShadowPoint, edges: TriangleEdges, corner: u32, t: f32, light_index: u32, g: vec3<f32>) {
+    let g_edge = shadow_jacobian_transposed(sp, g);
+    add_instance_grad(edges.instance, sp.edge_point, g_edge);
+    add_vertex_grad(edges.slots[corner], edges.linear, (1.0 - t) * g_edge);
+    add_vertex_grad(edges.slots[(corner + 1u) % 3u], edges.linear, t * g_edge);
+    add_light_grad(light_index, 0u, (1.0 - sp.k) / sp.k * g_edge);
+    let receiver = triangle_edges(sp.triangle);
+    let g_plane = sp.receiver_normal * (dot(sp.d, g) / sp.denom);
+    add_instance_grad(receiver.instance, sp.point, g_plane);
+    for (var j = 0u; j < 3u; j += 1u) {
+        add_vertex_grad(receiver.slots[j], receiver.linear, sp.barycentrics[j] * g_plane);
+    }
+}
+
+// The triangles along the edge in `slot` of the table, or `~0u`.
+fn edge_neighbors(slot: u32) -> vec2<u32> {
+    if (slot == ~0u) {
+        return vec2<u32>(~0u);
+    }
+    let count = atomicLoad(&edge_counts[slot]);
+    return vec2<u32>(
+        select(~0u, edge_triangles[2u * slot], count >= 1u),
+        select(~0u, edge_triangles[2u * slot + 1u], count >= 2u),
+    );
+}
+
+// The boundary term of the image at the shadow that the point `t` along the
+// edge from `corner` of the triangle of `edges` casts from the light
+// `light_index`, drawn with the density `1 / inverse_density` along `t`.
+fn sample_light_shadow(
+    light_index: u32,
+    edges: TriangleEdges,
+    corner: u32,
+    t: f32,
+    inverse_density: f32,
+    neighbors: vec2<u32>,
+    rng: ptr<function, RandomState>,
+) {
+    let corners = world_triangle(edges);
+    let sp = find_shadow_point(light_params[light_index].position, corners, corner, t, neighbors);
+    if (!sp.valid || !is_in_front(camera, sp.point)) {
+        return;
+    }
+    let p = get_projected_pixel_float(camera, sp.point);
+    if (any(p < vec2<f32>(0.0)) || any(p >= vec2<f32>(camera.target_size))) {
+        return;
+    }
+    let d_pixel = film_adjoint(p);
+    if (all(d_pixel == vec3<f32>(0.0)) || !sees_shadow_point(camera.position, 0.0, sp)) {
+        return;
+    }
+    let jacobian = projection_jacobian(camera, sp.point);
+    let along = jacobian * shadow_jacobian(sp, corners[(corner + 1u) % 3u] - corners[corner]);
+    let speed = length(along);
+    if (speed < 1.0e-8) {
+        return;
+    }
+    let across = vec2<f32>(-along.y, along.x) / speed;
+    let ahead = get_ray_direction_at(camera, p + 1.0e-3 * across) - get_ray_direction_at(camera, p - 1.0e-3 * across);
+    let shadowed = normalize(sp.point + sp.step - camera.position);
+    let lit = normalize(sp.point - sp.step - camera.position);
+    let side = dot(shadowed - lit, ahead);
+    if (side == 0.0) {
+        return;
+    }
+    var record: PathRecord;
+    var incident: array<vec3<f32>, PATH_LENGTH>;
+    var side_rng = *rng;
+    let below = walk_path(camera.position, 0.0, i32(parameters.max_bounces), select(shadowed, lit, side > 0.0), &side_rng, &record, false, vec3<f32>(0.0), &incident);
+    side_rng = *rng;
+    let above = walk_path(camera.position, 0.0, i32(parameters.max_bounces), select(lit, shadowed, side > 0.0), &side_rng, &record, false, vec3<f32>(0.0), &incident);
+    *rng = side_rng;
+    let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
+        - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
+    let weight = dot(d_pixel, jump) * speed * inverse_density;
+    if (weight == 0.0) {
+        return;
+    }
+    let velocity = vec3<f32>(dot(across, jacobian[0]), dot(across, jacobian[1]), dot(across, jacobian[2]));
+    scatter_shadow_grad(sp, edges, corner, t, light_index, weight * velocity);
+    add_camera_grad(-weight * velocity);
+}
+
 // The width of the band along every edge of a triangle, as a part of the
 // way to the opposite corner, whose points are projected onto the edge by
 // `sample_projective_edge`. Narrower keeps the band clear of whatever
@@ -1580,9 +1868,21 @@ fn edges(
         if (count == 0u || (count >= 2u && !precedes(a, b))) {
             continue;
         }
-        let slots = vec2<u32>(edges.slots[i], edges.slots[(i + 1u) % 3u]);
-        let c = to_world * vec4<f32>(local[(i + 2u) % 3u], 1.0);
-        sample_edge(to_world * vec4<f32>(a, 1.0), to_world * vec4<f32>(b, 1.0), c, edges.instance, slots, edges.linear, &rng);
+        if (parameters.projective_edges == 0u) {
+            let slots = vec2<u32>(edges.slots[i], edges.slots[(i + 1u) % 3u]);
+            let c = to_world * vec4<f32>(local[(i + 2u) % 3u], 1.0);
+            sample_edge(to_world * vec4<f32>(a, 1.0), to_world * vec4<f32>(b, 1.0), c, edges.instance, slots, edges.linear, &rng);
+        }
+        if (parameters.light_count != 0u) {
+            let neighbors = edge_neighbors(edge_slot(edge_key(edges.instance, a, b)));
+            let samples = max(parameters.edge_samples, 1u);
+            for (var light = 0u; light < parameters.light_count; light += 1u) {
+                for (var k = 0u; k < samples; k += 1u) {
+                    let t = (f32(k) + random_gen(&rng)) / f32(samples);
+                    sample_light_shadow(light, edges, i, t, 1.0 / f32(samples), neighbors, &rng);
+                }
+            }
+        }
     }
 }
 
@@ -1847,6 +2147,109 @@ fn secondary_edge_at(
     add_instance_grad(edges.instance, point, grad);
     add_vertex_grad(edges.slots[corner], edges.linear, (1.0 - t) * grad);
     add_vertex_grad(edges.slots[(corner + 1u) % 3u], edges.linear, t * grad);
+    return -grad;
+}
+
+// The shadows of the lights that the hit `pv` sees, from
+// `secondary_edge_samples` edges drawn like by `sample_secondary_edges`,
+// each with a light drawn uniformly. Returns the derivative of the loss by
+// moving the hit.
+fn sample_light_shadows(pv: PathVertex, depth: u32, rng: ptr<function, RandomState>) -> vec3<f32> {
+    let light_count = parameters.light_count;
+    let samples = parameters.secondary_edge_samples;
+    var d_hit = vec3<f32>(0.0);
+    if (parameters.triangle_count == 0u || light_count == 0u) {
+        return d_hit;
+    }
+    for (var k = 0u; k < samples; k += 1u) {
+        let drawn = draw_edge(random_gen(rng));
+        let triangle = drawn.edge / 3u;
+        let corner = drawn.edge % 3u;
+        let t = random_gen(rng);
+        let light_index = min(u32(random_gen(rng) * f32(light_count)), light_count - 1u);
+        let edges = triangle_edges(triangle);
+        if (edges.degenerate) {
+            continue;
+        }
+        let la = edges.local[corner];
+        let lb = edges.local[(corner + 1u) % 3u];
+        let slot = edge_slot(edge_key(edges.instance, la, lb));
+        let neighbors = edge_neighbors(slot);
+        let count = select(0u, atomicLoad(&edge_counts[slot]), slot != ~0u);
+        if (count == 0u || (count >= 2u && !precedes(la, lb))) {
+            continue;
+        }
+        let inverse_density = f32(light_count) / (f32(samples) * drawn.probability);
+        d_hit += light_shadow_at(pv, depth, light_index, edges, corner, t, inverse_density, neighbors, drawn.edge, rng);
+    }
+    return d_hit;
+}
+
+// Like `secondary_edge_at`, for the shadow that the point `t` along the edge
+// casts from the light `light_index`, see `find_shadow_point`.
+fn light_shadow_at(
+    pv: PathVertex,
+    depth: u32,
+    light_index: u32,
+    edges: TriangleEdges,
+    corner: u32,
+    t: f32,
+    inverse_density: f32,
+    neighbors: vec2<u32>,
+    guide_edge: u32,
+    rng: ptr<function, RandomState>,
+) -> vec3<f32> {
+    let corners = world_triangle(edges);
+    let sp = find_shadow_point(light_params[light_index].position, corners, corner, t, neighbors);
+    if (!sp.valid) {
+        return vec3<f32>(0.0);
+    }
+    let offset = sp.point - pv.position;
+    let distance = length(offset);
+    if (distance < 1.0e-4) {
+        return vec3<f32>(0.0);
+    }
+    let dir = offset / distance;
+    let horizon = horizon_weight(side_cosine(dir, pv.normal, pv.flat_normal));
+    if (horizon <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let bsdf = evaluate_surface_gradient(pv.material, pv.transmission, pv.eta, pv.normal, pv.view_dir, dir).value;
+    if (all(bsdf <= vec3<f32>(0.0)) || !sees_shadow_point(pv.position, parameters.t_start, sp)) {
+        return vec3<f32>(0.0);
+    }
+    let along = shadow_jacobian(sp, corners[(corner + 1u) % 3u] - corners[corner]);
+    let turn = (along - dir * dot(dir, along)) / distance;
+    let speed = length(turn);
+    if (speed < 1.0e-8) {
+        return vec3<f32>(0.0);
+    }
+    let across = normalize(cross(dir, turn));
+    let shadowed = normalize(sp.point + sp.step - pv.position);
+    let lit = normalize(sp.point - sp.step - pv.position);
+    let side = dot(shadowed - lit, across);
+    if (side == 0.0) {
+        return vec3<f32>(0.0);
+    }
+    var record: PathRecord;
+    var incident: array<vec3<f32>, PATH_LENGTH>;
+    var side_rng = *rng;
+    let budget = i32(parameters.max_bounces) - i32(depth) - 1;
+    let below = walk_path(pv.position, parameters.t_start, budget, select(shadowed, lit, side > 0.0), &side_rng, &record, false, vec3<f32>(0.0), &incident);
+    side_rng = *rng;
+    let above = walk_path(pv.position, parameters.t_start, budget, select(lit, shadowed, side > 0.0), &side_rng, &record, false, vec3<f32>(0.0), &incident);
+    *rng = side_rng;
+    let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
+        - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
+    let weight = dot(pv.d_found, bsdf * horizon * jump) * speed * inverse_density;
+    if (weight == 0.0) {
+        return vec3<f32>(0.0);
+    }
+    if (parameters.guided_edges != 0u) {
+        atomicAdd(&edge_hits[guide_edge], abs(weight) / distance);
+    }
+    let grad = weight * across / distance;
+    scatter_shadow_grad(sp, edges, corner, t, light_index, grad);
     return -grad;
 }
 
