@@ -1337,6 +1337,7 @@ impl DiffTracer {
                 environment.params.size(),
                 textures.params.size(),
             ],
+            instance_transforms.size(),
         );
         let this = Self {
             pipelines: Some(pipelines),
@@ -1532,7 +1533,17 @@ impl DiffTracer {
         ray_tracer: &super::RayTracer,
         temp: &mut crate::FrameResources,
     ) {
-        self.control.invalidate();
+        // The transforms of the previous scene, for the control variate.
+        encoder
+            .transfer("diff-previous-transforms")
+            .copy_buffer_to_buffer(
+                self.instance_transforms.into(),
+                self.control.previous_transforms.into(),
+                self.instance_transforms.size(),
+            );
+        self.control
+            .geometry_generation
+            .set(self.control.geometry_generation.get().wrapping_add(1));
         if !self.geometry {
             return;
         }
@@ -1818,7 +1829,6 @@ impl DiffTracer {
         offsets: &GeometryOffsets,
         temp: &mut crate::FrameResources,
     ) {
-        self.control.invalidate();
         let count = self.instance_count as usize;
         assert_eq!(offsets.translations.len(), count);
         assert_eq!(offsets.rotations.len(), count);
@@ -2268,7 +2278,13 @@ impl DiffTracer {
         }
         self.accumulated_frames[self.view as usize] += 1;
         if config.control_variate > 0.0 && !accumulate {
-            self.apply_control_variate(encoder, &data, dispatch, config.control_variate);
+            self.apply_control_variate(
+                encoder,
+                ray_tracer,
+                &data,
+                dispatch,
+                config.control_variate,
+            );
         }
     }
 
@@ -2278,17 +2294,41 @@ impl DiffTracer {
     fn apply_control_variate(
         &mut self,
         encoder: &mut blade_graphics::CommandEncoder,
+        ray_tracer: &super::RayTracer,
         data: &DiffTraceData,
         dispatch: [u32; 3],
         weight: f32,
     ) {
         let view = self.view as usize;
         let generation = self.control.generation.get();
-        let valid = self.control.view_generations[view] == Some(generation);
+        let geometry_generation = self.control.geometry_generation.get();
+        // The scene of the last estimate: the current one, or the previous
+        // one if the scene was built once since, which only moves the
+        // objects, as anything else bumps `generation`.
+        let last = self.control.view_states[view].filter(|state| state.generation == generation);
+        let scene = last.and_then(|state| {
+            if state.geometry_generation == geometry_generation {
+                Some((data.acc_struct, self.instance_transforms))
+            } else if state.geometry_generation.wrapping_add(1) == geometry_generation
+                && ray_tracer.prev_acceleration_structure
+                    != blade_graphics::AccelerationStructure::default()
+            {
+                Some((
+                    ray_tracer.prev_acceleration_structure,
+                    self.control.previous_transforms,
+                ))
+            } else {
+                None
+            }
+        });
+        let valid = scene.is_some();
         let previous =
             |i: usize| self.control.previous_params[i].at(self.control.strides[i] * view as u64);
-        if valid {
+        if let (Some(state), Some((acc_struct, transforms))) = (last, scene) {
             let mut previous_data = DiffTraceData {
+                camera: state.camera,
+                acc_struct,
+                instance_transforms: transforms.into(),
                 material_params: previous(0),
                 env_params: previous(1),
                 texture_params: previous(2),
@@ -2335,7 +2375,11 @@ impl DiffTracer {
                 transfer.copy_buffer_to_buffer(current.into(), previous(i), current.size());
             }
         }
-        self.control.view_generations[view] = Some(generation);
+        self.control.view_states[view] = Some(ControlView {
+            generation,
+            geometry_generation,
+            camera: data.camera,
+        });
     }
 
     /// Make the current image the target.
@@ -2604,10 +2648,21 @@ struct ControlState {
     /// The estimate of every view.
     estimate: blade_graphics::Buffer,
     /// Bumped by every change that the parameters of the last estimates
-    /// don't account for, such as of the geometry.
+    /// don't account for, such as of the vertices or from the host.
     generation: std::cell::Cell<u32>,
-    /// The generation of the last estimate of every view, if there is one.
-    view_generations: Vec<Option<u32>>,
+    /// Bumped by every new scene of the ray tracer, whose previous scene,
+    /// with `previous_transforms`, is that of the one before.
+    geometry_generation: std::cell::Cell<u32>,
+    previous_transforms: blade_graphics::Buffer,
+    /// Of the last estimate of every view, if there is one.
+    view_states: Vec<Option<ControlView>>,
+}
+
+#[derive(Clone, Copy)]
+struct ControlView {
+    generation: u32,
+    geometry_generation: u32,
+    camera: crate::CameraParams,
 }
 
 impl ControlState {
@@ -2616,6 +2671,7 @@ impl ControlState {
         view_count: u32,
         view_stride: u64,
         param_sizes: [u64; 3],
+        transform_bytes: u64,
     ) -> Self {
         let strides = param_sizes.map(|size| size.max(4).next_multiple_of(256));
         let names = [
@@ -2637,7 +2693,9 @@ impl ControlState {
             previous_image: device("diff previous image", view_stride),
             estimate: device("diff estimate", view_stride * u64::from(view_count)),
             generation: std::cell::Cell::new(0),
-            view_generations: vec![None; view_count as usize],
+            geometry_generation: std::cell::Cell::new(0),
+            previous_transforms: device("diff previous transforms", transform_bytes.max(16)),
+            view_states: vec![None; view_count as usize],
         }
     }
 
@@ -2651,6 +2709,7 @@ impl ControlState {
         }
         gpu.destroy_buffer(self.previous_image);
         gpu.destroy_buffer(self.estimate);
+        gpu.destroy_buffer(self.previous_transforms);
     }
 }
 

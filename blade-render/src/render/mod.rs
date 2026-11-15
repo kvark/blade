@@ -1169,6 +1169,9 @@ impl RayTracer {
             gpu.destroy_buffer(self.hit_buffer);
         }
         gpu.destroy_acceleration_structure(self.acceleration_structure);
+        if self.prev_acceleration_structure != blade_graphics::AccelerationStructure::default() {
+            gpu.destroy_acceleration_structure(self.prev_acceleration_structure);
+        }
         // env map, dummy, and debug
         self.env_map.destroy(gpu);
         self.dummy.destroy(gpu);
@@ -1375,13 +1378,17 @@ impl RayTracer {
         self.env_map
             .assign(env_view, env_extent, command_encoder, gpu);
 
-        self.prev_acceleration_structure = std::mem::take(&mut self.acceleration_structure);
-        if self.prev_acceleration_structure != blade_graphics::AccelerationStructure::default() {
-            // The old current scene becomes the previous scene used by this
-            // frame. Transfer ownership to this frame so FramePacer destroys
-            // it only after this frame's fence signals.
-            temp.acceleration_structures
-                .push(self.prev_acceleration_structure);
+        // The old current scene becomes the previous scene, which stays
+        // until the next build, for this frame and for rendering the
+        // previous scene, see `diff::DiffConfig::control_variate`. The one
+        // before goes to this frame, so FramePacer destroys it only after
+        // this frame's fence signals.
+        let older = std::mem::replace(
+            &mut self.prev_acceleration_structure,
+            std::mem::take(&mut self.acceleration_structure),
+        );
+        if older != blade_graphics::AccelerationStructure::default() {
+            temp.acceleration_structures.push(older);
         }
         let geometry_count = objects
             .iter()

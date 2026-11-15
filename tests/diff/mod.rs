@@ -2623,3 +2623,78 @@ fn diff_recovers_index_of_refraction() {
     assert!((found[0].ior - TRUTH).abs() < 0.05);
     scene.destroy();
 }
+
+/// The control variate of the image keeps up with moving objects, by
+/// rendering the previous scene, which the ray tracer keeps: the gradient
+/// by the translation of a sphere that moves a little every step keeps its
+/// mean, with less noise.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_control_variate_follows_motion() {
+    let Some(mut scene) = DiffScene::new("diff-control-motion", SceneKind::Ball) else {
+        return;
+    };
+    const ITERATIONS: u32 = 48;
+    // More samples of the gradient than of the image, whose noise the
+    // control variate takes out.
+    scene.config.edge_samples = 8;
+    scene.capture_target();
+    let start = [0.3, -0.2, 0.6];
+    let mut iteration = 0;
+    let mut stats = Vec::new();
+    for weight in [0.0, 0.9] {
+        scene.config.control_variate = weight;
+        let mut samples = Vec::new();
+        for k in 0..8 + ITERATIONS {
+            // Back and forth, as optimizing it would.
+            let jitter = if k % 2 == 0 { 0.002 } else { -0.002 };
+            let offsets = DiffScene::single_offsets(
+                [start[0] + jitter, start[1], start[2]],
+                [0.0; 3],
+                [0.0; 3],
+            );
+            scene.move_geometry(&offsets);
+            scene.backward(iteration, 1, 8);
+            iteration += 1;
+            scene.diff.read_back(&mut scene.encoder);
+            scene.submit();
+            let grad = scene.diff.translation_grads()[0];
+            scene.diff.step(&mut scene.encoder, &StepConfig::default());
+            if k >= 8 {
+                samples.push([grad[0], grad[1]]);
+            }
+        }
+        let count = samples.len() as f32;
+        let mean = [0, 1].map(|c| samples.iter().map(|s| s[c]).sum::<f32>() / count);
+        let variance = [0, 1].map(|c| {
+            samples
+                .iter()
+                .map(|s| (s[c] - mean[c]).powi(2))
+                .sum::<f32>()
+                / (count - 1.0)
+        });
+        println!(
+            "control variate {weight}: mean {mean:?}, deviation {:?}",
+            variance.map(f32::sqrt)
+        );
+        stats.push((mean, variance));
+    }
+    let [
+        (plain_mean, plain_variance),
+        (control_mean, control_variance),
+    ] = [stats[0], stats[1]];
+    let total = |v: [f32; 2]| v[0] + v[1];
+    let apart =
+        (plain_mean[0] - control_mean[0]).powi(2) + (plain_mean[1] - control_mean[1]).powi(2);
+    // The estimates of the control variate average the noise of the images
+    // over time, so its mean is about as far off as that of the plain one.
+    let expected = 2.0 * total(plain_variance) / ITERATIONS as f32;
+    println!("means apart by {:.2} of their spread", apart / expected);
+    assert!(
+        apart < 3.0 * expected,
+        "the means are apart by {}",
+        apart / expected
+    );
+    assert!(total(control_variance) < 0.7 * total(plain_variance));
+    scene.destroy();
+}
