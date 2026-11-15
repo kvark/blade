@@ -12,7 +12,7 @@ Changelog for *Blade* project
 - render: `marching::SdfGrid::extract` makes meshes of the zero level of signed distance grids by marching tetrahedra, whose `Extraction::backpropagate` takes gradients by the vertices to the values, for optimizing shapes of any topology with `SdfOptimizer`
 - render: `DiffTracer::rebuild` starts over from a scene with other geometry, keeping the compiled passes and the targets
 - render: `DiffConfig::emitter_samples` draws points on the emitting triangles at every vertex of a path, with MIS against finding them by the BSDF
-- render: `DiffConfig::control_variate` takes a recursive control variate of the image that the loss is taken on, from the image of the last parameters with the same random numbers
+- render: `DiffConfig::control_variate` takes a recursive control variate of the image that the loss is taken on, from the image of the last parameters with the same random numbers, and of the previous scene, which `RayTracer` keeps until the next build, as objects move
 - render: `MaterialParams::transmission` lets part of the diffuse albedo through surfaces, as thin walls, like `KHR_materials_transmission`, in the differentiable tracer
 - render: `DiffConfig::projective_edges` samples the edges that the camera sees by carrying the hits of the paths onto the edges of their triangles, which takes as long for any number of triangles, and those that the hits of the paths see by carrying the hits of directions drawn by their BSDFs over the surfaces to them
 - render: `MaterialParams::ior` makes transmissive surfaces those of solids, which refract by a rough dielectric microfacet model, and the differentiable tracer draws microfacets among those that the view sees
