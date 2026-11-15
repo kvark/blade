@@ -1302,6 +1302,28 @@ fn diff_sphere_translation_gradients_match_finite_differences() {
     );
 }
 
+/// Carrying the hits of the paths onto the edges of their triangles finds
+/// the same gradients, of the edges of the cube and of the outline of the
+/// sphere, without visiting every edge.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_projective_edges_match_finite_differences() {
+    check_single_object_with(
+        SceneKind::Cube,
+        "diff-projective-cube",
+        &ALL_MOVES,
+        [-0.08, 0.12, -0.06],
+        true,
+    );
+    check_single_object_with(
+        SceneKind::Ball,
+        "diff-projective-ball",
+        &[Move::Translation(0), Move::Translation(1), Move::Camera(2)],
+        [0.0; 3],
+        true,
+    );
+}
+
 const ALL_MOVES: [Move; 5] = [
     Move::Translation(0),
     Move::Translation(1),
@@ -1321,10 +1343,21 @@ enum Move {
 /// Check the gradient by moving the only object, starting off from where it
 /// was for the target.
 fn check_single_object(kind: SceneKind, cache_name: &str, moves: &[Move], rotation: [f32; 3]) {
+    check_single_object_with(kind, cache_name, moves, rotation, false);
+}
+
+fn check_single_object_with(
+    kind: SceneKind,
+    cache_name: &str,
+    moves: &[Move],
+    rotation: [f32; 3],
+    projective: bool,
+) {
     let Some(mut scene) = DiffScene::new(cache_name, kind) else {
         return;
     };
     scene.config.edge_samples = 4;
+    scene.config.projective_edges = projective;
     scene.capture_target();
     // Off along Z too, or the gradient by Z would be about zero.
     let start = DiffScene::single_offsets([0.3, -0.2, 0.6], rotation, [0.0; 3]);

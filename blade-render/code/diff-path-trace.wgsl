@@ -79,7 +79,9 @@ struct DiffParams {
     antithetic: u32,
     // Points drawn on the emitting triangles at every vertex of a path.
     emitter_samples: u32,
-    _pad0: u32,
+    // Sample the edges that the camera sees by projecting the hits of the
+    // paths onto them, see `sample_projective_edge`, instead of `edges`.
+    projective_edges: u32,
     _pad1: u32,
     _pad2: u32,
 }
@@ -178,6 +180,9 @@ var<storage, read_write> vertex_grads: array<atomic<f32>>;
 // before every step carries to the positions around the slot.
 var<storage, read_write> normal_grads: array<atomic<f32>>;
 var<storage, read_write> edge_counts: array<atomic<u32>>;
+// The normals of the first two triangles along every edge, in the space of
+// their instance, by the slot of the edge.
+var<storage, read_write> edge_normals: array<vec4<f32>>;
 // What the secondary edges drawn from every edge brought, since the last
 // `guide_edges`, and the importance and the distribution that it makes.
 var<storage, read_write> edge_hits: array<atomic<f32>>;
@@ -562,6 +567,7 @@ fn make_path_vertex(
     pv.d_found = d_found;
     let entry_index = intersection.instance_custom_data + intersection.geometry_index;
     pv.slots = vertex_slots_of(edge_entries[entry_index].vertex_base, indices);
+    pv.triangle = hit_triangle(intersection);
     pv.barycentrics = make_barycentrics(intersection.barycentrics);
     let linear = affine_linear(to_world) * affine_linear(entry.geometry_to_object);
     pv.local_depth_row = transpose(linear) * pv.depth_row;
@@ -739,6 +745,8 @@ struct PathVertex {
     depth_row: vec3<f32>,
     ray_dir: vec3<f32>,
     d_found: vec3<f32>,
+    // The index of the triangle, as `triangle_edges` takes it.
+    triangle: u32,
     // The vertex slots of the corners, and the weights of the hit.
     slots: vec3<u32>,
     barycentrics: vec3<f32>,
@@ -1109,12 +1117,16 @@ fn sample_tent(random: f32) -> f32 {
 // centers. With a box filter, an edge that moves across a pixel changes it
 // with a kink every time that it passes a corner, which leaves the loss with
 // kinks all over, and a tent filter smooths these out.
-fn primary_direction(pixel: vec2<u32>, rng: ptr<function, RandomState>) -> vec3<f32> {
+fn primary_point(pixel: vec2<u32>, rng: ptr<function, RandomState>) -> vec2<f32> {
     var jitter = vec2<f32>(0.5);
     if (parameters.jitter_primary_rays != 0u) {
         jitter += vec2<f32>(sample_tent(random_gen(rng)), sample_tent(random_gen(rng)));
     }
-    return get_ray_direction_at(camera, vec2<f32>(pixel) + jitter);
+    return vec2<f32>(pixel) + jitter;
+}
+
+fn primary_direction(pixel: vec2<u32>, rng: ptr<function, RandomState>) -> vec3<f32> {
+    return get_ray_direction_at(camera, primary_point(pixel, rng));
 }
 
 // Derivative of the loss by the radiance at a point of the film, through
@@ -1177,7 +1189,8 @@ fn adjoint(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let num_paths = max(parameters.samples_per_pixel, 1u);
     // The pixel is the mean of its paths.
     let d_pixel = image_adjoint[pixel_index].xyz / f32(num_paths);
-    if (all(d_pixel == vec3<f32>(0.0))) {
+    let projective = parameters.projective_edges != 0u && parameters.geometry != 0u;
+    if (all(d_pixel == vec3<f32>(0.0)) && !projective) {
         return;
     }
     var rng = random_init(pixel_index, parameters.frame_index);
@@ -1187,16 +1200,34 @@ fn adjoint(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var i = 0u; i < num_paths; i += 1u) {
         // The twin of a path starts from the same random numbers, which
         // also make the same point of the pixel.
-        turn_first_bsdf_sample = parameters.antithetic != 0u && (i & 1u) == 1u;
-        if (turn_first_bsdf_sample) {
+        let turned = parameters.antithetic != 0u && (i & 1u) == 1u;
+        turn_first_bsdf_sample = false;
+        if (turned) {
             rng = pair_rng;
         } else {
             pair_rng = rng;
         }
-        let dir = primary_direction(global_id.xy, &rng);
+        let q = primary_point(global_id.xy, &rng);
+        let dir = get_ray_direction_at(camera, q);
+        // Other random numbers than the paths of the pixel.
+        var edge_rng = random_init(pixel_index ^ 0x5bd1e995u, parameters.frame_index + i);
+        if (projective) {
+            // The pixels cover the screen with as many samples as each has.
+            let hit = trace_ray(camera.position, dir, 0.0);
+            if (hit.kind != RAY_QUERY_INTERSECTION_NONE) {
+                var pv: PathVertex;
+                pv.triangle = hit_triangle(hit);
+                sample_projective_edge(pv, q, f32(num_paths), &edge_rng);
+            }
+        }
+        if (all(d_pixel == vec3<f32>(0.0))) {
+            continue;
+        }
         var replay_rng = rng;
+        turn_first_bsdf_sample = turned;
         let radiance = walk_path(camera.position, 0.0, i32(parameters.max_bounces), dir, &rng, &record, false, vec3<f32>(0.0), &incident);
         if (!all(radiance == radiance)) {
+            turn_first_bsdf_sample = false;
             continue;
         }
         incident = compute_incident_radiance(&record);
@@ -1207,8 +1238,6 @@ fn adjoint(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
         if (parameters.secondary_edge_samples != 0u) {
-            // Other random numbers than the paths of the pixel.
-            var edge_rng = random_init(pixel_index ^ 0x5bd1e995u, parameters.frame_index + i);
             let depth = min(record.hit_count, parameters.secondary_edge_depth);
             for (var k = 0u; k < depth; k += 1u) {
                 if (record.hits[k].valid) {
@@ -1351,59 +1380,165 @@ fn sample_edge(
     }
     let pa = get_projected_pixel_float(camera, a);
     let pb = get_projected_pixel_float(camera, b);
-    let segment = pb - pa;
-    let segment_length = length(segment);
+    let segment_length = length(pb - pa);
     if (segment_length < 1.0e-6) {
         return;
     }
-    let across = vec2<f32>(-segment.y, segment.x) / segment_length;
-    let size = vec2<f32>(camera.target_size);
     let samples = max(parameters.edge_samples, 1u);
-    var record: PathRecord;
-    var incident: array<vec3<f32>, PATH_LENGTH>;
     for (var i = 0u; i < samples; i += 1u) {
         let t = (f32(i) + random_gen(rng)) / f32(samples);
-        let p = mix(pa, pb, t);
-        if (any(p < vec2<f32>(0.0)) || any(p >= size)) {
-            continue;
-        }
-        let d_pixel = film_adjoint(p);
-        if (all(d_pixel == vec3<f32>(0.0))) {
-            continue;
-        }
-        // The point of the segment that is seen through `p`.
-        let dir = get_ray_direction_at(camera, p);
-        let along = b - a;
-        let to_a = a - camera.position;
-        let aa = dot(along, along);
-        let ad = dot(along, dir);
-        let denom = aa - ad * ad;
-        let s = clamp(select(0.0, (ad * dot(dir, to_a) - dot(along, to_a)) / denom, denom > 0.0), 0.0, 1.0);
-        let point = a + s * along;
-        // `across` on the screen, as a direction in the world.
-        let ahead = get_ray_direction_at(camera, p + 1.0e-3 * across) - get_ray_direction_at(camera, p - 1.0e-3 * across);
-        let sides = edge_sides(camera.position, a, b, c, point, ahead);
-        if (!sides.valid) {
-            continue;
-        }
-        var side_rng = *rng;
-        let below = walk_path(camera.position, 0.0, i32(parameters.max_bounces), sides.below, &side_rng, &record, false, vec3<f32>(0.0), &incident);
-        side_rng = *rng;
-        let above = walk_path(camera.position, 0.0, i32(parameters.max_bounces), sides.above, &side_rng, &record, false, vec3<f32>(0.0), &incident);
-        *rng = side_rng;
-        let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
-            - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
-        let weight = dot(d_pixel, jump) * segment_length / f32(samples);
-        if (weight == 0.0) {
-            continue;
-        }
+        sample_edge_at(a, b, c, instance, slots, linear, pa, pb, mix(pa, pb, t), segment_length / f32(samples), rng);
+    }
+}
 
-        let jacobian = projection_jacobian(camera, point);
-        let velocity = vec3<f32>(dot(across, jacobian[0]), dot(across, jacobian[1]), dot(across, jacobian[2]));
-        add_instance_grad(instance, point, weight * velocity);
-        add_camera_grad(-weight * velocity);
-        add_vertex_grad(slots.x, linear, (1.0 - s) * weight * velocity);
-        add_vertex_grad(slots.y, linear, s * weight * velocity);
+// The boundary term of the image at `p`, on the edge from `a` to `b`, which
+// the camera sees from `pa` to `pb`, of a triangle with the third corner
+// `c`, drawn with the density `1 / inverse_density` along the edge on the
+// screen.
+fn sample_edge_at(
+    a: vec3<f32>,
+    b: vec3<f32>,
+    c: vec3<f32>,
+    instance: u32,
+    slots: vec2<u32>,
+    linear: mat3x3<f32>,
+    pa: vec2<f32>,
+    pb: vec2<f32>,
+    p: vec2<f32>,
+    inverse_density: f32,
+    rng: ptr<function, RandomState>,
+) {
+    let segment = pb - pa;
+    let segment_length = length(segment);
+    let across = vec2<f32>(-segment.y, segment.x) / segment_length;
+    let size = vec2<f32>(camera.target_size);
+    if (any(p < vec2<f32>(0.0)) || any(p >= size)) {
+        return;
+    }
+    let d_pixel = film_adjoint(p);
+    if (all(d_pixel == vec3<f32>(0.0))) {
+        return;
+    }
+    // The point of the segment that is seen through `p`.
+    let dir = get_ray_direction_at(camera, p);
+    let along = b - a;
+    let to_a = a - camera.position;
+    let aa = dot(along, along);
+    let ad = dot(along, dir);
+    let denom = aa - ad * ad;
+    let s = clamp(select(0.0, (ad * dot(dir, to_a) - dot(along, to_a)) / denom, denom > 0.0), 0.0, 1.0);
+    let point = a + s * along;
+    // `across` on the screen, as a direction in the world.
+    let ahead = get_ray_direction_at(camera, p + 1.0e-3 * across) - get_ray_direction_at(camera, p - 1.0e-3 * across);
+    let sides = edge_sides(camera.position, a, b, c, point, ahead);
+    if (!sides.valid) {
+        return;
+    }
+    var record: PathRecord;
+    var incident: array<vec3<f32>, PATH_LENGTH>;
+    var side_rng = *rng;
+    let below = walk_path(camera.position, 0.0, i32(parameters.max_bounces), sides.below, &side_rng, &record, false, vec3<f32>(0.0), &incident);
+    side_rng = *rng;
+    let above = walk_path(camera.position, 0.0, i32(parameters.max_bounces), sides.above, &side_rng, &record, false, vec3<f32>(0.0), &incident);
+    *rng = side_rng;
+    let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
+        - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
+    let weight = dot(d_pixel, jump) * inverse_density;
+    if (weight == 0.0) {
+        return;
+    }
+
+    let jacobian = projection_jacobian(camera, point);
+    let velocity = vec3<f32>(dot(across, jacobian[0]), dot(across, jacobian[1]), dot(across, jacobian[2]));
+    add_instance_grad(instance, point, weight * velocity);
+    add_camera_grad(-weight * velocity);
+    add_vertex_grad(slots.x, linear, (1.0 - s) * weight * velocity);
+    add_vertex_grad(slots.y, linear, s * weight * velocity);
+}
+
+// The width of the band along every edge of a triangle, as a part of the
+// way to the opposite corner, whose points are projected onto the edge by
+// `sample_projective_edge`. Narrower keeps the band clear of whatever
+// hides the inside of the triangle, and wider uses more of the samples.
+const PROJECTIVE_BAND: f32 = 0.4;
+
+// Projective sampling of the edges that the camera sees, after Zhang et al.
+// "Projective Sampling for Differentiable Rendering of Geometry" (2023):
+// a camera ray that hits a triangle at the point `q` of the screen is
+// carried from the opposite corner of an edge onto it. The screen is
+// covered by the samples of the pixels evenly, with `density` of them per
+// pixel, and carrying the triangle from a corner onto the opposite edge
+// spreads the points `s` of the way to the edge over it by `s * height`,
+// where `height` is that of the triangle on the screen, so the point on the
+// edge has the density `density * s * height` for every part of the way.
+// Only the points in a band along the edge are carried, which are rarely
+// hidden where the edge isn't.
+//
+// Every edge is carried onto from one of the triangles along it: the one
+// that faces the camera, if only one does, and otherwise the one that goes
+// along it from the point that `precedes` the other.
+fn sample_projective_edge(pv: PathVertex, q: vec2<f32>, density: f32, rng: ptr<function, RandomState>) {
+    let edges = triangle_edges(pv.triangle);
+    if (edges.degenerate) {
+        return;
+    }
+    let corners = world_triangle(edges);
+    var screen: array<vec2<f32>, 3>;
+    for (var k = 0u; k < 3u; k += 1u) {
+        if (!is_in_front(camera, corners[k])) {
+            return;
+        }
+        screen[k] = get_projected_pixel_float(camera, corners[k]);
+    }
+    let linear = affine_linear(instance_transforms[edges.instance]);
+    let local_normal = cross(edges.local[1] - edges.local[0], edges.local[2] - edges.local[0]);
+    let faces = dot(linear * local_normal, camera.position - corners[0]) > 0.0;
+    let e0 = screen[1] - screen[0];
+    let e1 = screen[2] - screen[0];
+    let area = e0.x * e1.y - e0.y * e1.x;
+    if (abs(area) < 1.0e-8) {
+        return;
+    }
+    let r = q - screen[0];
+    let w1 = (r.x * e1.y - r.y * e1.x) / area;
+    let w2 = (e0.x * r.y - e0.y * r.x) / area;
+    let weights = vec3<f32>(1.0 - w1 - w2, w1, w2);
+    // Every edge whose band `q` is in, which the bands of the others overlap.
+    for (var opposite = 0u; opposite < 3u; opposite += 1u) {
+        let s = 1.0 - weights[opposite];
+        if (s < 1.0 - PROJECTIVE_BAND || s <= 0.0) {
+            continue;
+        }
+        let ia = (opposite + 1u) % 3u;
+        let ib = (opposite + 2u) % 3u;
+        let la = edges.local[ia];
+        let lb = edges.local[ib];
+        let slot = edge_slot(edge_key(edges.instance, la, lb));
+        if (slot == ~0u) {
+            continue;
+        }
+        let count = atomicLoad(&edge_counts[slot]);
+        if (count >= 2u) {
+            // The other triangle along the edge, by its normal.
+            var other = edge_normals[2u * slot].xyz;
+            if (all(other == local_normal)) {
+                other = edge_normals[2u * slot + 1u].xyz;
+            }
+            let other_faces = dot(linear * other, camera.position - corners[ia]) > 0.0;
+            if (faces != other_faces) {
+                if (!faces) {
+                    continue;
+                }
+            } else if (!precedes(la, lb)) {
+                continue;
+            }
+        }
+        let c = screen[opposite];
+        let y = c + (q - c) / s;
+        let height = abs(area) / length(screen[ib] - screen[ia]);
+        let slots = vec2<u32>(edges.slots[ia], edges.slots[ib]);
+        sample_edge_at(corners[ia], corners[ib], corners[opposite], edges.instance, slots, edges.linear,
+            screen[ia], screen[ib], y, 1.0 / (density * s * height * PROJECTIVE_BAND), rng);
     }
 }
 
@@ -1476,19 +1611,28 @@ fn edge_slot_mask() -> u32 {
 }
 
 // Number of triangles along an edge, which `count_edges` has found.
-fn edge_triangle_count(key: u32) -> u32 {
+// The slot of the edge with `key`, or `~0u`.
+fn edge_slot(key: u32) -> u32 {
     let mask = edge_slot_mask();
     for (var probe = 0u; probe <= mask; probe += 1u) {
         let slot = (key + probe) & mask;
         let found = atomicLoad(&edge_keys[slot]);
         if (found == key) {
-            return atomicLoad(&edge_counts[slot]);
+            return slot;
         }
         if (found == 0u) {
             break;
         }
     }
-    return 0u;
+    return ~0u;
+}
+
+fn edge_triangle_count(key: u32) -> u32 {
+    let slot = edge_slot(key);
+    if (slot == ~0u) {
+        return 0u;
+    }
+    return atomicLoad(&edge_counts[slot]);
 }
 
 struct TriangleEdges {
@@ -1555,6 +1699,7 @@ fn count_edges(
     if (edges.degenerate) {
         return;
     }
+    let face_normal = cross(edges.local[1] - edges.local[0], edges.local[2] - edges.local[0]);
     let mask = edge_slot_mask();
     for (var i = 0u; i < 3u; i += 1u) {
         let a = edges.local[i];
@@ -1568,7 +1713,10 @@ fn count_edges(
             let slot = (key + probe) & mask;
             let result = atomicCompareExchangeWeak(&edge_keys[slot], 0u, key);
             if (result.exchanged || result.old_value == key) {
-                atomicAdd(&edge_counts[slot], 1u);
+                let index = atomicAdd(&edge_counts[slot], 1u);
+                if (index < 2u) {
+                    edge_normals[2u * slot + index] = vec4<f32>(face_normal, 0.0);
+                }
                 break;
             }
             // A weak exchange can fail spuriously, and then the slot is
