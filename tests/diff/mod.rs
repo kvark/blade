@@ -2904,7 +2904,7 @@ fn diff_recovers_point_light() {
     let intensity_step = StepConfig {
         lights: Some((
             AdamConfig {
-                learning_rate: 10.0,
+                learning_rate: 20.0,
                 ..Default::default()
             },
             LightParamFlags::INTENSITY,
@@ -2912,7 +2912,9 @@ fn diff_recovers_point_light() {
         ..Default::default()
     };
     let mut first_loss = None;
-    for iteration in 0..200 {
+    // The distance to the wall trades off with the intensity, but for the
+    // shadow, which takes a while to settle.
+    for iteration in 0..600 {
         scene.backward(iteration, 4, 2);
         // Positions and intensities take steps of their own scales, on
         // alternate iterations.
@@ -2922,7 +2924,7 @@ fn diff_recovers_point_light() {
             &intensity_step
         };
         scene.diff.step(&mut scene.encoder, config);
-        if iteration % 50 == 0 {
+        if iteration % 100 == 0 {
             scene.submit();
             let loss = scene.diff.loss();
             first_loss.get_or_insert(loss);
