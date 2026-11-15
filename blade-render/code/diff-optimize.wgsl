@@ -111,3 +111,49 @@ fn adam_step(
     }
     params[index] = value;
 }
+
+// Has to match the host!
+struct ControlParams {
+    pixel_count: u32,
+    // Whether `control_previous` and `control_estimate` are of the
+    // parameters of the last image, with the random numbers of this one.
+    valid: u32,
+    weight: f32,
+    _pad: u32,
+}
+
+var<uniform> control: ControlParams;
+// The image of the current parameters, which becomes the estimate.
+var<storage, read_write> control_image: array<vec4<f32>>;
+// The image of the parameters of the last estimate, with the same random
+// numbers as `control_image`.
+var<storage, read> control_previous: array<vec4<f32>>;
+// The last estimate, which becomes the new one.
+var<storage, read_write> control_estimate: array<vec4<f32>>;
+
+// A recursive control variate of the image, after Nicolet et al.
+// "Recursive Control Variates for Inverse Rendering" (2023): the image
+// minus how much the same random numbers made of the last parameters
+// differ from the estimate of them, which has no mean, and much of the
+// noise of the image while the parameters change slowly.
+@compute @workgroup_size(64)
+fn control_variate(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+) {
+    let index = flat_index(global_id, num_workgroups);
+    if (index >= control.pixel_count) {
+        return;
+    }
+    var estimate = control_image[index];
+    if (control.valid != 0u) {
+        let correction = control_previous[index] - control_estimate[index];
+        let combined = estimate - control.weight * correction;
+        // Not where it isn't finite.
+        if (all(combined == combined)) {
+            estimate = combined;
+        }
+    }
+    control_image[index] = estimate;
+    control_estimate[index] = estimate;
+}
