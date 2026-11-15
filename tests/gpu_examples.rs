@@ -729,7 +729,7 @@ fn bsdf_gradient_gpu_test() {
     }
     let output = context.create_buffer(gpu::BufferDesc {
         name: "bsdf-gradient-output",
-        size: (COUNT * 112) as u64,
+        size: (COUNT * 160) as u64,
         memory: gpu::Memory::Shared,
     });
     let source = [
@@ -748,6 +748,11 @@ struct Check {
     // `numeric_normal` with twice the step, which disagrees with it where
     // rounding leaves central differences off, at the sharpest peaks.
     numeric_normal_wide: vec4<f32>,
+    // By turning the light direction along its two tangents, through the
+    // first and the last channel, as with the normal.
+    analytic_light: vec4<f32>,
+    numeric_light: vec4<f32>,
+    numeric_light_wide: vec4<f32>,
 }
 var<storage, read_write> output: array<Check>;
 
@@ -854,6 +859,20 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         d_normal_wide[axis] = (reference_surface(mat, transmission, eta, normalize(normal + 2.0 * offset), view_dir, light_dir)
             - reference_surface(mat, transmission, eta, normalize(normal - 2.0 * offset), view_dir, light_dir)) / (4.0 * H_NORMAL);
     }
+    // The light only turns, along the tangents of its direction.
+    let light_tangent = normalize(cross(light_dir, vec3<f32>(0.3, 0.5, 0.8)));
+    let light_tangents = mat2x3<f32>(light_tangent, cross(light_dir, light_tangent));
+    var d_light = mat2x3<f32>();
+    var d_light_wide = mat2x3<f32>();
+    for (var axis = 0u; axis < 2u; axis += 1u) {
+        let offset = H_NORMAL * light_tangents[axis];
+        d_light[axis] = (reference_surface(mat, transmission, eta, normal, view_dir, normalize(light_dir + offset))
+            - reference_surface(mat, transmission, eta, normal, view_dir, normalize(light_dir - offset))) / (2.0 * H_NORMAL);
+        d_light_wide[axis] = (reference_surface(mat, transmission, eta, normal, view_dir, normalize(light_dir + 2.0 * offset))
+            - reference_surface(mat, transmission, eta, normal, view_dir, normalize(light_dir - 2.0 * offset))) / (4.0 * H_NORMAL);
+    }
+    let d_light_x = bsdf_light_grad(grad, vec3<f32>(1.0, 0.0, 0.0)) * light_tangents;
+    let d_light_z = bsdf_light_grad(grad, vec3<f32>(0.0, 0.0, 1.0)) * light_tangents;
     let d_normal_x = bsdf_normal_grad(grad, vec3<f32>(1.0, 0.0, 0.0));
     let d_normal_z = bsdf_normal_grad(grad, vec3<f32>(0.0, 0.0, 1.0));
     let d_transmission = (reference_surface(mat, transmission + h, eta, normal, view_dir, light_dir)
@@ -870,6 +889,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         vec4<f32>(grad.d_transmission.x, grad.d_eta.x, grad.value.xy),
         vec4<f32>(d_transmission.x, d_eta.x, value.xy),
         vec4<f32>(d_normal_wide[0].x, d_normal_wide[1].x, d_normal_wide[0].z, d_normal_wide[1].z),
+        vec4<f32>(d_light_x, d_light_z),
+        vec4<f32>(d_light[0].x, d_light[1].x, d_light[0].z, d_light[1].z),
+        vec4<f32>(d_light_wide[0].x, d_light_wide[1].x, d_light_wide[0].z, d_light_wide[1].z),
     );
 }
 "#,
@@ -906,7 +928,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let sync_point = context.submit(&mut encoder);
     assert!(context.wait_for(&sync_point, 2000).unwrap());
 
-    let checks = unsafe { slice::from_raw_parts(output.data() as *const [[f32; 4]; 7], COUNT) };
+    let checks = unsafe { slice::from_raw_parts(output.data() as *const [[f32; 4]; 10], COUNT) };
     let mut nonzero = 0;
     let mut through = 0;
     let mut unreliable = 0;
@@ -920,6 +942,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             analytic_more,
             numeric_more,
             numeric_wide,
+            analytic_light,
+            numeric_light,
+            numeric_light_wide,
         ],
     ) in checks.iter().enumerate()
     {
@@ -927,6 +952,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         if numeric_normal
             .iter()
             .zip(numeric_wide)
+            .chain(numeric_light.iter().zip(numeric_light_wide))
             .any(|(&n, &w)| (n - w).abs() > tolerance(n, w))
         {
             unreliable += 1;
@@ -945,9 +971,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             "eta",
             "value.x",
             "value.y",
+            "light.x",
+            "light.y",
+            "light.x",
+            "light.y",
         ];
-        let analytic = analytic.iter().chain(analytic_normal).chain(analytic_more);
-        let numeric = numeric.iter().chain(numeric_normal).chain(numeric_more);
+        let analytic = analytic
+            .iter()
+            .chain(analytic_normal)
+            .chain(analytic_more)
+            .chain(analytic_light);
+        let numeric = numeric
+            .iter()
+            .chain(numeric_normal)
+            .chain(numeric_more)
+            .chain(numeric_light);
         for ((name, &a), &n) in names.iter().zip(analytic).zip(numeric) {
             assert!(
                 (a - n).abs() <= tolerance(a, n),

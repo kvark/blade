@@ -13,6 +13,10 @@
 // The derivative by the normal is the sum of `dot(d_value, normal_weights[k])
 // * normal_dirs[k]`, see `bsdf_normal_grad`. The normal is taken as is,
 // without its normalization.
+//
+// The derivative by the light direction is likewise the sum of
+// `dot(d_value, light_weights[k]) * light_dirs[k]`, see `bsdf_light_grad`,
+// for a light whose direction is not drawn, like that of a point light.
 struct BsdfGradient {
     value: vec3<f32>,
     d_diffuse_albedo: vec3<f32>,
@@ -23,6 +27,8 @@ struct BsdfGradient {
     d_eta: vec3<f32>,
     normal_weights: array<vec3<f32>, 2>,
     normal_dirs: array<vec3<f32>, 2>,
+    light_weights: array<vec3<f32>, 3>,
+    light_dirs: array<vec3<f32>, 3>,
 }
 
 fn zero_bsdf_gradient() -> BsdfGradient {
@@ -35,6 +41,8 @@ fn zero_bsdf_gradient() -> BsdfGradient {
     grad.d_eta = vec3<f32>(0.0);
     grad.normal_weights = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0));
     grad.normal_dirs = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0));
+    grad.light_weights = array<vec3<f32>, 3>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+    grad.light_dirs = array<vec3<f32>, 3>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
     return grad;
 }
 
@@ -42,6 +50,14 @@ fn zero_bsdf_gradient() -> BsdfGradient {
 fn bsdf_normal_grad(bsdf: BsdfGradient, d_value: vec3<f32>) -> vec3<f32> {
     return dot(d_value, bsdf.normal_weights[0]) * bsdf.normal_dirs[0]
         + dot(d_value, bsdf.normal_weights[1]) * bsdf.normal_dirs[1];
+}
+
+// Derivative of the loss by the light direction, taken as is, given the
+// one by the value.
+fn bsdf_light_grad(bsdf: BsdfGradient, d_value: vec3<f32>) -> vec3<f32> {
+    return dot(d_value, bsdf.light_weights[0]) * bsdf.light_dirs[0]
+        + dot(d_value, bsdf.light_weights[1]) * bsdf.light_dirs[1]
+        + dot(d_value, bsdf.light_weights[2]) * bsdf.light_dirs[2];
 }
 
 // `distribution_ggx * visibility_smith * n_dot_l`, with its derivatives.
@@ -130,9 +146,12 @@ fn evaluate_surface_gradient(mat: Material, transmission: f32, eta: f32, normal:
         return evaluate_transmission_gradient(mat, transmission, normal, view_dir, light_dir);
     }
 
-    let half_dir = normalize(view_dir + light_dir);
+    let sum = view_dir + light_dir;
+    let sum_length = length(sum);
+    let half_dir = sum / max(sum_length, 1.0e-20);
     let n_dot_h = max(dot(normal, half_dir), 0.0);
-    let v_dot_h = max(dot(view_dir, half_dir), 0.0);
+    let v_dot_h_raw = dot(view_dir, half_dir);
+    let v_dot_h = max(v_dot_h_raw, 0.0);
     let mf = microfacet_gradient(mat.roughness, n_dot_h, n_dot_v, n_dot_l);
 
     let schlick = pow(1.0 - v_dot_h, 5.0);
@@ -153,6 +172,25 @@ fn evaluate_surface_gradient(mat: Material, transmission: f32, eta: f32, normal:
     grad.normal_dirs = array<vec3<f32>, 2>(
         k_diffuse / PI * light_dir,
         d_n_dot_h * half_dir + mf.d_n_dot_v * view_dir + mf.d_n_dot_l * light_dir,
+    );
+
+    // The half direction moves with the light by its part across itself,
+    // over the length of the sum, and `v_dot_h` with it, through the
+    // Fresnel terms of both lobes.
+    let across = 1.0 / max(sum_length, 1.0e-20);
+    let d_n_dot_h_l = across * (normal - half_dir * dot(normal, half_dir));
+    let d_v_dot_h_l = select(vec3<f32>(0.0), across * (view_dir - half_dir * v_dot_h_raw), v_dot_h_raw > 0.0);
+    let falloff = 5.0 * pow(1.0 - v_dot_h, 4.0);
+    let d_k_diffuse = (1.0 - DIELECTRIC_F0) * falloff;
+    grad.light_weights = array<vec3<f32>, 3>(
+        mat.diffuse_albedo * kept,
+        fresnel,
+        (vec3<f32>(1.0) - mat.specular_f0) * -falloff,
+    );
+    grad.light_dirs = array<vec3<f32>, 3>(
+        (k_diffuse * normal + n_dot_l * d_k_diffuse * d_v_dot_h_l) / PI,
+        d_n_dot_h * d_n_dot_h_l + mf.d_n_dot_l * normal,
+        mf.value * d_v_dot_h_l,
     );
     return grad;
 }
@@ -208,6 +246,22 @@ fn evaluate_transmission_gradient(mat: Material, transmission: f32, normal: vec3
     grad.normal_dirs = array<vec3<f32>, 2>(
         h_part * d_n_dot_h + mf.d_n_dot_v * view_dir + mf.d_n_dot_l * d_n_dot_m,
         d_v_dot_h,
+    );
+
+    // By the light, through the mirrored direction, which moves with it by
+    // the reflection about the surface, `u - 2 dot(normal, u) normal`.
+    let mirror_pn = across * (pn - 2.0 * dot(normal, pn) * normal);
+    let mirror_pv = across * (pv - 2.0 * dot(normal, pv) * normal);
+    let mirror_n = normal - 2.0 * dot(normal, normal) * normal;
+    grad.light_weights = array<vec3<f32>, 3>(
+        transmission * mat.diffuse_albedo * passed,
+        -transmission * mat.diffuse_albedo * v_part * mf.value,
+        vec3<f32>(0.0),
+    );
+    grad.light_dirs = array<vec3<f32>, 3>(
+        h_part * mirror_pn + mf.d_n_dot_l * mirror_n,
+        mirror_pv,
+        vec3<f32>(0.0),
     );
     return grad;
 }
@@ -290,6 +344,24 @@ fn evaluate_refraction_gradient(mat: Material, transmission: f32, eta: f32, norm
     grad.normal_weights = array<vec3<f32>, 2>(tint * passed * ratio, vec3<f32>(0.0));
     grad.normal_dirs = array<vec3<f32>, 2>(
         mf.d_n_dot_h * half_dir + mf.d_n_dot_v * view_dir - mf.d_n_dot_l * light_dir,
+        vec3<f32>(0.0),
+    );
+
+    // By the light, through the half direction, which moves by its part
+    // across itself of `-flip * eta * u / raw_length`, through `h_dot_l`
+    // directly too, and through `n_dot_l`, which the microfacets take
+    // negated.
+    let scale_l = -flip * eta / raw_length;
+    let l_n_dot_h = scale_l * (normal - half_dir * n_dot_h);
+    let l_h_dot_v = scale_l * (view_dir - half_dir * h_dot_v);
+    let l_h_dot_l = half_dir + scale_l * (light_dir - half_dir * h_dot_l);
+    let r_h_dot_l = -4.0 * h_dot_v / (sum * sum) - 2.0 * ratio * eta / sum;
+    let r_h_dot_v = -4.0 * h_dot_l / (sum * sum) - 2.0 * ratio / sum;
+    grad.light_weights = array<vec3<f32>, 3>(tint * passed, -tint * d_fresnel, vec3<f32>(0.0));
+    grad.light_dirs = array<vec3<f32>, 3>(
+        ratio * (mf.d_n_dot_h * l_n_dot_h - mf.d_n_dot_l * normal)
+            + mf.value * (r_h_dot_l * l_h_dot_l + r_h_dot_v * l_h_dot_v),
+        mf.value * ratio * l_h_dot_v,
         vec3<f32>(0.0),
     );
     return grad;
