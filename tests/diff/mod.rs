@@ -1460,6 +1460,14 @@ fn diff_projective_shadows_match_finite_differences() {
     check_shadow_gradients_with("diff-projective-shadow", 0, 1, 0.0, true);
 }
 
+/// With bounces, the shadows on what the wall reflects move too, and the
+/// edges of the sphere as seen from the hits of the bounced paths.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_projective_indirect_gradients_match_finite_differences() {
+    check_shadow_gradients_with("diff-projective-indirect", 2, 2, 0.0, true);
+}
+
 /// With the sphere emitting `emission`.
 fn check_shadow_gradients(cache_name: &str, bounces: u32, depth: u32, emission: f32) {
     check_shadow_gradients_with(cache_name, bounces, depth, emission, false);
