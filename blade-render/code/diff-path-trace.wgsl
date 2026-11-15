@@ -183,6 +183,8 @@ var<storage, read_write> edge_counts: array<atomic<u32>>;
 // The normals of the first two triangles along every edge, in the space of
 // their instance, by the slot of the edge.
 var<storage, read_write> edge_normals: array<vec4<f32>>;
+// The first two triangles along every edge, by the slot of the edge.
+var<storage, read_write> edge_triangles: array<u32>;
 // What the secondary edges drawn from every edge brought, since the last
 // `guide_edges`, and the importance and the distribution that it makes.
 var<storage, read_write> edge_hits: array<atomic<f32>>;
@@ -1237,7 +1239,14 @@ fn adjoint(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (parameters.geometry == 0u) {
             continue;
         }
-        if (parameters.secondary_edge_samples != 0u) {
+        if (projective) {
+            let depth = min(record.hit_count, parameters.secondary_edge_depth);
+            for (var k = 0u; k < depth; k += 1u) {
+                if (record.hits[k].valid) {
+                    record.d_hits[k] += sample_projective_directions(record.hits[k], k, &edge_rng);
+                }
+            }
+        } else if (parameters.secondary_edge_samples != 0u) {
             let depth = min(record.hit_count, parameters.secondary_edge_depth);
             for (var k = 0u; k < depth; k += 1u) {
                 if (record.hits[k].valid) {
@@ -1716,6 +1725,7 @@ fn count_edges(
                 let index = atomicAdd(&edge_counts[slot], 1u);
                 if (index < 2u) {
                     edge_normals[2u * slot + index] = vec4<f32>(face_normal, 0.0);
+                    edge_triangles[2u * slot + index] = triangle;
                 }
                 break;
             }
@@ -1746,8 +1756,6 @@ fn sample_secondary_edges(pv: PathVertex, depth: u32, rng: ptr<function, RandomS
     if (triangle_count == 0u) {
         return d_hit;
     }
-    var record: PathRecord;
-    var incident: array<vec3<f32>, PATH_LENGTH>;
     for (var k = 0u; k < samples; k += 1u) {
         let drawn = draw_edge(random_gen(rng));
         let triangle = drawn.edge / 3u;
@@ -1763,61 +1771,260 @@ fn sample_secondary_edges(pv: PathVertex, depth: u32, rng: ptr<function, RandomS
         if (count == 0u || (count >= 2u && !precedes(la, lb))) {
             continue;
         }
-        let to_world = instance_transforms[edges.instance];
-        let a = to_world * vec4<f32>(la, 1.0);
-        let b = to_world * vec4<f32>(lb, 1.0);
-        let point = mix(a, b, t);
-        let offset = point - pv.position;
-        let distance = length(offset);
-        if (distance < 1.0e-4) {
+        d_hit += secondary_edge_at(pv, depth, edges, corner, t, 1.0 / (f32(samples) * drawn.probability), drawn.edge, rng);
+    }
+    return d_hit;
+}
+
+// The boundary term of the light arriving at `pv` from the point `t` along
+// the edge from `corner` of the triangle of `edges`, drawn with the density
+// `1 / inverse_density` along `t`, recording what it brings for the guide
+// of `guide_edge`, unless it's `~0u`. Returns the derivative of the loss by
+// moving the hit.
+fn secondary_edge_at(
+    pv: PathVertex,
+    depth: u32,
+    edges: TriangleEdges,
+    corner: u32,
+    t: f32,
+    inverse_density: f32,
+    guide_edge: u32,
+    rng: ptr<function, RandomState>,
+) -> vec3<f32> {
+    let corners = world_triangle(edges);
+    let a = corners[corner];
+    let b = corners[(corner + 1u) % 3u];
+    let c = corners[(corner + 2u) % 3u];
+    let point = mix(a, b, t);
+    let offset = point - pv.position;
+    let distance = length(offset);
+    if (distance < 1.0e-4) {
+        return vec3<f32>(0.0);
+    }
+    let dir = offset / distance;
+    let horizon = horizon_weight(side_cosine(dir, pv.normal, pv.flat_normal));
+    if (horizon <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let bsdf = evaluate_surface_gradient(pv.material, pv.transmission, pv.normal, pv.view_dir, dir).value;
+    if (all(bsdf <= vec3<f32>(0.0))) {
+        return vec3<f32>(0.0);
+    }
+    // How the direction of the point turns along the edge, and across it.
+    let along = b - a;
+    let turn = (along - dir * dot(dir, along)) / distance;
+    let speed = length(turn);
+    if (speed < 1.0e-8) {
+        return vec3<f32>(0.0);
+    }
+    let across = normalize(cross(dir, turn));
+    let sides = edge_sides(pv.position, a, b, c, point, across);
+    if (!sides.valid) {
+        return vec3<f32>(0.0);
+    }
+    var record: PathRecord;
+    var incident: array<vec3<f32>, PATH_LENGTH>;
+    var side_rng = *rng;
+    // The light arriving at the hit, with the bounces left after it.
+    let budget = i32(parameters.max_bounces) - i32(depth) - 1;
+    let below = walk_path(pv.position, parameters.t_start, budget, sides.below, &side_rng, &record, false, vec3<f32>(0.0), &incident);
+    side_rng = *rng;
+    let above = walk_path(pv.position, parameters.t_start, budget, sides.above, &side_rng, &record, false, vec3<f32>(0.0), &incident);
+    *rng = side_rng;
+    let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
+        - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
+    let weight = dot(pv.d_found, bsdf * horizon * jump) * speed * inverse_density;
+    if (weight == 0.0) {
+        return vec3<f32>(0.0);
+    }
+    if (guide_edge != ~0u && parameters.guided_edges != 0u) {
+        atomicAdd(&edge_hits[guide_edge], abs(weight) / distance);
+    }
+    // Moving the point by `u` turns its direction across the edge by
+    // `dot(across, u) / distance`, and moving the hit does the opposite.
+    let grad = weight * across / distance;
+    add_instance_grad(edges.instance, point, grad);
+    add_vertex_grad(edges.slots[corner], edges.linear, (1.0 - t) * grad);
+    add_vertex_grad(edges.slots[(corner + 1u) % 3u], edges.linear, t * grad);
+    return -grad;
+}
+
+// `sample_projective_secondary` from the hits of `secondary_edge_samples`
+// directions drawn by the BSDF at `pv`, of which the average is taken.
+fn sample_projective_directions(pv: PathVertex, depth: u32, rng: ptr<function, RandomState>) -> vec3<f32> {
+    var d_hit = vec3<f32>(0.0);
+    let samples = max(parameters.secondary_edge_samples, 1u);
+    for (var j = 0u; j < samples; j += 1u) {
+        let bs = sample_bsdf_turned(pv.material, pv.transmission, pv.normal, pv.view_dir, false, rng);
+        if (bs.pdf <= 0.0 || horizon_weight(side_cosine(bs.dir, pv.normal, pv.flat_normal)) <= 0.0) {
             continue;
         }
-        let dir = offset / distance;
-        let horizon = horizon_weight(side_cosine(dir, pv.normal, pv.flat_normal));
-        if (horizon <= 0.0) {
+        let hit = trace_ray(pv.position, bs.dir, parameters.t_start);
+        if (hit.kind == RAY_QUERY_INTERSECTION_NONE) {
             continue;
         }
-        let bsdf = evaluate_surface_gradient(pv.material, pv.transmission, pv.normal, pv.view_dir, dir).value;
-        if (all(bsdf <= vec3<f32>(0.0))) {
-            continue;
+        var next: PathVertex;
+        next.triangle = hit_triangle(hit);
+        next.position = pv.position + hit.t * bs.dir;
+        next.barycentrics = make_barycentrics(hit.barycentrics);
+        d_hit += sample_projective_secondary(pv, next, bs.pdf * f32(samples), depth, rng);
+    }
+    return d_hit;
+}
+
+// How far the hits are carried towards the edges by
+// `sample_projective_secondary`, as the tangent of the angle.
+const PROJECTIVE_REACH: f32 = 0.05;
+// The most triangles that a hit is carried across.
+const PROJECTIVE_STEPS: u32 = 16u;
+
+// Coordinates of `point` on the plane at a unit distance from `eye` along
+// the axis of `frame`, by the central projection from `eye`, which keeps
+// lines as lines, or nothing behind.
+fn gnomonic(eye: vec3<f32>, frame: mat3x3<f32>, point: vec3<f32>) -> vec3<f32> {
+    let local = transpose(frame) * (point - eye);
+    if (local.z <= 1.0e-6) {
+        return vec3<f32>(0.0, 0.0, -1.0);
+    }
+    return vec3<f32>(local.xy / local.z, 1.0);
+}
+
+// Whether the triangle faces `eye`, with its normal in the instance.
+fn triangle_faces(edges: TriangleEdges, corners: mat3x3<f32>, eye: vec3<f32>) -> bool {
+    let linear = affine_linear(instance_transforms[edges.instance]);
+    let local_normal = cross(edges.local[1] - edges.local[0], edges.local[2] - edges.local[0]);
+    return dot(linear * local_normal, eye - corners[0]) > 0.0;
+}
+
+// Projective sampling of the edges that `pv` sees, after Zhang et al.
+// "Projective Sampling for Differentiable Rendering of Geometry" (2023):
+// the hit `next` of a direction drawn by the BSDF at `pv` with `pdf` is
+// carried in a random way over the surface, from triangle to triangle, up
+// to `PROJECTIVE_REACH`, and every edge that it crosses is sampled there,
+// until it reaches the outline of what `pv` sees. So the edges are drawn
+// where the BSDF sends the light, from any hit on the surface, without
+// drawing them from the scene.
+//
+// This is on the plane at a unit distance along the normal, onto which the
+// directions are projected from `pv`, where the hit has the density of the
+// direction times the cube of its cosine with the normal. The points that
+// are carried onto a point of an edge are those up to the reach before it,
+// in as much as the edge goes across the way, which would make the edges
+// along the way very heavy. So the way is taken as drawn along with the
+// hit, and the points are weighted by how much the edge goes across them,
+// over the ways that come to it: all of them for an edge between triangles
+// that `pv` sees, and the half from the inside for the outline.
+fn sample_projective_secondary(pv: PathVertex, next: PathVertex, pdf: f32, depth: u32, rng: ptr<function, RandomState>) -> vec3<f32> {
+    var d_hit = vec3<f32>(0.0);
+    let offset = next.position - pv.position;
+    let distance = length(offset);
+    if (pdf <= 0.0 || distance <= 0.0) {
+        return d_hit;
+    }
+    let dir = offset / distance;
+    // The plane on the side of the surface that the direction is on.
+    let side = select(-1.0, 1.0, dot(dir, pv.normal) >= 0.0);
+    let frame = make_tangent_frame(side * pv.normal);
+    let cosine = dot(dir, frame[2]);
+    if (cosine <= 1.0e-3) {
+        return d_hit;
+    }
+    let density = pdf * cosine * cosine * cosine;
+    let angle = 2.0 * PI * random_gen(rng);
+    let way = vec2<f32>(cos(angle), sin(angle));
+    var start = gnomonic(pv.position, frame, next.position).xy;
+    var triangle = next.triangle;
+    // The edge that the walk came in through, as the slot of the edge.
+    var entry_slot = ~0u;
+    var travelled = 0.0;
+    for (var step = 0u; step < PROJECTIVE_STEPS; step += 1u) {
+        let edges = triangle_edges(triangle);
+        if (edges.degenerate) {
+            break;
         }
-        // How the direction of the point turns along the edge, and across it.
-        let along = b - a;
-        let turn = (along - dir * dot(dir, along)) / distance;
-        let speed = length(turn);
-        if (speed < 1.0e-8) {
-            continue;
+        let corners = world_triangle(edges);
+        var flat: array<vec2<f32>, 3>;
+        var behind = false;
+        for (var k = 0u; k < 3u; k += 1u) {
+            let g = gnomonic(pv.position, frame, corners[k]);
+            behind = behind || g.z < 0.0;
+            flat[k] = g.xy;
         }
-        let across = normalize(cross(dir, turn));
-        let c = to_world * vec4<f32>(edges.local[(corner + 2u) % 3u], 1.0);
-        let sides = edge_sides(pv.position, a, b, c, point, across);
-        if (!sides.valid) {
-            continue;
+        if (behind) {
+            break;
         }
-        var side_rng = *rng;
-        // The light arriving at the hit, with the bounces left after it.
-        let budget = i32(parameters.max_bounces) - i32(depth) - 1;
-        let below = walk_path(pv.position, parameters.t_start, budget, sides.below, &side_rng, &record, false, vec3<f32>(0.0), &incident);
-        side_rng = *rng;
-        let above = walk_path(pv.position, parameters.t_start, budget, sides.above, &side_rng, &record, false, vec3<f32>(0.0), &incident);
-        *rng = side_rng;
-        let jump = select(vec3<f32>(0.0), below * radiance_scale(below), all(below == below))
-            - select(vec3<f32>(0.0), above * radiance_scale(above), all(above == above));
-        let contribution = dot(pv.d_found, bsdf * horizon * jump) * speed / f32(samples);
-        if (contribution == 0.0) {
-            continue;
+        // The edge that the way leaves the triangle through, from `start`.
+        var exit_corner = 3u;
+        var exit_distance = 1.0e30;
+        var exit_slot = ~0u;
+        for (var k = 0u; k < 3u; k += 1u) {
+            let ea = flat[k];
+            let eb = flat[(k + 1u) % 3u];
+            let edge = eb - ea;
+            let denom = way.x * edge.y - way.y * edge.x;
+            if (abs(denom) < 1.0e-12) {
+                continue;
+            }
+            let rel = ea - start;
+            let along = (rel.x * edge.y - rel.y * edge.x) / denom;
+            let at = (rel.x * way.y - rel.y * way.x) / denom;
+            if (along < 0.0 || at < 0.0 || at > 1.0) {
+                continue;
+            }
+            let slot = edge_slot(edge_key(edges.instance, edges.local[k], edges.local[(k + 1u) % 3u]));
+            if (slot == entry_slot) {
+                continue;
+            }
+            if (along < exit_distance) {
+                exit_distance = along;
+                exit_corner = k;
+                exit_slot = slot;
+            }
         }
-        let weight = contribution / drawn.probability;
-        if (parameters.guided_edges != 0u) {
-            atomicAdd(&edge_hits[drawn.edge], abs(weight) / distance);
+        if (exit_corner == 3u || exit_slot == ~0u || travelled + exit_distance > PROJECTIVE_REACH) {
+            break;
         }
-        // Moving the point by `u` turns its direction across the edge by
-        // `dot(across, u) / distance`, and moving the hit does the opposite.
-        let grad = weight * across / distance;
-        add_instance_grad(edges.instance, point, grad);
-        add_vertex_grad(edges.slots[corner], edges.linear, (1.0 - t) * grad);
-        add_vertex_grad(edges.slots[(corner + 1u) % 3u], edges.linear, t * grad);
-        d_hit -= grad;
+        travelled += exit_distance;
+        let y = start + exit_distance * way;
+        let ia = exit_corner;
+        let ib = (exit_corner + 1u) % 3u;
+        // The point of the edge in the world that is seen at `y`.
+        let ray = normalize(frame * vec3<f32>(y, 1.0));
+        let a = corners[ia];
+        let b = corners[ib];
+        let along3 = b - a;
+        let to_a = a - pv.position;
+        let aa = dot(along3, along3);
+        let ad = dot(along3, ray);
+        let denom3 = aa - ad * ad;
+        let t = clamp(select(0.0, (ad * dot(ray, to_a) - dot(along3, to_a)) / denom3, denom3 > 0.0), 0.0, 1.0);
+        // How the point moves on the plane along `t`, across the way.
+        let point = a + t * along3;
+        let depth_along = dot(point - pv.position, frame[2]);
+        let moved = transpose(frame) * along3;
+        let d_flat = (moved.xy - y * moved.z) / depth_along;
+        let speed = length(d_flat);
+        let count = atomicLoad(&edge_counts[exit_slot]);
+        var other = edge_triangles[2u * exit_slot];
+        if (other == triangle) {
+            other = edge_triangles[2u * exit_slot + 1u];
+        }
+        let other_edges = triangle_edges(other);
+        let outline = count < 2u || triangle_faces(other_edges, world_triangle(other_edges), pv.position) != triangle_faces(edges, corners, pv.position);
+        if (speed > 1.0e-12) {
+            // Only the ways out of the outline come to it, half of them,
+            // and both halves to an edge between triangles that are seen.
+            let half = select(1.0, 2.0, outline);
+            let inverse_density = half * 0.5 * PI / (density * PROJECTIVE_REACH * speed);
+            d_hit += secondary_edge_at(pv, depth, edges, ia, t, inverse_density, ~0u, rng);
+        }
+        // Over the outline, the way leaves what `pv` sees.
+        if (outline) {
+            break;
+        }
+        triangle = other;
+        entry_slot = exit_slot;
+        start = y;
     }
     return d_hit;
 }

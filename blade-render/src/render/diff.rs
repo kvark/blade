@@ -125,8 +125,11 @@ pub struct DiffConfig {
     pub control_variate: f32,
     /// Sample the edges that the camera sees by carrying the hits of the
     /// paths of the gradient onto them, instead of sampling every edge,
-    /// which takes as long for any number of triangles, see
-    /// `sample_projective_edge` in the shader.
+    /// which takes as long for any number of triangles, and those that the
+    /// first [`Self::secondary_edge_depth`] hits see by carrying the hits
+    /// of the directions that the paths take from them, instead of drawing
+    /// [`Self::secondary_edge_samples`], see `sample_projective_edge` and
+    /// `sample_projective_secondary` in the shader.
     pub projective_edges: bool,
 }
 
@@ -610,6 +613,7 @@ struct DiffTraceData<'a> {
     edge_keys: blade_graphics::BufferPiece,
     edge_counts: blade_graphics::BufferPiece,
     edge_normals: blade_graphics::BufferPiece,
+    edge_triangles: blade_graphics::BufferPiece,
     edge_hits: blade_graphics::BufferPiece,
     edge_importance: blade_graphics::BufferPiece,
     edge_guide: blade_graphics::BufferPiece,
@@ -910,6 +914,7 @@ pub struct DiffTracer {
     edge_keys: blade_graphics::Buffer,
     edge_counts: blade_graphics::Buffer,
     edge_normals: blade_graphics::Buffer,
+    edge_triangles: blade_graphics::Buffer,
     /// What the secondary edges drawn from every triangle corner brought,
     /// their importance, and its cumulative distribution.
     edge_hits: blade_graphics::Buffer,
@@ -1283,6 +1288,11 @@ impl DiffTracer {
             size: 32 * edge_slots,
             memory: blade_graphics::Memory::Device,
         });
+        let edge_triangles = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "diff edge triangles",
+            size: 8 * edge_slots,
+            memory: blade_graphics::Memory::Device,
+        });
         let edge_array = |name| {
             gpu.create_buffer(blade_graphics::BufferDesc {
                 name,
@@ -1336,6 +1346,7 @@ impl DiffTracer {
             edge_keys,
             edge_counts,
             edge_normals,
+            edge_triangles,
             edge_hits,
             edge_importance,
             edge_guide,
@@ -1635,6 +1646,7 @@ impl DiffTracer {
             edge_keys: self.edge_keys.into(),
             edge_counts: self.edge_counts.into(),
             edge_normals: self.edge_normals.into(),
+            edge_triangles: self.edge_triangles.into(),
             edge_hits: self.edge_hits.into(),
             edge_importance: self.edge_importance.into(),
             edge_guide: self.edge_guide.into(),
@@ -2546,6 +2558,7 @@ impl DiffTracer {
         gpu.destroy_buffer(self.edge_keys);
         gpu.destroy_buffer(self.edge_counts);
         gpu.destroy_buffer(self.edge_normals);
+        gpu.destroy_buffer(self.edge_triangles);
         gpu.destroy_buffer(self.edge_hits);
         gpu.destroy_buffer(self.edge_importance);
         gpu.destroy_buffer(self.edge_guide);
