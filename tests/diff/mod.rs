@@ -376,7 +376,7 @@ impl DiffScene {
         let size = self.diff.image_size();
         let count = (size.width * size.height) as usize;
         let half = frames.start + (frames.end - frames.start) / 2;
-        let mut render = |scene: &mut Self, range: std::ops::Range<u32>| {
+        let render = |scene: &mut Self, range: std::ops::Range<u32>| {
             // In chunks, which keeps the recorded commands short.
             let start = range.start;
             for chunk in range.clone().step_by(256) {
@@ -1770,10 +1770,7 @@ fn fit_icosahedron(cache_name: &str, edge_lengths: &[f32]) -> Option<Fit> {
             scene.diff.step(
                 &mut scene.encoder,
                 &StepConfig {
-                    vertices: Some((
-                        adam,
-                        std::env::var("DIFF_SMOOTH").map_or(1.0e-2, |v| v.parse().unwrap()),
-                    )),
+                    vertices: Some((adam, 1.0e-2)),
                     ..Default::default()
                 },
             );
