@@ -107,6 +107,14 @@ pub struct DiffConfig {
     /// cancel, which takes much of the noise out of those by normal maps,
     /// rotations and vertex positions on glossy surfaces.
     pub antithetic: bool,
+    /// Points drawn on the triangles whose materials emit, at every vertex
+    /// of a path, for their light, along with finding them by the BSDF.
+    /// The emitters are those with any emissive factor, as of every pass.
+    pub emitter_samples: u32,
+    /// Weight of the recursive control variate of the image that the loss
+    /// is taken on, from 0 for none to below 1, see
+    /// [`DiffTracer::render`]. It takes another pass for every image.
+    pub control_variate: f32,
 }
 
 impl Default for DiffConfig {
@@ -123,6 +131,8 @@ impl Default for DiffConfig {
             secondary_edge_depth: 1,
             guided_edges: false,
             antithetic: false,
+            emitter_samples: 1,
+            control_variate: 0.0,
         }
     }
 }
@@ -348,6 +358,8 @@ struct DiffParams {
     secondary_edge_depth: u32,
     guided_edges: u32,
     antithetic: u32,
+    emitter_samples: u32,
+    _pad: [u32; 3],
 }
 
 #[repr(C)]
@@ -585,6 +597,7 @@ struct DiffTraceData<'a> {
     edge_hits: blade_graphics::BufferPiece,
     edge_importance: blade_graphics::BufferPiece,
     edge_guide: blade_graphics::BufferPiece,
+    emitters: blade_graphics::BufferPiece,
     vertex_slots: blade_graphics::BufferPiece,
     vertex_grads: blade_graphics::BufferPiece,
     normal_grads: blade_graphics::BufferPiece,
@@ -620,6 +633,23 @@ struct TextureInitData<'a> {
 struct LossParams {
     pixel_count: u32,
     _pad: [u32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct ControlParams {
+    pixel_count: u32,
+    valid: u32,
+    weight: f32,
+    _pad: u32,
+}
+
+#[derive(blade_macros::ShaderData)]
+struct ControlData {
+    control: ControlParams,
+    control_image: blade_graphics::BufferPiece,
+    control_previous: blade_graphics::BufferPiece,
+    control_estimate: blade_graphics::BufferPiece,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -713,6 +743,8 @@ impl ParamGroup {
 /// The compiled passes of [`DiffTracer`], which outlive it through
 /// [`DiffTracer::rebuild`].
 struct DiffPipelines {
+    control: blade_graphics::ComputePipeline,
+    collect_emitters: blade_graphics::ComputePipeline,
     primal: blade_graphics::ComputePipeline,
     adjoint: blade_graphics::ComputePipeline,
     init_materials: blade_graphics::ComputePipeline,
@@ -753,6 +785,7 @@ impl DiffPipelines {
         let edges_pipeline = trace_pipeline("diff-edges", "edges");
         let count_edges_pipeline = trace_pipeline("diff-count-edges", "count_edges");
         let guide_edges_pipeline = trace_pipeline("diff-guide-edges", "guide_edges");
+        let collect_emitters_pipeline = trace_pipeline("diff-collect-emitters", "collect_emitters");
         let texture_init_layout = super::ray_data_layout::<TextureInitData>(gpu);
         let init_texture_pipeline =
             gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
@@ -761,6 +794,12 @@ impl DiffPipelines {
                 compute: sh_trace.at("init_texture"),
             });
         let loss_layout = <LossData as blade_graphics::ShaderData>::layout();
+        let control_layout = <ControlData as blade_graphics::ShaderData>::layout();
+        let control_pipeline = gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+            name: "diff-control-variate",
+            data_layouts: &[&control_layout],
+            compute: sh_optimize.at("control_variate"),
+        });
         let loss_pipeline = gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "diff-loss",
             data_layouts: &[&loss_layout],
@@ -788,10 +827,12 @@ impl DiffPipelines {
             init_environment: init_environment_pipeline,
             init_texture: init_texture_pipeline,
             loss: loss_pipeline,
+            control: control_pipeline,
             adam: adam_pipeline,
             edges: edges_pipeline,
             count_edges: count_edges_pipeline,
             guide_edges: guide_edges_pipeline,
+            collect_emitters: collect_emitters_pipeline,
             weld: vertex_pipeline("diff-weld-vertices", "weld_vertices"),
             apply: vertex_pipeline("diff-apply-vertices", "apply_vertices"),
             sum_normals: vertex_pipeline("diff-sum-normals", "sum_normals"),
@@ -806,6 +847,8 @@ impl DiffPipelines {
     }
 
     fn destroy(&mut self, gpu: &blade_graphics::Context) {
+        gpu.destroy_compute_pipeline(&mut self.collect_emitters);
+        gpu.destroy_compute_pipeline(&mut self.control);
         gpu.destroy_compute_pipeline(&mut self.primal);
         gpu.destroy_compute_pipeline(&mut self.adjoint);
         gpu.destroy_compute_pipeline(&mut self.init_materials);
@@ -856,6 +899,10 @@ pub struct DiffTracer {
     edge_importance: blade_graphics::Buffer,
     edge_guide: blade_graphics::Buffer,
     edge_guide_ready: bool,
+    emitters: blade_graphics::Buffer,
+    /// For the control variate: the parameters of the last estimate of
+    /// every view, the image of them, and the estimate.
+    control: ControlState,
     /// Translations of the instances, in XYZ of 4 floats.
     translations: ParamGroup,
     /// Rotations of the instances about their origins, as axis times angle.
@@ -1076,7 +1123,8 @@ impl DiffTracer {
         // Every triangle of the scene, in the order of the hit entries.
         let mut edge_table = Vec::new();
         let mut triangle_count = 0;
-        if desc.geometry {
+        // For the emitters, as well as the edges.
+        {
             for (instance, &model) in ray_tracer.scene_models.iter().enumerate() {
                 let first_vertex = vertex_models
                     .iter()
@@ -1197,11 +1245,7 @@ impl DiffTracer {
         };
         let (edge_entries, edge_staging, edge_bytes) =
             upload("diff edge entries", bytemuck::cast_slice(&edge_table));
-        let transforms = if desc.geometry {
-            instance_transform_data(ray_tracer)
-        } else {
-            Vec::new()
-        };
+        let transforms = instance_transform_data(ray_tracer);
         let (instance_transforms, transform_staging, transform_bytes) = upload(
             "diff instance transforms",
             bytemuck::cast_slice(&transforms),
@@ -1227,6 +1271,11 @@ impl DiffTracer {
         let edge_hits = edge_array("diff edge hits");
         let edge_importance = edge_array("diff edge importance");
         let edge_guide = edge_array("diff edge guide");
+        let emitters = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "diff emitters",
+            size: 4 * (1 + u64::from(triangle_count)),
+            memory: blade_graphics::Memory::Device,
+        });
         let translations = ParamGroup::new("diff translations", instance_count * 4, gpu);
         let rotations = ParamGroup::new("diff rotations", instance_count * 4, gpu);
         let camera_position = ParamGroup::new("diff camera position", 4, gpu);
@@ -1242,6 +1291,16 @@ impl DiffTracer {
                 memory: blade_graphics::Memory::Device,
             })
         };
+        let control = ControlState::new(
+            gpu,
+            view_count,
+            view_stride,
+            [
+                materials.params.size(),
+                environment.params.size(),
+                textures.params.size(),
+            ],
+        );
         let this = Self {
             pipelines: Some(pipelines),
             materials,
@@ -1258,6 +1317,8 @@ impl DiffTracer {
             edge_importance,
             edge_guide,
             edge_guide_ready: false,
+            emitters,
+            control,
             translations,
             rotations,
             camera_position,
@@ -1432,6 +1493,7 @@ impl DiffTracer {
         ray_tracer: &super::RayTracer,
         temp: &mut crate::FrameResources,
     ) {
+        self.control.invalidate();
         if !self.geometry {
             return;
         }
@@ -1497,6 +1559,21 @@ impl DiffTracer {
         self.edge_guide_ready = true;
     }
 
+    /// List the emitting triangles for the passes that follow, by the
+    /// current material parameters.
+    fn collect_emitters(&self, encoder: &mut blade_graphics::CommandEncoder, data: &DiffTraceData) {
+        encoder
+            .transfer("diff-clear-emitters")
+            .fill_buffer(self.emitters.at(0), 4, 0);
+        if self.triangle_count == 0 {
+            return;
+        }
+        let mut pass = encoder.compute("diff-collect-emitters");
+        let mut pc = pass.with(&self.pipelines.as_ref().unwrap().collect_emitters);
+        pc.bind(0, data);
+        pc.dispatch(flat_dispatch(self.triangle_count));
+    }
+
     fn trace_data<'a>(
         &self,
         ray_tracer: &'a super::RayTracer,
@@ -1537,6 +1614,7 @@ impl DiffTracer {
             edge_hits: self.edge_hits.into(),
             edge_importance: self.edge_importance.into(),
             edge_guide: self.edge_guide.into(),
+            emitters: self.emitters.into(),
             vertex_slots: self.vertex_params.vertex_slots.into(),
             vertex_grads: self.vertex_params.group.grads.into(),
             normal_grads: self.vertex_params.normal_grads.into(),
@@ -1569,6 +1647,8 @@ impl DiffTracer {
             secondary_edge_depth: config.secondary_edge_depth,
             guided_edges: (config.guided_edges && self.edge_guide_ready) as u32,
             antithetic: config.antithetic as u32,
+            emitter_samples: config.emitter_samples,
+            _pad: [0; 3],
         }
     }
 
@@ -1696,6 +1776,7 @@ impl DiffTracer {
         offsets: &GeometryOffsets,
         temp: &mut crate::FrameResources,
     ) {
+        self.control.invalidate();
         let count = self.instance_count as usize;
         assert_eq!(offsets.translations.len(), count);
         assert_eq!(offsets.rotations.len(), count);
@@ -1732,6 +1813,7 @@ impl DiffTracer {
     /// acceleration structures again. [`Self::rebuild_scene`] has to follow
     /// before tracing, for the scene to take them.
     pub fn apply_vertices(&self, encoder: &mut blade_graphics::CommandEncoder) {
+        self.control.invalidate();
         let vp = &self.vertex_params;
         if vp.models.is_empty() {
             return;
@@ -1945,6 +2027,7 @@ impl DiffTracer {
         offsets: &[[f32; 4]],
         temp: &mut crate::FrameResources,
     ) {
+        self.control.invalidate();
         assert_eq!(offsets.len(), self.vertex_slot_count());
         let bytes = (offsets.len() * 16) as u64;
         let staging = gpu.create_buffer(blade_graphics::BufferDesc {
@@ -1994,6 +2077,7 @@ impl DiffTracer {
         params: &[MaterialParams],
         temp: &mut crate::FrameResources,
     ) {
+        self.control.invalidate();
         assert_eq!(params.len(), self.material_count());
         let bytes = self.material_bytes();
         let staging = gpu.create_buffer(blade_graphics::BufferDesc {
@@ -2127,17 +2211,89 @@ impl DiffTracer {
             self.make_camera(camera),
             self.make_params(config, frame_index),
         );
-        let mut pass = encoder.compute("diff-primal");
-        let mut pc = pass.with(&self.pipelines.as_ref().unwrap().primal);
-        pc.bind(0, &data);
-        pc.dispatch(
-            self.pipelines
-                .as_ref()
-                .unwrap()
-                .primal
-                .get_dispatch_for(self.image_size),
-        );
+        self.collect_emitters(encoder, &data);
+        let dispatch = self
+            .pipelines
+            .as_ref()
+            .unwrap()
+            .primal
+            .get_dispatch_for(self.image_size);
+        {
+            let mut pass = encoder.compute("diff-primal");
+            let mut pc = pass.with(&self.pipelines.as_ref().unwrap().primal);
+            pc.bind(0, &data);
+            pc.dispatch(dispatch);
+        }
         self.accumulated_frames[self.view as usize] += 1;
+        if config.control_variate > 0.0 && !accumulate {
+            self.apply_control_variate(encoder, &data, dispatch, config.control_variate);
+        }
+    }
+
+    /// Make the image the recursive control variate of it, from the image
+    /// of the parameters of the last estimate of the view with the same
+    /// random numbers, and keep the parameters for the next one.
+    fn apply_control_variate(
+        &mut self,
+        encoder: &mut blade_graphics::CommandEncoder,
+        data: &DiffTraceData,
+        dispatch: [u32; 3],
+        weight: f32,
+    ) {
+        let view = self.view as usize;
+        let generation = self.control.generation.get();
+        let valid = self.control.view_generations[view] == Some(generation);
+        let previous =
+            |i: usize| self.control.previous_params[i].at(self.control.strides[i] * view as u64);
+        if valid {
+            let mut previous_data = DiffTraceData {
+                material_params: previous(0),
+                env_params: previous(1),
+                texture_params: previous(2),
+                image: self.control.previous_image.into(),
+                ..*data
+            };
+            // Rendered anew, not accumulated.
+            previous_data.parameters.accumulated_frames = 0;
+            let mut pass = encoder.compute("diff-primal-previous");
+            let mut pc = pass.with(&self.pipelines.as_ref().unwrap().primal);
+            pc.bind(0, &previous_data);
+            pc.dispatch(dispatch);
+        }
+        let pixel_count = self.image_size.width * self.image_size.height;
+        {
+            let mut pass = encoder.compute("diff-control-variate");
+            let mut pc = pass.with(&self.pipelines.as_ref().unwrap().control);
+            pc.bind(
+                0,
+                &ControlData {
+                    control: ControlParams {
+                        pixel_count,
+                        valid: valid as u32,
+                        weight,
+                        _pad: 0,
+                    },
+                    control_image: self.view_piece(self.image),
+                    control_previous: self.control.previous_image.into(),
+                    control_estimate: self.view_piece(self.control.estimate),
+                },
+            );
+            pc.dispatch(flat_dispatch(pixel_count));
+        }
+        let mut transfer = encoder.transfer("diff-keep-parameters");
+        for (i, current) in [
+            self.materials.params,
+            self.environment.params,
+            self.textures.params,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if current.size() != 0 {
+                transfer.copy_buffer_to_buffer(current.into(), previous(i), current.size());
+            }
+        }
+        self.control.view_generations[view] = Some(generation);
     }
 
     /// Make the current image the target.
@@ -2206,6 +2362,7 @@ impl DiffTracer {
             self.make_camera(camera),
             self.make_params(config, frame_index),
         );
+        self.collect_emitters(encoder, &data);
         let mut pass = encoder.compute("diff-adjoint");
         {
             let mut pc = pass.with(&self.pipelines.as_ref().unwrap().adjoint);
@@ -2366,6 +2523,8 @@ impl DiffTracer {
         gpu.destroy_buffer(self.edge_hits);
         gpu.destroy_buffer(self.edge_importance);
         gpu.destroy_buffer(self.edge_guide);
+        gpu.destroy_buffer(self.emitters);
+        self.control.destroy(gpu);
         self.vertex_params.destroy(gpu);
         self.translations.destroy(gpu);
         self.rotations.destroy(gpu);
@@ -2386,6 +2545,68 @@ impl DiffTracer {
         gpu.destroy_buffer(self.image_adjoint);
         gpu.destroy_buffer(self.loss);
         gpu.destroy_buffer(self.readback);
+    }
+}
+
+/// What the recursive control variate of the images keeps, see
+/// [`DiffConfig::control_variate`].
+struct ControlState {
+    /// The material, environment and texture parameters of the last
+    /// estimate of every view, each at its multiple of `strides`.
+    previous_params: [blade_graphics::Buffer; 3],
+    strides: [u64; 3],
+    /// The image of those, with the random numbers of the current one.
+    previous_image: blade_graphics::Buffer,
+    /// The estimate of every view.
+    estimate: blade_graphics::Buffer,
+    /// Bumped by every change that the parameters of the last estimates
+    /// don't account for, such as of the geometry.
+    generation: std::cell::Cell<u32>,
+    /// The generation of the last estimate of every view, if there is one.
+    view_generations: Vec<Option<u32>>,
+}
+
+impl ControlState {
+    fn new(
+        gpu: &blade_graphics::Context,
+        view_count: u32,
+        view_stride: u64,
+        param_sizes: [u64; 3],
+    ) -> Self {
+        let strides = param_sizes.map(|size| size.max(4).next_multiple_of(256));
+        let names = [
+            "diff previous materials",
+            "diff previous environment",
+            "diff previous textures",
+        ];
+        let device = |name, size| {
+            gpu.create_buffer(blade_graphics::BufferDesc {
+                name,
+                size,
+                memory: blade_graphics::Memory::Device,
+            })
+        };
+        Self {
+            previous_params: [0, 1, 2]
+                .map(|i| device(names[i], strides[i] * u64::from(view_count))),
+            strides,
+            previous_image: device("diff previous image", view_stride),
+            estimate: device("diff estimate", view_stride * u64::from(view_count)),
+            generation: std::cell::Cell::new(0),
+            view_generations: vec![None; view_count as usize],
+        }
+    }
+
+    fn invalidate(&self) {
+        self.generation.set(self.generation.get().wrapping_add(1));
+    }
+
+    fn destroy(&mut self, gpu: &blade_graphics::Context) {
+        for buffer in self.previous_params {
+            gpu.destroy_buffer(buffer);
+        }
+        gpu.destroy_buffer(self.previous_image);
+        gpu.destroy_buffer(self.estimate);
     }
 }
 

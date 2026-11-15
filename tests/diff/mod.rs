@@ -1480,7 +1480,7 @@ fn check_shadow_gradients(cache_name: &str, bounces: u32, depth: u32, emission: 
             // noise that it leaves in the image adds to the loss, which
             // moves with the emitter.
             *loss = if emission > 0.0 {
-                scene.unbiased_loss(2_000_000..2_002_048)
+                scene.unbiased_loss(2_000_000..2_000_512)
             } else {
                 scene.converged_loss(frames.clone())
             };
@@ -2230,4 +2230,182 @@ fn diff_signed_distance_splits_the_shape() {
         );
     }
     assert!(late < 0.5 * early);
+}
+
+/// Drawing points on an emitter finds the light that it casts with much
+/// less noise than finding it by the BSDF alone, and the same on average.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_emitter_sampling_reduces_noise() {
+    let Some(mut scene) = DiffScene::new("diff-emitter-sampling", SceneKind::Shadow) else {
+        return;
+    };
+    scene.config.max_bounces = 1;
+    let (mut params, _) = scene.read_materials();
+    params[1].emissive = [4.0; 3];
+    scene.write_materials(&params);
+    let size = scene.diff.environment_size();
+    let env = scene.diff.environment_params();
+    scene.upload(
+        env,
+        &vec![[0.0, 0.0, 0.0, 1.0]; (size.width * size.height) as usize],
+    );
+    let image_size = scene.diff.image_size();
+    let count = (image_size.width * image_size.height) as usize;
+    let mut results = Vec::new();
+    for samples in [0, 1] {
+        scene.config.emitter_samples = samples;
+        let mut halves = Vec::new();
+        for half in 0..2u32 {
+            scene.render_converged(half * 64..(half + 1) * 64);
+            scene.submit();
+            halves.push(scene.download(scene.diff.image(), count));
+        }
+        // The difference of two images with separate noise.
+        let noise = halves[0]
+            .iter()
+            .zip(&halves[1])
+            .map(|(a, b)| (0..3).map(|c| (a[c] - b[c]).powi(2)).sum::<f32>())
+            .sum::<f32>()
+            / (6 * count) as f32;
+        let mean = halves
+            .iter()
+            .flatten()
+            .map(|t| t[0] + t[1] + t[2])
+            .sum::<f32>()
+            / (6 * count) as f32;
+        results.push((mean, noise));
+    }
+    let [(bsdf_mean, bsdf_noise), (light_mean, light_noise)] = [results[0], results[1]];
+    println!(
+        "mean radiance {bsdf_mean:.4} by the BSDF, {light_mean:.4} with the emitters drawn; variance {bsdf_noise:.3e} and {light_noise:.3e}"
+    );
+    // The variance is of a pixel of either half, and the colors are gray.
+    let spread = ((bsdf_noise + light_noise) / (2 * count) as f32).sqrt();
+    assert!(
+        (bsdf_mean - light_mean).abs() < 4.0 * spread + 1.0e-3 * bsdf_mean,
+        "the means are {bsdf_mean} and {light_mean}"
+    );
+    assert!(light_noise < 0.2 * bsdf_noise);
+    scene.destroy();
+}
+
+/// The recursive control variate of the image takes much of the noise of
+/// its image out of the gradient by the base colors, which keeps its mean.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_control_variate_reduces_variance() {
+    let Some(mut scene) = DiffScene::new("diff-control", SceneKind::Grid) else {
+        return;
+    };
+    const ITERATIONS: u32 = 48;
+    scene.capture_target();
+    let (truth, _) = scene.read_materials();
+    let mut params = truth.clone();
+    for params in &mut params[..pbr_scene::COLUMNS] {
+        params.base_color = [0.4, 0.4, 0.4];
+    }
+    scene.write_materials(&params);
+    let mut iteration = 0;
+    let mut stats = Vec::new();
+    for weight in [0.0, 0.9] {
+        scene.config.control_variate = weight;
+        let mut samples = Vec::new();
+        for k in 0..8 + ITERATIONS {
+            scene.backward(iteration, 2, 2);
+            iteration += 1;
+            let (_, grads) = scene.read_materials();
+            // Clear the gradients.
+            scene.diff.step(&mut scene.encoder, &StepConfig::default());
+            if k >= 8 {
+                samples.push(
+                    grads[..pbr_scene::COLUMNS]
+                        .iter()
+                        .flat_map(|g| g.base_color)
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        let count = samples[0].len();
+        let mean: Vec<f32> = (0..count)
+            .map(|k| samples.iter().map(|s| s[k]).sum::<f32>() / samples.len() as f32)
+            .collect();
+        let variance: Vec<f32> = (0..count)
+            .map(|k| {
+                samples
+                    .iter()
+                    .map(|s| (s[k] - mean[k]).powi(2))
+                    .sum::<f32>()
+                    / (samples.len() - 1) as f32
+            })
+            .collect();
+        stats.push((mean, variance));
+    }
+    let (plain_mean, plain_variance) = &stats[0];
+    let (control_mean, control_variance) = &stats[1];
+    let total = |v: &[f32]| v.iter().sum::<f32>();
+    let apart: f32 = plain_mean
+        .iter()
+        .zip(control_mean)
+        .map(|(a, b)| (a - b).powi(2))
+        .sum();
+    // The control variate averages the noise of the images over time, so
+    // its mean is about as far off as that of the plain one.
+    let expected = 2.0 * total(plain_variance) / ITERATIONS as f32;
+    println!(
+        "variance of the base color gradients {:e} plain, {:e} with the control variate; means apart by {:.2} of their spread",
+        total(plain_variance),
+        total(control_variance),
+        apart / expected
+    );
+    assert!(
+        apart < 3.0 * expected,
+        "the means are apart by {}",
+        apart / expected
+    );
+    assert!(total(control_variance) < 0.5 * total(plain_variance));
+
+    // As the parameters change, it still finds them.
+    let error = |params: &[MaterialParams]| {
+        let mut sum = 0.0;
+        for (p, t) in params.iter().zip(&truth).take(pbr_scene::COLUMNS) {
+            for c in 0..3 {
+                sum += (p.base_color[c] - t.base_color[c]).abs();
+            }
+        }
+        sum / (3 * pbr_scene::COLUMNS) as f32
+    };
+    let mut errors = Vec::new();
+    for weight in [0.0, 0.9] {
+        scene.config.control_variate = weight;
+        scene.write_materials(&params);
+        for _ in 0..40 {
+            scene.backward(iteration, 2, 2);
+            iteration += 1;
+            scene.diff.step(
+                &mut scene.encoder,
+                &StepConfig {
+                    materials: Some((
+                        AdamConfig {
+                            learning_rate: 0.03,
+                            ..Default::default()
+                        },
+                        MaterialParamFlags::BASE_COLOR,
+                    )),
+                    ..Default::default()
+                },
+            );
+            scene.submit();
+        }
+        let (found, _) = scene.read_materials();
+        errors.push(error(&found));
+    }
+    println!(
+        "base color error {:.3} -> {:.3} plain, {:.3} with the control variate",
+        error(&params),
+        errors[0],
+        errors[1]
+    );
+    assert!(errors[1] < 0.25 * error(&params));
+    scene.destroy();
 }

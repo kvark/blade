@@ -77,6 +77,11 @@ struct DiffParams {
     // Pair every other path of the adjoint with the one before, see
     // `sample_bsdf_turned`.
     antithetic: u32,
+    // Points drawn on the emitting triangles at every vertex of a path.
+    emitter_samples: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 // Has to match the host!
@@ -172,6 +177,9 @@ var<storage, read_write> edge_counts: array<atomic<u32>>;
 var<storage, read_write> edge_hits: array<atomic<f32>>;
 var<storage, read_write> edge_importance: array<f32>;
 var<storage, read_write> edge_guide: array<f32>;
+// The number of the triangles whose materials emit, and then their indices,
+// which `collect_emitters` fills in for every pass.
+var<storage, read_write> emitters: array<atomic<u32>>;
 var<storage, read_write> camera_grads: array<atomic<f32>>;
 
 fn trace_ray(position: vec3<f32>, direction: vec3<f32>, t_min: f32) -> RayIntersection {
@@ -741,6 +749,65 @@ fn compute_incident_radiance(record: ptr<function, PathRecord>) -> array<vec3<f3
     return incident;
 }
 
+// List the triangles whose materials emit, by their factors, which are
+// what the light is drawn from.
+@compute @workgroup_size(64)
+fn collect_emitters(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+) {
+    let triangle = global_id.y * num_workgroups.x * 64u + global_id.x;
+    if (triangle >= parameters.triangle_count) {
+        return;
+    }
+    let edges = triangle_edges(triangle);
+    if (edges.degenerate || !is_emitter_entry(edges.entry)) {
+        return;
+    }
+    let index = atomicAdd(&emitters[0], 1u);
+    atomicStore(&emitters[1u + index], triangle);
+}
+
+fn is_emitter_entry(entry: u32) -> bool {
+    return any(material_params[entry].emissive > vec3<f32>(0.0));
+}
+
+fn emitter_count() -> u32 {
+    if (parameters.emitter_samples == 0u) {
+        return 0u;
+    }
+    return atomicLoad(&emitters[0]);
+}
+
+// The global index of the triangle of a hit, as `triangle_edges` takes it.
+fn hit_triangle(intersection: RayIntersection) -> u32 {
+    let entry_index = intersection.instance_custom_data + intersection.geometry_index;
+    return edge_entries[entry_index].first_triangle + intersection.primitive_index;
+}
+
+fn world_triangle(edges: TriangleEdges) -> mat3x3<f32> {
+    let to_world = instance_transforms[edges.instance];
+    return mat3x3<f32>(
+        to_world * vec4<f32>(edges.local[0], 1.0),
+        to_world * vec4<f32>(edges.local[1], 1.0),
+        to_world * vec4<f32>(edges.local[2], 1.0),
+    );
+}
+
+// Solid angle density of drawing `direction` from a point, which sees the
+// emitting `triangle` at `distance` that way, by drawing an emitter
+// uniformly and then a point on it uniformly.
+fn emitter_pdf(triangle: u32, direction: vec3<f32>, distance: f32, count: u32) -> f32 {
+    let corners = world_triangle(triangle_edges(triangle));
+    let normal = cross(corners[1] - corners[0], corners[2] - corners[0]);
+    let double_area = length(normal);
+    let cosine = abs(dot(normal, direction)) / max(double_area, 1.0e-20);
+    if (cosine < 1.0e-6 || double_area <= 0.0) {
+        return 0.0;
+    }
+    return distance * distance / (cosine * 0.5 * double_area * f32(count));
+}
+
 // Whether the walk turns the first direction that it samples from a BSDF,
 // see `sample_bsdf_turned`.
 var<private> turn_first_bsdf_sample: bool;
@@ -832,8 +899,18 @@ fn walk_path(
         let flat_normal = v.surface.flat_normal;
         // Derivative of the loss by everything found at this vertex.
         let d_found = adjoint * throughput;
-        var grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found, vec3<f32>(0.0), vec3<f32>(0.0));
-        var found = v.emissive;
+        // The emission is also found by drawing points on the emitters from
+        // the previous vertex, if this one was found by its BSDF.
+        var emission_weight = 1.0;
+        if (bsdf_pdf >= 0.0 && any(v.emissive > vec3<f32>(0.0)) && is_emitter_entry(v.surface.entry_index)) {
+            let count = emitter_count();
+            if (count != 0u) {
+                let light_pdf = emitter_pdf(hit_triangle(intersection), direction, intersection.t, count);
+                emission_weight = mis_weight(1.0, bsdf_pdf, f32(parameters.emitter_samples), light_pdf);
+            }
+        }
+        var grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found * emission_weight, vec3<f32>(0.0), vec3<f32>(0.0));
+        var found = v.emissive * emission_weight;
         position = v.surface.position;
         t_min = parameters.t_start;
 
@@ -870,6 +947,52 @@ fn walk_path(
                 scatter_env_grad(ls.texel, d_found * bsdf.value * weight);
                 grad.flat_normal += dot(d_found, bsdf.value * light) * unfaded
                     * horizon_weight_grad(horizon_cosine) * ls.dir;
+            }
+        }
+        // Points on the emitting triangles. Only their directions are drawn
+        // from them: the light comes from what the ray that way hits, if it's
+        // the triangle, which keeps the gradient in the same terms as for
+        // the light found by the BSDF, with the directions held fixed.
+        let emitters_drawn = select(0u, emitter_count(), light_hits);
+        for (var i = 0u; i < select(0u, parameters.emitter_samples, emitters_drawn != 0u); i += 1u) {
+            let pick = min(u32(random_gen(rng) * f32(emitters_drawn)), emitters_drawn - 1u);
+            let r1 = sqrt(random_gen(rng));
+            let r2 = random_gen(rng);
+            let triangle = atomicLoad(&emitters[1u + pick]);
+            let corners = world_triangle(triangle_edges(triangle));
+            let point = (1.0 - r1) * corners[0] + r1 * (1.0 - r2) * corners[1] + r1 * r2 * corners[2];
+            let offset = point - position;
+            let distance = length(offset);
+            if (distance < 1.0e-4) {
+                continue;
+            }
+            let dir = offset / distance;
+            let light_pdf = emitter_pdf(triangle, dir, distance, emitters_drawn);
+            let horizon_cosine = dot(dir, flat_normal);
+            let horizon = horizon_weight(horizon_cosine);
+            if (light_pdf <= 0.0 || horizon <= 0.0) {
+                continue;
+            }
+            let bsdf = evaluate_bsdf_gradient(v.material, normal, view_dir, dir);
+            if (all(bsdf.value <= vec3<f32>(0.0))) {
+                continue;
+            }
+            let hit = trace_ray(position, dir, t_min);
+            if (hit.kind == RAY_QUERY_INTERSECTION_NONE || hit_triangle(hit) != triangle) {
+                continue;
+            }
+            let lamp = resolve_vertex(hit);
+            let other_pdf = compute_bsdf_pdf(v.material, normal, view_dir, dir);
+            let samples = f32(parameters.emitter_samples);
+            let unfaded = mis_weight(samples, light_pdf, bsdf_count, other_pdf) / (samples * light_pdf);
+            let weight = unfaded * horizon;
+            found += bsdf.value * lamp.emissive * weight;
+            if (replay) {
+                add_bsdf_grad(&grad, bsdf, v.material, d_found * lamp.emissive * weight);
+                grad.flat_normal += dot(d_found, bsdf.value * lamp.emissive) * unfaded
+                    * horizon_weight_grad(horizon_cosine) * dir;
+                var lamp_grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found * bsdf.value * weight, vec3<f32>(0.0), vec3<f32>(0.0));
+                scatter_material_grad(lamp, lamp_grad);
             }
         }
         radiance += throughput * found;
@@ -1331,6 +1454,8 @@ fn edge_triangle_count(key: u32) -> u32 {
 
 struct TriangleEdges {
     instance: u32,
+    // The hit entry, which is the material.
+    entry: u32,
     // The corners in the space of the instance.
     local: mat3x3<f32>,
     // Parameters of the corners, or `~0u`.
@@ -1361,6 +1486,7 @@ fn triangle_edges(triangle: u32) -> TriangleEdges {
     let vptr = &vertex_buffers[entry.vertex_buf].data;
     var edges: TriangleEdges;
     edges.instance = edge_entry.instance;
+    edges.entry = edge_entry.hit_entry;
     edges.slots = vertex_slots_of(edge_entry.vertex_base, indices);
     edges.linear = affine_linear(instance_transforms[edge_entry.instance]) * affine_linear(entry.geometry_to_object);
     edges.local = entry.geometry_to_object * mat3x4<f32>(
