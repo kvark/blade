@@ -1436,8 +1436,27 @@ fn diff_emitter_gradients_match_finite_differences() {
     check_shadow_gradients("diff-emitter", 1, 1, 4.0);
 }
 
+/// The light of the wall, and of what it reflects, moves with the sphere, as
+/// with drawing the edges from the whole scene, when the edges are found by
+/// carrying the hits of directions drawn by the BSDF onto them.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_projective_shadows_match_finite_differences() {
+    check_shadow_gradients_with("diff-projective-shadow", 2, 2, 0.0, true);
+}
+
 /// With the sphere emitting `emission`.
 fn check_shadow_gradients(cache_name: &str, bounces: u32, depth: u32, emission: f32) {
+    check_shadow_gradients_with(cache_name, bounces, depth, emission, false);
+}
+
+fn check_shadow_gradients_with(
+    cache_name: &str,
+    bounces: u32,
+    depth: u32,
+    emission: f32,
+    projective: bool,
+) {
     let Some(mut scene) = DiffScene::new(cache_name, SceneKind::Shadow) else {
         return;
     };
@@ -1471,6 +1490,7 @@ fn check_shadow_gradients(cache_name: &str, bounces: u32, depth: u32, emission: 
     let mut grads = Vec::new();
     for secondary in [0, 32] {
         scene.config.secondary_edge_samples = secondary;
+        scene.config.projective_edges = projective && secondary != 0;
         // Guided by what the edges brought in a few rounds first.
         scene.config.guided_edges = secondary != 0;
         if secondary != 0 {
