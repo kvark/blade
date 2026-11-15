@@ -129,7 +129,9 @@ struct MaterialParams {
     // The part of the diffuse albedo that goes through the surface instead,
     // see `evaluate_surface_gradient`.
     transmission: f32,
-    _pad0: f32,
+    // Index of refraction of a solid, through which the transmission is
+    // refracted, or zero for a thin wall.
+    ior: f32,
     _pad1: f32,
     _pad2: f32,
 }
@@ -339,6 +341,9 @@ struct DiffVertex {
     normal_local: vec3<f32>,
     material: Material,
     transmission: f32,
+    // The relative index of refraction, see `evaluate_surface_gradient`,
+    // which depends on the side that the vertex is seen from.
+    eta: f32,
     emissive: vec3<f32>,
     // Texture values that multiply the factors.
     base_color_texel: vec3<f32>,
@@ -371,6 +376,8 @@ fn resolve_vertex(intersection: RayIntersection) -> DiffVertex {
     );
     v.emissive = params.emissive * v.emissive_texel;
     v.transmission = params.transmission;
+    // As seen from outside, which `walk_path` turns around from inside.
+    v.eta = select(0.0, max(params.ior, 1.0001), params.ior > 0.0);
     return v;
 }
 
@@ -381,6 +388,8 @@ struct MaterialGrad {
     roughness: f32,
     emissive: vec3<f32>,
     transmission: f32,
+    // By the relative index of refraction of the vertex.
+    eta: f32,
     // By the shading normal, in world space, before its normalization.
     normal: vec3<f32>,
     // By the normal of the triangle, through `horizon_weight`.
@@ -393,6 +402,7 @@ fn add_bsdf_grad(grad: ptr<function, MaterialGrad>, bsdf: BsdfGradient, mat: Mat
     (*grad).specular_f0 += d_value * bsdf.d_specular_f0;
     (*grad).roughness += dot(d_value, bsdf.d_roughness);
     (*grad).transmission += dot(d_value, bsdf.d_transmission);
+    (*grad).eta += dot(d_value, bsdf.d_eta);
     (*grad).normal += bsdf_normal_grad(bsdf, d_value);
 }
 
@@ -425,6 +435,10 @@ fn scatter_material_grad(v: DiffVertex, grad: MaterialGrad) {
     add_material_grad(index, 6u, d_emissive_factor.z);
     add_material_grad(index, 7u, grad.roughness * v.roughness_texel);
     add_material_grad(index, 8u, grad.transmission);
+    // `eta` is the index, or its inverse from inside.
+    if (v.eta > 0.0) {
+        add_material_grad(index, 9u, grad.eta * select(-v.eta * v.eta, 1.0, v.eta >= 1.0));
+    }
 
     let entry = v.surface.entry;
     let tc = v.surface.tex_coords;
@@ -564,6 +578,7 @@ fn make_path_vertex(
     pv.view_dir = -direction;
     pv.material = v.material;
     pv.transmission = v.transmission;
+    pv.eta = v.eta;
     pv.depth_row = cross(e1, e2) / det;
     pv.ray_dir = direction;
     pv.d_found = d_found;
@@ -742,6 +757,7 @@ struct PathVertex {
     view_dir: vec3<f32>,
     material: Material,
     transmission: f32,
+    eta: f32,
     // Moving the origin of the camera ray by `d` moves the hit along the
     // ray by `dot(depth_row, d)` times its direction.
     depth_row: vec3<f32>,
@@ -854,26 +870,8 @@ var<private> turn_first_bsdf_sample: bool;
 // where each alone has a large one, which is antithetic sampling, after
 // Zhang et al. "Antithetic Sampling for Monte Carlo Differentiable
 // Rendering" (2021).
-fn sample_bsdf_turned(mat: Material, transmission: f32, normal: vec3<f32>, view_dir: vec3<f32>, turned: bool, rng: ptr<function, RandomState>) -> BsdfSample {
-    let frame = make_tangent_frame(normal);
-    let turn = select(vec3<f32>(1.0), vec3<f32>(-1.0, -1.0, 1.0), turned);
-    var dir: vec3<f32>;
-    if (random_gen(rng) < specular_sampling_ratio(mat)) {
-        let half_dir = frame * (turn * sample_ggx_half_dir(material_alpha(mat), rng));
-        dir = 2.0 * dot(view_dir, half_dir) * half_dir - view_dir;
-    } else if (transmission > 0.0 && random_gen(rng) < transmission) {
-        // The specular lobe, mirrored through the surface.
-        let half_dir = frame * (turn * sample_ggx_half_dir(material_alpha(mat), rng));
-        let reflected = 2.0 * dot(view_dir, half_dir) * half_dir - view_dir;
-        if (dot(reflected, normal) <= 0.0) {
-            return BsdfSample(normal, 0.0);
-        }
-        dir = reflected - 2.0 * dot(reflected, normal) * normal;
-    } else {
-        dir = frame * (turn * sample_hemisphere_cosine(rng));
-    }
-    dir = normalize(dir);
-    return BsdfSample(dir, surface_pdf(mat, transmission, normal, view_dir, dir));
+fn sample_bsdf_turned(mat: Material, transmission: f32, eta: f32, normal: vec3<f32>, view_dir: vec3<f32>, turned: bool, rng: ptr<function, RandomState>) -> BsdfSample {
+    return sample_surface(mat, transmission, eta, normal, view_dir, turned, rng);
 }
 
 // Walk one path and return its radiance.
@@ -943,6 +941,9 @@ fn walk_path(
         v.surface.normal = bend_normal(unbent_normal, view_dir);
         let normal = v.surface.normal;
         let flat_normal = facing * v.surface.flat_normal;
+        if (facing < 0.0 && v.eta > 0.0) {
+            v.eta = 1.0 / v.eta;
+        }
         // Derivative of the loss by everything found at this vertex.
         let d_found = adjoint * throughput;
         // The emission is also found by drawing points on the emitters from
@@ -955,7 +956,7 @@ fn walk_path(
                 emission_weight = mis_weight(1.0, bsdf_pdf, f32(parameters.emitter_samples), light_pdf);
             }
         }
-        var grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found * emission_weight, 0.0, vec3<f32>(0.0), vec3<f32>(0.0));
+        var grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found * emission_weight, 0.0, 0.0, vec3<f32>(0.0), vec3<f32>(0.0));
         var found = v.emissive * emission_weight;
         position = v.surface.position;
         t_min = parameters.t_start;
@@ -976,14 +977,14 @@ fn walk_path(
             if (ls.pdf <= 0.0) {
                 continue;
             }
-            let bsdf = evaluate_surface_gradient(v.material, v.transmission, normal, view_dir, ls.dir);
+            let bsdf = evaluate_surface_gradient(v.material, v.transmission, v.eta, normal, view_dir, ls.dir);
             let horizon_cosine = side_cosine(ls.dir, normal, flat_normal);
             let horizon = horizon_weight(horizon_cosine);
             if (horizon <= 0.0 || all(bsdf.value <= vec3<f32>(0.0))
                 || is_occluded(position, ls.dir)) {
                 continue;
             }
-            let other_pdf = surface_pdf(v.material, v.transmission, normal, view_dir, ls.dir);
+            let other_pdf = surface_pdf(v.material, v.transmission, v.eta, normal, view_dir, ls.dir);
             let unfaded = mis_weight(num_light, ls.pdf, bsdf_count, other_pdf) / (num_light * ls.pdf);
             let weight = unfaded * horizon;
             let light = env_radiance(ls.texel);
@@ -1019,7 +1020,7 @@ fn walk_path(
             if (light_pdf <= 0.0 || horizon <= 0.0) {
                 continue;
             }
-            let bsdf = evaluate_surface_gradient(v.material, v.transmission, normal, view_dir, dir);
+            let bsdf = evaluate_surface_gradient(v.material, v.transmission, v.eta, normal, view_dir, dir);
             if (all(bsdf.value <= vec3<f32>(0.0))) {
                 continue;
             }
@@ -1028,7 +1029,7 @@ fn walk_path(
                 continue;
             }
             let lamp = resolve_vertex(hit);
-            let other_pdf = surface_pdf(v.material, v.transmission, normal, view_dir, dir);
+            let other_pdf = surface_pdf(v.material, v.transmission, v.eta, normal, view_dir, dir);
             let samples = f32(parameters.emitter_samples);
             let unfaded = mis_weight(samples, light_pdf, bsdf_count, other_pdf) / (samples * light_pdf);
             let weight = unfaded * horizon;
@@ -1037,7 +1038,7 @@ fn walk_path(
                 add_bsdf_grad(&grad, bsdf, v.material, d_found * lamp.emissive * weight);
                 grad.flat_normal += dot(d_found, bsdf.value * lamp.emissive) * unfaded
                     * horizon_weight_grad(horizon_cosine) * side_cosine_grad(dir, normal);
-                var lamp_grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found * bsdf.value * weight, 0.0, vec3<f32>(0.0), vec3<f32>(0.0));
+                var lamp_grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found * bsdf.value * weight, 0.0, 0.0, vec3<f32>(0.0), vec3<f32>(0.0));
                 scatter_material_grad(lamp, lamp_grad);
             }
         }
@@ -1050,11 +1051,11 @@ fn walk_path(
 
         var weight = vec3<f32>(0.0);
         if (will_extend) {
-            let bs = sample_bsdf_turned(v.material, v.transmission, normal, view_dir, bounce == 0u && turn_first_bsdf_sample, rng);
+            let bs = sample_bsdf_turned(v.material, v.transmission, v.eta, normal, view_dir, bounce == 0u && turn_first_bsdf_sample, rng);
             let horizon_cosine = side_cosine(bs.dir, normal, flat_normal);
             let horizon = horizon_weight(horizon_cosine);
             if (bs.pdf > 0.0 && horizon > 0.0) {
-                let bsdf = evaluate_surface_gradient(v.material, v.transmission, normal, view_dir, bs.dir);
+                let bsdf = evaluate_surface_gradient(v.material, v.transmission, v.eta, normal, view_dir, bs.dir);
                 var scale = horizon / bs.pdf;
                 var survives = true;
                 if (bounce >= ROULETTE_START) {
@@ -1806,7 +1807,7 @@ fn secondary_edge_at(
     if (horizon <= 0.0) {
         return vec3<f32>(0.0);
     }
-    let bsdf = evaluate_surface_gradient(pv.material, pv.transmission, pv.normal, pv.view_dir, dir).value;
+    let bsdf = evaluate_surface_gradient(pv.material, pv.transmission, pv.eta, pv.normal, pv.view_dir, dir).value;
     if (all(bsdf <= vec3<f32>(0.0))) {
         return vec3<f32>(0.0);
     }
@@ -1855,7 +1856,7 @@ fn sample_projective_directions(pv: PathVertex, depth: u32, rng: ptr<function, R
     var d_hit = vec3<f32>(0.0);
     let samples = max(parameters.secondary_edge_samples, 1u);
     for (var j = 0u; j < samples; j += 1u) {
-        let bs = sample_bsdf_turned(pv.material, pv.transmission, pv.normal, pv.view_dir, false, rng);
+        let bs = sample_bsdf_turned(pv.material, pv.transmission, pv.eta, pv.normal, pv.view_dir, false, rng);
         if (bs.pdf <= 0.0 || horizon_weight(side_cosine(bs.dir, pv.normal, pv.flat_normal)) <= 0.0) {
             continue;
         }

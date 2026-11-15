@@ -42,7 +42,11 @@ pub struct MaterialParams {
     /// with its base color tint. Only the differentiable tracer has it, and
     /// it starts at zero.
     pub transmission: f32,
-    _pad: [f32; 3],
+    /// The index of refraction of a solid that the transmission goes
+    /// through, refracted at its surface by a rough dielectric microfacet
+    /// model, or zero for a thin wall. It starts at zero.
+    pub ior: f32,
+    _pad: [f32; 2],
 }
 
 const MATERIAL_PARAM_COUNT: u32 = (mem::size_of::<MaterialParams>() / 4) as u32;
@@ -65,6 +69,7 @@ bitflags::bitflags! {
         const EMISSIVE = 0x70;
         const ROUGHNESS = 0x80;
         const TRANSMISSION = 0x100;
+        const IOR = 0x200;
     }
 }
 
