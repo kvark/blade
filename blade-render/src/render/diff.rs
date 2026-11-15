@@ -123,6 +123,11 @@ pub struct DiffConfig {
     /// is taken on, from 0 for none to below 1, see
     /// [`DiffTracer::render`]. It takes another pass for every image.
     pub control_variate: f32,
+    /// Sample the edges that the camera sees by carrying the hits of the
+    /// paths of the gradient onto them, instead of sampling every edge,
+    /// which takes as long for any number of triangles, see
+    /// `sample_projective_edge` in the shader.
+    pub projective_edges: bool,
 }
 
 impl Default for DiffConfig {
@@ -141,6 +146,7 @@ impl Default for DiffConfig {
             antithetic: false,
             emitter_samples: 1,
             control_variate: 0.0,
+            projective_edges: false,
         }
     }
 }
@@ -367,7 +373,8 @@ struct DiffParams {
     guided_edges: u32,
     antithetic: u32,
     emitter_samples: u32,
-    _pad: [u32; 3],
+    projective_edges: u32,
+    _pad: [u32; 2],
 }
 
 #[repr(C)]
@@ -602,6 +609,7 @@ struct DiffTraceData<'a> {
     camera_grads: blade_graphics::BufferPiece,
     edge_keys: blade_graphics::BufferPiece,
     edge_counts: blade_graphics::BufferPiece,
+    edge_normals: blade_graphics::BufferPiece,
     edge_hits: blade_graphics::BufferPiece,
     edge_importance: blade_graphics::BufferPiece,
     edge_guide: blade_graphics::BufferPiece,
@@ -901,6 +909,7 @@ pub struct DiffTracer {
     /// Hash table of the edges, with the triangles along each.
     edge_keys: blade_graphics::Buffer,
     edge_counts: blade_graphics::Buffer,
+    edge_normals: blade_graphics::Buffer,
     /// What the secondary edges drawn from every triangle corner brought,
     /// their importance, and its cumulative distribution.
     edge_hits: blade_graphics::Buffer,
@@ -1269,6 +1278,11 @@ impl DiffTracer {
         };
         let edge_keys = edge_table("diff edge keys");
         let edge_counts = edge_table("diff edge counts");
+        let edge_normals = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "diff edge normals",
+            size: 32 * edge_slots,
+            memory: blade_graphics::Memory::Device,
+        });
         let edge_array = |name| {
             gpu.create_buffer(blade_graphics::BufferDesc {
                 name,
@@ -1321,6 +1335,7 @@ impl DiffTracer {
             geometry: desc.geometry,
             edge_keys,
             edge_counts,
+            edge_normals,
             edge_hits,
             edge_importance,
             edge_guide,
@@ -1619,6 +1634,7 @@ impl DiffTracer {
             camera_grads: self.camera_position.grads.into(),
             edge_keys: self.edge_keys.into(),
             edge_counts: self.edge_counts.into(),
+            edge_normals: self.edge_normals.into(),
             edge_hits: self.edge_hits.into(),
             edge_importance: self.edge_importance.into(),
             edge_guide: self.edge_guide.into(),
@@ -1656,7 +1672,8 @@ impl DiffTracer {
             guided_edges: (config.guided_edges && self.edge_guide_ready) as u32,
             antithetic: config.antithetic as u32,
             emitter_samples: config.emitter_samples,
-            _pad: [0; 3],
+            projective_edges: config.projective_edges as u32,
+            _pad: [0; 2],
         }
     }
 
@@ -2383,7 +2400,7 @@ impl DiffTracer {
                     .get_dispatch_for(self.image_size),
             );
         }
-        if self.geometry && self.triangle_count != 0 {
+        if self.geometry && self.triangle_count != 0 && !config.projective_edges {
             assert!(
                 config.jitter_primary_rays,
                 "the gradient of the geometry needs jittered primary rays"
@@ -2528,6 +2545,7 @@ impl DiffTracer {
     fn destroy_resources(&mut self, gpu: &blade_graphics::Context, with_target: bool) {
         gpu.destroy_buffer(self.edge_keys);
         gpu.destroy_buffer(self.edge_counts);
+        gpu.destroy_buffer(self.edge_normals);
         gpu.destroy_buffer(self.edge_hits);
         gpu.destroy_buffer(self.edge_importance);
         gpu.destroy_buffer(self.edge_guide);
