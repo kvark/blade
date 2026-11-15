@@ -17,6 +17,7 @@ Changelog for *Blade* project
 - render: `DiffConfig::projective_edges` samples the edges that the camera sees by carrying the hits of the paths onto the edges of their triangles, which takes as long for any number of triangles, and those that the hits of the paths see by carrying the hits of directions drawn by their BSDFs over the surfaces to them
 - render: `MaterialParams::ior` makes transmissive surfaces those of solids, which refract by a rough dielectric microfacet model, and the differentiable tracer draws microfacets among those that the view sees
 - render: `DiffTracer::set_lights` adds point and spot lights (`diff::DiffLight`), whose positions, intensities and directions are parameters, with the BSDF differentiated by the direction of the light, and the shadows that they cast sampled at the silhouettes that the lights see
+- render: `DiffConfig::emitters_by_area` finds the light of the emitters only from points drawn on them, differentiated by their motion, whose shadows are sampled at the silhouettes that they see, like those of the point lights
 - render: `DiffTracerDesc::views` renders and compares several cameras, each with its own target, whose gradients add up, see `DiffTracer::select_view`
 - render: `large_steps::LargeSteps` optimizes vertex offsets through `(I + λL)⁻¹` with one Adam scale for all, after Nicolet et al., with `DiffTracer::slot_triangles` for the mesh
 - render: retain SVGF history on frozen frames; vehicle diagnostic captures require `BLADE_CAPTURE_VEHICLE=1` even when running ignored tests
