@@ -349,7 +349,7 @@ pub fn components(mesh: &Mesh) -> Vec<Component> {
             center: (sums[root] / v as f32).into(),
         })
         .collect();
-    parts.sort_by(|a, b| b.triangles.cmp(&a.triangles));
+    parts.sort_by_key(|part| std::cmp::Reverse(part.triangles));
     parts
 }
 
