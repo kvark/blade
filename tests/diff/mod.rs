@@ -1534,7 +1534,7 @@ fn check_shadow_gradients_with(
     }
 
     const H: f32 = 0.05;
-    let frames = 2_000_000..2_000_256;
+    let frames = 2_000_000..2_002_048;
     let [without_grad, with_grad] = [grads[0], grads[1]];
     let mut results = Vec::new();
     for axis in 0..2 {
@@ -1543,14 +1543,10 @@ fn check_shadow_gradients_with(
             let mut offsets = start.clone();
             offsets.translations[BALL][axis] += sign * H;
             scene.move_geometry(&offsets);
-            // The light of a small emitter is found by few paths, and the
-            // noise that it leaves in the image adds to the loss, which
-            // moves with the emitter.
-            *loss = if emission > 0.0 {
-                scene.unbiased_loss(2_000_000..2_000_512)
-            } else {
-                scene.converged_loss(frames.clone())
-            };
+            // The light of the wall is found by few paths, and the noise
+            // that it leaves in the image adds to the loss, and moves with
+            // the sphere, which tilts central differences of it.
+            *loss = scene.unbiased_loss(frames.clone());
         }
         let numeric = (losses[0] - losses[1]) / (2.0 * H);
         let without = without_grad[axis] / ITERATIONS as f32;
