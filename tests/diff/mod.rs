@@ -1518,10 +1518,8 @@ fn check_shadow_gradients_with(
             }
             scene.diff.step(&mut scene.encoder, &StepConfig::default());
         }
-        let seed: u32 = std::env::var("DIFF_SEED").map_or(0, |v| v.parse().unwrap());
-        scene.config.control_variate = std::env::var("DIFF_CV").map_or(0.0, |v| v.parse().unwrap());
         for iteration in 0..ITERATIONS {
-            scene.backward(iteration + seed, 8, 4);
+            scene.backward(iteration, 8, 4);
             if secondary != 0 && iteration % 16 == 15 {
                 scene
                     .diff
