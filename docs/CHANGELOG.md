@@ -16,6 +16,7 @@ Changelog for *Blade* project
 - render: `MaterialParams::transmission` lets part of the diffuse albedo through surfaces, as thin walls, like `KHR_materials_transmission`, in the differentiable tracer
 - render: `DiffConfig::projective_edges` samples the edges that the camera sees by carrying the hits of the paths onto the edges of their triangles, which takes as long for any number of triangles, and those that the hits of the paths see by carrying the hits of directions drawn by their BSDFs over the surfaces to them
 - render: `MaterialParams::ior` makes transmissive surfaces those of solids, which refract by a rough dielectric microfacet model, and the differentiable tracer draws microfacets among those that the view sees
+- render: `DiffTracer::set_lights` adds point and spot lights (`diff::DiffLight`), whose positions, intensities and directions are parameters, with the BSDF differentiated by the direction of the light, and the shadows that they cast sampled at the silhouettes that the lights see
 - render: `DiffTracerDesc::views` renders and compares several cameras, each with its own target, whose gradients add up, see `DiffTracer::select_view`
 - render: `large_steps::LargeSteps` optimizes vertex offsets through `(I + λL)⁻¹` with one Adam scale for all, after Nicolet et al., with `DiffTracer::slot_triangles` for the mesh
 - render: retain SVGF history on frozen frames; vehicle diagnostic captures require `BLADE_CAPTURE_VEHICLE=1` even when running ignored tests

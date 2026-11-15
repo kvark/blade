@@ -15,6 +15,8 @@
 //!
 //!   - optionally, the translations of the objects and of the camera (see
 //!     [`DiffTracerDesc::geometry`]).
+//!   - the positions, intensities, and directions of point and spot lights
+//!     (see [`DiffLight`]), which only this tracer has.
 //!
 //! Shading normals that face away from the view are bent towards it, which
 //! is the only difference from the reference path tracer. That one cuts the
@@ -70,6 +72,71 @@ bitflags::bitflags! {
         const ROUGHNESS = 0x80;
         const TRANSMISSION = 0x100;
         const IOR = 0x200;
+    }
+}
+
+/// A point light, or a spot light, of the differentiable tracer, which
+/// [`DiffTracer::set_lights`] adds to the scene. It is a parameter, like
+/// the materials, and the gradient includes how it moves the shadows that
+/// it casts.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct DiffLight {
+    pub position: [f32; 3],
+    /// Cosine of the angle off `direction` from which a spot light fades
+    /// out, smoothly, down to nothing at `cos_outer`. Below -1 for a point
+    /// light, which shines everywhere.
+    pub cos_outer: f32,
+    /// Radiant intensity: the radiance it brings from a distance of 1.
+    pub intensity: [f32; 3],
+    pub cos_inner: f32,
+    /// Where a spot light points, of any length.
+    pub direction: [f32; 3],
+    _pad: f32,
+}
+
+impl DiffLight {
+    pub fn point(position: [f32; 3], intensity: [f32; 3]) -> Self {
+        Self {
+            position,
+            cos_outer: -2.0,
+            intensity,
+            cos_inner: -2.0,
+            direction: [0.0, 0.0, 1.0],
+            _pad: 0.0,
+        }
+    }
+
+    /// Fading out between the angles `inner` and `outer` off `direction`,
+    /// in radians.
+    pub fn spot(
+        position: [f32; 3],
+        intensity: [f32; 3],
+        direction: [f32; 3],
+        inner: f32,
+        outer: f32,
+    ) -> Self {
+        assert!(inner < outer, "a spot light fades out past its inner angle");
+        Self {
+            position,
+            cos_outer: outer.cos(),
+            intensity,
+            cos_inner: inner.cos(),
+            direction,
+            _pad: 0.0,
+        }
+    }
+}
+
+const LIGHT_PARAM_COUNT: u32 = (mem::size_of::<DiffLight>() / 4) as u32;
+
+bitflags::bitflags! {
+    /// Which of the [`DiffLight`] parameters an optimizer step changes.
+    #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+    pub struct LightParamFlags: u32 {
+        const POSITION = 0x007;
+        const INTENSITY = 0x070;
+        const DIRECTION = 0x700;
     }
 }
 
@@ -342,6 +409,9 @@ pub struct StepConfig {
     pub vertices: Option<(AdamConfig, f32)>,
     /// Translation of the camera, which is unbounded.
     pub camera_position: Option<AdamConfig>,
+    /// The parameters of the lights, of which the intensities stay
+    /// non-negative.
+    pub lights: Option<(AdamConfig, LightParamFlags)>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -382,7 +452,8 @@ struct DiffParams {
     antithetic: u32,
     emitter_samples: u32,
     projective_edges: u32,
-    _pad: [u32; 2],
+    light_count: u32,
+    _pad: u32,
 }
 
 #[repr(C)]
@@ -623,6 +694,8 @@ struct DiffTraceData<'a> {
     edge_importance: blade_graphics::BufferPiece,
     edge_guide: blade_graphics::BufferPiece,
     emitters: blade_graphics::BufferPiece,
+    light_params: blade_graphics::BufferPiece,
+    light_grads: blade_graphics::BufferPiece,
     vertex_slots: blade_graphics::BufferPiece,
     vertex_grads: blade_graphics::BufferPiece,
     normal_grads: blade_graphics::BufferPiece,
@@ -701,6 +774,9 @@ struct AdamParams {
     period: u32,
     mask: u32,
     upper_mask: u32,
+    // Those that `lower` bounds.
+    lower_mask: u32,
+    _pad: [u32; 3],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -927,6 +1003,7 @@ pub struct DiffTracer {
     edge_guide: blade_graphics::Buffer,
     edge_guide_ready: bool,
     emitters: blade_graphics::Buffer,
+    lights: LightState,
     /// For the control variate: the parameters of the last estimate of
     /// every view, the image of them, and the estimate.
     control: ControlState,
@@ -1013,6 +1090,12 @@ impl DiffTracer {
         self.destroy_resources(gpu, false);
         let pipelines = self.pipelines.take().unwrap();
         let mut this = Self::with_pipelines(pipelines, encoder, gpu, asset_hub, ray_tracer, desc);
+        // The lights stay, as they aren't of the scene.
+        mem::swap(&mut this.lights, &mut self.lights);
+        self.lights.destroy(gpu);
+        if this.lights.views != this.view_count {
+            this.lights.resize_previous(gpu, this.view_count);
+        }
         if (this.image_size, this.view_count) == layout {
             gpu.destroy_buffer(this.target);
             this.target = target;
@@ -1358,6 +1441,7 @@ impl DiffTracer {
             edge_guide,
             edge_guide_ready: false,
             emitters,
+            lights: LightState::new(gpu, view_count),
             control,
             translations,
             rotations,
@@ -1667,6 +1751,8 @@ impl DiffTracer {
             edge_importance: self.edge_importance.into(),
             edge_guide: self.edge_guide.into(),
             emitters: self.emitters.into(),
+            light_params: self.lights.group.params.into(),
+            light_grads: self.lights.group.grads.into(),
             vertex_slots: self.vertex_params.vertex_slots.into(),
             vertex_grads: self.vertex_params.group.grads.into(),
             normal_grads: self.vertex_params.normal_grads.into(),
@@ -1701,7 +1787,8 @@ impl DiffTracer {
             antithetic: config.antithetic as u32,
             emitter_samples: config.emitter_samples,
             projective_edges: config.projective_edges as u32,
-            _pad: [0; 2],
+            light_count: self.lights.count,
+            _pad: 0,
         }
     }
 
@@ -2147,6 +2234,47 @@ impl DiffTracer {
         temp.buffers.push(staging);
     }
 
+    /// Replace the lights at this point of the `encoder`, which starts their
+    /// optimizer over. They stay through [`Self::rebuild`].
+    ///
+    /// The staging buffer goes to `temp`, to be destroyed with it.
+    pub fn set_lights(
+        &mut self,
+        encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+        lights: &[DiffLight],
+        temp: &mut crate::FrameResources,
+    ) {
+        self.control.invalidate();
+        self.lights.set(encoder, gpu, lights, temp);
+    }
+
+    /// The lights, as of the last [`Self::read_back_lights`], once its work
+    /// is done.
+    pub fn lights(&self) -> &[DiffLight] {
+        self.lights.read(0)
+    }
+
+    /// The gradients of the lights, in the same layout, as of the last
+    /// [`Self::read_back_lights`], once its work is done.
+    pub fn light_grads(&self) -> &[DiffLight] {
+        self.lights.read(1)
+    }
+
+    /// Copy the lights and their gradients for the host to read.
+    pub fn read_back_lights(&self, encoder: &mut blade_graphics::CommandEncoder) {
+        let group = &self.lights.group;
+        let bytes = u64::from(group.count) * 4;
+        let mut transfer = encoder.transfer("diff-read-back-lights");
+        for (i, buffer) in [group.params, group.grads].into_iter().enumerate() {
+            transfer.copy_buffer_to_buffer(
+                buffer.into(),
+                self.lights.readback.at(i as u64 * bytes),
+                bytes,
+            );
+        }
+    }
+
     /// Sum of the losses of the views, each as of its last
     /// [`Self::evaluate_loss`], which [`Self::backward`] includes, once the
     /// work is done.
@@ -2332,6 +2460,7 @@ impl DiffTracer {
                 material_params: previous(0),
                 env_params: previous(1),
                 texture_params: previous(2),
+                light_params: self.lights.previous_piece(view),
                 image: self.control.previous_image.into(),
                 ..*data
             };
@@ -2375,6 +2504,12 @@ impl DiffTracer {
                 transfer.copy_buffer_to_buffer(current.into(), previous(i), current.size());
             }
         }
+        let lights = self.lights.group.params;
+        transfer.copy_buffer_to_buffer(
+            lights.into(),
+            self.lights.previous_piece(view),
+            lights.size(),
+        );
         self.control.view_states[view] = Some(ControlView {
             generation,
             geometry_generation,
@@ -2461,7 +2596,12 @@ impl DiffTracer {
                     .get_dispatch_for(self.image_size),
             );
         }
-        if self.geometry && self.triangle_count != 0 && !config.projective_edges {
+        // Along with the edges that the camera sees, the pass over them
+        // samples the shadows that they cast from the lights.
+        if self.geometry
+            && self.triangle_count != 0
+            && (!config.projective_edges || self.lights.count != 0)
+        {
             assert!(
                 config.jitter_primary_rays,
                 "the gradient of the geometry needs jittered primary rays"
@@ -2576,6 +2716,20 @@ impl DiffTracer {
                 );
             }
         }
+        match config.lights {
+            Some((adam, flags)) => adam_step(
+                &self.pipelines.as_ref().unwrap().adam,
+                encoder,
+                &mut self.lights.group,
+                &adam,
+                LIGHT_PARAM_COUNT,
+                flags.bits(),
+                Bounds::NonNegativeOnly {
+                    lower_mask: LightParamFlags::INTENSITY.bits(),
+                },
+            ),
+            None => self.lights.group.clear_grads(encoder),
+        }
         for (group, adam) in [
             (&mut self.translations, config.translations),
             (&mut self.rotations, config.rotations),
@@ -2612,6 +2766,9 @@ impl DiffTracer {
         gpu.destroy_buffer(self.edge_importance);
         gpu.destroy_buffer(self.edge_guide);
         gpu.destroy_buffer(self.emitters);
+        if with_target {
+            self.lights.destroy(gpu);
+        }
         self.control.destroy(gpu);
         self.vertex_params.destroy(gpu);
         self.translations.destroy(gpu);
@@ -2638,6 +2795,112 @@ impl DiffTracer {
 
 /// What the recursive control variate of the images keeps, see
 /// [`DiffConfig::control_variate`].
+/// The lights, which outlive the scene through [`DiffTracer::rebuild`].
+struct LightState {
+    /// At least one light's worth, which the shader ignores without any.
+    group: ParamGroup,
+    count: u32,
+    /// The parameters and the gradients, for the host to read.
+    readback: blade_graphics::Buffer,
+    /// The parameters of the last estimate of every view, for the control
+    /// variate, each at its multiple of `stride`.
+    previous: blade_graphics::Buffer,
+    stride: u64,
+    views: u32,
+}
+
+impl LightState {
+    fn new(gpu: &blade_graphics::Context, views: u32) -> Self {
+        Self::with_count(gpu, 0, views)
+    }
+
+    fn with_count(gpu: &blade_graphics::Context, count: u32, views: u32) -> Self {
+        let group = ParamGroup::new("diff lights", count.max(1) * LIGHT_PARAM_COUNT, gpu);
+        let bytes = u64::from(group.count) * 4;
+        let stride = bytes.next_multiple_of(256);
+        Self {
+            group,
+            count,
+            readback: gpu.create_buffer(blade_graphics::BufferDesc {
+                name: "diff light readback",
+                size: 2 * bytes,
+                memory: blade_graphics::Memory::Download,
+            }),
+            previous: gpu.create_buffer(blade_graphics::BufferDesc {
+                name: "diff previous lights",
+                size: stride * u64::from(views),
+                memory: blade_graphics::Memory::Device,
+            }),
+            stride,
+            views,
+        }
+    }
+
+    fn set(
+        &mut self,
+        encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+        lights: &[DiffLight],
+        temp: &mut crate::FrameResources,
+    ) {
+        let count = lights.len() as u32;
+        let mut fresh = Self::with_count(gpu, count, self.views);
+        mem::swap(self, &mut fresh);
+        fresh.destroy(gpu);
+        self.group.clear(encoder);
+        let bytes = u64::from(self.group.count) * 4;
+        let staging = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "diff light staging",
+            size: bytes,
+            memory: blade_graphics::Memory::Upload,
+        });
+        unsafe {
+            let data = slice::from_raw_parts_mut(
+                staging.data() as *mut DiffLight,
+                (self.group.count / LIGHT_PARAM_COUNT) as usize,
+            );
+            data.fill(DiffLight::default());
+            data[..lights.len()].copy_from_slice(lights);
+        }
+        encoder.transfer("diff-write-lights").copy_buffer_to_buffer(
+            staging.into(),
+            self.group.params.into(),
+            bytes,
+        );
+        temp.buffers.push(staging);
+    }
+
+    fn resize_previous(&mut self, gpu: &blade_graphics::Context, views: u32) {
+        gpu.destroy_buffer(self.previous);
+        self.previous = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "diff previous lights",
+            size: self.stride * u64::from(views),
+            memory: blade_graphics::Memory::Device,
+        });
+        self.views = views;
+    }
+
+    fn previous_piece(&self, view: usize) -> blade_graphics::BufferPiece {
+        self.previous.at(self.stride * view as u64)
+    }
+
+    fn read(&self, which: u64) -> &[DiffLight] {
+        let bytes = u64::from(self.group.count) * 4;
+        unsafe {
+            slice::from_raw_parts(
+                self.readback.data().add((which * bytes) as usize) as *const DiffLight,
+                self.count as usize,
+            )
+        }
+    }
+
+    fn destroy(&mut self, gpu: &blade_graphics::Context) {
+        self.group.destroy(gpu);
+        gpu.destroy_buffer(self.readback);
+        gpu.destroy_buffer(self.previous);
+    }
+}
+
 struct ControlState {
     /// The material, environment and texture parameters of the last
     /// estimate of every view, each at its multiple of `strides`.
@@ -2720,6 +2983,10 @@ enum Bounds {
     NonNegative {
         upper_mask: u32,
     },
+    /// Non-negative only for those with a bit in the mask.
+    NonNegativeOnly {
+        lower_mask: u32,
+    },
     Unbounded,
 }
 
@@ -2732,9 +2999,10 @@ fn adam_step(
     mask: u32,
     bounds: Bounds,
 ) {
-    let (lower, upper_mask) = match bounds {
-        Bounds::NonNegative { upper_mask } => (0.0, upper_mask),
-        Bounds::Unbounded => (f32::MIN, 0),
+    let (lower, upper_mask, lower_mask) = match bounds {
+        Bounds::NonNegative { upper_mask } => (0.0, upper_mask, !0),
+        Bounds::NonNegativeOnly { lower_mask } => (0.0, 0, lower_mask),
+        Bounds::Unbounded => (f32::MIN, 0, !0),
     };
     group.step += 1;
     let step = group.step as i32;
@@ -2756,6 +3024,8 @@ fn adam_step(
                 period,
                 mask,
                 upper_mask,
+                lower_mask,
+                _pad: [0; 3],
             },
             params: group.params.into(),
             grads: group.grads.into(),

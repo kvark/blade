@@ -74,6 +74,11 @@ struct AdamParams {
     period: u32,
     mask: u32,
     upper_mask: u32,
+    // Of `lower`, likewise.
+    lower_mask: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 var<uniform> adam: AdamParams;
@@ -105,7 +110,10 @@ fn adam_step(
     let v = mix(grad * grad, moments[index].y, adam.beta2);
     moments[index] = vec2<f32>(m, v);
     let step = (m / adam.bias_correction1) / (sqrt(v / adam.bias_correction2) + adam.epsilon);
-    var value = max(params[index] - adam.learning_rate * step, adam.lower);
+    var value = params[index] - adam.learning_rate * step;
+    if ((adam.lower_mask & bit) != 0u) {
+        value = max(value, adam.lower);
+    }
     if ((adam.upper_mask & bit) != 0u) {
         value = min(value, adam.upper);
     }
