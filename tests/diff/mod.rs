@@ -376,12 +376,26 @@ impl DiffScene {
         let size = self.diff.image_size();
         let count = (size.width * size.height) as usize;
         let half = frames.start + (frames.end - frames.start) / 2;
-        self.render_converged(frames.start..half);
-        self.submit();
-        let first = self.download(self.diff.image(), count);
-        self.render_converged(half..frames.end);
-        self.submit();
-        let second = self.download(self.diff.image(), count);
+        let mut render = |scene: &mut Self, range: std::ops::Range<u32>| {
+            // In chunks, which keeps the recorded commands short.
+            let start = range.start;
+            for chunk in range.clone().step_by(256) {
+                for frame in chunk..(chunk + 256).min(range.end) {
+                    scene.diff.render(
+                        &mut scene.encoder,
+                        &scene.renderer,
+                        &scene.camera,
+                        &scene.config,
+                        frame,
+                        frame != start,
+                    );
+                }
+                scene.submit();
+            }
+            scene.download(scene.diff.image(), count)
+        };
+        let first = render(self, frames.start..half);
+        let second = render(self, half..frames.end);
         let target = self.download(self.diff.target(), count);
         let mut sum = 0.0f64;
         for ((a, b), t) in first.iter().zip(&second).zip(&target) {
@@ -1504,8 +1518,10 @@ fn check_shadow_gradients_with(
             }
             scene.diff.step(&mut scene.encoder, &StepConfig::default());
         }
+        let seed: u32 = std::env::var("DIFF_SEED").map_or(0, |v| v.parse().unwrap());
+        scene.config.control_variate = std::env::var("DIFF_CV").map_or(0.0, |v| v.parse().unwrap());
         for iteration in 0..ITERATIONS {
-            scene.backward(iteration, 8, 4);
+            scene.backward(iteration + seed, 8, 4);
             if secondary != 0 && iteration % 16 == 15 {
                 scene
                     .diff
@@ -2525,5 +2541,85 @@ fn diff_recovers_transmission() {
     let (found, _) = scene.read_materials();
     println!("transmission 0.2 -> {} for {TRUTH}", found[0].transmission);
     assert!((found[0].transmission - TRUTH).abs() < 0.05);
+    scene.destroy();
+}
+
+/// A ball of glass refracts the sky behind it, entering and leaving it: the
+/// gradient by its index of refraction agrees with central differences,
+/// and optimizing it finds the index.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_recovers_index_of_refraction() {
+    let Some(mut scene) = DiffScene::new("diff-refraction", SceneKind::Ball) else {
+        return;
+    };
+    const TRUTH: f32 = 1.5;
+    const START: f32 = 1.3;
+    let (mut params, _) = scene.read_materials();
+    params[0].transmission = 1.0;
+    params[0].ior = TRUTH;
+    scene.write_materials(&params);
+    scene.capture_target();
+    params[0].ior = START;
+    scene.write_materials(&params);
+
+    // The gradient through two refractions is noisy.
+    const ITERATIONS: u32 = 512;
+    // In batches, which add up on the host in double precision.
+    let mut total = 0.0f64;
+    for batch in 0..ITERATIONS / 32 {
+        for iteration in 0..32 {
+            scene.backward(batch * 32 + iteration, 8, 4);
+        }
+        let (_, grads) = scene.read_materials();
+        total += f64::from(grads[0].ior);
+        scene.diff.step(&mut scene.encoder, &StepConfig::default());
+    }
+    let analytic = (total / f64::from(ITERATIONS)) as f32;
+    // The paths depend on the index through their refraction, so the
+    // images on both sides don't share their noise, which takes many
+    // frames, and the loss of the expected image.
+    let h = 0.05;
+    let frames = 2_000_000..2_004_096;
+    let mut losses = [0.0; 2];
+    for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
+        params[0].ior = START + sign * h;
+        scene.write_materials(&params);
+        *loss = scene.unbiased_loss(frames.clone());
+    }
+    let numeric = (losses[0] - losses[1]) / (2.0 * h);
+    println!("d loss / d ior: gradient {analytic:e}, central difference {numeric:e}");
+    assert!(
+        analytic * numeric > 0.0 && (analytic - numeric).abs() <= 0.2 * numeric.abs(),
+        "d loss / d ior: gradient {analytic:e} disagrees with {numeric:e}"
+    );
+
+    params[0].ior = START;
+    scene.write_materials(&params);
+    // Clear the gradients.
+    scene.diff.step(&mut scene.encoder, &StepConfig::default());
+    for iteration in 0..100 {
+        scene.backward(ITERATIONS + iteration, 4, 2);
+        scene.diff.step(
+            &mut scene.encoder,
+            &StepConfig {
+                materials: Some((
+                    AdamConfig {
+                        learning_rate: 0.01 * 0.98f32.powi(iteration as i32),
+                        ..Default::default()
+                    },
+                    MaterialParamFlags::IOR,
+                )),
+                ..Default::default()
+            },
+        );
+        scene.submit();
+    }
+    let (found, _) = scene.read_materials();
+    println!(
+        "index of refraction {START} -> {} for {TRUTH}",
+        found[0].ior
+    );
+    assert!((found[0].ior - TRUTH).abs() < 0.05);
     scene.destroy();
 }
