@@ -369,6 +369,29 @@ impl DiffScene {
         self.diff.view_loss()
     }
 
+    /// The loss of the expected image, without the part that the noise of
+    /// the image adds: the product of the differences of two images from
+    /// separate frames with the target.
+    fn unbiased_loss(&mut self, frames: std::ops::Range<u32>) -> f32 {
+        let size = self.diff.image_size();
+        let count = (size.width * size.height) as usize;
+        let half = frames.start + (frames.end - frames.start) / 2;
+        self.render_converged(frames.start..half);
+        self.submit();
+        let first = self.download(self.diff.image(), count);
+        self.render_converged(half..frames.end);
+        self.submit();
+        let second = self.download(self.diff.image(), count);
+        let target = self.download(self.diff.target(), count);
+        let mut sum = 0.0f64;
+        for ((a, b), t) in first.iter().zip(&second).zip(&target) {
+            for c in 0..3 {
+                sum += f64::from(a[c] - t[c]) * f64::from(b[c] - t[c]);
+            }
+        }
+        (sum / (3 * count) as f64) as f32
+    }
+
     /// One noisy loss and gradient evaluation, adding to the gradients.
     ///
     /// The image the loss is taken on gets more paths than the gradient,
@@ -499,13 +522,20 @@ impl DiffScene {
             &self.desc,
         );
         let size = diff.image_size();
-        self.encoder
-            .transfer("diff-keep-target")
-            .copy_buffer_to_buffer(
-                self.diff.target(),
-                diff.target(),
-                u64::from(size.width * size.height) * 16,
-            );
+        let mut diff = diff;
+        let selected = self.diff.selected_view();
+        for view in 0..self.diff.view_count() {
+            self.diff.select_view(view);
+            diff.select_view(view);
+            self.encoder
+                .transfer("diff-keep-target")
+                .copy_buffer_to_buffer(
+                    self.diff.target(),
+                    diff.target(),
+                    u64::from(size.width * size.height) * 16,
+                );
+        }
+        diff.select_view(selected);
         self.submit();
         let mut old_diff = std::mem::replace(&mut self.diff, diff);
         old_diff.destroy(&context);
@@ -1368,7 +1398,7 @@ fn check_single_object(kind: SceneKind, cache_name: &str, moves: &[Move], rotati
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_shadow_gradients_match_finite_differences() {
     // Direct light only.
-    check_shadow_gradients("diff-shadow", 0, 1);
+    check_shadow_gradients("diff-shadow", 0, 1, 0.0);
 }
 
 /// With bounces, the light that the sphere reflects onto the wall moves
@@ -1377,10 +1407,20 @@ fn diff_shadow_gradients_match_finite_differences() {
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_indirect_gradients_match_finite_differences() {
-    check_shadow_gradients("diff-indirect", 2, 2);
+    check_shadow_gradients("diff-indirect", 2, 2, 0.0);
 }
 
-fn check_shadow_gradients(cache_name: &str, bounces: u32, depth: u32) {
+/// An emissive sphere out of view is the only light of the wall, which the
+/// camera sees move with it: the light that it casts is a boundary, like a
+/// shadow, which is all that moves.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_emitter_gradients_match_finite_differences() {
+    check_shadow_gradients("diff-emitter", 1, 1, 4.0);
+}
+
+/// With the sphere emitting `emission`.
+fn check_shadow_gradients(cache_name: &str, bounces: u32, depth: u32, emission: f32) {
     let Some(mut scene) = DiffScene::new(cache_name, SceneKind::Shadow) else {
         return;
     };
@@ -1388,6 +1428,19 @@ fn check_shadow_gradients(cache_name: &str, bounces: u32, depth: u32) {
     scene.config.edge_samples = 4;
     scene.config.max_bounces = bounces;
     scene.config.secondary_edge_depth = depth;
+    if emission > 0.0 {
+        let (mut params, _) = scene.read_materials();
+        assert_eq!(params.len(), 2);
+        params[BALL].emissive = [emission; 3];
+        scene.write_materials(&params);
+        // The sphere is the only light.
+        {
+            let size = scene.diff.environment_size();
+            let count = (size.width * size.height) as usize;
+            let env = scene.diff.environment_params();
+            scene.upload(env, &vec![[0.0, 0.0, 0.0, 1.0]; count]);
+        }
+    }
     scene.capture_target();
     let mut start = GeometryOffsets {
         translations: vec![[0.0; 3]; 2],
@@ -1401,8 +1454,26 @@ fn check_shadow_gradients(cache_name: &str, bounces: u32, depth: u32) {
     let mut grads = Vec::new();
     for secondary in [0, 32] {
         scene.config.secondary_edge_samples = secondary;
+        // Guided by what the edges brought in a few rounds first.
+        scene.config.guided_edges = secondary != 0;
+        if secondary != 0 {
+            for round in 0..4 {
+                for iteration in 0..8 {
+                    scene.backward(ITERATIONS + 8 * round + iteration, 4, 2);
+                }
+                scene
+                    .diff
+                    .refresh_edge_guide(&mut scene.encoder, &scene.renderer);
+            }
+            scene.diff.step(&mut scene.encoder, &StepConfig::default());
+        }
         for iteration in 0..ITERATIONS {
             scene.backward(iteration, 8, 4);
+            if secondary != 0 && iteration % 16 == 15 {
+                scene
+                    .diff
+                    .refresh_edge_guide(&mut scene.encoder, &scene.renderer);
+            }
         }
         scene.diff.read_back(&mut scene.encoder);
         scene.submit();
@@ -1421,7 +1492,14 @@ fn check_shadow_gradients(cache_name: &str, bounces: u32, depth: u32) {
             let mut offsets = start.clone();
             offsets.translations[BALL][axis] += sign * H;
             scene.move_geometry(&offsets);
-            *loss = scene.converged_loss(frames.clone());
+            // The light of a small emitter is found by few paths, and the
+            // noise that it leaves in the image adds to the loss, which
+            // moves with the emitter.
+            *loss = if emission > 0.0 {
+                scene.unbiased_loss(2_000_000..2_002_048)
+            } else {
+                scene.converged_loss(frames.clone())
+            };
         }
         let numeric = (losses[0] - losses[1]) / (2.0 * H);
         let without = without_grad[axis] / ITERATIONS as f32;
@@ -1449,7 +1527,7 @@ fn check_shadow_gradients(cache_name: &str, bounces: u32, depth: u32) {
         );
         interreflection = interreflection.max(without.abs() / largest);
     }
-    if bounces > 0 {
+    if bounces > 0 && emission == 0.0 {
         assert!(
             interreflection > 0.2,
             "the light reflected by the sphere barely moves with it"

@@ -8,6 +8,7 @@ Changelog for *Blade* project
 - render: `DiffTracer` differentiates the geometry at every hit of a path, as hits slide along their rays, and draws edges for shadows and reflections at the first `DiffConfig::secondary_edge_depth` hits
 - render: `DiffConfig::guided_edges` draws the edges for shadows and reflections by what they brought before, as of `DiffTracer::refresh_edge_guide`, mixed with drawing them uniformly
 - render: `DiffConfig::antithetic` pairs the paths of the gradient with twins turned about the normal at the first hit
+- render: `DiffTracer` measures the jump across an edge on the plane of its triangle, and leaves degenerate triangles out of the edges, which made the gradients of bright emitters too large
 - render: `DiffTracerDesc::views` renders and compares several cameras, each with its own target, whose gradients add up, see `DiffTracer::select_view`
 - render: `large_steps::LargeSteps` optimizes vertex offsets through `(I + λL)⁻¹` with one Adam scale for all, after Nicolet et al., with `DiffTracer::slot_triangles` for the mesh
 - render: retain SVGF history on frozen frames; vehicle diagnostic captures require `BLADE_CAPTURE_VEHICLE=1` even when running ignored tests
