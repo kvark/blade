@@ -2830,6 +2830,38 @@ fn check_light_gradients_with(
     scene.capture_target();
     let ball = [0.3, 0.25, 0.0];
     set_light_scene(scene, ball, start);
+    if std::env::var_os("LIGHT_FD_DIAGNOSTIC").is_some() {
+        for &(param, h) in params {
+            if !matches!(param, LightParam::Ball(2) | LightParam::Position(2)) {
+                continue;
+            }
+            for (frames, h) in [
+                (2_000_000..2_002_048, h),
+                (3_000_000..3_008_192, h),
+                (3_000_000..3_008_192, 0.5 * h),
+            ] {
+                let mut losses = [0.0; 2];
+                for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
+                    let mut moved = ball;
+                    let mut light = start;
+                    match param {
+                        LightParam::Ball(axis) => moved[axis] += sign * h,
+                        LightParam::Position(axis) => light.position[axis] += sign * h,
+                        LightParam::Intensity => light.intensity[0] += sign * h,
+                        LightParam::Direction(axis) => light.direction[axis] += sign * h,
+                    }
+                    set_light_scene(scene, moved, light);
+                    *loss = scene.unbiased_loss(frames.clone());
+                }
+                println!(
+                    "FD {param:?} h {h} frames {}: {:e}",
+                    frames.len(),
+                    (losses[0] - losses[1]) / (2.0 * h)
+                );
+            }
+        }
+        return;
+    }
 
     const ITERATIONS: u32 = 256;
     // The gradients only add up until an optimizer step reads them, so
@@ -2895,35 +2927,6 @@ fn check_light_gradients_with(
     );
     let zero = ([0.0; 4], DiffLight::point([0.0; 3], [0.0; 3]));
 
-    if std::env::var_os("LIGHT_FD_DIAGNOSTIC").is_some() {
-        for &(param, h) in params {
-            for (frames, h) in [
-                (2_000_000..2_002_048, h),
-                (3_000_000..3_008_192, h),
-                (3_000_000..3_008_192, 0.5 * h),
-            ] {
-                let mut losses = [0.0; 2];
-                for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
-                    let mut moved = ball;
-                    let mut light = start;
-                    match param {
-                        LightParam::Ball(axis) => moved[axis] += sign * h,
-                        LightParam::Position(axis) => light.position[axis] += sign * h,
-                        LightParam::Intensity => light.intensity[0] += sign * h,
-                        LightParam::Direction(axis) => light.direction[axis] += sign * h,
-                    }
-                    set_light_scene(scene, moved, light);
-                    *loss = scene.unbiased_loss(frames.clone());
-                }
-                println!(
-                    "FD {param:?} h {h} frames {}: {:e}",
-                    frames.len(),
-                    (losses[0] - losses[1]) / (2.0 * h)
-                );
-            }
-        }
-        return;
-    }
     let frames = 2_000_000..2_002_048;
     let mut results = Vec::new();
     for &(param, h) in params {
