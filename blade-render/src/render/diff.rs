@@ -431,13 +431,6 @@ struct VertexParams {
     /// The slots of the vertices, then the indices of every model.
     mesh_readback: blade_graphics::Buffer,
     vertex_count: u32,
-    weld_pipeline: blade_graphics::ComputePipeline,
-    apply_pipeline: blade_graphics::ComputePipeline,
-    sum_normals_pipeline: blade_graphics::ComputePipeline,
-    write_normals_pipeline: blade_graphics::ComputePipeline,
-    sum_neighbors_pipeline: blade_graphics::ComputePipeline,
-    smoothness_pipeline: blade_graphics::ComputePipeline,
-    normals_to_positions_pipeline: blade_graphics::ComputePipeline,
 }
 
 impl VertexParams {
@@ -553,17 +546,6 @@ impl VertexParams {
             self.mesh_readback,
         ] {
             gpu.destroy_buffer(buffer);
-        }
-        for pipeline in [
-            &mut self.weld_pipeline,
-            &mut self.apply_pipeline,
-            &mut self.sum_normals_pipeline,
-            &mut self.write_normals_pipeline,
-            &mut self.sum_neighbors_pipeline,
-            &mut self.smoothness_pipeline,
-            &mut self.normals_to_positions_pipeline,
-        ] {
-            gpu.destroy_compute_pipeline(pipeline);
         }
     }
 }
@@ -728,6 +710,122 @@ impl ParamGroup {
     }
 }
 
+/// The compiled passes of [`DiffTracer`], which outlive it through
+/// [`DiffTracer::rebuild`].
+struct DiffPipelines {
+    primal: blade_graphics::ComputePipeline,
+    adjoint: blade_graphics::ComputePipeline,
+    init_materials: blade_graphics::ComputePipeline,
+    init_environment: blade_graphics::ComputePipeline,
+    init_texture: blade_graphics::ComputePipeline,
+    loss: blade_graphics::ComputePipeline,
+    adam: blade_graphics::ComputePipeline,
+    edges: blade_graphics::ComputePipeline,
+    count_edges: blade_graphics::ComputePipeline,
+    guide_edges: blade_graphics::ComputePipeline,
+    weld: blade_graphics::ComputePipeline,
+    apply: blade_graphics::ComputePipeline,
+    sum_normals: blade_graphics::ComputePipeline,
+    write_normals: blade_graphics::ComputePipeline,
+    sum_neighbors: blade_graphics::ComputePipeline,
+    smoothness: blade_graphics::ComputePipeline,
+    normals_to_positions: blade_graphics::ComputePipeline,
+}
+
+impl DiffPipelines {
+    fn new(
+        gpu: &blade_graphics::Context,
+        sh_trace: &blade_graphics::Shader,
+        sh_optimize: &blade_graphics::Shader,
+    ) -> Self {
+        let trace_layout = super::ray_data_layout::<DiffTraceData>(gpu);
+        let trace_pipeline = |name, entry| {
+            gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+                name,
+                data_layouts: &[&trace_layout],
+                compute: sh_trace.at(entry),
+            })
+        };
+        let primal_pipeline = trace_pipeline("diff-primal", "primal");
+        let adjoint_pipeline = trace_pipeline("diff-adjoint", "adjoint");
+        let init_materials_pipeline = trace_pipeline("diff-init-materials", "init_materials");
+        let init_environment_pipeline = trace_pipeline("diff-init-environment", "init_environment");
+        let edges_pipeline = trace_pipeline("diff-edges", "edges");
+        let count_edges_pipeline = trace_pipeline("diff-count-edges", "count_edges");
+        let guide_edges_pipeline = trace_pipeline("diff-guide-edges", "guide_edges");
+        let texture_init_layout = super::ray_data_layout::<TextureInitData>(gpu);
+        let init_texture_pipeline =
+            gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+                name: "diff-init-texture",
+                data_layouts: &[&texture_init_layout],
+                compute: sh_trace.at("init_texture"),
+            });
+        let loss_layout = <LossData as blade_graphics::ShaderData>::layout();
+        let loss_pipeline = gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+            name: "diff-loss",
+            data_layouts: &[&loss_layout],
+            compute: sh_optimize.at("loss_l2"),
+        });
+        let adam_layout = <AdamData as blade_graphics::ShaderData>::layout();
+        let adam_pipeline = gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+            name: "diff-adam",
+            data_layouts: &[&adam_layout],
+            compute: sh_optimize.at("adam_step"),
+        });
+
+        let vertex_layout = <VertexPassData as blade_graphics::ShaderData>::layout();
+        let vertex_pipeline = |name, entry| {
+            gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
+                name,
+                data_layouts: &[&vertex_layout],
+                compute: sh_trace.at(entry),
+            })
+        };
+        Self {
+            primal: primal_pipeline,
+            adjoint: adjoint_pipeline,
+            init_materials: init_materials_pipeline,
+            init_environment: init_environment_pipeline,
+            init_texture: init_texture_pipeline,
+            loss: loss_pipeline,
+            adam: adam_pipeline,
+            edges: edges_pipeline,
+            count_edges: count_edges_pipeline,
+            guide_edges: guide_edges_pipeline,
+            weld: vertex_pipeline("diff-weld-vertices", "weld_vertices"),
+            apply: vertex_pipeline("diff-apply-vertices", "apply_vertices"),
+            sum_normals: vertex_pipeline("diff-sum-normals", "sum_normals"),
+            write_normals: vertex_pipeline("diff-write-normals", "write_normals"),
+            sum_neighbors: vertex_pipeline("diff-sum-neighbors", "sum_neighbors"),
+            smoothness: vertex_pipeline("diff-add-smoothness", "add_smoothness"),
+            normals_to_positions: vertex_pipeline(
+                "diff-normals-to-positions",
+                "normals_to_positions",
+            ),
+        }
+    }
+
+    fn destroy(&mut self, gpu: &blade_graphics::Context) {
+        gpu.destroy_compute_pipeline(&mut self.primal);
+        gpu.destroy_compute_pipeline(&mut self.adjoint);
+        gpu.destroy_compute_pipeline(&mut self.init_materials);
+        gpu.destroy_compute_pipeline(&mut self.init_environment);
+        gpu.destroy_compute_pipeline(&mut self.init_texture);
+        gpu.destroy_compute_pipeline(&mut self.loss);
+        gpu.destroy_compute_pipeline(&mut self.adam);
+        gpu.destroy_compute_pipeline(&mut self.edges);
+        gpu.destroy_compute_pipeline(&mut self.count_edges);
+        gpu.destroy_compute_pipeline(&mut self.guide_edges);
+        gpu.destroy_compute_pipeline(&mut self.weld);
+        gpu.destroy_compute_pipeline(&mut self.apply);
+        gpu.destroy_compute_pipeline(&mut self.sum_normals);
+        gpu.destroy_compute_pipeline(&mut self.write_normals);
+        gpu.destroy_compute_pipeline(&mut self.sum_neighbors);
+        gpu.destroy_compute_pipeline(&mut self.smoothness);
+        gpu.destroy_compute_pipeline(&mut self.normals_to_positions);
+    }
+}
+
 /// Differentiable path tracer of the scene of a [`RayTracer`](super::RayTracer).
 ///
 /// Its parameters start from the scene that was built when it was created,
@@ -739,21 +837,14 @@ impl ParamGroup {
 /// is computed on must come from other random numbers than the gradient,
 /// which is what passing different `frame_index` values does.
 pub struct DiffTracer {
-    primal_pipeline: blade_graphics::ComputePipeline,
-    adjoint_pipeline: blade_graphics::ComputePipeline,
-    init_materials_pipeline: blade_graphics::ComputePipeline,
-    init_environment_pipeline: blade_graphics::ComputePipeline,
-    init_texture_pipeline: blade_graphics::ComputePipeline,
-    loss_pipeline: blade_graphics::ComputePipeline,
-    adam_pipeline: blade_graphics::ComputePipeline,
+    /// Only `None` while [`Self::rebuild`] moves them on.
+    pipelines: Option<DiffPipelines>,
     materials: ParamGroup,
     environment: ParamGroup,
     environment_size: blade_graphics::Extent,
     textures: ParamGroup,
     texture_list: Vec<DiffTexture>,
     texture_regions: blade_graphics::Buffer,
-    edges_pipeline: blade_graphics::ComputePipeline,
-    count_edges_pipeline: blade_graphics::ComputePipeline,
     vertex_params: VertexParams,
     geometry: bool,
     /// Hash table of the edges, with the triangles along each.
@@ -765,7 +856,6 @@ pub struct DiffTracer {
     edge_importance: blade_graphics::Buffer,
     edge_guide: blade_graphics::Buffer,
     edge_guide_ready: bool,
-    guide_edges_pipeline: blade_graphics::ComputePipeline,
     /// Translations of the instances, in XYZ of 4 floats.
     translations: ParamGroup,
     /// Rotations of the instances about their origins, as axis times angle.
@@ -825,42 +915,48 @@ impl DiffTracer {
         let sh_optimize = shader_man[shaders.optimize].raw.as_ref().unwrap();
         sh_optimize.check_struct_size::<LossParams>();
         sh_optimize.check_struct_size::<AdamParams>();
+        let pipelines = DiffPipelines::new(gpu, sh_trace, sh_optimize);
+        Self::with_pipelines(pipelines, encoder, gpu, asset_hub, ray_tracer, desc)
+    }
 
-        let trace_layout = super::ray_data_layout::<DiffTraceData>(gpu);
-        let trace_pipeline = |name, entry| {
-            gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
-                name,
-                data_layouts: &[&trace_layout],
-                compute: sh_trace.at(entry),
-            })
-        };
-        let primal_pipeline = trace_pipeline("diff-primal", "primal");
-        let adjoint_pipeline = trace_pipeline("diff-adjoint", "adjoint");
-        let init_materials_pipeline = trace_pipeline("diff-init-materials", "init_materials");
-        let init_environment_pipeline = trace_pipeline("diff-init-environment", "init_environment");
-        let edges_pipeline = trace_pipeline("diff-edges", "edges");
-        let count_edges_pipeline = trace_pipeline("diff-count-edges", "count_edges");
-        let guide_edges_pipeline = trace_pipeline("diff-guide-edges", "guide_edges");
-        let texture_init_layout = super::ray_data_layout::<TextureInitData>(gpu);
-        let init_texture_pipeline =
-            gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
-                name: "diff-init-texture",
-                data_layouts: &[&texture_init_layout],
-                compute: sh_trace.at("init_texture"),
-            });
-        let loss_layout = <LossData as blade_graphics::ShaderData>::layout();
-        let loss_pipeline = gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
-            name: "diff-loss",
-            data_layouts: &[&loss_layout],
-            compute: sh_optimize.at("loss_l2"),
-        });
-        let adam_layout = <AdamData as blade_graphics::ShaderData>::layout();
-        let adam_pipeline = gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
-            name: "diff-adam",
-            data_layouts: &[&adam_layout],
-            compute: sh_optimize.at("adam_step"),
-        });
+    /// Start again from the scene of `ray_tracer`, which can have other
+    /// geometry, keeping the compiled passes, which takes much less than
+    /// [`Self::new`]. The targets stay, if the images are of the same size
+    /// and as many, and everything else starts over, including the
+    /// parameters and the moments of the optimizer.
+    ///
+    /// The work submitted with this tracer has to be done.
+    pub fn rebuild(
+        &mut self,
+        encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+        asset_hub: &crate::AssetHub,
+        ray_tracer: &super::RayTracer,
+        desc: &DiffTracerDesc,
+    ) {
+        let target = self.target;
+        let layout = (self.image_size, self.view_count);
+        self.destroy_resources(gpu, false);
+        let pipelines = self.pipelines.take().unwrap();
+        let mut this = Self::with_pipelines(pipelines, encoder, gpu, asset_hub, ray_tracer, desc);
+        if (this.image_size, this.view_count) == layout {
+            gpu.destroy_buffer(this.target);
+            this.target = target;
+            this.view = self.view;
+        } else {
+            gpu.destroy_buffer(target);
+        }
+        *self = this;
+    }
 
+    fn with_pipelines(
+        pipelines: DiffPipelines,
+        encoder: &mut blade_graphics::CommandEncoder,
+        gpu: &blade_graphics::Context,
+        asset_hub: &crate::AssetHub,
+        ray_tracer: &super::RayTracer,
+        desc: &DiffTracerDesc,
+    ) -> Self {
         let material_count =
             (ray_tracer.hit_buffer.size() as usize / mem::size_of::<super::HitEntry>()) as u32;
         let materials =
@@ -1001,14 +1097,6 @@ impl DiffTracer {
             }
         }
         let slot_count = (2 * vertex_count).max(64).next_power_of_two();
-        let vertex_layout = <VertexPassData as blade_graphics::ShaderData>::layout();
-        let vertex_pipeline = |name, entry| {
-            gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
-                name,
-                data_layouts: &[&vertex_layout],
-                compute: sh_trace.at(entry),
-            })
-        };
         let device_buffer = |name: &str, size: u64| {
             gpu.create_buffer(blade_graphics::BufferDesc {
                 name,
@@ -1084,16 +1172,6 @@ impl DiffTracer {
                 memory: blade_graphics::Memory::Download,
             }),
             vertex_count,
-            weld_pipeline: vertex_pipeline("diff-weld-vertices", "weld_vertices"),
-            apply_pipeline: vertex_pipeline("diff-apply-vertices", "apply_vertices"),
-            sum_normals_pipeline: vertex_pipeline("diff-sum-normals", "sum_normals"),
-            write_normals_pipeline: vertex_pipeline("diff-write-normals", "write_normals"),
-            sum_neighbors_pipeline: vertex_pipeline("diff-sum-neighbors", "sum_neighbors"),
-            smoothness_pipeline: vertex_pipeline("diff-add-smoothness", "add_smoothness"),
-            normals_to_positions_pipeline: vertex_pipeline(
-                "diff-normals-to-positions",
-                "normals_to_positions",
-            ),
         };
         let instance_count = if desc.geometry {
             ray_tracer.scene_models.len() as u32
@@ -1165,21 +1243,13 @@ impl DiffTracer {
             })
         };
         let this = Self {
-            primal_pipeline,
-            adjoint_pipeline,
-            init_materials_pipeline,
-            init_environment_pipeline,
-            init_texture_pipeline,
-            loss_pipeline,
-            adam_pipeline,
+            pipelines: Some(pipelines),
             materials,
             environment,
             environment_size,
             textures,
             texture_list: texture_list.iter().map(|&(_, texture)| texture).collect(),
             texture_regions,
-            edges_pipeline,
-            count_edges_pipeline,
             vertex_params,
             geometry: desc.geometry,
             edge_keys,
@@ -1188,7 +1258,6 @@ impl DiffTracer {
             edge_importance,
             edge_guide,
             edge_guide_ready: false,
-            guide_edges_pipeline,
             translations,
             rotations,
             camera_position,
@@ -1276,28 +1345,36 @@ impl DiffTracer {
         let parameters = bytemuck::Zeroable::zeroed();
         let mut pass = encoder.compute("diff-init");
         {
-            let mut pc = pass.with(&this.init_materials_pipeline);
+            let mut pc = pass.with(&this.pipelines.as_ref().unwrap().init_materials);
             pc.bind(0, &this.trace_data(ray_tracer, camera, parameters));
-            let wg = this.init_materials_pipeline.get_workgroup_size();
+            let wg = this
+                .pipelines
+                .as_ref()
+                .unwrap()
+                .init_materials
+                .get_workgroup_size();
             pc.dispatch([material_count.div_ceil(wg[0]).max(1), 1, 1]);
         }
         {
-            let mut pc = pass.with(&this.init_environment_pipeline);
+            let mut pc = pass.with(&this.pipelines.as_ref().unwrap().init_environment);
             pc.bind(0, &this.trace_data(ray_tracer, camera, parameters));
             pc.dispatch(
-                this.init_environment_pipeline
+                this.pipelines
+                    .as_ref()
+                    .unwrap()
+                    .init_environment
                     .get_dispatch_for(environment_size),
             );
         }
         if this.geometry && this.triangle_count != 0 {
-            let mut pc = pass.with(&this.count_edges_pipeline);
+            let mut pc = pass.with(&this.pipelines.as_ref().unwrap().count_edges);
             let mut parameters: DiffParams = bytemuck::Zeroable::zeroed();
             parameters.triangle_count = this.triangle_count;
             pc.bind(0, &this.trace_data(ray_tracer, camera, parameters));
             pc.dispatch(flat_dispatch(this.triangle_count));
         }
         if !texture_list.is_empty() {
-            let mut pc = pass.with(&this.init_texture_pipeline);
+            let mut pc = pass.with(&this.pipelines.as_ref().unwrap().init_texture);
             for &(texture_index, texture) in &texture_list {
                 pc.bind(
                     0,
@@ -1313,7 +1390,10 @@ impl DiffTracer {
                     },
                 );
                 pc.dispatch(
-                    this.init_texture_pipeline
+                    this.pipelines
+                        .as_ref()
+                        .unwrap()
+                        .init_texture
                         .get_dispatch_for(blade_graphics::Extent {
                             width: texture.width,
                             height: texture.height,
@@ -1326,7 +1406,7 @@ impl DiffTracer {
         this.vertex_params.dispatch(
             encoder,
             "diff-weld-vertices",
-            &this.vertex_params.weld_pipeline,
+            &this.pipelines.as_ref().unwrap().weld,
             false,
             0.0,
         );
@@ -1335,7 +1415,7 @@ impl DiffTracer {
         this.vertex_params.dispatch(
             encoder,
             "diff-sum-normals",
-            &this.vertex_params.sum_normals_pipeline,
+            &this.pipelines.as_ref().unwrap().sum_normals,
             true,
             0.0,
         );
@@ -1382,7 +1462,7 @@ impl DiffTracer {
             transfer.fill_buffer(self.edge_counts.into(), self.edge_counts.size(), 0);
             drop(transfer);
             let mut pass = encoder.compute("diff-count-edges");
-            let mut pc = pass.with(&self.count_edges_pipeline);
+            let mut pc = pass.with(&self.pipelines.as_ref().unwrap().count_edges);
             let mut parameters: DiffParams = bytemuck::Zeroable::zeroed();
             parameters.triangle_count = self.triangle_count;
             pc.bind(
@@ -1406,7 +1486,7 @@ impl DiffTracer {
             return;
         }
         let mut pass = encoder.compute("diff-guide-edges");
-        let mut pc = pass.with(&self.guide_edges_pipeline);
+        let mut pc = pass.with(&self.pipelines.as_ref().unwrap().guide_edges);
         let mut parameters: DiffParams = bytemuck::Zeroable::zeroed();
         parameters.triangle_count = self.triangle_count;
         pc.bind(
@@ -1659,7 +1739,7 @@ impl DiffTracer {
         vp.dispatch(
             encoder,
             "diff-apply-vertices",
-            &vp.apply_pipeline,
+            &self.pipelines.as_ref().unwrap().apply,
             false,
             0.0,
         );
@@ -1671,14 +1751,14 @@ impl DiffTracer {
         vp.dispatch(
             encoder,
             "diff-sum-normals",
-            &vp.sum_normals_pipeline,
+            &self.pipelines.as_ref().unwrap().sum_normals,
             true,
             0.0,
         );
         vp.dispatch(
             encoder,
             "diff-write-normals",
-            &vp.write_normals_pipeline,
+            &self.pipelines.as_ref().unwrap().write_normals,
             false,
             0.0,
         );
@@ -1708,7 +1788,7 @@ impl DiffTracer {
         vp.dispatch(
             encoder,
             "diff-normals-to-positions",
-            &vp.normals_to_positions_pipeline,
+            &self.pipelines.as_ref().unwrap().normals_to_positions,
             true,
             0.0,
         );
@@ -2048,9 +2128,15 @@ impl DiffTracer {
             self.make_params(config, frame_index),
         );
         let mut pass = encoder.compute("diff-primal");
-        let mut pc = pass.with(&self.primal_pipeline);
+        let mut pc = pass.with(&self.pipelines.as_ref().unwrap().primal);
         pc.bind(0, &data);
-        pc.dispatch(self.primal_pipeline.get_dispatch_for(self.image_size));
+        pc.dispatch(
+            self.pipelines
+                .as_ref()
+                .unwrap()
+                .primal
+                .get_dispatch_for(self.image_size),
+        );
         self.accumulated_frames[self.view as usize] += 1;
     }
 
@@ -2069,7 +2155,7 @@ impl DiffTracer {
         }
         let pixel_count = self.image_size.width * self.image_size.height;
         let mut pass = encoder.compute("diff-loss");
-        let mut pc = pass.with(&self.loss_pipeline);
+        let mut pc = pass.with(&self.pipelines.as_ref().unwrap().loss);
         pc.bind(
             0,
             &LossData {
@@ -2122,16 +2208,22 @@ impl DiffTracer {
         );
         let mut pass = encoder.compute("diff-adjoint");
         {
-            let mut pc = pass.with(&self.adjoint_pipeline);
+            let mut pc = pass.with(&self.pipelines.as_ref().unwrap().adjoint);
             pc.bind(0, &data);
-            pc.dispatch(self.adjoint_pipeline.get_dispatch_for(self.image_size));
+            pc.dispatch(
+                self.pipelines
+                    .as_ref()
+                    .unwrap()
+                    .adjoint
+                    .get_dispatch_for(self.image_size),
+            );
         }
         if self.geometry && self.triangle_count != 0 {
             assert!(
                 config.jitter_primary_rays,
                 "the gradient of the geometry needs jittered primary rays"
             );
-            let mut pc = pass.with(&self.edges_pipeline);
+            let mut pc = pass.with(&self.pipelines.as_ref().unwrap().edges);
             pc.bind(0, &data);
             pc.dispatch(flat_dispatch(self.triangle_count));
         }
@@ -2145,7 +2237,7 @@ impl DiffTracer {
     pub fn step(&mut self, encoder: &mut blade_graphics::CommandEncoder, config: &StepConfig) {
         match config.materials {
             Some((adam, flags)) => adam_step(
-                &self.adam_pipeline,
+                &self.pipelines.as_ref().unwrap().adam,
                 encoder,
                 &mut self.materials,
                 &adam,
@@ -2159,7 +2251,7 @@ impl DiffTracer {
         }
         match config.environment {
             Some(adam) => adam_step(
-                &self.adam_pipeline,
+                &self.pipelines.as_ref().unwrap().adam,
                 encoder,
                 &mut self.environment,
                 &adam,
@@ -2171,7 +2263,7 @@ impl DiffTracer {
         }
         match config.textures {
             Some(adam) => adam_step(
-                &self.adam_pipeline,
+                &self.pipelines.as_ref().unwrap().adam,
                 encoder,
                 &mut self.textures,
                 &adam,
@@ -2188,7 +2280,7 @@ impl DiffTracer {
                     vp.dispatch(
                         encoder,
                         "diff-normals-to-positions",
-                        &vp.normals_to_positions_pipeline,
+                        &self.pipelines.as_ref().unwrap().normals_to_positions,
                         true,
                         0.0,
                     );
@@ -2207,12 +2299,12 @@ impl DiffTracer {
                     vp.dispatch(
                         encoder,
                         "diff-sum-neighbors",
-                        &vp.sum_neighbors_pipeline,
+                        &self.pipelines.as_ref().unwrap().sum_neighbors,
                         true,
                         smoothness,
                     );
                     let mut pass = encoder.compute("diff-add-smoothness");
-                    let mut pc = pass.with(&vp.smoothness_pipeline);
+                    let mut pc = pass.with(&self.pipelines.as_ref().unwrap().smoothness);
                     let vertex_pass = VertexPass {
                         smoothness,
                         slot_count: vp.slot_count,
@@ -2222,7 +2314,7 @@ impl DiffTracer {
                     pc.dispatch(flat_dispatch(vp.slot_count));
                 }
                 adam_step(
-                    &self.adam_pipeline,
+                    &self.pipelines.as_ref().unwrap().adam,
                     encoder,
                     &mut vp.group,
                     &adam,
@@ -2248,7 +2340,7 @@ impl DiffTracer {
         ] {
             match adam {
                 Some(adam) => adam_step(
-                    &self.adam_pipeline,
+                    &self.pipelines.as_ref().unwrap().adam,
                     encoder,
                     group,
                     &adam,
@@ -2262,18 +2354,15 @@ impl DiffTracer {
     }
 
     pub fn destroy(&mut self, gpu: &blade_graphics::Context) {
-        gpu.destroy_compute_pipeline(&mut self.primal_pipeline);
-        gpu.destroy_compute_pipeline(&mut self.adjoint_pipeline);
-        gpu.destroy_compute_pipeline(&mut self.init_materials_pipeline);
-        gpu.destroy_compute_pipeline(&mut self.init_environment_pipeline);
-        gpu.destroy_compute_pipeline(&mut self.init_texture_pipeline);
-        gpu.destroy_compute_pipeline(&mut self.loss_pipeline);
-        gpu.destroy_compute_pipeline(&mut self.adam_pipeline);
-        gpu.destroy_compute_pipeline(&mut self.edges_pipeline);
-        gpu.destroy_compute_pipeline(&mut self.count_edges_pipeline);
+        if let Some(mut pipelines) = self.pipelines.take() {
+            pipelines.destroy(gpu);
+        }
+        self.destroy_resources(gpu, true);
+    }
+
+    fn destroy_resources(&mut self, gpu: &blade_graphics::Context, with_target: bool) {
         gpu.destroy_buffer(self.edge_keys);
         gpu.destroy_buffer(self.edge_counts);
-        gpu.destroy_compute_pipeline(&mut self.guide_edges_pipeline);
         gpu.destroy_buffer(self.edge_hits);
         gpu.destroy_buffer(self.edge_importance);
         gpu.destroy_buffer(self.edge_guide);
@@ -2291,7 +2380,9 @@ impl DiffTracer {
         self.textures.destroy(gpu);
         gpu.destroy_buffer(self.texture_regions);
         gpu.destroy_buffer(self.image);
-        gpu.destroy_buffer(self.target);
+        if with_target {
+            gpu.destroy_buffer(self.target);
+        }
         gpu.destroy_buffer(self.image_adjoint);
         gpu.destroy_buffer(self.loss);
         gpu.destroy_buffer(self.readback);

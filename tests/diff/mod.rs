@@ -134,7 +134,6 @@ struct DiffScene {
     sky: blade_asset::Handle<blade_render::Texture>,
     base: GeometryBase,
     config: DiffConfig,
-    diff_shaders: DiffShaders,
     desc: DiffTracerDesc,
 }
 
@@ -315,7 +314,7 @@ impl DiffScene {
             camera: pbr_scene::camera(),
             sky,
             base: GeometryBase::new(&[], &pbr_scene::camera()),
-            diff_shaders,
+
             desc,
             config: DiffConfig {
                 num_environment_samples: 1,
@@ -514,32 +513,16 @@ impl DiffScene {
             &context,
             &mut self.temp,
         );
-        let diff = DiffTracer::new(
+        // Nothing that is recorded can use the buffers of the old tracer.
+        self.submit();
+        self.diff.rebuild(
             &mut self.encoder,
             &context,
-            &self.diff_shaders,
             &self.harness.asset_hub,
             &self.renderer,
             &self.desc,
         );
-        let size = diff.image_size();
-        let mut diff = diff;
-        let selected = self.diff.selected_view();
-        for view in 0..self.diff.view_count() {
-            self.diff.select_view(view);
-            diff.select_view(view);
-            self.encoder
-                .transfer("diff-keep-target")
-                .copy_buffer_to_buffer(
-                    self.diff.target(),
-                    diff.target(),
-                    u64::from(size.width * size.height) * 16,
-                );
-        }
-        diff.select_view(selected);
         self.submit();
-        let mut old_diff = std::mem::replace(&mut self.diff, diff);
-        old_diff.destroy(&context);
     }
 
     /// The mesh of the only object, as it is now.
