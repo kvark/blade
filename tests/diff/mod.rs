@@ -3055,9 +3055,10 @@ fn diff_indirect_light_shadow_gradients_match_finite_differences() {
 }
 
 /// The scene of `diff_point_light_gradients_match_finite_differences`, lit
-/// by a small emissive sphere instead: its shadow is a discontinuity of
-/// the light that the wall gets from the directions to it, which the edges
-/// drawn at the hits on the wall find, and so does moving the light.
+/// by a small emissive sphere instead, by the points drawn on it, which
+/// cast the shadow of the sphere like a point light. The edges drawn at the
+/// hits on the wall find it too, as the discontinuity of the light from the
+/// directions to the emitter, but rarely, as it's small.
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_area_light_gradients_match_finite_differences() {
@@ -3069,8 +3070,7 @@ fn diff_area_light_gradients_match_finite_differences() {
     scene.config.max_bounces = 0;
     scene.config.edge_samples = 4;
     scene.config.emitter_samples = 1;
-    scene.config.secondary_edge_samples = 16;
-    scene.config.guided_edges = true;
+    scene.config.emitters_by_area = true;
     scene.darken_sky();
     let place = |scene: &mut DiffScene, ball: [f32; 3], light: [f32; 3]| {
         let mut offsets = GeometryOffsets {
@@ -3088,28 +3088,12 @@ fn diff_area_light_gradients_match_finite_differences() {
     let light = [0.3, 7.7, 0.1];
     place(&mut scene, ball, light);
 
-    // The guide comes from what the edges brought in a few rounds first,
-    // whose gradients are cleared by the step.
-    for round in 0..4 {
-        for iteration in 0..8 {
-            scene.backward(1000 + 8 * round + iteration, 4, 2);
-        }
-        scene
-            .diff
-            .refresh_edge_guide(&mut scene.encoder, &scene.renderer);
-    }
-    scene.diff.step(&mut scene.encoder, &StepConfig::default());
     const ITERATIONS: u32 = 256;
     const BATCH: u32 = 32;
     let mut sums = Vec::new();
     let clock = std::time::Instant::now();
     for iteration in 0..ITERATIONS {
         scene.backward(iteration, 8, 4);
-        if iteration % 16 == 15 {
-            scene
-                .diff
-                .refresh_edge_guide(&mut scene.encoder, &scene.renderer);
-        }
         if (iteration + 1) % BATCH == 0 {
             scene.diff.read_back(&mut scene.encoder);
             scene.submit();

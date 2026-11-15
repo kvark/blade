@@ -203,6 +203,16 @@ pub struct DiffConfig {
     /// [`Self::secondary_edge_samples`], see `sample_projective_edge` and
     /// `sample_projective_secondary` in the shader.
     pub projective_edges: bool,
+    /// Find the light of the emitters only from the points drawn on them by
+    /// [`Self::emitter_samples`], as of the area of the emitters, which
+    /// moves with them, instead of along with the directions drawn by the
+    /// BSDF. The shadows that a point on an emitter casts are then sampled
+    /// at the silhouettes that it sees, like those of the lights, which
+    /// finds the boundaries of the shadows of small emitters much more
+    /// often than the edges drawn at the vertices of the paths, which leave
+    /// out the emission that they see instead. The camera still sees the
+    /// emitters themselves as before.
+    pub emitters_by_area: bool,
 }
 
 impl Default for DiffConfig {
@@ -222,6 +232,7 @@ impl Default for DiffConfig {
             emitter_samples: 1,
             control_variate: 0.0,
             projective_edges: false,
+            emitters_by_area: false,
         }
     }
 }
@@ -453,7 +464,7 @@ struct DiffParams {
     emitter_samples: u32,
     projective_edges: u32,
     light_count: u32,
-    _pad: u32,
+    emitters_by_area: u32,
 }
 
 #[repr(C)]
@@ -1788,7 +1799,7 @@ impl DiffTracer {
             emitter_samples: config.emitter_samples,
             projective_edges: config.projective_edges as u32,
             light_count: self.lights.count,
-            _pad: 0,
+            emitters_by_area: config.emitters_by_area as u32,
         }
     }
 
@@ -2597,10 +2608,12 @@ impl DiffTracer {
             );
         }
         // Along with the edges that the camera sees, the pass over them
-        // samples the shadows that they cast from the lights.
+        // samples the shadows that they cast from the lights, and from
+        // points on the emitters.
+        let emitter_shadows = config.emitters_by_area && config.emitter_samples != 0;
         if self.geometry
             && self.triangle_count != 0
-            && (!config.projective_edges || self.lights.count != 0)
+            && (!config.projective_edges || self.lights.count != 0 || emitter_shadows)
         {
             assert!(
                 config.jitter_primary_rays,
