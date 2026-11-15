@@ -48,6 +48,13 @@ enum SceneKind {
     /// part of the sky. The camera only sees it in the shadow, and the
     /// translations of both are parameters.
     Shadow,
+    /// The wall of `Shadow` under a ceiling above the view, with the sphere
+    /// between them. A light below the ceiling only lights it, so the
+    /// camera sees the shadow of the sphere on it by a bounce off the wall.
+    Ceiling,
+    /// The wall and the sphere of `Shadow`, lit by a small emissive sphere
+    /// where the point light of the tests of lights is.
+    AreaLight,
     /// A small quad, an open mesh, whose translation is a parameter. Its
     /// silhouette is its boundary, whose edges only have one triangle.
     Panel,
@@ -75,6 +82,8 @@ impl SceneKind {
                 | Self::Blob
                 | Self::Panel
                 | Self::Shadow
+                | Self::Ceiling
+                | Self::AreaLight
         )
     }
 
@@ -205,15 +214,27 @@ impl DiffScene {
                 max_debug_lines: 16,
             },
         );
-        let mut objects = if kind == SceneKind::Shadow {
-            [("diff-wall", wall()), ("diff-shading-ball", small_ball())]
+        let mut objects = if matches!(
+            kind,
+            SceneKind::Shadow | SceneKind::Ceiling | SceneKind::AreaLight
+        ) {
+            let room = if kind == SceneKind::Ceiling {
+                vec![wall(), ceiling()]
+            } else {
+                vec![wall()]
+            };
+            let mut parts = vec![("diff-wall", room), ("diff-shading-ball", vec![small_ball()])];
+            if kind == SceneKind::AreaLight {
+                parts.push(("diff-area-light", vec![light_ball()]));
+            }
+            parts
                 .into_iter()
-                .map(|(name, geometry)| {
+                .map(|(name, geometries)| {
                     let model = harness
                         .asset_hub
                         .models
                         .baker
-                        .create_model(name, vec![geometry]);
+                        .create_model(name, geometries);
                     blade_render::Object::from(harness.asset_hub.models.insert(model))
                 })
                 .collect()
@@ -990,6 +1011,40 @@ fn wall() -> blade_render::ProceduralGeometry {
         [0.0; 3],
         [0.7, 0.7, 0.7, 1.0],
     )
+}
+
+/// A slab above the view and the sphere, over the wall and in front of it.
+fn ceiling() -> blade_render::ProceduralGeometry {
+    cuboid(
+        [4.0, 0.1, 2.2],
+        [0.0, 6.6, 0.6],
+        [0.0; 3],
+        [0.7, 0.7, 0.7, 1.0],
+    )
+}
+
+/// Where the emissive sphere of `SceneKind::AreaLight` is, and its radius.
+const AREA_LIGHT_CENTER: [f32; 3] = [0.0, 8.0, -0.2];
+const AREA_LIGHT_RADIUS: f32 = 0.1;
+
+/// A small sphere, that emits about as much as a point light of 800 at its
+/// center: its radiance times the area of its disk.
+fn light_ball() -> blade_render::ProceduralGeometry {
+    let mut geometry = ball();
+    // `ball` has a radius of 1.5.
+    let scale = AREA_LIGHT_RADIUS / 1.5;
+    for vertex in &mut geometry.vertices {
+        let [x, y, z] = vertex.position.map(|c| c * scale);
+        vertex.position = [
+            x + AREA_LIGHT_CENTER[0],
+            y + AREA_LIGHT_CENTER[1],
+            z + AREA_LIGHT_CENTER[2],
+        ];
+    }
+    let radiance = 800.0 / (std::f32::consts::PI * AREA_LIGHT_RADIUS * AREA_LIGHT_RADIUS);
+    geometry.base_color_factor = [0.0, 0.0, 0.0, 1.0];
+    geometry.emissive_factor = [radiance; 3];
+    geometry
 }
 
 /// The dielectric sphere of the grid, a little larger, above the view and
@@ -2726,7 +2781,7 @@ fn diff_control_variate_follows_motion() {
 }
 
 /// A parameter of the scene of the lights, for central differences.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum LightParam {
     Ball(usize),
     Position(usize),
@@ -2755,6 +2810,20 @@ fn check_light_gradients(
     start: DiffLight,
     params: &[(LightParam, f32)],
 ) {
+    check_light_gradients_with(scene, target, start, params, &[], 8);
+}
+
+/// Like `check_light_gradients`, and also the gradients by `alone` without
+/// the secondary edge samples, which have to disagree with the central
+/// differences: the shadows that they find are what makes up the gradient.
+fn check_light_gradients_with(
+    scene: &mut DiffScene,
+    target: DiffLight,
+    start: DiffLight,
+    params: &[(LightParam, f32)],
+    alone: &[LightParam],
+    primal_samples: u32,
+) {
     const BALL: usize = 1;
     scene.darken_sky();
     set_light_scene(scene, [0.0; 3], target);
@@ -2763,24 +2832,123 @@ fn check_light_gradients(
     set_light_scene(scene, ball, start);
 
     const ITERATIONS: u32 = 256;
-    for iteration in 0..ITERATIONS {
-        scene.backward(iteration, 8, 4);
+    // The gradients only add up until an optimizer step reads them, so
+    // those without the secondary edge samples come first, and are taken
+    // out of the sum after them.
+    // The sums after every batch, of which the spread tells the noise.
+    const BATCH: u32 = 32;
+    let guided = scene.config.guided_edges;
+    let read = |scene: &mut DiffScene| {
+        scene.diff.read_back(&mut scene.encoder);
+        scene.submit();
+        let ball_grad = scene.diff.translation_grads()[BALL];
+        let (_, light_grads) = scene.read_lights();
+        (ball_grad, light_grads[0])
+    };
+    let gradients = |scene: &mut DiffScene, iterations: std::ops::Range<u32>| {
+        let mut sums = Vec::new();
+        for iteration in iterations {
+            scene.backward(iteration, primal_samples, 4);
+            if guided && iteration % 16 == 15 {
+                scene
+                    .diff
+                    .refresh_edge_guide(&mut scene.encoder, &scene.renderer);
+            }
+            if (iteration + 1) % BATCH == 0 {
+                sums.push(read(scene));
+            }
+        }
+        sums
+    };
+    // The guide comes from what the edges brought in a few rounds first,
+    // whose gradients are left out.
+    let mut warm = None;
+    if guided {
+        for round in 0..4 {
+            for iteration in 0..8 {
+                scene.backward(3 * ITERATIONS + 8 * round + iteration, 4, 2);
+            }
+            scene
+                .diff
+                .refresh_edge_guide(&mut scene.encoder, &scene.renderer);
+        }
+        warm = Some(read(scene));
     }
-    scene.diff.read_back(&mut scene.encoder);
-    scene.submit();
-    let ball_grad = scene.diff.translation_grads()[BALL];
-    let (_, light_grads) = scene.read_lights();
-    let light_grad = light_grads[0];
+    let analytic_of = |(ball_grad, light_grad): ([f32; 4], DiffLight), param| match param {
+        LightParam::Ball(axis) => ball_grad[axis],
+        LightParam::Position(axis) => light_grad.position[axis],
+        LightParam::Intensity => light_grad.intensity[0],
+        LightParam::Direction(axis) => light_grad.direction[axis],
+    };
+    let mut without = None;
+    if !alone.is_empty() {
+        let samples = scene.config.secondary_edge_samples;
+        scene.config.secondary_edge_samples = 0;
+        without = Some(gradients(scene, ITERATIONS..2 * ITERATIONS));
+        scene.config.secondary_edge_samples = samples;
+    }
+    let clock = std::time::Instant::now();
+    let with = gradients(scene, 0..ITERATIONS);
+    println!(
+        "{ITERATIONS} gradient iterations in {:.1} s",
+        clock.elapsed().as_secs_f32()
+    );
+    let zero = ([0.0; 4], DiffLight::point([0.0; 3], [0.0; 3]));
 
+    if std::env::var_os("LIGHT_FD_DIAGNOSTIC").is_some() {
+        for &(param, h) in params {
+            for (frames, h) in [
+                (2_000_000..2_002_048, h),
+                (3_000_000..3_008_192, h),
+                (3_000_000..3_008_192, 0.5 * h),
+            ] {
+                let mut losses = [0.0; 2];
+                for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
+                    let mut moved = ball;
+                    let mut light = start;
+                    match param {
+                        LightParam::Ball(axis) => moved[axis] += sign * h,
+                        LightParam::Position(axis) => light.position[axis] += sign * h,
+                        LightParam::Intensity => light.intensity[0] += sign * h,
+                        LightParam::Direction(axis) => light.direction[axis] += sign * h,
+                    }
+                    set_light_scene(scene, moved, light);
+                    *loss = scene.unbiased_loss(frames.clone());
+                }
+                println!(
+                    "FD {param:?} h {h} frames {}: {:e}",
+                    frames.len(),
+                    (losses[0] - losses[1]) / (2.0 * h)
+                );
+            }
+        }
+        return;
+    }
     let frames = 2_000_000..2_002_048;
     let mut results = Vec::new();
     for &(param, h) in params {
-        let analytic = match param {
-            LightParam::Ball(axis) => ball_grad[axis],
-            LightParam::Position(axis) => light_grad.position[axis],
-            LightParam::Intensity => light_grad.intensity[0],
-            LightParam::Direction(axis) => light_grad.direction[axis],
-        } / ITERATIONS as f32;
+        // The mean of the batches since `last`, and its standard error.
+        let mean_of = |sums: &[([f32; 4], DiffLight)], mut last: f32| {
+            let batches = sums
+                .iter()
+                .map(|&sums| {
+                    let sum = analytic_of(sums, param);
+                    let batch = (sum - last) / BATCH as f32;
+                    last = sum;
+                    batch
+                })
+                .collect::<Vec<_>>();
+            let count = batches.len() as f32;
+            let mean = batches.iter().sum::<f32>() / count;
+            let spread = batches.iter().map(|b| (b - mean).powi(2)).sum::<f32>() / (count - 1.0);
+            (mean, (spread / count).sqrt(), last)
+        };
+        let warmed = analytic_of(warm.unwrap_or(zero), param);
+        let (before, before_error, last) = match &without {
+            Some(sums) => mean_of(sums, warmed),
+            None => (0.0, 0.0, warmed),
+        };
+        let (analytic, error, _) = mean_of(&with, last);
         let mut losses = [0.0; 2];
         for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
             let mut moved = ball;
@@ -2795,15 +2963,30 @@ fn check_light_gradients(
             *loss = scene.unbiased_loss(frames.clone());
         }
         let numeric = (losses[0] - losses[1]) / (2.0 * h);
-        println!("d loss / d {param:?}: {analytic:e}, central difference {numeric:e}");
-        results.push((param, analytic, numeric));
+        if without.is_some() {
+            println!(
+                "d loss / d {param:?}: {analytic:e} ± {error:e}, {before:e} ± {before_error:e} without secondary edges, central difference {numeric:e}"
+            );
+        } else {
+            println!("d loss / d {param:?}: {analytic:e} ± {error:e}, central difference {numeric:e}");
+        }
+        results.push((param, analytic, before, numeric));
     }
-    let largest = results.iter().map(|r| r.2.abs()).fold(0.0, f32::max);
-    for (param, analytic, numeric) in results {
+    let largest = results.iter().map(|r| r.3.abs()).fold(0.0, f32::max);
+    let close = |gradient: f32, numeric: f32| {
+        (gradient - numeric).abs() <= 0.25 * numeric.abs() + 0.05 * largest
+    };
+    for (param, analytic, before, numeric) in results {
         assert!(
-            (analytic - numeric).abs() <= 0.25 * numeric.abs() + 0.05 * largest,
+            close(analytic, numeric),
             "d loss / d {param:?}: gradient {analytic:e} disagrees with {numeric:e}"
         );
+        if alone.iter().any(|&p| p == param) {
+            assert!(
+                !close(before, numeric),
+                "d loss / d {param:?}: {before:e} without secondary edges is already {numeric:e}"
+            );
+        }
     }
 }
 
@@ -2862,6 +3045,158 @@ fn diff_spot_light_gradients_match_finite_differences() {
             (LightParam::Direction(2), 0.1),
         ],
     );
+    scene.destroy();
+}
+
+/// A spot light under the ceiling, which only lights the ceiling, and the
+/// camera only sees the wall, by the light that the ceiling sends it. The
+/// shadow of the sphere on the ceiling moves with the light and the sphere,
+/// which only the edges drawn at the hits on the wall find: from there, the
+/// silhouette of the sphere is seen from the light on another surface.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_indirect_light_shadow_gradients_match_finite_differences() {
+    let Some(mut scene) = DiffScene::new("diff-indirect-light", SceneKind::Ceiling) else {
+        return;
+    };
+    scene.config.max_bounces = 1;
+    scene.config.edge_samples = 2;
+    scene.config.secondary_edge_samples = 16;
+    // Few of the edges of the scene are silhouettes from the light.
+    scene.config.guided_edges = true;
+    let spot = |position: [f32; 3]| {
+        DiffLight::spot(position, [800.0; 3], [0.0, 1.0, 0.0], 0.35, 0.5)
+    };
+    check_light_gradients_with(
+        &mut scene,
+        spot([0.0, 2.0, -0.2]),
+        spot([0.2, 2.1, -0.1]),
+        &[
+            (LightParam::Ball(0), 0.05),
+            (LightParam::Ball(2), 0.05),
+            (LightParam::Position(0), 0.1),
+            (LightParam::Position(2), 0.1),
+        ],
+        &[LightParam::Ball(2)],
+        32,
+    );
+    scene.destroy();
+}
+
+/// The scene of `diff_point_light_gradients_match_finite_differences`, lit
+/// by a small emissive sphere instead: its shadow is a discontinuity of
+/// the light that the wall gets from the directions to it, which the edges
+/// drawn at the hits on the wall find, and so does moving the light.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_area_light_gradients_match_finite_differences() {
+    let Some(mut scene) = DiffScene::new("diff-area-light", SceneKind::AreaLight) else {
+        return;
+    };
+    const BALL: usize = 1;
+    const LIGHT: usize = 2;
+    scene.config.max_bounces = 0;
+    scene.config.edge_samples = 4;
+    scene.config.emitter_samples = 1;
+    scene.config.secondary_edge_samples = 16;
+    scene.config.guided_edges = true;
+    scene.darken_sky();
+    let place = |scene: &mut DiffScene, ball: [f32; 3], light: [f32; 3]| {
+        let mut offsets = GeometryOffsets {
+            translations: vec![[0.0; 3]; 3],
+            rotations: vec![[0.0; 3]; 3],
+            camera: [0.0; 3],
+        };
+        offsets.translations[BALL] = ball;
+        offsets.translations[LIGHT] = [0, 1, 2].map(|i| light[i] - AREA_LIGHT_CENTER[i]);
+        scene.move_geometry(&offsets);
+    };
+    place(&mut scene, [0.0; 3], AREA_LIGHT_CENTER);
+    scene.capture_target();
+    let ball = [0.3, 0.25, 0.0];
+    let light = [0.3, 7.7, 0.1];
+    place(&mut scene, ball, light);
+
+    // The guide comes from what the edges brought in a few rounds first,
+    // whose gradients are cleared by the step.
+    for round in 0..4 {
+        for iteration in 0..8 {
+            scene.backward(1000 + 8 * round + iteration, 4, 2);
+        }
+        scene
+            .diff
+            .refresh_edge_guide(&mut scene.encoder, &scene.renderer);
+    }
+    scene.diff.step(&mut scene.encoder, &StepConfig::default());
+    const ITERATIONS: u32 = 256;
+    const BATCH: u32 = 32;
+    let mut sums = Vec::new();
+    let clock = std::time::Instant::now();
+    for iteration in 0..ITERATIONS {
+        scene.backward(iteration, 8, 4);
+        if iteration % 16 == 15 {
+            scene
+                .diff
+                .refresh_edge_guide(&mut scene.encoder, &scene.renderer);
+        }
+        if (iteration + 1) % BATCH == 0 {
+            scene.diff.read_back(&mut scene.encoder);
+            scene.submit();
+            let grads = scene.diff.translation_grads();
+            sums.push([grads[BALL], grads[LIGHT]]);
+        }
+    }
+    println!(
+        "{ITERATIONS} gradient iterations in {:.1} s",
+        clock.elapsed().as_secs_f32()
+    );
+
+    let params = [
+        (LightParam::Ball(0), 0.05),
+        (LightParam::Ball(1), 0.05),
+        (LightParam::Position(0), 0.1),
+        (LightParam::Position(1), 0.1),
+        (LightParam::Position(2), 0.1),
+    ];
+    let frames = 2_000_000..2_002_048;
+    let mut results = Vec::new();
+    for (param, h) in params {
+        let (object, axis) = match param {
+            LightParam::Ball(axis) => (0, axis),
+            LightParam::Position(axis) => (1, axis),
+            _ => unreachable!(),
+        };
+        let mut last = 0.0;
+        let batches = sums
+            .iter()
+            .map(|sum| {
+                let batch = (sum[object][axis] - last) / BATCH as f32;
+                last = sum[object][axis];
+                batch
+            })
+            .collect::<Vec<_>>();
+        let count = batches.len() as f32;
+        let analytic = batches.iter().sum::<f32>() / count;
+        let spread = batches.iter().map(|b| (b - analytic).powi(2)).sum::<f32>() / (count - 1.0);
+        let error = (spread / count).sqrt();
+        let mut losses = [0.0; 2];
+        for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
+            let mut moved = [ball, light];
+            moved[object][axis] += sign * h;
+            place(&mut scene, moved[0], moved[1]);
+            *loss = scene.unbiased_loss(frames.clone());
+        }
+        let numeric = (losses[0] - losses[1]) / (2.0 * h);
+        println!("d loss / d {param:?}: {analytic:e} ± {error:e}, central difference {numeric:e}");
+        results.push((param, analytic, numeric));
+    }
+    let largest = results.iter().map(|r| r.2.abs()).fold(0.0, f32::max);
+    for (param, analytic, numeric) in results {
+        assert!(
+            (analytic - numeric).abs() <= 0.25 * numeric.abs() + 0.05 * largest,
+            "d loss / d {param:?}: gradient {analytic:e} disagrees with {numeric:e}"
+        );
+    }
     scene.destroy();
 }
 
