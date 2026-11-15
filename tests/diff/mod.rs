@@ -7,6 +7,7 @@ use blade_render::diff::{
     MaterialParamFlags, MaterialParams, StepConfig,
 };
 use blade_render::large_steps::{LargeSteps, LargeStepsConfig};
+use blade_render::marching::{SdfGrid, SdfOptimizer, SdfOptimizerConfig};
 
 const SIZE: gpu::Extent = gpu::Extent {
     width: 40,
@@ -1777,9 +1778,9 @@ fn diff_remeshing_refines_the_fit() {
     assert!(remeshed.triangles > 10 * fixed.triangles);
 }
 
-/// The camera of the grid, and the same from the right and from above,
-/// all looking at the center.
-fn view_cameras() -> [blade_render::Camera; 3] {
+/// The camera of the grid, and the same from the right, from above, from
+/// behind and from below, all looking at the center.
+fn view_cameras() -> [blade_render::Camera; 5] {
     let front = pbr_scene::camera();
     let distance = front.pos.z;
     let half = std::f32::consts::FRAC_1_SQRT_2;
@@ -1799,7 +1800,23 @@ fn view_cameras() -> [blade_render::Camera; 3] {
         },
         ..front
     };
-    [front, side, top]
+    let back = blade_render::Camera {
+        pos: [0.0, 0.0, -distance].into(),
+        rot: mint::Quaternion {
+            v: [0.0, 1.0, 0.0].into(),
+            s: 0.0,
+        },
+        ..front
+    };
+    let bottom = blade_render::Camera {
+        pos: [0.0, -distance, 0.0].into(),
+        rot: mint::Quaternion {
+            v: [half, 0.0, 0.0].into(),
+            s: half,
+        },
+        ..front
+    };
+    [front, side, top, back, bottom]
 }
 
 /// How the vertices of the blob are optimized by [`fit_depth`].
@@ -2121,4 +2138,113 @@ fn diff_antithetic_paths_reduce_variance() {
         total(independent_variance)
     );
     scene.destroy();
+}
+
+/// The values of a signed distance grid, through the vertices of the mesh
+/// of its zero level, find two spheres from one capsule around both, which
+/// takes a change of topology that moving the vertices of one mesh can't.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_signed_distance_splits_the_shape() {
+    // These see the gap between the spheres, and all around them.
+    const VIEWS: [u32; 4] = [0, 2, 3, 4];
+    let Some(mut scene) = DiffScene::with_views("diff-sdf", SceneKind::Blob, 5) else {
+        return;
+    };
+    scene.config.edge_samples = 2;
+    let cameras = view_cameras();
+    let grid_at = |distance: &dyn Fn(glam::Vec3) -> f32| {
+        SdfGrid::new(
+            [25, 15, 15],
+            glam::Vec3::new(-2.4, -1.4, -1.4),
+            0.2,
+            distance,
+        )
+    };
+    let spheres = grid_at(&|p| {
+        let left = (p - glam::Vec3::new(-1.1, 0.0, 0.0)).length();
+        let right = (p - glam::Vec3::new(1.1, 0.0, 0.0)).length();
+        left.min(right) - 0.8
+    });
+    scene.set_mesh(&spheres.extract().mesh);
+    for view in VIEWS {
+        scene.diff.select_view(view);
+        scene.camera = cameras[view as usize];
+        scene.capture_target();
+    }
+
+    let mut grid = grid_at(&|p| {
+        let axis = glam::Vec3::new(p.x.clamp(-1.1, 1.1), 0.0, 0.0);
+        (p - axis).length() - 0.7
+    });
+    let mut optimizer = SdfOptimizer::new(&grid);
+    let start = blade_render::marching::components(&grid.extract().mesh);
+    let mut losses = Vec::new();
+    for iteration in 0..80u32 {
+        let extraction = grid.extract();
+        scene.set_mesh(&extraction.mesh);
+        for (k, &view) in VIEWS.iter().enumerate() {
+            scene.diff.select_view(view);
+            scene.camera = cameras[view as usize];
+            scene.backward(iteration * VIEWS.len() as u32 + k as u32, 4, 2);
+        }
+        scene.diff.gather_vertex_grads(&mut scene.encoder);
+        scene.diff.read_back_meshes(&mut scene.encoder);
+        scene.submit();
+        losses.push(scene.diff.loss());
+        // The slot of every vertex of the mesh, by the corners of its
+        // triangles, which the model has in the same order.
+        let slot_triangles = scene.diff.slot_triangles(&scene.harness.asset_hub);
+        assert_eq!(slot_triangles.len(), extraction.mesh.triangles.len());
+        let mut slots = vec![u32::MAX; extraction.mesh.positions.len()];
+        for (t, s) in extraction.mesh.triangles.iter().zip(&slot_triangles) {
+            for k in 0..3 {
+                slots[t[k] as usize] = s[k];
+            }
+        }
+        let vertex_grads = scene.diff.vertex_grads();
+        let position_grads: Vec<glam::Vec3> = slots
+            .iter()
+            .map(|&slot| match vertex_grads.get(slot as usize) {
+                Some(g) => glam::Vec3::new(g[0], g[1], g[2]),
+                None => glam::Vec3::ZERO,
+            })
+            .collect();
+        let mut value_grads = vec![0.0; grid.values.len()];
+        extraction.backpropagate(&grid, &position_grads, &mut value_grads);
+        optimizer.step(
+            &mut grid,
+            &value_grads,
+            &SdfOptimizerConfig {
+                learning_rate: 0.04 * 0.98f32.powi(iteration as i32),
+                smoothness: 0.1,
+                limit: 2.0,
+                ..Default::default()
+            },
+        );
+        // Clear the gradients.
+        scene.diff.step(&mut scene.encoder, &StepConfig::default());
+    }
+    let end = blade_render::marching::components(&grid.extract().mesh);
+    let early = losses[..8].iter().sum::<f32>() / 8.0;
+    let late = losses[losses.len() - 8..].iter().sum::<f32>() / 8.0;
+    println!("parts {start:?} -> {end:?}, loss {early:.3e} -> {late:.3e}");
+    scene.destroy();
+    let closed_spheres = |parts: &[blade_render::marching::Component]| {
+        parts.iter().all(|p| p.euler_characteristic == 2)
+    };
+    assert!(start.len() == 1 && closed_spheres(&start));
+    assert!(
+        end.len() == 2 && closed_spheres(&end),
+        "the shape didn't split into two spheres"
+    );
+    for part in &end {
+        let [x, y, z] = part.center;
+        assert!(
+            (x.abs() - 1.1).abs() < 0.1 && y.abs() < 0.1 && z.abs() < 0.1,
+            "a part is at {:?}",
+            part.center
+        );
+    }
+    assert!(late < 0.5 * early);
 }
