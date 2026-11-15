@@ -37,6 +37,12 @@ pub struct MaterialParams {
     pub metalness: f32,
     pub emissive: [f32; 3],
     pub roughness: f32,
+    /// The part of the diffuse albedo that goes through the surface
+    /// instead, as through a thin wall, like `KHR_materials_transmission`
+    /// with its base color tint. Only the differentiable tracer has it, and
+    /// it starts at zero.
+    pub transmission: f32,
+    _pad: [f32; 3],
 }
 
 const MATERIAL_PARAM_COUNT: u32 = (mem::size_of::<MaterialParams>() / 4) as u32;
@@ -58,13 +64,15 @@ bitflags::bitflags! {
         const METALNESS = 0x08;
         const EMISSIVE = 0x70;
         const ROUGHNESS = 0x80;
+        const TRANSMISSION = 0x100;
     }
 }
 
 /// Parameters that live in the unit interval.
 const BOUNDED_MATERIAL_PARAMS: MaterialParamFlags = MaterialParamFlags::BASE_COLOR
     .union(MaterialParamFlags::METALNESS)
-    .union(MaterialParamFlags::ROUGHNESS);
+    .union(MaterialParamFlags::ROUGHNESS)
+    .union(MaterialParamFlags::TRANSMISSION);
 
 #[derive(Clone, Copy, Debug)]
 pub struct DiffConfig {

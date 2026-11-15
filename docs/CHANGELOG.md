@@ -13,6 +13,7 @@ Changelog for *Blade* project
 - render: `DiffTracer::rebuild` starts over from a scene with other geometry, keeping the compiled passes and the targets
 - render: `DiffConfig::emitter_samples` draws points on the emitting triangles at every vertex of a path, with MIS against finding them by the BSDF
 - render: `DiffConfig::control_variate` takes a recursive control variate of the image that the loss is taken on, from the image of the last parameters with the same random numbers
+- render: `MaterialParams::transmission` lets part of the diffuse albedo through surfaces, as thin walls, like `KHR_materials_transmission`, in the differentiable tracer
 - render: `DiffTracerDesc::views` renders and compares several cameras, each with its own target, whose gradients add up, see `DiffTracer::select_view`
 - render: `large_steps::LargeSteps` optimizes vertex offsets through `(I + λL)⁻¹` with one Adam scale for all, after Nicolet et al., with `DiffTracer::slot_triangles` for the mesh
 - render: retain SVGF history on frozen frames; vehicle diagnostic captures require `BLADE_CAPTURE_VEHICLE=1` even when running ignored tests

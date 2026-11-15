@@ -729,7 +729,7 @@ fn bsdf_gradient_gpu_test() {
     }
     let output = context.create_buffer(gpu::BufferDesc {
         name: "bsdf-gradient-output",
-        size: (COUNT * 64) as u64,
+        size: (COUNT * 112) as u64,
         memory: gpu::Memory::Shared,
     });
     let source = [
@@ -741,18 +741,38 @@ struct Check {
     numeric: vec4<f32>,
     analytic_normal: vec4<f32>,
     numeric_normal: vec4<f32>,
+    analytic_transmission: vec4<f32>,
+    numeric_transmission: vec4<f32>,
+    // `numeric_normal` with twice the step, which disagrees with it where
+    // rounding leaves central differences off, at the sharpest peaks.
+    numeric_normal_wide: vec4<f32>,
 }
 var<storage, read_write> output: array<Check>;
 
-// The same as `evaluate_bsdf`, without the sampling include.
-fn reference_bsdf(mat: Material, normal: vec3<f32>, view_dir: vec3<f32>, light_dir: vec3<f32>) -> vec3<f32> {
-    let brdf = evaluate_brdf(mat, normal, view_dir, light_dir);
-    return mat.diffuse_albedo * brdf.diffuse + brdf.specular;
+// The same as `evaluate_bsdf`, without the sampling include, with a part
+// `transmission` of the diffuse albedo going through the surface as the
+// specular lobe mirrored about it.
+fn reference_surface(mat: Material, transmission: f32, normal: vec3<f32>, view_dir: vec3<f32>, light_dir: vec3<f32>) -> vec3<f32> {
+    let n_dot_l = dot(normal, light_dir);
+    if (n_dot_l >= 0.0) {
+        let brdf = evaluate_brdf(mat, normal, view_dir, light_dir);
+        return mat.diffuse_albedo * (1.0 - transmission) * brdf.diffuse + brdf.specular;
+    }
+    let mirrored = light_dir - 2.0 * n_dot_l * normal;
+    let n_dot_v = dot(normal, view_dir);
+    let half_dir = normalize(view_dir + mirrored);
+    let alpha = material_alpha(mat);
+    let microfacet = distribution_ggx(max(dot(normal, half_dir), 0.0), alpha)
+        * visibility_smith(n_dot_v, -n_dot_l, alpha) * -n_dot_l;
+    let fresnel = fresnel_schlick(max(dot(view_dir, half_dir), 0.0), mat.specular_f0);
+    return transmission * mat.diffuse_albedo * (vec3<f32>(1.0) - fresnel) * microfacet;
 }
 
 fn direction(theta: f32, phi: f32) -> vec3<f32> {
     return vec3<f32>(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
 }
+
+const H_NORMAL: f32 = 1.0e-3;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -762,49 +782,60 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let w = fract(i * vec4<f32>(0.3247180, 0.8191725, 0.2207440, 0.6823278));
     let normal = vec3<f32>(0.0, 0.0, 1.0);
     let view_dir = direction(0.1 + 1.2 * u.x, 6.2 * u.y);
-    let light_dir = direction(0.1 + 1.2 * u.z, 6.2 * u.w);
+    // Every other configuration lights the surface from below, through it.
+    let below = (id.x & 1u) == 1u;
+    let light_dir = direction(select(0.1 + 1.2 * u.z, 3.04 - 1.2 * u.z, below), 6.2 * u.w);
     var mat: Material;
     mat.diffuse_albedo = 0.1 + 0.8 * w.xyz;
     mat.specular_f0 = 0.02 + 0.9 * w.yzx;
     mat.roughness = 0.15 + 0.8 * w.w;
+    let transmission = 0.2 + 0.6 * fract(i * 0.5497004);
 
-    let grad = evaluate_bsdf_gradient(mat, normal, view_dir, light_dir);
+    let grad = evaluate_surface_gradient(mat, transmission, normal, view_dir, light_dir);
     let h = 1.0e-3;
     var a = mat;
     var b = mat;
     a.diffuse_albedo.x += h;
     b.diffuse_albedo.x -= h;
-    let d_albedo = (reference_bsdf(a, normal, view_dir, light_dir) - reference_bsdf(b, normal, view_dir, light_dir)) / (2.0 * h);
+    let d_albedo = (reference_surface(a, transmission, normal, view_dir, light_dir) - reference_surface(b, transmission, normal, view_dir, light_dir)) / (2.0 * h);
     a = mat;
     b = mat;
     a.specular_f0.y += h;
     b.specular_f0.y -= h;
-    let d_f0 = (reference_bsdf(a, normal, view_dir, light_dir) - reference_bsdf(b, normal, view_dir, light_dir)) / (2.0 * h);
+    let d_f0 = (reference_surface(a, transmission, normal, view_dir, light_dir) - reference_surface(b, transmission, normal, view_dir, light_dir)) / (2.0 * h);
     a = mat;
     b = mat;
     a.roughness += h;
     b.roughness -= h;
-    let d_roughness = (reference_bsdf(a, normal, view_dir, light_dir) - reference_bsdf(b, normal, view_dir, light_dir)) / (2.0 * h);
+    let d_roughness = (reference_surface(a, transmission, normal, view_dir, light_dir) - reference_surface(b, transmission, normal, view_dir, light_dir)) / (2.0 * h);
 
     // Tilting the normal along the tangents, which is all that a unit normal
     // can do, through the first and the last channel. The tracer normalizes
     // the normal, which takes the component along it out of the derivative.
     var d_normal = mat2x3<f32>();
+    var d_normal_wide = mat2x3<f32>();
     for (var axis = 0u; axis < 2u; axis += 1u) {
         var offset = vec3<f32>(0.0);
-        offset[axis] = h;
-        d_normal[axis] = (reference_bsdf(mat, normalize(normal + offset), view_dir, light_dir)
-            - reference_bsdf(mat, normalize(normal - offset), view_dir, light_dir)) / (2.0 * h);
+        offset[axis] = H_NORMAL;
+        d_normal[axis] = (reference_surface(mat, transmission, normalize(normal + offset), view_dir, light_dir)
+            - reference_surface(mat, transmission, normalize(normal - offset), view_dir, light_dir)) / (2.0 * H_NORMAL);
+        d_normal_wide[axis] = (reference_surface(mat, transmission, normalize(normal + 2.0 * offset), view_dir, light_dir)
+            - reference_surface(mat, transmission, normalize(normal - 2.0 * offset), view_dir, light_dir)) / (4.0 * H_NORMAL);
     }
-    let d_normal_x = bsdf_normal_grad(grad, mat, vec3<f32>(1.0, 0.0, 0.0));
-    let d_normal_z = bsdf_normal_grad(grad, mat, vec3<f32>(0.0, 0.0, 1.0));
+    let d_normal_x = bsdf_normal_grad(grad, vec3<f32>(1.0, 0.0, 0.0));
+    let d_normal_z = bsdf_normal_grad(grad, vec3<f32>(0.0, 0.0, 1.0));
+    let d_transmission = (reference_surface(mat, transmission + h, normal, view_dir, light_dir)
+        - reference_surface(mat, transmission - h, normal, view_dir, light_dir)) / (2.0 * h);
 
-    let value = reference_bsdf(mat, normal, view_dir, light_dir);
+    let value = reference_surface(mat, transmission, normal, view_dir, light_dir);
     output[id.x] = Check(
         vec4<f32>(grad.d_diffuse_albedo.x, grad.d_specular_f0.y, grad.d_roughness.x, grad.value.z),
         vec4<f32>(d_albedo.x, d_f0.y, d_roughness.x, value.z),
         vec4<f32>(d_normal_x.xy, d_normal_z.xy),
         vec4<f32>(d_normal[0].x, d_normal[1].x, d_normal[0].z, d_normal[1].z),
+        vec4<f32>(grad.d_transmission.xy, grad.value.xy),
+        vec4<f32>(d_transmission.xy, value.xy),
+        vec4<f32>(d_normal_wide[0].x, d_normal_wide[1].x, d_normal_wide[0].z, d_normal_wide[1].z),
     );
 }
 "#,
@@ -841,9 +872,32 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let sync_point = context.submit(&mut encoder);
     assert!(context.wait_for(&sync_point, 2000).unwrap());
 
-    let checks = unsafe { slice::from_raw_parts(output.data() as *const [[f32; 4]; 4], COUNT) };
+    let checks = unsafe { slice::from_raw_parts(output.data() as *const [[f32; 4]; 7], COUNT) };
     let mut nonzero = 0;
-    for (index, [analytic, numeric, analytic_normal, numeric_normal]) in checks.iter().enumerate() {
+    let mut through = 0;
+    let mut unreliable = 0;
+    for (
+        index,
+        [
+            analytic,
+            numeric,
+            analytic_normal,
+            numeric_normal,
+            analytic_more,
+            numeric_more,
+            numeric_wide,
+        ],
+    ) in checks.iter().enumerate()
+    {
+        let tolerance = |a: f32, n: f32| 1.0e-3 + 1.0e-2 * a.abs().max(n.abs());
+        if numeric_normal
+            .iter()
+            .zip(numeric_wide)
+            .any(|(&n, &w)| (n - w).abs() > tolerance(n, w))
+        {
+            unreliable += 1;
+            continue;
+        }
         let names = [
             "albedo",
             "f0",
@@ -853,20 +907,34 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             "normal.y",
             "normal.x",
             "normal.y",
+            "transmission.x",
+            "transmission.y",
+            "value.x",
+            "value.y",
         ];
-        let analytic = analytic.iter().chain(analytic_normal);
-        let numeric = numeric.iter().chain(numeric_normal);
+        let analytic = analytic.iter().chain(analytic_normal).chain(analytic_more);
+        let numeric = numeric.iter().chain(numeric_normal).chain(numeric_more);
         for ((name, &a), &n) in names.iter().zip(analytic).zip(numeric) {
-            let tolerance = 1.0e-3 + 1.0e-2 * a.abs().max(n.abs());
             assert!(
-                (a - n).abs() <= tolerance,
+                (a - n).abs() <= tolerance(a, n),
                 "configuration {index}: d/d{name} is {a}, central difference is {n}"
             );
         }
         if checks[index][0][2] != 0.0 {
             nonzero += 1;
+            if index % 2 == 1 {
+                through += 1;
+            }
         }
     }
+    assert!(
+        through > COUNT / 4,
+        "only {through} configurations were lit through"
+    );
+    assert!(
+        unreliable < COUNT / 20,
+        "central differences were unreliable for {unreliable} configurations"
+    );
     // Most configurations face both directions away from the surface.
     assert!(
         nonzero > COUNT / 2,
