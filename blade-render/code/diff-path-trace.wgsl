@@ -44,7 +44,7 @@ const PATH_LENGTH: u32 = MAX_DIFF_BOUNCES + 1u;
 const ROULETTE_START: u32 = 4u;
 const MAX_RADIANCE: f32 = 1.0e6;
 // Floats per `MaterialParams`, also the stride of `material_grads`.
-const MATERIAL_PARAM_COUNT: u32 = 12u;
+const MATERIAL_PARAM_COUNT: u32 = 16u;
 // Floats per environment texel in `env_params` and `env_grads`.
 const ENV_PARAM_COUNT: u32 = 4u;
 // Floats per material texture texel in `texture_params` and `texture_grads`.
@@ -135,8 +135,15 @@ struct MaterialParams {
     // Index of refraction of a solid, through which the transmission is
     // refracted, or zero for a thin wall.
     ior: f32,
-    _pad1: f32,
-    _pad2: f32,
+    // The medium inside of a closed mesh, see `medium_at`: its extinction,
+    // per unit of length, or zero for none, and the mean cosine of the
+    // Henyey-Greenstein phase function.
+    density: f32,
+    anisotropy: f32,
+    // The single-scattering albedo of the medium, the part of the extinction
+    // that scatters.
+    scattering: vec3<f32>,
+    _pad: f32,
 }
 
 var<uniform> camera: CameraParams;
@@ -767,6 +774,9 @@ fn horizon_weight_grad(cosine: f32) -> f32 {
 // and for moving the hit with the geometry, see `scatter_hit_motion`.
 struct PathVertex {
     valid: bool,
+    // A point where the path scattered in a medium, which moves with the
+    // origin of its ray, see `scatter_hit_motion`.
+    in_medium: bool,
     instance: u32,
     position: vec3<f32>,
     // The normals as the BSDF and the horizon take them.
@@ -790,6 +800,20 @@ struct PathVertex {
     local_depth_row: vec3<f32>,
 }
 
+// A ray of a replayed path that went through a medium up to its hit, see
+// `sample_medium_boundaries`.
+struct MediumBoundary {
+    valid: bool,
+    // The hit, and the direction of the ray to it.
+    position: vec3<f32>,
+    direction: vec3<f32>,
+    // The derivative of the loss by what the path finds from there, as the
+    // adjoint times the throughput of the path up to it.
+    d_throughput: vec3<f32>,
+    // The material of the closed mesh, with the medium.
+    material: u32,
+}
+
 // What the first walk of a path learns about each of its vertices.
 struct PathRecord {
     // Radiance found at the vertex: its emission, the lights it connects to,
@@ -804,6 +828,8 @@ struct PathRecord {
     hits: array<PathVertex, PATH_LENGTH>,
     hit_count: u32,
     d_hits: array<vec3<f32>, PATH_LENGTH>,
+    // The rays of the replay through media, by the hits they end at.
+    boundaries: array<MediumBoundary, PATH_LENGTH>,
 }
 
 // Radiance arriving at each vertex of a recorded path through the direction
@@ -995,6 +1021,40 @@ fn sample_bsdf_turned(mat: Material, transmission: f32, eta: f32, normal: vec3<f
     return sample_surface(mat, transmission, eta, normal, view_dir, turned, rng);
 }
 
+// The Henyey-Greenstein phase function of the media stays this far from
+// the delta of a mean cosine of 1.
+const MAX_ANISOTROPY: f32 = 0.95;
+
+fn phase_anisotropy(params: MaterialParams) -> f32 {
+    return clamp(params.anisotropy, -MAX_ANISOTROPY, MAX_ANISOTROPY);
+}
+
+// A direction scattered from `dir` by the Henyey-Greenstein phase function
+// of mean cosine `g`, which is drawn exactly, so the phase function over
+// its density is 1.
+fn sample_phase(dir: vec3<f32>, g: f32, rng: ptr<function, RandomState>) -> vec3<f32> {
+    let r1 = random_gen(rng);
+    let r2 = random_gen(rng);
+    var cosine = 1.0 - 2.0 * r1;
+    if (abs(g) >= 1.0e-3) {
+        let q = (1.0 - g * g) / (1.0 - g + 2.0 * g * r1);
+        cosine = (1.0 + g * g - q * q) / (2.0 * g);
+    }
+    cosine = clamp(cosine, -1.0, 1.0);
+    let sine = sqrt(max(0.0, 1.0 - cosine * cosine));
+    let around = sample_circle_uniform(r2);
+    let frame = make_tangent_frame(dir);
+    return normalize(frame * vec3<f32>(sine * around, cosine));
+}
+
+// Derivative of the log of the Henyey-Greenstein phase function by `g`,
+// at the cosine between the directions, which is that of its value over
+// the density of the direction held fixed.
+fn phase_log_grad(g: f32, cosine: f32) -> f32 {
+    let denom = 1.0 + g * g - 2.0 * g * cosine;
+    return -2.0 * g / (1.0 - g * g) - 3.0 * (g - cosine) / denom;
+}
+
 // Walk one path and return its radiance.
 //
 // Without `adjoint`, the walk fills the `record`. With it, the walk is a
@@ -1030,6 +1090,9 @@ fn walk_path(
     (*record).length = 0u;
     if (replay) {
         (*record).hit_count = 0u;
+        for (var i = 0u; i < PATH_LENGTH; i += 1u) {
+            (*record).boundaries[i].valid = false;
+        }
     }
 
     for (var bounce = 0u; bounce <= max_bounces; bounce += 1u) {
@@ -1054,6 +1117,88 @@ fn walk_path(
         }
 
         var v = resolve_vertex(intersection);
+        // A ray that leaves a closed mesh through its surface went through
+        // the medium inside of it, if it has one: the distance to scatter
+        // at is drawn by the transmittance, so the transmittance over the
+        // density is the single-scattering albedo where it scatters, and 1
+        // where the ray goes through. Neither depends on the distance, but
+        // their densities do, which the derivatives by the medium take:
+        // `log(density * exp(-density * s))` by the density is
+        // `1 / density - s`, and `-t` where the ray goes through.
+        let medium = material_params[v.surface.entry_index];
+        // Derivative of the loss by the length of the ray to this hit, in
+        // a medium, which moves with the hit and its origin.
+        var d_segment = 0.0;
+        if (medium.density > 0.0 && dot(v.surface.flat_normal, direction) > 0.0) {
+            let index = v.surface.entry_index;
+            let s = -log(max(1.0 - random_gen(rng), 1.0e-30)) / medium.density;
+            if (s < intersection.t) {
+                if (bounce >= max_bounces) {
+                    if (!replay) {
+                        (*record).found[bounce] = vec3<f32>(0.0);
+                        (*record).weight[bounce] = vec3<f32>(0.0);
+                        (*record).length = bounce + 1u;
+                    }
+                    break;
+                }
+                let g = phase_anisotropy(medium);
+                let scattered = sample_phase(direction, g, rng);
+                let albedo = medium.scattering;
+                if (replay) {
+                    // The light that the scattered ray brings, by the
+                    // albedo, and by the densities of the distance and of
+                    // the direction.
+                    let d_albedo = adjoint * throughput * (*incident)[bounce];
+                    let d_light = dot(d_albedo, albedo);
+                    add_material_grad(index, 10u, d_light * (1.0 / medium.density - s));
+                    if (abs(medium.anisotropy) < MAX_ANISOTROPY) {
+                        add_material_grad(index, 11u, d_light * phase_log_grad(g, dot(direction, scattered)));
+                    }
+                    add_material_grad(index, 12u, d_albedo.x);
+                    add_material_grad(index, 13u, d_albedo.y);
+                    add_material_grad(index, 14u, d_albedo.z);
+                    if (parameters.geometry != 0u) {
+                        var pv: PathVertex;
+                        pv.in_medium = true;
+                        (*record).hits[bounce] = pv;
+                        (*record).d_hits[bounce] = vec3<f32>(0.0);
+                        (*record).hit_count = bounce + 1u;
+                    }
+                } else {
+                    (*record).found[bounce] = vec3<f32>(0.0);
+                    (*record).weight[bounce] = albedo;
+                    (*record).length = bounce + 1u;
+                }
+                throughput *= albedo;
+                position += s * direction;
+                direction = scattered;
+                t_min = 0.0;
+                // Nothing is drawn from the lights here, whose rays the
+                // surface of the medium stops, so the next hit takes all of
+                // the light that it finds.
+                bsdf_pdf = -1.0;
+                if (all(throughput <= vec3<f32>(0.0))) {
+                    break;
+                }
+                continue;
+            }
+            if (replay) {
+                // All that the path finds from the hit on.
+                let leaving = (*record).found[bounce] + (*record).weight[bounce] * (*incident)[bounce];
+                let d_through = dot(adjoint * throughput, leaving);
+                add_material_grad(index, 10u, -intersection.t * d_through);
+                d_segment = -medium.density * d_through;
+                if (parameters.geometry != 0u) {
+                    var boundary: MediumBoundary;
+                    boundary.valid = true;
+                    boundary.position = position + intersection.t * direction;
+                    boundary.direction = direction;
+                    boundary.d_throughput = adjoint * throughput;
+                    boundary.material = index;
+                    (*record).boundaries[bounce] = boundary;
+                }
+            }
+        }
         let view_dir = -direction;
         // A transmissive surface is a thin wall, seen the same from both
         // sides, so its normals face the ray.
@@ -1124,8 +1269,9 @@ fn walk_path(
             }
         }
         // Derivative of the loss by moving this vertex, see
-        // `scatter_hit_motion`.
-        var d_position = vec3<f32>(0.0);
+        // `scatter_hit_motion`, which starts with that of the length of the
+        // ray in a medium.
+        var d_position = d_segment * direction;
         // Points on the emitting triangles. Only their directions are drawn
         // from them: the light comes from what the ray that way hits, if it's
         // the triangle, which keeps the gradient in the same terms as for
@@ -1289,7 +1435,8 @@ fn walk_path(
             if (parameters.geometry != 0u) {
                 // Only a path from the camera, whose origin is the previous hit.
                 let ray_dir = select(start_dir, -view_dir, bounce > 0u);
-                let d_origin = scatter_hit_geometry_grad(intersection, ray_dir, v, grad.normal, grad.flat_normal);
+                let d_origin = scatter_hit_geometry_grad(intersection, ray_dir, v, grad.normal, grad.flat_normal)
+                    - d_segment * direction;
                 if (bounce == 0u) {
                     add_camera_grad(d_origin);
                 } else {
@@ -1467,6 +1614,7 @@ fn adjoint(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
             }
         }
+        sample_medium_boundaries(&record, &edge_rng);
         scatter_hit_motion(&record);
     }
 }
@@ -1484,6 +1632,7 @@ fn init_materials(@builtin(global_invocation_id) global_id: vec3<u32>) {
         entry.emissive_factor.xyz,
         entry.roughness,
         0.0, 0.0, 0.0, 0.0,
+        vec3<f32>(0.0), 0.0,
     );
 }
 
@@ -2795,6 +2944,41 @@ fn guide_edges(@builtin(local_invocation_index) local_index: u32) {
     }
 }
 
+// A ray through a medium also scatters the light that its length takes in:
+// the light up to a hit at `t` is `L(t) = ∫ σs exp(-σ s) Ls(s) ds + exp(-σ t)
+// Lhit` over `s < t`, so `dL/dt = exp(-σ t) (σs Ls(t) - σ Lhit)`, of which
+// the replay takes the second term, where the ray went through, and this
+// the first, by a walk from the hit, inside of the medium, in a direction
+// drawn by the phase function, as if it scattered there. It moves the hit,
+// and the origin of the ray the other way.
+fn sample_medium_boundaries(record: ptr<function, PathRecord>, rng: ptr<function, RandomState>) {
+    for (var k = 0u; k < (*record).hit_count; k += 1u) {
+        let boundary = (*record).boundaries[k];
+        // Scattering there takes a bounce, which the path may not have.
+        let budget = i32(parameters.max_bounces) - i32(k) - 1;
+        if (!boundary.valid || budget < 0) {
+            continue;
+        }
+        let medium = material_params[boundary.material];
+        let dir = sample_phase(boundary.direction, phase_anisotropy(medium), rng);
+        // Just inside, so that a direction out finds the surface.
+        let start = boundary.position - 1.0e-4 * boundary.direction;
+        var side_record: PathRecord;
+        var side_incident: array<vec3<f32>, PATH_LENGTH>;
+        let light = walk_path(start, 0.0, budget, dir, rng, &side_record, false, vec3<f32>(0.0), &side_incident);
+        if (!all(light == light)) {
+            continue;
+        }
+        let d_length = medium.density * dot(boundary.d_throughput, medium.scattering * light * radiance_scale(light));
+        (*record).d_hits[k] += d_length * boundary.direction;
+        if (k == 0u) {
+            add_camera_grad(-d_length * boundary.direction);
+        } else {
+            (*record).d_hits[k - 1u] -= d_length * boundary.direction;
+        }
+    }
+}
+
 // A hit slides along its ray as the origin of the ray moves, which is the
 // previous hit or the camera, and as the triangle moves: moving the origin
 // by `d` moves the hit by `d + dot(depth_row, d) * ray_dir`, and moving the
@@ -2807,6 +2991,15 @@ fn scatter_hit_motion(record: ptr<function, PathRecord>) {
         let pv = (*record).hits[i - 1u];
         let d_hit = (*record).d_hits[i - 1u] + d_next;
         d_next = vec3<f32>(0.0);
+        if (pv.in_medium) {
+            // It moves with its origin, along the same direction.
+            if (i == 1u) {
+                add_camera_grad(d_hit);
+            } else {
+                d_next = d_hit;
+            }
+            continue;
+        }
         if (!pv.valid || all(d_hit == vec3<f32>(0.0))) {
             continue;
         }

@@ -48,7 +48,19 @@ pub struct MaterialParams {
     /// through, refracted at its surface by a rough dielectric microfacet
     /// model, or zero for a thin wall. It starts at zero.
     pub ior: f32,
-    _pad: [f32; 2],
+    /// The extinction of a homogeneous medium inside of the closed mesh,
+    /// per unit of length, or zero for none: its rays scatter after a
+    /// distance drawn from it, by the phase function, or come out of the
+    /// mesh through its surface, of any of the BSDFs. It starts at zero.
+    pub density: f32,
+    /// The mean cosine of the Henyey-Greenstein phase function of the
+    /// medium, from 0 for isotropic up to forward scattering. It starts at
+    /// zero.
+    pub anisotropy: f32,
+    /// The single-scattering albedo of the medium, the part of its
+    /// extinction that scatters rather than absorbs. It starts at zero.
+    pub scattering: [f32; 3],
+    _pad: f32,
 }
 
 const MATERIAL_PARAM_COUNT: u32 = (mem::size_of::<MaterialParams>() / 4) as u32;
@@ -72,6 +84,9 @@ bitflags::bitflags! {
         const ROUGHNESS = 0x80;
         const TRANSMISSION = 0x100;
         const IOR = 0x200;
+        const DENSITY = 0x400;
+        const ANISOTROPY = 0x800;
+        const SCATTERING = 0x7000;
     }
 }
 
@@ -144,7 +159,8 @@ bitflags::bitflags! {
 const BOUNDED_MATERIAL_PARAMS: MaterialParamFlags = MaterialParamFlags::BASE_COLOR
     .union(MaterialParamFlags::METALNESS)
     .union(MaterialParamFlags::ROUGHNESS)
-    .union(MaterialParamFlags::TRANSMISSION);
+    .union(MaterialParamFlags::TRANSMISSION)
+    .union(MaterialParamFlags::SCATTERING);
 
 #[derive(Clone, Copy, Debug)]
 pub struct DiffConfig {
