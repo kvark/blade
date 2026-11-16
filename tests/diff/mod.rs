@@ -2910,6 +2910,7 @@ fn check_light_gradients_with(
                 })
                 .collect::<Vec<_>>();
             let count = batches.len() as f32;
+            println!("batches of {param:?}: {batches:?}");
             let mean = batches.iter().sum::<f32>() / count;
             let spread = batches.iter().map(|b| (b - mean).powi(2)).sum::<f32>() / (count - 1.0);
             (mean, (spread / count).sqrt(), last)
