@@ -1411,6 +1411,8 @@ fn diff_projective_edges_match_finite_differences() {
         &ALL_MOVES,
         [-0.08, 0.12, -0.06],
         true,
+        |_| {},
+        128,
     );
     check_single_object_with(
         SceneKind::Ball,
@@ -1418,6 +1420,29 @@ fn diff_projective_edges_match_finite_differences() {
         &[Move::Translation(0), Move::Translation(1), Move::Camera(2)],
         [0.0; 3],
         true,
+        |_| {},
+        128,
+    );
+}
+
+/// Moving the glass ball with the medium inside moves the lengths of the
+/// rays through the medium, which changes what they let through, and what
+/// they scatter in, along with the refractions and the outline.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_medium_translation_gradients_match_finite_differences() {
+    check_single_object_with(
+        SceneKind::Ball,
+        "diff-medium-ball",
+        &[Move::Translation(0), Move::Translation(1), Move::Translation(2)],
+        [0.0; 3],
+        false,
+        |scene| {
+            scene.config.max_bounces = 6;
+            let (density, anisotropy, scattering) = MEDIUM_TRUTH;
+            set_medium(scene, density, anisotropy, scattering);
+        },
+        1024,
     );
 }
 
@@ -1440,21 +1465,26 @@ enum Move {
 /// Check the gradient by moving the only object, starting off from where it
 /// was for the target.
 fn check_single_object(kind: SceneKind, cache_name: &str, moves: &[Move], rotation: [f32; 3]) {
-    check_single_object_with(kind, cache_name, moves, rotation, false);
+    check_single_object_with(kind, cache_name, moves, rotation, false, |_| {}, 128);
 }
 
+/// With the scene set up by `setup` first, and the central differences of
+/// images of `frames` each.
 fn check_single_object_with(
     kind: SceneKind,
     cache_name: &str,
     moves: &[Move],
     rotation: [f32; 3],
     projective: bool,
+    setup: fn(&mut DiffScene),
+    frames: u32,
 ) {
     let Some(mut scene) = DiffScene::new(cache_name, kind) else {
         return;
     };
     scene.config.edge_samples = 4;
     scene.config.projective_edges = projective;
+    setup(&mut scene);
     scene.capture_target();
     // Off along Z too, or the gradient by Z would be about zero.
     let start = DiffScene::single_offsets([0.3, -0.2, 0.6], rotation, [0.0; 3]);
@@ -1469,7 +1499,7 @@ fn check_single_object_with(
     let rotation_grad = scene.diff.rotation_grads()[0];
     let camera_grad = scene.diff.camera_offset_grad();
     const H: f32 = 0.05;
-    let frames = 2_000_000..2_000_128;
+    let frames = 2_000_000..2_000_000 + frames;
     let mut results = Vec::new();
     for &movement in moves {
         let (grad, axis) = match movement {
@@ -2706,6 +2736,177 @@ fn diff_recovers_index_of_refraction() {
         found[0].ior
     );
     assert!((found[0].ior - TRUTH).abs() < 0.05);
+    scene.destroy();
+}
+
+/// The parameters of the medium inside of the glass ball of
+/// `diff_recovers_index_of_refraction`, or the derivatives by them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum MediumParam {
+    Density,
+    Anisotropy,
+    Scattering(usize),
+}
+
+impl MediumParam {
+    fn of(self, params: &MaterialParams) -> f32 {
+        match self {
+            Self::Density => params.density,
+            Self::Anisotropy => params.anisotropy,
+            Self::Scattering(c) => params.scattering[c],
+        }
+    }
+
+    fn of_mut(self, params: &mut MaterialParams) -> &mut f32 {
+        match self {
+            Self::Density => &mut params.density,
+            Self::Anisotropy => &mut params.anisotropy,
+            Self::Scattering(c) => &mut params.scattering[c],
+        }
+    }
+}
+
+/// The glass ball filled with a medium of `density`, `anisotropy` and
+/// `scattering`, lit by the sky through its refractions, with enough
+/// bounces for a few scatterings inside.
+fn set_medium(scene: &mut DiffScene, density: f32, anisotropy: f32, scattering: [f32; 3]) {
+    let (mut params, _) = scene.read_materials();
+    params[0].transmission = 1.0;
+    params[0].ior = 1.33;
+    params[0].density = density;
+    params[0].anisotropy = anisotropy;
+    params[0].scattering = scattering;
+    scene.write_materials(&params);
+}
+
+const MEDIUM_TRUTH: (f32, f32, [f32; 3]) = (0.8, 0.4, [0.9, 0.7, 0.5]);
+const MEDIUM_START: (f32, f32, [f32; 3]) = (0.5, 0.2, [0.7, 0.7, 0.7]);
+
+/// The gradients by the medium inside of a glass ball, of the distances
+/// that its rays scatter at, the directions they scatter to, and the
+/// light that they keep, agree with central differences.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_medium_gradients_match_finite_differences() {
+    let Some(mut scene) = DiffScene::new("diff-medium", SceneKind::Ball) else {
+        return;
+    };
+    scene.config.max_bounces = 6;
+    let (density, anisotropy, scattering) = MEDIUM_TRUTH;
+    set_medium(&mut scene, density, anisotropy, scattering);
+    scene.capture_target();
+    let (density, anisotropy, scattering) = MEDIUM_START;
+    set_medium(&mut scene, density, anisotropy, scattering);
+    let (start, _) = scene.read_materials();
+
+    let params = [
+        (MediumParam::Density, 0.05),
+        (MediumParam::Anisotropy, 0.05),
+        (MediumParam::Scattering(0), 0.05),
+        (MediumParam::Scattering(2), 0.05),
+    ];
+    const ITERATIONS: u32 = 512;
+    const BATCH: u32 = 32;
+    let mut batches = vec![Vec::new(); params.len()];
+    for batch in 0..ITERATIONS / BATCH {
+        for iteration in 0..BATCH {
+            scene.backward(batch * BATCH + iteration, 8, 4);
+        }
+        let (_, grads) = scene.read_materials();
+        for (values, &(param, _)) in batches.iter_mut().zip(&params) {
+            values.push(param.of(&grads[0]) / BATCH as f32);
+        }
+        // Clears the gradients.
+        scene.diff.step(&mut scene.encoder, &StepConfig::default());
+    }
+    // The distances drawn depend on the density, so the images on both
+    // sides don't share their noise, which takes many frames.
+    let frames = 2_000_000..2_004_096;
+    let mut results = Vec::new();
+    for (values, &(param, h)) in batches.iter().zip(&params) {
+        let count = values.len() as f32;
+        let analytic = values.iter().sum::<f32>() / count;
+        let spread = values.iter().map(|v| (v - analytic).powi(2)).sum::<f32>() / (count - 1.0);
+        let error = (spread / count).sqrt();
+        let mut losses = [0.0; 2];
+        for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
+            let mut moved = start.clone();
+            *param.of_mut(&mut moved[0]) += sign * h;
+            scene.write_materials(&moved);
+            *loss = scene.unbiased_loss(frames.clone());
+        }
+        scene.write_materials(&start);
+        let numeric = (losses[0] - losses[1]) / (2.0 * h);
+        println!("d loss / d {param:?}: {analytic:e} ± {error:e}, central difference {numeric:e}");
+        results.push((param, analytic, numeric));
+    }
+    let largest = results.iter().map(|r| r.2.abs()).fold(0.0, f32::max);
+    for (param, analytic, numeric) in results {
+        assert!(
+            (analytic - numeric).abs() <= 0.2 * numeric.abs() + 0.05 * largest,
+            "d loss / d {param:?}: gradient {analytic:e} disagrees with {numeric:e}"
+        );
+    }
+    scene.destroy();
+}
+
+/// Optimizing the medium inside of the glass ball from the image of
+/// another finds its density, its anisotropy and its albedo.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_recovers_medium() {
+    let Some(mut scene) = DiffScene::new("diff-medium-recovery", SceneKind::Ball) else {
+        return;
+    };
+    scene.config.max_bounces = 6;
+    let (density, anisotropy, scattering) = MEDIUM_TRUTH;
+    set_medium(&mut scene, density, anisotropy, scattering);
+    scene.capture_target();
+    let (density, anisotropy, scattering) = MEDIUM_START;
+    set_medium(&mut scene, density, anisotropy, scattering);
+    let error = |params: &MaterialParams| {
+        let (density, anisotropy, scattering) = MEDIUM_TRUTH;
+        let albedo = (0..3)
+            .map(|c| (params.scattering[c] - scattering[c]).abs())
+            .fold(0.0, f32::max);
+        (
+            (params.density - density).abs(),
+            (params.anisotropy - anisotropy).abs(),
+            albedo,
+        )
+    };
+    let (start, _) = scene.read_materials();
+    let before = error(&start[0]);
+    let loss_before = scene.converged_loss(3_000_000..3_000_256);
+    for iteration in 0..200 {
+        scene.backward(iteration, 4, 4);
+        scene.diff.step(
+            &mut scene.encoder,
+            &StepConfig {
+                materials: Some((
+                    AdamConfig {
+                        learning_rate: 0.02 * 0.99f32.powi(iteration as i32),
+                        ..Default::default()
+                    },
+                    MaterialParamFlags::DENSITY
+                        | MaterialParamFlags::ANISOTROPY
+                        | MaterialParamFlags::SCATTERING,
+                )),
+                ..Default::default()
+            },
+        );
+        scene.submit();
+    }
+    let (found, _) = scene.read_materials();
+    let after = error(&found[0]);
+    let loss_after = scene.converged_loss(3_000_000..3_000_256);
+    println!(
+        "medium {:?} for {MEDIUM_TRUTH:?}: errors of the density, anisotropy and albedo {before:?} -> {after:?}, loss {loss_before:e} -> {loss_after:e}",
+        (found[0].density, found[0].anisotropy, found[0].scattering)
+    );
+    assert!(after.0 < 0.4 * before.0, "the density only went from {} to {}", before.0, after.0);
+    assert!(after.2 < 0.5 * before.2, "the albedo only went from {} to {}", before.2, after.2);
+    assert!(after.1 < before.1, "the anisotropy went from {} to {}", before.1, after.1);
     scene.destroy();
 }
 
