@@ -2893,7 +2893,8 @@ fn check_light_gradients_with(
         "{ITERATIONS} gradient iterations in {:.1} s",
         clock.elapsed().as_secs_f32()
     );
-    let zero = ([0.0; 4], DiffLight::point([0.0; 3], [0.0; 3]));
+    // No gradient yet, of any parameter, the direction among them.
+    let zero = ([0.0; 4], DiffLight::default());
 
     let frames = 2_000_000..2_002_048;
     let mut results = Vec::new();
