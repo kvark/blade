@@ -1336,14 +1336,18 @@ fn diff_recovers_translation() {
         "the sphere moved {} along Z",
         offset[2]
     );
-    // The other spheres stay about where they are, across the view.
+    // The other spheres stay about where they are, across the view. Adam
+    // takes steps of about the rate however small the gradient, so with
+    // none but the noise, they still wander by a part of the sum of the
+    // rates, which more samples don't bring down, and which differs from
+    // run to run with the order of the atomic sums.
     for (i, offset) in offsets.iter().enumerate() {
         println!("  sphere {i}: {offset:?}");
         if i != EDGE_SPHERE {
             let lateral = (offset[0] * offset[0] + offset[1] * offset[1]).sqrt();
-            assert!(lateral < 0.15, "sphere {i} wandered off to {offset:?}");
+            assert!(lateral < 0.25, "sphere {i} wandered off to {offset:?}");
             assert!(
-                offset[2].abs() < 0.4,
+                offset[2].abs() < 0.6,
                 "sphere {i} wandered off to {offset:?}"
             );
         }
