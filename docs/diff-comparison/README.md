@@ -88,6 +88,14 @@ much.
   (`diff_indirect_light_shadow_gradients_match_finite_differences`) and the
   other scenes of `tests/diff` only ran in blade.
 - Mitsuba's CUDA variants, for want of a GPU, and blade on a GPU.
+- Media: blade has homogeneous media inside of closed meshes
+  (`MaterialParams::density`, `anisotropy` and `scattering`), tested
+  against its own central differences
+  (`diff_medium_gradients_match_finite_differences`,
+  `diff_medium_translation_gradients_match_finite_differences`), but not
+  against Mitsuba's. Mitsuba also has heterogeneous media, in grids, and
+  draws the lights from inside of a medium, which blade doesn't: its
+  scattered rays only find the light through the surface of the mesh.
 - Mitsuba 3 has what blade doesn't: differentiation of any program of its
-  JIT, rather than adjoints written for each term, participating media,
-  spectral rendering and polarization.
+  JIT, rather than adjoints written for each term, spectral rendering and
+  polarization.
