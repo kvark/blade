@@ -93,7 +93,10 @@ much.
   against its own central differences
   (`diff_medium_gradients_match_finite_differences`,
   `diff_medium_translation_gradients_match_finite_differences`), but not
-  against Mitsuba's. Mitsuba also has heterogeneous media, in grids, and
+  against Mitsuba's. By the translation of the ball, the gradients are
+  within 9% of the central differences; without the light that the rays
+  scatter in at the surface of the medium as it moves, the gradient by
+  the depth of the ball is a third too large. Mitsuba also has heterogeneous media, in grids, and
   draws the lights from inside of a medium, which blade doesn't: its
   scattered rays only find the light through the surface of the mesh.
 - Mitsuba 3 has what blade doesn't: differentiation of any program of its
