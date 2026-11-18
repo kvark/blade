@@ -374,9 +374,10 @@ impl super::Context {
             let format = surface.swapchain.format;
             log::info!("Retaining current format: {:?}", format);
             let vk_color_space = match (format, config.color_space) {
-                (crate::TextureFormat::Bgra8Unorm, crate::ColorSpace::Srgb) => {
-                    vk::ColorSpaceKHR::SRGB_NONLINEAR
-                }
+                (
+                    crate::TextureFormat::Bgra8Unorm | crate::TextureFormat::Rgba8Unorm,
+                    crate::ColorSpace::Srgb,
+                ) => vk::ColorSpaceKHR::SRGB_NONLINEAR,
                 (crate::TextureFormat::Bgra8Unorm, crate::ColorSpace::Linear) => {
                     vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT
                 }
