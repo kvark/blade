@@ -41,13 +41,13 @@ pub trait ShaderDevice {
     fn destroy_render_pipeline(&self, pipeline: &mut Self::RenderPipeline);
     /// Return compiler-provided statistics for a compute pipeline.
     ///
-    /// Returns an empty list when capture support was not requested through
-    /// [`crate::ContextDesc::capture`] or the backend does not provide
-    /// statistics.
+    /// Returns `None` when capture was not requested through
+    /// [`crate::ContextDesc::capture`] or no report is available. Individual
+    /// metrics can be absent even when a report is available.
     fn get_pipeline_statistics(
         &self,
         pipeline: &Self::ComputePipeline,
-    ) -> Vec<super::PipelineExecutableInfo>;
+    ) -> Option<super::ComputePipelineStatistics>;
 }
 
 pub trait CommandDevice {

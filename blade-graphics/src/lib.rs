@@ -1161,25 +1161,46 @@ pub struct ComputePipelineDesc<'a> {
     pub full_subgroup_size: Option<u32>,
 }
 
-/// A single statistic reported for a pipeline executable.
-#[derive(Clone, Debug)]
-pub struct PipelineStatistic {
-    /// Name of the statistic (e.g. "numUsedVgprs", "spilledSgprs").
-    pub name: String,
-    /// Human-readable description.
-    pub description: String,
-    /// Numeric value. Integer statistics are converted to `f64` for a uniform,
-    /// cross-platform representation.
-    pub value: f64,
+/// Compile-time information about a compute pipeline, not runtime GPU counters.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ComputePipelineStatistics {
+    /// Pipeline-specific limit on invocations per workgroup, if reported.
+    /// This is not the configured workgroup size or an occupancy estimate.
+    pub max_workgroup_invocations: Option<u32>,
+    /// Statistics for the compiled executables, without aggregating variants.
+    pub executables: Vec<PipelineExecutableStatistics>,
 }
 
-/// Statistics for one executable stage within a pipeline.
-#[derive(Clone, Debug)]
-pub struct PipelineExecutableInfo {
-    /// Name of the executable (e.g. "Compute").
-    pub name: String,
-    /// Individual statistics.
-    pub statistics: Vec<PipelineStatistic>,
+/// Compile-time statistics for one executable in a compute pipeline.
+///
+/// `None` means a metric wasn't reported or Blade couldn't establish its
+/// semantics. `Some(0)` is a reported zero. Allocation and register counts
+/// are most useful when comparing shaders on the same device and driver.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PipelineExecutableStatistics {
+    /// Optional display label, not a stable identifier.
+    pub name: Option<String>,
+    /// Invocations per subgroup for this executable, not the device default.
+    pub subgroup_size: Option<u32>,
+    /// Statically allocated shared memory per workgroup, in bytes.
+    /// Includes any compiler-reported padding, but not dynamically bound memory.
+    pub static_workgroup_memory_bytes: Option<u64>,
+    /// Size of the compiled machine code in bytes.
+    pub code_size_bytes: Option<u64>,
+    /// Private scratch allocation per subgroup, in bytes. Not a spill count.
+    pub scratch_bytes_per_subgroup: Option<u64>,
+    /// General-purpose registers reported per invocation on NVIDIA hardware.
+    pub gprs_per_invocation: Option<u32>,
+    /// Scalar general-purpose register slots allocated per subgroup (AMD).
+    pub allocated_sgprs: Option<u32>,
+    /// Vector general-purpose register slots allocated per subgroup (AMD).
+    pub allocated_vgprs: Option<u32>,
+    /// Scalar registers spilled per subgroup (AMD), not spill instructions.
+    pub spilled_sgprs: Option<u32>,
+    /// Vector registers spilled per subgroup (AMD), not spill instructions.
+    pub spilled_vgprs: Option<u32>,
 }
 
 /// Primitive type the input mesh is composed of.

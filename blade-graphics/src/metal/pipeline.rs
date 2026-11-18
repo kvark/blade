@@ -455,30 +455,23 @@ impl crate::traits::ShaderDevice for super::Context {
     fn get_pipeline_statistics(
         &self,
         pipeline: &super::ComputePipeline,
-    ) -> Vec<crate::PipelineExecutableInfo> {
+    ) -> Option<crate::ComputePipelineStatistics> {
         if !self.info.pipeline_statistics {
-            return Vec::new();
+            return None;
         }
-        vec![crate::PipelineExecutableInfo {
-            name: pipeline.name.clone(),
-            statistics: vec![
-                crate::PipelineStatistic {
-                    name: "maxTotalThreadsPerThreadgroup".to_string(),
-                    description: "Maximum threads per threadgroup for this pipeline".to_string(),
-                    value: pipeline.raw.maxTotalThreadsPerThreadgroup() as f64,
-                },
-                crate::PipelineStatistic {
-                    name: "threadExecutionWidth".to_string(),
-                    description: "SIMD-group width".to_string(),
-                    value: pipeline.raw.threadExecutionWidth() as f64,
-                },
-                crate::PipelineStatistic {
-                    name: "staticThreadgroupMemoryLength".to_string(),
-                    description: "Statically allocated threadgroup memory in bytes".to_string(),
-                    value: pipeline.raw.staticThreadgroupMemoryLength() as f64,
-                },
-            ],
-        }]
+        Some(crate::ComputePipelineStatistics {
+            max_workgroup_invocations: pipeline.raw.maxTotalThreadsPerThreadgroup().try_into().ok(),
+            executables: vec![crate::PipelineExecutableStatistics {
+                name: (!pipeline.name.is_empty()).then(|| pipeline.name.clone()),
+                subgroup_size: pipeline.raw.threadExecutionWidth().try_into().ok(),
+                static_workgroup_memory_bytes: pipeline
+                    .raw
+                    .staticThreadgroupMemoryLength()
+                    .try_into()
+                    .ok(),
+                ..Default::default()
+            }],
+        })
     }
 
     fn destroy_compute_pipeline(&self, _pipeline: &mut super::ComputePipeline) {

@@ -32,6 +32,7 @@ Changelog for *Blade* project
 - graphics: `CommandEncoder::present_with_damage` tells the compositor which rectangles changed since the previous present, empty if none did: `VK_KHR_incremental_present` on Vulkan, `EGL_KHR/EXT_swap_buffers_with_damage` on GLES, ignored on Metal and WebGL
 - graphics: `CooperativeMatrix` lists `[M, N, K]` shapes in `f32_shapes`, `f16_f32_shapes`, and `bf16_f32_shapes` instead of square tile sizes, and is no longer `Copy`
 - graphics: `Capabilities` reports the default subgroup size and `max_compute_shared_memory_size`
+- graphics: `get_pipeline_statistics` now returns `Option<ComputePipelineStatistics>` instead of a list of named values; unavailable metrics are `None`
 - graphics: a pass-boundary GPU timestamp uses that barrier's source stage, so the sample is the completion that releases the next pass
 - graphics: `CommandEncoder::last_timing` returns `Timing` with borrowed pass names; wait on its sync point first
 - graphics: `Capabilities::timing` tells whether the device can timestamp passes at all

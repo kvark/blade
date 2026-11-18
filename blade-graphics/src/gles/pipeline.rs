@@ -405,8 +405,8 @@ impl crate::traits::ShaderDevice for super::Context {
     fn get_pipeline_statistics(
         &self,
         _pipeline: &super::ComputePipeline,
-    ) -> Vec<crate::PipelineExecutableInfo> {
-        Vec::new()
+    ) -> Option<crate::ComputePipelineStatistics> {
+        None
     }
 
     fn destroy_compute_pipeline(&self, pipeline: &mut super::ComputePipeline) {

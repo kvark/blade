@@ -132,6 +132,7 @@ struct AdapterCapabilities {
     api_version: u32,
     properties: vk::PhysicalDeviceProperties,
     device_information: crate::DeviceInformation,
+    driver_id: vk::DriverId,
     queue_family_index: u32,
     layered: bool,
     binding_array: bool,
@@ -430,6 +431,8 @@ fn inspect_adapter(
         desc.low_priority && supported_extensions.contains(&vk::KHR_GLOBAL_PRIORITY_NAME);
     let mut global_priority_query_features =
         vk::PhysicalDeviceGlobalPriorityQueryFeaturesKHR::default();
+    let mut pipeline_executable_features =
+        vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default();
     let mut features2_khr = vk::PhysicalDeviceFeatures2::default()
         .push_next(&mut inline_uniform_block_features)
         .push_next(&mut timeline_semaphore_features)
@@ -457,6 +460,9 @@ fn inspect_adapter(
     }
     if global_priority_extension {
         features2_khr = features2_khr.push_next(&mut global_priority_query_features);
+    }
+    if supported_extensions.contains(&vk::KHR_PIPELINE_EXECUTABLE_PROPERTIES_NAME) {
+        features2_khr = features2_khr.push_next(&mut pipeline_executable_features);
     }
     unsafe {
         instance
@@ -803,8 +809,7 @@ fn inspect_adapter(
     let shader_bfloat16 = shader_bfloat16 && cooperative_matrix.supports_bfloat16();
     let buffer_marker = supported_extensions.contains(&vk::AMD_BUFFER_MARKER_NAME);
     let shader_info = supported_extensions.contains(&vk::AMD_SHADER_INFO_NAME);
-    let pipeline_executable_properties =
-        supported_extensions.contains(&vk::KHR_PIPELINE_EXECUTABLE_PROPERTIES_NAME);
+    let pipeline_executable_properties = pipeline_executable_features.pipeline_executable_info != 0;
     let full_screen_exclusive = supported_extensions.contains(&vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
     let incremental_present = supported_extensions.contains(&vk::KHR_INCREMENTAL_PRESENT_NAME);
     let memory_budget = supported_extensions.contains(&vk::EXT_MEMORY_BUDGET_NAME);
@@ -828,6 +833,7 @@ fn inspect_adapter(
         api_version,
         properties,
         device_information,
+        driver_id: driver_properties.driver_id,
         queue_family_index,
         layered: portability_subset_properties.min_vertex_input_binding_stride_alignment != 0,
         binding_array,
@@ -1647,6 +1653,7 @@ impl super::Context {
             min_imported_host_pointer_alignment: capabilities.min_imported_host_pointer_alignment,
             core: device_core,
             device_information: capabilities.device_information,
+            driver_id: capabilities.driver_id,
             command_scope: if desc.capture {
                 Some(super::CommandScopeDevice {})
             } else {

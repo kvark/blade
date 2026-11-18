@@ -510,68 +510,43 @@ impl crate::traits::ShaderDevice for super::Context {
     fn get_pipeline_statistics(
         &self,
         pipeline: &super::ComputePipeline,
-    ) -> Vec<crate::PipelineExecutableInfo> {
-        let Some(ref ext) = self.device.pipeline_executable_properties else {
-            return Vec::new();
-        };
-
+    ) -> Option<crate::ComputePipelineStatistics> {
+        let ext = self.device.pipeline_executable_properties.as_ref()?;
         let pipeline_info = vk::PipelineInfoKHR::default().pipeline(pipeline.raw);
-        let executables = match unsafe { ext.get_pipeline_executable_properties(&pipeline_info) } {
-            Ok(e) => e,
-            Err(_) => return Vec::new(),
-        };
-
-        executables
+        let properties = unsafe { ext.get_pipeline_executable_properties(&pipeline_info) }.ok()?;
+        if properties.is_empty() {
+            return None;
+        }
+        let executables = properties
             .iter()
             .enumerate()
-            .map(|(i, exec)| {
-                let name = exec
-                    .name_as_c_str()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-
+            .map(|(i, props)| {
+                let mut executable = crate::PipelineExecutableStatistics {
+                    name: props
+                        .name_as_c_str()
+                        .ok()
+                        .filter(|name| !name.is_empty())
+                        .map(|name| name.to_string_lossy().into_owned()),
+                    subgroup_size: (props.subgroup_size != 0).then_some(props.subgroup_size),
+                    ..Default::default()
+                };
                 let exec_info = vk::PipelineExecutableInfoKHR::default()
                     .pipeline(pipeline.raw)
                     .executable_index(i as u32);
-
-                let statistics = unsafe { ext.get_pipeline_executable_statistics(&exec_info) }
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|stat| {
-                        let stat_name = stat
-                            .name_as_c_str()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-                        let stat_desc = stat
-                            .description_as_c_str()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-                        let value = unsafe {
-                            match stat.format {
-                                vk::PipelineExecutableStatisticFormatKHR::BOOL32 => {
-                                    if stat.value.b32 != 0 { 1.0 } else { 0.0 }
-                                }
-                                vk::PipelineExecutableStatisticFormatKHR::INT64 => {
-                                    stat.value.i64 as f64
-                                }
-                                vk::PipelineExecutableStatisticFormatKHR::UINT64 => {
-                                    stat.value.u64 as f64
-                                }
-                                vk::PipelineExecutableStatisticFormatKHR::FLOAT64 => stat.value.f64,
-                                _ => 0.0,
-                            }
-                        };
-                        crate::PipelineStatistic {
-                            name: stat_name,
-                            description: stat_desc,
-                            value,
-                        }
-                    })
-                    .collect();
-
-                crate::PipelineExecutableInfo { name, statistics }
+                if let Ok(statistics) =
+                    unsafe { ext.get_pipeline_executable_statistics(&exec_info) }
+                {
+                    for stat in &statistics {
+                        apply_executable_statistic(&mut executable, self.device.driver_id, stat);
+                    }
+                }
+                executable
             })
-            .collect()
+            .collect();
+        Some(crate::ComputePipelineStatistics {
+            max_workgroup_invocations: None,
+            executables,
+        })
     }
 
     fn destroy_compute_pipeline(&self, pipeline: &mut super::ComputePipeline) {
@@ -810,6 +785,164 @@ impl crate::traits::ShaderDevice for super::Context {
         unsafe {
             self.device.core.destroy_pipeline(pipeline.raw, None);
         }
+    }
+}
+
+fn apply_executable_statistic(
+    executable: &mut crate::PipelineExecutableStatistics,
+    driver: vk::DriverId,
+    stat: &vk::PipelineExecutableStatisticKHR<'_>,
+) {
+    use vk::{DriverId as Driver, PipelineExecutableStatisticFormatKHR as Format};
+
+    let Ok(name) = stat.name_as_c_str() else {
+        return;
+    };
+    // The reported format selects the initialized union member.
+    let value = match stat.format {
+        Format::UINT64 => unsafe { stat.value.u64 },
+        Format::INT64 => {
+            let Ok(value) = u64::try_from(unsafe { stat.value.i64 }) else {
+                return;
+            };
+            value
+        }
+        _ => return,
+    };
+    let count = || u32::try_from(value).ok();
+
+    // Vulkan names are display strings, not portable keys. Mesa's units are
+    // defined in src/util/shader_stats.xml and src/nouveau/vulkan/nvk_shader.c.
+    // NVIDIA's proprietary names are also reported in nvpro-samples/vk_gltf_renderer.
+    match (driver, name.to_bytes()) {
+        (Driver::MESA_RADV, b"SGPRs") => executable.allocated_sgprs = count(),
+        (Driver::MESA_RADV, b"VGPRs") => executable.allocated_vgprs = count(),
+        (Driver::MESA_RADV, b"Spilled SGPRs") => executable.spilled_sgprs = count(),
+        (Driver::MESA_RADV, b"Spilled VGPRs") => executable.spilled_vgprs = count(),
+        (Driver::MESA_RADV, b"Scratch size") => executable.scratch_bytes_per_subgroup = Some(value),
+        (Driver::MESA_NVK, b"Number of GPRs") | (Driver::NVIDIA_PROPRIETARY, b"Register Count") => {
+            executable.gprs_per_invocation = count();
+        }
+        (Driver::MESA_RADV, b"LDS size")
+        | (Driver::INTEL_OPEN_SOURCE_MESA, b"Workgroup Memory Size")
+        | (Driver::MESA_NVK, b"Shared size")
+        | (Driver::NVIDIA_PROPRIETARY, b"Shared Memory Size") => {
+            executable.static_workgroup_memory_bytes = Some(value);
+        }
+        (Driver::MESA_RADV | Driver::INTEL_OPEN_SOURCE_MESA | Driver::MESA_NVK, b"Code size") => {
+            executable.code_size_bytes = Some(value)
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_executable_statistic;
+    use crate::PipelineExecutableStatistics;
+    use ash::vk::{self, DriverId as Driver, PipelineExecutableStatisticFormatKHR as Format};
+    use std::ffi::CStr;
+
+    fn unsigned_stat(name: &CStr, value: u64) -> vk::PipelineExecutableStatisticKHR<'static> {
+        vk::PipelineExecutableStatisticKHR::default()
+            .name(name)
+            .unwrap()
+            .format(Format::UINT64)
+            .value(vk::PipelineExecutableStatisticValueKHR { u64: value })
+    }
+
+    fn statistics(
+        driver: Driver,
+        stats: impl IntoIterator<Item = vk::PipelineExecutableStatisticKHR<'static>>,
+    ) -> PipelineExecutableStatistics {
+        let mut executable = PipelineExecutableStatistics::default();
+        for stat in stats {
+            apply_executable_statistic(&mut executable, driver, &stat);
+        }
+        executable
+    }
+
+    #[test]
+    fn radv_statistics_keep_units_zeroes_and_integer_precision() {
+        let code_bytes = (1 << 53) + 1;
+        assert_eq!(
+            statistics(
+                Driver::MESA_RADV,
+                [
+                    unsigned_stat(c"SGPRs", 64),
+                    unsigned_stat(c"VGPRs", 32),
+                    unsigned_stat(c"Spilled SGPRs", 0),
+                    unsigned_stat(c"Spilled VGPRs", 2),
+                    unsigned_stat(c"Scratch size", 128),
+                    unsigned_stat(c"LDS size", 1024),
+                    unsigned_stat(c"Code size", code_bytes),
+                ],
+            ),
+            PipelineExecutableStatistics {
+                allocated_sgprs: Some(64),
+                allocated_vgprs: Some(32),
+                spilled_sgprs: Some(0),
+                spilled_vgprs: Some(2),
+                scratch_bytes_per_subgroup: Some(128),
+                static_workgroup_memory_bytes: Some(1024),
+                code_size_bytes: Some(code_bytes),
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn statistics_are_driver_specific() {
+        for (driver, name) in [
+            (Driver::INTEL_OPEN_SOURCE_MESA, c"Workgroup Memory Size"),
+            (Driver::MESA_NVK, c"Shared size"),
+            (Driver::NVIDIA_PROPRIETARY, c"Shared Memory Size"),
+        ] {
+            assert_eq!(
+                statistics(driver, [unsigned_stat(name, 16)]).static_workgroup_memory_bytes,
+                Some(16),
+            );
+        }
+        for (driver, name) in [
+            (Driver::MESA_NVK, c"Number of GPRs"),
+            (Driver::NVIDIA_PROPRIETARY, c"Register Count"),
+        ] {
+            assert_eq!(
+                statistics(driver, [unsigned_stat(name, 32)]).gprs_per_invocation,
+                Some(32),
+            );
+        }
+        // Turnip's identically named statistic is in dwords, not bytes.
+        let code_size = [unsigned_stat(c"Code size", 8)];
+        assert_eq!(
+            statistics(Driver::MESA_TURNIP, code_size).code_size_bytes,
+            None
+        );
+        assert_eq!(
+            statistics(Driver::MESA_NVK, code_size).code_size_bytes,
+            Some(8)
+        );
+        assert_eq!(
+            statistics(Driver::INTEL_OPEN_SOURCE_MESA, code_size).code_size_bytes,
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn statistics_ignore_unrepresentable_values() {
+        let stats = [
+            unsigned_stat(c"VGPRs", u64::from(u32::MAX) + 1),
+            unsigned_stat(c"Scratch size", 0)
+                .format(Format::INT64)
+                .value(vk::PipelineExecutableStatisticValueKHR { i64: -1 }),
+            unsigned_stat(c"LDS size", 0)
+                .format(Format::FLOAT64)
+                .value(vk::PipelineExecutableStatisticValueKHR { f64: 2.0 }),
+        ];
+        assert_eq!(
+            statistics(Driver::MESA_RADV, stats),
+            PipelineExecutableStatistics::default()
+        );
     }
 }
 

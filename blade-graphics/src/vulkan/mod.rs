@@ -136,6 +136,7 @@ struct Workarounds {
 struct Device {
     core: ash::Device,
     device_information: crate::DeviceInformation,
+    driver_id: vk::DriverId,
     swapchain: Option<khr::swapchain::Device>,
     debug_utils: ash::ext::debug_utils::Device,
     timeline_semaphore: khr::timeline_semaphore::Device,
