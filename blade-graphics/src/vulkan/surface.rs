@@ -374,9 +374,10 @@ impl super::Context {
             let format = surface.swapchain.format;
             log::info!("Retaining current format: {:?}", format);
             let vk_color_space = match (format, config.color_space) {
-                (crate::TextureFormat::Bgra8Unorm, crate::ColorSpace::Srgb) => {
-                    vk::ColorSpaceKHR::SRGB_NONLINEAR
-                }
+                (
+                    crate::TextureFormat::Bgra8Unorm | crate::TextureFormat::Rgba8Unorm,
+                    crate::ColorSpace::Srgb,
+                ) => vk::ColorSpaceKHR::SRGB_NONLINEAR,
                 (crate::TextureFormat::Bgra8Unorm, crate::ColorSpace::Linear) => {
                     vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT
                 }
@@ -420,13 +421,22 @@ impl super::Context {
                         )
                     }
                 }
-                crate::ColorSpace::Srgb => (
-                    crate::TextureFormat::Bgra8Unorm,
-                    vk::SurfaceFormatKHR {
+                crate::ColorSpace::Srgb => {
+                    let bgra = vk::SurfaceFormatKHR {
                         format: vk::Format::B8G8R8A8_UNORM,
                         color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
-                    },
-                ),
+                    };
+                    let rgba = vk::SurfaceFormatKHR {
+                        format: vk::Format::R8G8B8A8_UNORM,
+                        color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                    };
+                    // Android's surfaces are RGBA: most offer no BGRA format.
+                    if !supported_formats.contains(&bgra) && supported_formats.contains(&rgba) {
+                        (crate::TextureFormat::Rgba8Unorm, rgba)
+                    } else {
+                        (crate::TextureFormat::Bgra8Unorm, bgra)
+                    }
+                }
             }
         };
         if !supported_formats.is_empty() && !supported_formats.contains(&surface_format) {
