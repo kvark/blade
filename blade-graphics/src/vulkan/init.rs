@@ -298,6 +298,12 @@ fn is_presentation_broken(
     }
 }
 
+fn warn_rejected(instance: &super::Instance, phd: vk::PhysicalDevice, reason: &str) {
+    let properties = unsafe { instance.core.get_physical_device_properties(phd) };
+    let name = unsafe { ffi::CStr::from_ptr(properties.device_name.as_ptr()) };
+    log::warn!("Rejected adapter {:?}: {}", name, reason);
+}
+
 fn inspect_adapter(
     phd: vk::PhysicalDevice,
     instance: &super::Instance,
@@ -1196,7 +1202,10 @@ impl super::Context {
                 &gpu_vendors,
                 display_server,
             )
-            .map_err(|_| NotSupportedError::NoSupportedDeviceFound)?;
+            .map_err(|reason| {
+                warn_rejected(&inner.instance, physical_device, &reason);
+                NotSupportedError::NoSupportedDeviceFound
+            })?;
             (physical_device, capabilities)
         } else {
             unsafe { inner.instance.core.enumerate_physical_devices() }
@@ -1211,6 +1220,7 @@ impl super::Context {
                         &gpu_vendors,
                         display_server,
                     )
+                    .map_err(|reason| warn_rejected(&inner.instance, phd, &reason))
                     .ok()
                     .map(|caps| (phd, caps))
                 })
