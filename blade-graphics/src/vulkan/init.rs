@@ -159,6 +159,7 @@ struct AdapterCapabilities {
     preserve_f16_denorms: bool,
     shader_bfloat16: bool,
     shader_integer_dot_product: bool,
+    shader_float32_atomic: bool,
     subgroup_size: u32,
     full_subgroups: Option<crate::FullSubgroups>,
     cooperative_matrix: crate::CooperativeMatrix,
@@ -206,6 +207,7 @@ impl AdapterCapabilities {
             shader_float16: self.shader_float16,
             shader_bfloat16: self.shader_bfloat16,
             shader_integer_dot_product: self.shader_integer_dot_product,
+            shader_float32_atomic: self.shader_float32_atomic,
             timing: self.timing,
             subgroup_size: self.subgroup_size,
             full_subgroups: self.full_subgroups,
@@ -425,6 +427,8 @@ fn inspect_adapter(
     let mut storage_16bit_features = vk::PhysicalDevice16BitStorageFeatures::default();
     let mut integer_dot_product_features =
         vk::PhysicalDeviceShaderIntegerDotProductFeaturesKHR::default();
+    let atomic_float_extension = supported_extensions.contains(&vk::EXT_SHADER_ATOMIC_FLOAT_NAME);
+    let mut atomic_float_features = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default();
     let mut unified_image_layouts_features =
         unified_image_layouts::PhysicalDeviceFeatures::default();
     let global_priority_extension =
@@ -464,6 +468,9 @@ fn inspect_adapter(
     if supported_extensions.contains(&vk::KHR_PIPELINE_EXECUTABLE_PROPERTIES_NAME) {
         features2_khr = features2_khr.push_next(&mut pipeline_executable_features);
     }
+    if atomic_float_extension {
+        features2_khr = features2_khr.push_next(&mut atomic_float_features);
+    }
     unsafe {
         instance
             .get_physical_device_properties2
@@ -471,6 +478,11 @@ fn inspect_adapter(
     };
 
     let dual_source_blending = features2_khr.features.dual_src_blend != 0;
+    // Naga's `SHADER_FLOAT32_ATOMIC` admits add, subtract and exchange; exchange,
+    // loads and stores need `shaderBufferFloat32Atomics`.
+    let shader_float32_atomic = atomic_float_extension
+        && atomic_float_features.shader_buffer_float32_atomics != 0
+        && atomic_float_features.shader_buffer_float32_atomic_add != 0;
     let full_subgroups = (subgroup_control_features.subgroup_size_control == vk::TRUE
         && subgroup_control_features.compute_full_subgroups == vk::TRUE
         && subgroup_control_properties
@@ -871,6 +883,7 @@ fn inspect_adapter(
         preserve_f16_denorms,
         shader_bfloat16,
         shader_integer_dot_product,
+        shader_float32_atomic,
         subgroup_size: subgroup_properties.subgroup_size,
         full_subgroups,
         cooperative_matrix,
@@ -1327,6 +1340,9 @@ impl super::Context {
             if capabilities.memory_budget {
                 device_extensions.push(vk::EXT_MEMORY_BUDGET_NAME);
             }
+            if capabilities.shader_float32_atomic {
+                device_extensions.push(vk::EXT_SHADER_ATOMIC_FLOAT_NAME);
+            }
             if capabilities.full_subgroups.is_some()
                 && capabilities.api_version < vk::API_VERSION_1_3
             {
@@ -1449,6 +1465,16 @@ impl super::Context {
                     ..Default::default()
                 };
                 device_create_info = device_create_info.push_next(&mut storage_16bit);
+            }
+
+            let mut ext_atomic_float;
+            if capabilities.shader_float32_atomic {
+                ext_atomic_float = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT {
+                    shader_buffer_float32_atomics: vk::TRUE,
+                    shader_buffer_float32_atomic_add: vk::TRUE,
+                    ..Default::default()
+                };
+                device_create_info = device_create_info.push_next(&mut ext_atomic_float);
             }
 
             let mut khr_integer_dot_product;
@@ -1875,6 +1901,7 @@ impl super::Context {
             shader_float16: capabilities.shader_float16,
             shader_bfloat16: capabilities.shader_bfloat16,
             shader_integer_dot_product: capabilities.shader_integer_dot_product,
+            shader_float32_atomic: capabilities.shader_float32_atomic,
             cooperative_matrix: capabilities.cooperative_matrix,
             vulkan_memory_model: capabilities.vulkan_memory_model,
             binding_array: capabilities.binding_array,
@@ -1916,6 +1943,7 @@ impl super::Context {
             shader_float16: self.shader_float16,
             shader_bfloat16: self.shader_bfloat16,
             shader_integer_dot_product: self.shader_integer_dot_product,
+            shader_float32_atomic: self.shader_float32_atomic,
             timing: self.timing_supported,
             cooperative_matrix: self.cooperative_matrix.clone(),
         }

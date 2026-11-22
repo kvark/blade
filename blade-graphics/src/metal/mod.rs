@@ -702,6 +702,7 @@ impl Context {
             shader_bfloat16: bfloat16,
             // MSL provides `dot4U8Packed`-equivalent math via packed char vectors.
             shader_integer_dot_product: true,
+            shader_float32_atomic: false,
             timing: find_timestamp_counter_set(device).is_some(),
             cooperative_matrix: if device.supportsFamily(metal::MTLGPUFamily::Apple7)
                 || device.supportsFamily(metal::MTLGPUFamily::Mac2)

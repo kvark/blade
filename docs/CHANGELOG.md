@@ -2,6 +2,7 @@ Changelog for *Blade* project
 
 ## (TBD)
 
+- graphics: `Capabilities::shader_float32_atomic` reports `atomic<f32>` add, subtract and exchange in storage buffers; Vulkan enables `VK_EXT_shader_atomic_float` when the device has both its buffer atomics and buffer atomic add, and shader validation follows the capability
 - graphics: `ComputePipelineDesc::full_subgroup_size` requires full compute subgroups of a given width; check `Capabilities::full_subgroups` first and pass `None` for the default. Vulkan uses subgroup size control; Metal supports width 32 on Apple GPUs and checks the compiled pipeline's SIMD-group width
 - render: retain SVGF history on frozen frames; vehicle diagnostic captures require `BLADE_CAPTURE_VEHICLE=1` even when running ignored tests
 - graphics: ray queries require macOS 13+ / iOS 16+ on Metal; compute limits report direct sampled-texture slots, and renderer resource tables account for Vulkan image descriptors

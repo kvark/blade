@@ -48,6 +48,10 @@ fn validation_capabilities(device_caps: &super::Capabilities) -> naga::valid::Ca
         device_caps.shader_bfloat16,
     );
     caps.set(
+        naga::valid::Capabilities::SHADER_FLOAT32_ATOMIC,
+        device_caps.shader_float32_atomic,
+    );
+    caps.set(
         naga::valid::Capabilities::COOPERATIVE_MATRIX,
         device_caps.cooperative_matrix.is_supported(),
     );

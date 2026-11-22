@@ -417,6 +417,8 @@ pub struct Capabilities {
     /// Support for integer dot product instructions in shaders,
     /// such as `dot4U8Packed`.
     pub shader_integer_dot_product: bool,
+    /// Atomic add on `f32` in storage buffers (`atomic<f32>`).
+    pub shader_float32_atomic: bool,
     /// Cooperative matrix support.
     pub cooperative_matrix: CooperativeMatrix,
     /// Support for timestamping passes on the GPU.
