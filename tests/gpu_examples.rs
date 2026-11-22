@@ -699,6 +699,89 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     context.destroy_buffer(input);
 }
 
+#[test]
+#[ignore = "requires a working GPU context with f32 atomics"]
+fn float32_atomic_gpu_test() {
+    const SLOTS: usize = 16;
+    const INVOCATIONS: u32 = 4096;
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    if !context.capabilities().shader_float32_atomic {
+        println!("Skipping: shader f32 atomics are not supported");
+        return;
+    }
+
+    let input = context.create_buffer(gpu::BufferDesc {
+        name: "float32-atomic-input",
+        size: 16,
+        memory: gpu::Memory::Shared,
+    });
+    let output = context.create_buffer(gpu::BufferDesc {
+        name: "float32-atomic-output",
+        size: (SLOTS * 4) as u64,
+        memory: gpu::Memory::Shared,
+    });
+    unsafe {
+        slice::from_raw_parts_mut(input.data() as *mut f32, 4)
+            .copy_from_slice(&[0.5, 0.25, 1.0, 2.0]);
+        slice::from_raw_parts_mut(output.data() as *mut f32, SLOTS).fill(0.0);
+    }
+    context.sync_buffer(input.into(), input.size(), gpu::BufferTarget::Data);
+    context.sync_buffer(output.into(), output.size(), gpu::BufferTarget::Data);
+
+    let shader = context.create_shader(gpu::ShaderDesc {
+        source: r#"
+var<storage, read> input: array<f32>;
+var<storage, read_write> output: array<atomic<f32>>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    atomicAdd(&output[id.x % 16u], input[id.x % 4u]);
+}
+"#,
+        naga_module: None,
+    });
+    let global_layout = DispatchGlobals::layout();
+    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        name: "float32-atomic-test",
+        data_layouts: &[&global_layout],
+        compute: shader.at("main"),
+        full_subgroup_size: None,
+    });
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "float32-atomic-test",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    encoder.start();
+    if let mut compute = encoder.compute("float32-atomic")
+        && let mut pass = compute.with(&pipeline)
+    {
+        pass.bind(
+            0,
+            &DispatchGlobals {
+                input: input.into(),
+                output: output.into(),
+            },
+        );
+        pass.dispatch([INVOCATIONS / 64, 1, 1]);
+    }
+    let sync_point = context.submit(&mut encoder);
+    assert!(context.wait_for(&sync_point, 2000).unwrap());
+
+    // Each slot takes 256 adds of one input value; every partial sum is exact in f32.
+    let adds = (INVOCATIONS as usize / SLOTS) as f32;
+    let expected: Vec<f32> = (0..SLOTS)
+        .map(|slot| adds * [0.5, 0.25, 1.0, 2.0][slot % 4])
+        .collect();
+    let actual = unsafe { slice::from_raw_parts(output.data() as *const f32, SLOTS) };
+    assert_eq!(actual, expected.as_slice());
+
+    context.destroy_command_encoder(&mut encoder);
+    context.destroy_compute_pipeline(&mut pipeline);
+    context.destroy_buffer(output);
+    context.destroy_buffer(input);
+}
+
 #[cfg(not(gles))]
 #[test]
 #[ignore = "requires a working GPU context"]
