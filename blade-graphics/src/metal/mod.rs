@@ -657,6 +657,13 @@ impl Context {
         use metal::MTLDevice as _;
         let bfloat16 = objc2::available!(macos = 14.0, ios = 17.0)
             && device.supportsFamily(metal::MTLGPUFamily::Apple9);
+        // `atomic_float` in device memory needs MSL 3.0, which `Context::init` selects
+        // from macOS 14 / iOS 17 on, and an Apple7, Mac2 or Metal3 GPU.
+        // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=4
+        let float32_atomic = objc2::available!(macos = 14.0, ios = 17.0)
+            && (device.supportsFamily(metal::MTLGPUFamily::Apple7)
+                || device.supportsFamily(metal::MTLGPUFamily::Mac2)
+                || device.supportsFamily(metal::MTLGPUFamily::Metal3));
         crate::Capabilities {
             // Metal has 31 buffer argument slots. Blade reserves one for its
             // buffer-size table; plain-data bindings consume slots as well.
@@ -702,7 +709,7 @@ impl Context {
             shader_bfloat16: bfloat16,
             // MSL provides `dot4U8Packed`-equivalent math via packed char vectors.
             shader_integer_dot_product: true,
-            shader_float32_atomic: false,
+            shader_float32_atomic: float32_atomic,
             timing: find_timestamp_counter_set(device).is_some(),
             cooperative_matrix: if device.supportsFamily(metal::MTLGPUFamily::Apple7)
                 || device.supportsFamily(metal::MTLGPUFamily::Mac2)
