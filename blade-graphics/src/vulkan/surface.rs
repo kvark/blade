@@ -1054,7 +1054,7 @@ fn select_xr_swapchain_format(
     .expect("No compatible XR swapchain format available")
 }
 
-fn pose_from_xr(pose: xr::Posef) -> super::XrPose {
+pub(super) fn pose_from_xr(pose: xr::Posef) -> super::XrPose {
     super::XrPose {
         orientation: [
             pose.orientation.x,

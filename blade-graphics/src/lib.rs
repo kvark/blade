@@ -689,6 +689,7 @@ pub enum TextureFormat {
     Rg32Uint,
     Rgba32Uint,
     // depth and stencil
+    Depth16Unorm,
     Depth32Float,
     Depth32FloatStencil8Uint,
     Stencil8Uint,

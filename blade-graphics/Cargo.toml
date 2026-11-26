@@ -108,6 +108,8 @@ gpu-alloc-ash = "0.7"
 naga = { workspace = true, features = ["spv-out"] }
 slab = { workspace = true }
 openxr = { workspace = true }
+# The timespec of `XR_KHR_convert_timespec_time`.
+libc = "0.2"
 
 [target.'cfg(any(gles, target_arch = "wasm32"))'.dependencies]
 glow = "0.17"
