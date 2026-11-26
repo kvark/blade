@@ -10,7 +10,7 @@ mod bunnymark_example;
 #[cfg(not(gles))]
 mod denoiser;
 #[cfg(not(gles))]
-mod diff;
+mod pbr_harness;
 mod pbr_scene;
 #[cfg(not(gles))]
 #[path = "../examples/ray-query/example.rs"]
@@ -19,6 +19,8 @@ mod snapshot;
 
 /// Directory with the renderer shaders, needed by the asset hub.
 const SHADER_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/blade-render/code");
+
+use pbr_harness::PbrHarness;
 
 // --- Sky snapshot test structs ---
 
@@ -1859,67 +1861,6 @@ const CANONICAL_FRAMES: usize = 32;
 /// as a mean absolute difference of the 8-bit channels.
 #[cfg(not(gles))]
 const CANONICAL_MAX_DIFFERENCE: f64 = 12.0;
-
-struct PbrHarness {
-    context: std::sync::Arc<gpu::Context>,
-    choir: std::sync::Arc<choir::Choir>,
-    workers: Vec<choir::WorkerHandle>,
-    asset_hub: blade_render::AssetHub,
-    shaders: blade_render::Shaders,
-}
-
-impl PbrHarness {
-    /// Bring up the asset hub and cook the renderer shaders.
-    fn new(context: gpu::Context, cache_name: &str, ray_tracing: bool) -> Self {
-        let context = std::sync::Arc::new(context);
-        let choir = choir::Choir::new();
-        #[cfg(not(any(gles, target_arch = "wasm32")))]
-        let workers = (0..2)
-            .map(|i| choir.add_worker(&format!("{cache_name}-{i}")))
-            .collect::<Vec<_>>();
-        #[cfg(any(gles, target_arch = "wasm32"))]
-        let workers = Vec::new();
-        let cache_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("test-assets")
-            .join(cache_name);
-        let asset_hub = blade_render::AssetHub::new(&cache_path, &choir, &context);
-        let (shaders, shader_task) =
-            blade_render::Shaders::load(SHADER_DIR.as_ref(), &asset_hub, ray_tracing);
-        if workers.is_empty() {
-            shader_task.join_active();
-        } else {
-            shader_task.join();
-        }
-        Self {
-            context,
-            choir,
-            workers,
-            asset_hub,
-            shaders,
-        }
-    }
-
-    fn create_grid_model(
-        &self,
-        roughness_range: [f32; 2],
-    ) -> blade_asset::Handle<blade_render::Model> {
-        let geometries = pbr_scene::material_grid(roughness_range);
-        let model = self
-            .asset_hub
-            .models
-            .baker
-            .create_model("pbr-material-grid", geometries);
-        self.asset_hub.models.insert(model)
-    }
-
-    fn destroy(mut self) {
-        self.asset_hub.destroy();
-        // let the workers finish before the choir goes away
-        self.workers.clear();
-        drop(self.choir);
-    }
-}
 
 /// Rasterize a grid of spheres covering the metallic-roughness space,
 /// plus a row of emissive materials.

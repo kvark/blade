@@ -186,6 +186,14 @@ jobs:
         env:
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
 
+      # Two quick tests of the differentiable tracer, whose own target takes
+      # about an hour and a half on Lavapipe in all.
+      - name: Run differentiable tracer smoke tests (Linux)
+        if: matrix.name == 'Linux'
+        run: cargo test --test diff_tracer -- --ignored --nocapture --test-threads=1 diff_material_gradients diff_recovers_base_colors
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
+
       - name: Run GPU integration tests
         if: matrix.name != 'Linux'
         run: cargo test --test gpu_examples -- --ignored --nocapture --test-threads=1
