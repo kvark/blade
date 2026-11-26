@@ -283,6 +283,10 @@ impl SdfGrid {
                             }
                         }
                     }
+                    // A grid of one cell has no neighbors.
+                    if count == 0.0 {
+                        continue;
+                    }
                     let index = self.index([x, y, z]);
                     values[index] += rate * (sum / count - self.values[index]);
                 }

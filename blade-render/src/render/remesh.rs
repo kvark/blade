@@ -214,6 +214,11 @@ impl Mesh {
                 if topology.boundary[a as usize] || topology.boundary[b as usize] {
                     continue;
                 }
+                // Only an edge of two triangles, which a mesh that isn't a
+                // manifold may not have.
+                if topology.edge_faces[&(a, b)].len() != 2 {
+                    continue;
+                }
                 // The link condition: the neighbors that the ends share are
                 // exactly the two opposite corners.
                 let na = &topology.neighbors[a as usize];

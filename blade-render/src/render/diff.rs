@@ -1053,8 +1053,6 @@ pub struct DiffTracer {
     instance_transforms: blade_graphics::Buffer,
     instance_count: u32,
     triangle_count: u32,
-    /// Uploaded at creation, and kept until destruction.
-    staging: Vec<blade_graphics::Buffer>,
     image_size: blade_graphics::Extent,
     image: blade_graphics::Buffer,
     target: blade_graphics::Buffer,
@@ -1076,7 +1074,8 @@ const LOSS_STRIDE: u64 = 256;
 
 impl DiffTracer {
     /// Start from the scene of `ray_tracer`, which has to be built already,
-    /// possibly earlier in the same `encoder`.
+    /// possibly earlier in the same `encoder`. The staging buffers go to
+    /// `temp`.
     ///
     /// Requires [`blade_graphics::Capabilities::shader_float32_atomic`].
     pub fn new(
@@ -1086,6 +1085,7 @@ impl DiffTracer {
         asset_hub: &crate::AssetHub,
         ray_tracer: &super::RayTracer,
         desc: &DiffTracerDesc,
+        temp: &mut crate::FrameResources,
     ) -> Self {
         let shader_man = &asset_hub.shaders;
         assert!(
@@ -1104,7 +1104,7 @@ impl DiffTracer {
         sh_optimize.check_struct_size::<LossParams>();
         sh_optimize.check_struct_size::<AdamParams>();
         let pipelines = DiffPipelines::new(gpu, sh_trace, sh_optimize);
-        Self::with_pipelines(pipelines, encoder, gpu, asset_hub, ray_tracer, desc)
+        Self::with_pipelines(pipelines, encoder, gpu, asset_hub, ray_tracer, desc, temp)
     }
 
     /// Start again from the scene of `ray_tracer`, which can have other
@@ -1113,7 +1113,8 @@ impl DiffTracer {
     /// and as many, and everything else starts over, including the
     /// parameters and the moments of the optimizer.
     ///
-    /// The work submitted with this tracer has to be done.
+    /// The work submitted with this tracer has to be done. The staging
+    /// buffers go to `temp`.
     pub fn rebuild(
         &mut self,
         encoder: &mut blade_graphics::CommandEncoder,
@@ -1121,12 +1122,14 @@ impl DiffTracer {
         asset_hub: &crate::AssetHub,
         ray_tracer: &super::RayTracer,
         desc: &DiffTracerDesc,
+        temp: &mut crate::FrameResources,
     ) {
         let target = self.target;
         let layout = (self.image_size, self.view_count);
         self.destroy_resources(gpu, false);
         let pipelines = self.pipelines.take().unwrap();
-        let mut this = Self::with_pipelines(pipelines, encoder, gpu, asset_hub, ray_tracer, desc);
+        let mut this =
+            Self::with_pipelines(pipelines, encoder, gpu, asset_hub, ray_tracer, desc, temp);
         // The lights stay, as they aren't of the scene.
         mem::swap(&mut this.lights, &mut self.lights);
         self.lights.destroy(gpu);
@@ -1150,6 +1153,7 @@ impl DiffTracer {
         asset_hub: &crate::AssetHub,
         ray_tracer: &super::RayTracer,
         desc: &DiffTracerDesc,
+        temp: &mut crate::FrameResources,
     ) -> Self {
         let material_count =
             (ray_tracer.hit_buffer.size() as usize / mem::size_of::<super::HitEntry>()) as u32;
@@ -1493,7 +1497,6 @@ impl DiffTracer {
             instance_transforms,
             instance_count,
             triangle_count,
-            staging: vec![texture_regions_staging, edge_staging, transform_staging],
             image_size,
             image: image_buffer("diff image"),
             target: image_buffer("diff target"),
@@ -1647,6 +1650,9 @@ impl DiffTracer {
             true,
             0.0,
         );
+        // The copies from them are recorded, and done with the frame.
+        temp.buffers
+            .extend([texture_regions_staging, edge_staging, transform_staging]);
         this
     }
 
@@ -1671,15 +1677,17 @@ impl DiffTracer {
         self.control
             .geometry_generation
             .set(self.control.geometry_generation.get().wrapping_add(1));
-        if !self.geometry {
-            return;
-        }
-        assert_eq!(
-            ray_tracer.instance_transforms.len(),
-            self.instance_count as usize
-        );
+        // The transforms place the emitters too, so they follow the scene
+        // even without the gradients of the geometry.
         let transforms = instance_transform_data(ray_tracer);
         let bytes = (transforms.len() * mem::size_of::<[f32; 16]>()) as u64;
+        assert!(
+            bytes.max(16) == self.instance_transforms.size(),
+            "the scene has other objects than the tracer, which `rebuild` takes"
+        );
+        if bytes == 0 {
+            return;
+        }
         let staging = gpu.create_buffer(blade_graphics::BufferDesc {
             name: "diff instance transforms staging",
             size: bytes,
@@ -1693,6 +1701,9 @@ impl DiffTracer {
             .transfer("diff-instance-transforms")
             .copy_buffer_to_buffer(staging.into(), self.instance_transforms.into(), bytes);
         temp.buffers.push(staging);
+        if !self.geometry {
+            return;
+        }
         // The edges are told apart by their positions, which the vertices
         // move, so they are counted again for where they are now.
         if !self.vertex_params.models.is_empty() && self.triangle_count != 0 {
@@ -2509,10 +2520,16 @@ impl DiffTracer {
             };
             // Rendered anew, not accumulated.
             previous_data.parameters.accumulated_frames = 0;
-            let mut pass = encoder.compute("diff-primal-previous");
-            let mut pc = pass.with(&self.pipelines.as_ref().unwrap().primal);
-            pc.bind(0, &previous_data);
-            pc.dispatch(dispatch);
+            // With the emitters of the previous materials, which a step may
+            // have turned off or on, and then those of these again.
+            self.collect_emitters(encoder, &previous_data);
+            {
+                let mut pass = encoder.compute("diff-primal-previous");
+                let mut pc = pass.with(&self.pipelines.as_ref().unwrap().primal);
+                pc.bind(0, &previous_data);
+                pc.dispatch(dispatch);
+            }
+            self.collect_emitters(encoder, data);
         }
         let pixel_count = self.image_size.width * self.image_size.height;
         {
@@ -2819,9 +2836,6 @@ impl DiffTracer {
         self.camera_position.destroy(gpu);
         gpu.destroy_buffer(self.edge_entries);
         gpu.destroy_buffer(self.instance_transforms);
-        for buffer in self.staging.drain(..) {
-            gpu.destroy_buffer(buffer);
-        }
         self.materials.destroy(gpu);
         self.environment.destroy(gpu);
         self.textures.destroy(gpu);

@@ -154,6 +154,15 @@ impl DiffScene {
     }
 
     fn with_views(cache_name: &str, kind: SceneKind, views: u32) -> Option<Self> {
+        Self::build(cache_name, kind, views, kind.moves())
+    }
+
+    /// Without the gradients of the geometry, even if the scene moves.
+    fn without_geometry(cache_name: &str, kind: SceneKind) -> Option<Self> {
+        Self::build(cache_name, kind, 1, false)
+    }
+
+    fn build(cache_name: &str, kind: SceneKind, views: u32, geometry: bool) -> Option<Self> {
         let textured = matches!(kind, SceneKind::BaseColorTexture | SceneKind::NormalMap);
         if cfg!(target_os = "macos") && std::env::var_os("CI").is_some() {
             println!("Skipping: ray tracing is not supported on macOS CI");
@@ -316,7 +325,7 @@ impl DiffScene {
         );
         let desc = DiffTracerDesc {
             textures: textured,
-            geometry: kind.moves(),
+            geometry,
             vertices: kind == SceneKind::Blob,
             views,
         };
@@ -327,6 +336,7 @@ impl DiffScene {
             &harness.asset_hub,
             &renderer,
             &desc,
+            &mut temp,
         );
         let mut scene = Self {
             harness,
@@ -583,6 +593,7 @@ impl DiffScene {
             &self.harness.asset_hub,
             &self.renderer,
             &self.desc,
+            &mut self.temp,
         );
         self.submit();
     }
@@ -3289,6 +3300,52 @@ fn diff_indirect_light_shadow_gradients_match_finite_differences() {
 /// cast the shadow of the sphere like a point light. The edges drawn at the
 /// hits on the wall find it too, as the discontinuity of the light from the
 /// directions to the emitter, but rarely, as it's small.
+/// Without the gradients of the geometry, drawing the emitters by area
+/// takes the gradients of the materials alone: by the emission of the light
+/// here, which only moves the image through those points.
+#[test]
+#[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
+fn diff_area_light_materials_without_geometry() {
+    let Some(mut scene) =
+        DiffScene::without_geometry("diff-area-light-materials", SceneKind::AreaLight)
+    else {
+        return;
+    };
+    const LIGHT: usize = 2;
+    scene.config.max_bounces = 0;
+    scene.config.emitter_samples = 1;
+    scene.config.emitters_by_area = true;
+    scene.darken_sky();
+    scene.capture_target();
+    let (mut params, _) = scene.read_materials();
+    let truth = params[LIGHT].emissive;
+    params[LIGHT].emissive = truth.map(|e| 0.7 * e);
+    scene.write_materials(&params);
+    let start = params.clone();
+
+    const ITERATIONS: u32 = 128;
+    for iteration in 0..ITERATIONS {
+        scene.backward(iteration, 8, 4);
+    }
+    let (_, grads) = scene.read_materials();
+    let analytic = grads[LIGHT].emissive[0] / ITERATIONS as f32;
+    let h = 0.05 * start[LIGHT].emissive[0];
+    let mut losses = [0.0; 2];
+    for (loss, sign) in losses.iter_mut().zip([1.0, -1.0]) {
+        let mut moved = start.clone();
+        moved[LIGHT].emissive[0] += sign * h;
+        scene.write_materials(&moved);
+        *loss = scene.unbiased_loss(2_000_000..2_002_048);
+    }
+    let numeric = (losses[0] - losses[1]) / (2.0 * h);
+    println!("d loss / d light emission: gradient {analytic:e}, central difference {numeric:e}");
+    assert!(
+        analytic.is_finite() && (analytic - numeric).abs() <= 0.2 * numeric.abs(),
+        "d loss / d light emission: gradient {analytic:e} disagrees with {numeric:e}"
+    );
+    scene.destroy();
+}
+
 #[test]
 #[ignore = "requires a working GPU context with ray tracing and float32 atomics"]
 fn diff_area_light_gradients_match_finite_differences() {

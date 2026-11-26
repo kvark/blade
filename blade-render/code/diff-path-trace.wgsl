@@ -1321,7 +1321,9 @@ fn walk_path(
                 grad.flat_normal += d_horizon * horizon_weight_grad(horizon_cosine) * side_cosine_grad(dir, normal);
                 var lamp_grad = MaterialGrad(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, d_found * bsdf.value * weight, 0.0, 0.0, vec3<f32>(0.0), vec3<f32>(0.0));
                 scatter_material_grad(lamp, lamp_grad);
-                if (by_area) {
+                // Moving the point and the receiver is of the geometry, whose
+                // gradients aren't there without it.
+                if (by_area && parameters.geometry != 0u) {
                     // `1 / light_pdf` is `emitter_geometry` of the offset,
                     // and the BSDF and the horizon take its direction.
                     var ep: EmitterPoint;
