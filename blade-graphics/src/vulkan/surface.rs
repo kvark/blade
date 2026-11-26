@@ -653,7 +653,7 @@ impl super::Context {
                 .map(|layer| match *layer {
                     super::XrLayer::Projection(ref projection) => xr_projection_layer_views(
                         &projection.surface.raw,
-                        projection.views,
+                        projection.views.unwrap_or(frame.views()),
                         projection.surface.swapchain.target_size,
                     ),
                     _ => Vec::new(),

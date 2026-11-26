@@ -340,10 +340,11 @@ impl XrImage {
 }
 
 /// A projection layer: one view per array layer of the swapchain, rendered
-/// from those views, usually `XrFrame::views`.
+/// from those views.
 pub struct XrProjectionLayer<'a> {
     pub surface: &'a XrSurface,
-    pub views: &'a [XrView],
+    /// The views it was rendered from, or those of the frame it ends.
+    pub views: Option<&'a [XrView]>,
     /// The space of the views, or the base space.
     pub space: Option<&'a xr::Space>,
     pub flags: crate::XrLayerFlags,
