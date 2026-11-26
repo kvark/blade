@@ -223,7 +223,10 @@ impl DiffScene {
             } else {
                 vec![wall()]
             };
-            let mut parts = vec![("diff-wall", room), ("diff-shading-ball", vec![small_ball()])];
+            let mut parts = vec![
+                ("diff-wall", room),
+                ("diff-shading-ball", vec![small_ball()]),
+            ];
             if kind == SceneKind::AreaLight {
                 parts.push(("diff-area-light", vec![light_ball()]));
             }
@@ -1434,7 +1437,11 @@ fn diff_medium_translation_gradients_match_finite_differences() {
     check_single_object_with(
         SceneKind::Ball,
         "diff-medium-ball",
-        &[Move::Translation(0), Move::Translation(1), Move::Translation(2)],
+        &[
+            Move::Translation(0),
+            Move::Translation(1),
+            Move::Translation(2),
+        ],
         [0.0; 3],
         false,
         |scene| {
@@ -2904,9 +2911,24 @@ fn diff_recovers_medium() {
         "medium {:?} for {MEDIUM_TRUTH:?}: errors of the density, anisotropy and albedo {before:?} -> {after:?}, loss {loss_before:e} -> {loss_after:e}",
         (found[0].density, found[0].anisotropy, found[0].scattering)
     );
-    assert!(after.0 < 0.4 * before.0, "the density only went from {} to {}", before.0, after.0);
-    assert!(after.2 < 0.5 * before.2, "the albedo only went from {} to {}", before.2, after.2);
-    assert!(after.1 < before.1, "the anisotropy went from {} to {}", before.1, after.1);
+    assert!(
+        after.0 < 0.4 * before.0,
+        "the density only went from {} to {}",
+        before.0,
+        after.0
+    );
+    assert!(
+        after.2 < 0.5 * before.2,
+        "the albedo only went from {} to {}",
+        before.2,
+        after.2
+    );
+    assert!(
+        after.1 < before.1,
+        "the anisotropy went from {} to {}",
+        before.1,
+        after.1
+    );
     scene.destroy();
 }
 
@@ -3146,7 +3168,9 @@ fn check_light_gradients_with(
                 "d loss / d {param:?}: {analytic:e} ± {error:e}, {before:e} ± {before_error:e} without secondary edges, central difference {numeric:e}"
             );
         } else {
-            println!("d loss / d {param:?}: {analytic:e} ± {error:e}, central difference {numeric:e}");
+            println!(
+                "d loss / d {param:?}: {analytic:e} ± {error:e}, central difference {numeric:e}"
+            );
         }
         results.push((param, analytic, before, numeric));
     }
@@ -3242,9 +3266,8 @@ fn diff_indirect_light_shadow_gradients_match_finite_differences() {
     scene.config.secondary_edge_samples = 16;
     // Few of the edges of the scene are silhouettes from the light.
     scene.config.guided_edges = true;
-    let spot = |position: [f32; 3]| {
-        DiffLight::spot(position, [800.0; 3], [0.0, 1.0, 0.0], 0.35, 0.5)
-    };
+    let spot =
+        |position: [f32; 3]| DiffLight::spot(position, [800.0; 3], [0.0, 1.0, 0.0], 0.35, 0.5);
     check_light_gradients_with(
         &mut scene,
         spot([0.0, 2.0, -0.2]),
