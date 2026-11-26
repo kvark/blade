@@ -75,7 +75,12 @@ unsafe impl Sync for XrPassthrough {}
 
 impl XrPassthrough {
     fn fp(&self) -> &xr::raw::PassthroughFB {
-        self.session.instance().exts().fb_passthrough.as_ref().unwrap()
+        self.session
+            .instance()
+            .exts()
+            .fb_passthrough
+            .as_ref()
+            .unwrap()
     }
 
     /// Change how the world is drawn, from the next frame.
@@ -189,8 +194,8 @@ pub struct XrDepthImage {
     /// The views of the eyes that the depth is projected for, in the base
     /// space, which reprojecting the depth to the views of the frame takes.
     pub views: [super::XrView; 2],
-    /// The planes of the projection of the depth, where `far` may be
-    /// infinite, in which case the depth is `1 - near / z`.
+    /// The planes of the projection that the depth is in, where `far` may
+    /// be infinite.
     pub near: f32,
     pub far: f32,
 }
@@ -304,9 +309,9 @@ impl super::Context {
             flags: xr::sys::PassthroughFlagsFB::IS_RUNNING_AT_CREATION,
             purpose: xr::sys::PassthroughLayerPurposeFB::RECONSTRUCTION,
         };
-        if let Err(e) = cvt(unsafe {
-            (fp.create_passthrough_layer)(session.as_raw(), &layer_info, &mut layer)
-        }) {
+        if let Err(e) =
+            cvt(unsafe { (fp.create_passthrough_layer)(session.as_raw(), &layer_info, &mut layer) })
+        {
             log::error!("XR passthrough layer: {e}");
             unsafe { (fp.destroy_passthrough)(passthrough) };
             return None;
@@ -377,36 +382,37 @@ impl super::Context {
             height: 0,
         };
         let mut count = 0;
-        let images = cvt(unsafe { (fp.get_environment_depth_swapchain_state)(swapchain, &mut state) })
-            .and_then(|()| {
-                cvt(unsafe {
-                    (fp.enumerate_environment_depth_swapchain_images)(
-                        swapchain,
-                        0,
-                        &mut count,
-                        ptr::null_mut(),
-                    )
+        let images =
+            cvt(unsafe { (fp.get_environment_depth_swapchain_state)(swapchain, &mut state) })
+                .and_then(|()| {
+                    cvt(unsafe {
+                        (fp.enumerate_environment_depth_swapchain_images)(
+                            swapchain,
+                            0,
+                            &mut count,
+                            ptr::null_mut(),
+                        )
+                    })
                 })
-            })
-            .and_then(|()| {
-                let mut images = vec![
-                    xr::sys::SwapchainImageVulkanKHR {
-                        ty: xr::sys::SwapchainImageVulkanKHR::TYPE,
-                        next: ptr::null_mut(),
-                        image: 0,
-                    };
-                    count as usize
-                ];
-                cvt(unsafe {
-                    (fp.enumerate_environment_depth_swapchain_images)(
-                        swapchain,
-                        count,
-                        &mut count,
-                        images.as_mut_ptr() as *mut xr::sys::SwapchainImageBaseHeader,
-                    )
-                })
-                .map(|()| images)
-            });
+                .and_then(|()| {
+                    let mut images = vec![
+                        xr::sys::SwapchainImageVulkanKHR {
+                            ty: xr::sys::SwapchainImageVulkanKHR::TYPE,
+                            next: ptr::null_mut(),
+                            image: 0,
+                        };
+                        count as usize
+                    ];
+                    cvt(unsafe {
+                        (fp.enumerate_environment_depth_swapchain_images)(
+                            swapchain,
+                            count,
+                            &mut count,
+                            images.as_mut_ptr() as *mut xr::sys::SwapchainImageBaseHeader,
+                        )
+                    })
+                    .map(|()| images)
+                });
         let images = match images {
             Ok(images) => images,
             Err(e) => {

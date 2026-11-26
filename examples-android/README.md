@@ -1,8 +1,11 @@
 ### Testing VR examples (Android)
 
-This folder contains two Android OpenXR sample crates:
+This folder contains three Android OpenXR sample crates:
 - `examples-android/xr`
 - `examples-android/asteroids`
+- `examples-android/passthrough`, for Meta Quest: passthrough of the cameras
+  tinted red with colored edges, the scene over it, and a HUD quad in front of
+  the head that shows the depth of the environment
 
 Prerequisites:
 - Android SDK + NDK configured (`ANDROID_HOME`/`ANDROID_NDK_HOME`)
@@ -49,3 +52,11 @@ Same for asteroids:
 ```bash
 cargo apk build --manifest-path examples-android/asteroids/Cargo.toml --release && adb shell am force-stop rust.asteroids && adb install -r target/release/apk/asteroids.apk && adb logcat -c && adb shell am start -n rust.asteroids/android.app.NativeActivity &&  adb logcat -v time | grep -E "blade-asteroids|RustStdoutStderr|mark:|render pipeline|AdrenoVK-0"
 ```
+
+Same for passthrough:
+```bash
+cargo apk build --manifest-path examples-android/passthrough/Cargo.toml --release && adb shell am force-stop rust.passthrough && adb install -r target/release/apk/passthrough.apk && adb shell pm grant rust.passthrough com.oculus.permission.USE_SCENE && adb logcat -c && adb shell am start -n rust.passthrough/android.app.NativeActivity && adb logcat -v time | grep -E "blade-passthrough|RustStdoutStderr"
+```
+The depth of the environment needs the `com.oculus.permission.USE_SCENE`
+permission, which `pm grant` gives it above; without it, the HUD shows a dark
+red window instead of the depth.

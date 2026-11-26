@@ -1,0 +1,74 @@
+[package]
+name = "blade-android-passthrough"
+version = "0.1.0"
+publish = false
+edition = "2024"
+
+[features]
+
+[dependencies]
+
+[target.'cfg(target_os = "android")'.dependencies]
+blade-graphics = { workspace = true }
+blade-macros = { workspace = true }
+openxr = { workspace = true }
+bytemuck = { workspace = true }
+glam = { workspace = true }
+log = { workspace = true }
+libc = "0.2.50"
+libloading = "0.8"
+ndk-glue = "0.7"
+ndk-context = "0.1"
+android-activity = { version = "0.6", features = ["native-activity"] }
+android_logger = "0.14"
+
+[lib]
+name = "passthrough"
+path = "passthrough.rs"
+crate-type = ["cdylib"]
+
+[package.metadata.android]
+build_targets = ["aarch64-linux-android"]
+runtime_libs = "../libs"
+label = "Blade Passthrough"
+
+[package.metadata.android.sdk]
+min_sdk_version = 21
+target_sdk_version = 30
+
+[package.metadata.android.signing.release]
+path = "../keystore/debug.keystore"
+keystore_password = "android"
+key_alias = "androiddebugkey"
+key_password = "android"
+
+[package.metadata.android.application]
+label = "Blade Passthrough"
+
+# Passthrough of the cameras, which the headset has to have.
+[[package.metadata.android.uses_feature]]
+name = "com.oculus.feature.PASSTHROUGH"
+required = true
+
+# The depth of the environment, which the user grants at run time.
+[[package.metadata.android.uses_permission]]
+name = "com.oculus.permission.USE_SCENE"
+
+[[package.metadata.android.application.meta_data]]
+name = "com.oculus.vr.focusaware"
+value = "true"
+
+[package.metadata.android.application.activity]
+label = "Blade Passthrough"
+theme = "@android:style/Theme.Black.NoTitleBar.Fullscreen"
+config_changes = "density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
+launch_mode = "singleTask"
+orientation = "landscape"
+resizeable_activity = false
+
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = [
+    "com.oculus.intent.category.VR",
+    "android.intent.category.LAUNCHER",
+]
