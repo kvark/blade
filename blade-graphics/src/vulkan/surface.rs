@@ -87,7 +87,11 @@ impl super::XrSurface {
     /// use `Context::xr_begin_frame` and `Context::xr_end_frame`.
     pub fn acquire_frame(&mut self, context: &super::Context) -> Option<super::Frame> {
         let frame = context.xr_begin_frame()?;
-        let image = self.acquire_image()?;
+        let Some(image) = self.acquire_image() else {
+            // The frame has begun, so it ends, with nothing in it.
+            let _ = context.xr_end_frame(frame, context.xr_default_blend_mode(), &[]);
+            return None;
+        };
         let xr_view_count = frame.view_count.min(self.view_count);
         if frame.view_count > self.view_count {
             log::warn!(
@@ -99,7 +103,7 @@ impl super::XrSurface {
         Some(super::Frame {
             internal: image.internal,
             swapchain: self.swapchain,
-            image_index: Some(0),
+            image_index: Some(image.index),
             xr_swapchain: (&mut self.raw as *mut xr::Swapchain<xr::Vulkan>) as usize,
             xr_view_count,
             xr_views: frame.views,
@@ -112,8 +116,14 @@ impl super::XrSurface {
     /// shows it ends.
     pub fn acquire_image(&mut self) -> Option<super::XrImage> {
         let image_index = self.raw.acquire_image().ok()?;
-        self.raw.wait_image(xr::Duration::INFINITE).ok()?;
+        if let Err(e) = self.raw.wait_image(xr::Duration::INFINITE) {
+            // Acquired, so it goes back.
+            log::error!("XR swapchain image wait failed: {e}");
+            let _ = self.raw.release_image();
+            return None;
+        }
         Some(super::XrImage {
+            index: image_index,
             internal: self.frames[image_index as usize],
             swapchain: self.swapchain,
             layer_count: self.view_count,
@@ -598,12 +608,28 @@ impl super::Context {
                 .ok()?;
             return None;
         }
+        let located = match xr.space.as_ref() {
+            Some(space) => xr
+                .session
+                .locate_views(xr.view_type, display_time, space)
+                .map(|(_, views)| views),
+            None => Err(xr::sys::Result::ERROR_HANDLE_INVALID),
+        };
+        let located = match located {
+            Ok(located) => located,
+            Err(e) => {
+                // The frame has begun, so it ends, with nothing in it.
+                log::warn!("XR views can't be located: {e}");
+                xr.predicted_display_time = None;
+                let environment_blend_mode = xr.environment_blend_mode;
+                let _ = xr
+                    .frame_stream
+                    .end(display_time, environment_blend_mode, &[]);
+                return None;
+            }
+        };
+        // Kept after the frame ends, for `xr_locate_space` in between frames.
         xr.predicted_display_time = Some(display_time);
-        let space = xr.space.as_ref()?;
-        let (_, located) = xr
-            .session
-            .locate_views(xr.view_type, display_time, space)
-            .ok()?;
         let mut views = [super::XrView::default(); super::MAX_XR_EYES];
         let view_count = located.len().min(super::MAX_XR_EYES);
         for (out, view) in views.iter_mut().zip(&located) {
@@ -622,6 +648,15 @@ impl super::Context {
             view_count: view_count as u32,
             views,
         })
+    }
+
+    /// The blend mode that the runtime prefers, which `XrSurface::acquire_frame`
+    /// ends its frames with.
+    pub fn xr_default_blend_mode(&self) -> crate::XrBlendMode {
+        self.xr_blend_modes()
+            .first()
+            .copied()
+            .unwrap_or(crate::XrBlendMode::Opaque)
     }
 
     /// The blend modes that `xr_end_frame` can take, in the order that the
@@ -687,6 +722,12 @@ impl super::Context {
                         );
                     }
                     super::XrLayer::Quad(ref quad) => {
+                        assert!(
+                            quad.array_index < quad.surface.view_count,
+                            "XR quad layer {} is past the {} layers of its swapchain",
+                            quad.array_index,
+                            quad.surface.view_count
+                        );
                         let [width, height] = quad.surface.swapchain.target_size;
                         quads.push(
                             xr::CompositionLayerQuad::new()
