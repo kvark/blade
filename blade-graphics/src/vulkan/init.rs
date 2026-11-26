@@ -1846,11 +1846,13 @@ impl super::Context {
             } {
                 Ok((session, frame_wait, frame_stream)) => {
                     let view_type = openxr::ViewConfigurationType::PRIMARY_STEREO;
-                    let environment_blend_mode = xr_desc
+                    let environment_blend_modes = xr_desc
                         .instance
                         .enumerate_environment_blend_modes(xr_desc.system_id, view_type)
-                        .ok()
-                        .and_then(|modes| modes.first().copied())
+                        .unwrap_or_default();
+                    let environment_blend_mode = environment_blend_modes
+                        .first()
+                        .copied()
                         .unwrap_or(openxr::EnvironmentBlendMode::OPAQUE);
                     let space = match session.create_reference_space(
                         openxr::ReferenceSpaceType::LOCAL,
@@ -1870,6 +1872,7 @@ impl super::Context {
                         frame_stream,
                         view_type,
                         environment_blend_mode,
+                        environment_blend_modes,
                         space: Some(space),
                         predicted_display_time: None,
                     }))
