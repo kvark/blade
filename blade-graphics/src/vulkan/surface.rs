@@ -661,11 +661,16 @@ impl super::Context {
             let projection_views = layers
                 .iter()
                 .map(|layer| match *layer {
-                    super::XrLayer::Projection(ref projection) => xr_projection_layer_views(
-                        &projection.surface.raw,
-                        projection.views.unwrap_or(frame.views()),
-                        projection.surface.swapchain.target_size,
-                    ),
+                    super::XrLayer::Projection(ref projection) => {
+                        // One view per array layer of the swapchain.
+                        let views = projection.views.unwrap_or(frame.views());
+                        let count = views.len().min(projection.surface.view_count as usize);
+                        xr_projection_layer_views(
+                            &projection.surface.raw,
+                            &views[..count],
+                            projection.surface.swapchain.target_size,
+                        )
+                    }
                     _ => Vec::new(),
                 })
                 .collect::<Vec<_>>();
