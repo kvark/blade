@@ -1676,6 +1676,45 @@ impl Default for XrSurfaceConfig {
     }
 }
 
+/// How the XR compositor blends the layers of a frame with the real world,
+/// see `Context::xr_end_frame`.
+#[derive(Clone, Copy, Debug, Default, Hash, Eq, PartialEq)]
+pub enum XrBlendMode {
+    /// The layers replace the view of the world.
+    #[default]
+    Opaque,
+    /// The layers add up to the light of the world, as on optical see-through
+    /// displays.
+    Additive,
+    /// The layers are blended over the world by their alpha, as for video
+    /// passthrough where the runtime does it without a passthrough layer.
+    AlphaBlend,
+}
+
+bitflags::bitflags! {
+    /// How the compositor treats one XR composition layer.
+    #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+    pub struct XrLayerFlags: u32 {
+        /// Blend the layer over those below it by the alpha of its texture,
+        /// instead of replacing them.
+        const BLEND_SOURCE_ALPHA = 1 << 0;
+        /// The colors of the texture aren't multiplied by its alpha.
+        const UNPREMULTIPLIED_ALPHA = 1 << 1;
+        /// Ask the compositor to correct the chromatic aberration of the
+        /// lenses for this layer.
+        const CORRECT_CHROMATIC_ABERRATION = 1 << 2;
+    }
+}
+
+/// Which eyes see an XR layer that isn't per eye, such as a quad.
+#[derive(Clone, Copy, Debug, Default, Hash, Eq, PartialEq)]
+pub enum XrEyeVisibility {
+    #[default]
+    Both,
+    Left,
+    Right,
+}
+
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
 pub enum AlphaMode {
     #[default]
