@@ -904,6 +904,7 @@ impl DiffPipelines {
                 name,
                 data_layouts: &[&trace_layout],
                 compute: sh_trace.at(entry),
+                full_subgroup_size: None,
             })
         };
         let primal_pipeline = trace_pipeline("diff-primal", "primal");
@@ -920,6 +921,7 @@ impl DiffPipelines {
                 name: "diff-init-texture",
                 data_layouts: &[&texture_init_layout],
                 compute: sh_trace.at("init_texture"),
+                full_subgroup_size: None,
             });
         let loss_layout = <LossData as blade_graphics::ShaderData>::layout();
         let control_layout = <ControlData as blade_graphics::ShaderData>::layout();
@@ -927,17 +929,20 @@ impl DiffPipelines {
             name: "diff-control-variate",
             data_layouts: &[&control_layout],
             compute: sh_optimize.at("control_variate"),
+            full_subgroup_size: None,
         });
         let loss_pipeline = gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "diff-loss",
             data_layouts: &[&loss_layout],
             compute: sh_optimize.at("loss_l2"),
+            full_subgroup_size: None,
         });
         let adam_layout = <AdamData as blade_graphics::ShaderData>::layout();
         let adam_pipeline = gpu.create_compute_pipeline(blade_graphics::ComputePipelineDesc {
             name: "diff-adam",
             data_layouts: &[&adam_layout],
             compute: sh_optimize.at("adam_step"),
+            full_subgroup_size: None,
         });
 
         let vertex_layout = <VertexPassData as blade_graphics::ShaderData>::layout();
@@ -946,6 +951,7 @@ impl DiffPipelines {
                 name,
                 data_layouts: &[&vertex_layout],
                 compute: sh_trace.at(entry),
+                full_subgroup_size: None,
             })
         };
         Self {

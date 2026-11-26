@@ -974,6 +974,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         name: "bsdf-gradient-test",
         data_layouts: &[&global_layout],
         compute: shader.at("main"),
+        full_subgroup_size: None,
     });
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "bsdf-gradient-test",
@@ -1184,6 +1185,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         name: "bsdf-sampling-test",
         data_layouts: &[&global_layout],
         compute: shader.at("main"),
+        full_subgroup_size: None,
     });
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "bsdf-sampling-test",
