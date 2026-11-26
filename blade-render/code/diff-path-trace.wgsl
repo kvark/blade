@@ -2248,8 +2248,11 @@ fn hash_combine(hash: u32, value: u32) -> u32 {
     return hash_jenkins(hash ^ (value + 0x9e3779b9u + (hash << 6u) + (hash >> 2u)));
 }
 
-// Key of the edge between `a` and `b` of `instance`, the same both ways.
-fn edge_key(instance: u32, a: vec3<f32>, b: vec3<f32>) -> u32 {
+// Key of the edge between `a` and `b` of `instance`, the same both ways:
+// two hashes of different seeds, of which the first picks the slot, and the
+// second tells apart the edges whose first ones collide, which a table of
+// thousands of edges would have.
+fn edge_key(instance: u32, a: vec3<f32>, b: vec3<f32>) -> vec2<u32> {
     var qa = quantize_position(a);
     var qb = quantize_position(b);
     let swap = qb.x < qa.x || (qb.x == qa.x && (qb.y < qa.y || (qb.y == qa.y && qb.z < qa.z)));
@@ -2258,28 +2261,36 @@ fn edge_key(instance: u32, a: vec3<f32>, b: vec3<f32>) -> u32 {
         qa = qb;
         qb = q;
     }
-    var hash = hash_jenkins(instance);
-    hash = hash_combine(hash, bitcast<u32>(qa.x));
-    hash = hash_combine(hash, bitcast<u32>(qa.y));
-    hash = hash_combine(hash, bitcast<u32>(qa.z));
-    hash = hash_combine(hash, bitcast<u32>(qb.x));
-    hash = hash_combine(hash, bitcast<u32>(qb.y));
-    hash = hash_combine(hash, bitcast<u32>(qb.z));
-    return max(hash, 1u);
+    var key = vec2<u32>(hash_jenkins(instance), hash_jenkins(instance ^ KEY_SEED));
+    for (var i = 0u; i < 3u; i += 1u) {
+        key = hash_key(key, bitcast<u32>(qa[i]));
+    }
+    for (var i = 0u; i < 3u; i += 1u) {
+        key = hash_key(key, bitcast<u32>(qb[i]));
+    }
+    return max(key, vec2<u32>(1u));
 }
 
+// The second seed of the keys of the tables of edges and vertices.
+const KEY_SEED: u32 = 0x85ebca6bu;
+
+fn hash_key(key: vec2<u32>, value: u32) -> vec2<u32> {
+    return vec2<u32>(hash_combine(key.x, value), hash_combine(key.y, value));
+}
+
+// The tables hold the two words of a key at `2 * slot` and `2 * slot + 1`.
 fn edge_slot_mask() -> u32 {
-    return arrayLength(&edge_keys) - 1u;
+    return arrayLength(&edge_keys) / 2u - 1u;
 }
 
 // Number of triangles along an edge, which `count_edges` has found.
 // The slot of the edge with `key`, or `~0u`.
-fn edge_slot(key: u32) -> u32 {
+fn edge_slot(key: vec2<u32>) -> u32 {
     let mask = edge_slot_mask();
     for (var probe = 0u; probe <= mask; probe += 1u) {
-        let slot = (key + probe) & mask;
-        let found = atomicLoad(&edge_keys[slot]);
-        if (found == key) {
+        let slot = (key.x + probe) & mask;
+        let found = atomicLoad(&edge_keys[2u * slot]);
+        if (found == key.x && atomicLoad(&edge_keys[2u * slot + 1u]) == key.y) {
             return slot;
         }
         if (found == 0u) {
@@ -2289,7 +2300,7 @@ fn edge_slot(key: u32) -> u32 {
     return ~0u;
 }
 
-fn edge_triangle_count(key: u32) -> u32 {
+fn edge_triangle_count(key: vec2<u32>) -> u32 {
     let slot = edge_slot(key);
     if (slot == ~0u) {
         return 0u;
@@ -2372,9 +2383,25 @@ fn count_edges(
             if (probe > mask) {
                 break;
             }
-            let slot = (key + probe) & mask;
-            let result = atomicCompareExchangeWeak(&edge_keys[slot], 0u, key);
-            if (result.exchanged || result.old_value == key) {
+            let slot = (key.x + probe) & mask;
+            let result = atomicCompareExchangeWeak(&edge_keys[2u * slot], 0u, key.x);
+            // A weak exchange can fail spuriously, and then the slot is
+            // still empty, so try it again.
+            if (!result.exchanged && result.old_value == 0u) {
+                continue;
+            }
+            if (result.old_value != key.x && !result.exchanged) {
+                probe += 1u;
+                continue;
+            }
+            // The first word is the key's, as of this thread or another with
+            // the same first hash, and the slot is the key's whose second word
+            // gets there first. The others go on probing.
+            var second = atomicCompareExchangeWeak(&edge_keys[2u * slot + 1u], 0u, key.y);
+            while (!second.exchanged && second.old_value == 0u) {
+                second = atomicCompareExchangeWeak(&edge_keys[2u * slot + 1u], 0u, key.y);
+            }
+            if (second.exchanged || second.old_value == key.y) {
                 let index = atomicAdd(&edge_counts[slot], 1u);
                 if (index < 2u) {
                     edge_normals[2u * slot + index] = vec4<f32>(face_normal, 0.0);
@@ -2382,11 +2409,7 @@ fn count_edges(
                 }
                 break;
             }
-            // A weak exchange can fail spuriously, and then the slot is
-            // still empty, so try it again.
-            if (result.old_value != 0u) {
-                probe += 1u;
-            }
+            probe += 1u;
         }
     }
 }
@@ -3080,27 +3103,39 @@ fn weld_vertices(
     }
     let position = base_vertices[index].position;
     let q = quantize_position(position);
-    var key = hash_jenkins(vertex_pass.model);
-    key = hash_combine(key, bitcast<u32>(q.x));
-    key = hash_combine(key, bitcast<u32>(q.y));
-    key = hash_combine(key, bitcast<u32>(q.z));
-    key = max(key, 1u);
-    let mask = arrayLength(&weld_keys) - 1u;
+    // Two words, like the keys of the edges, see `edge_key` and
+    // `count_edges`.
+    var key = vec2<u32>(
+        hash_jenkins(vertex_pass.model),
+        hash_jenkins(vertex_pass.model ^ KEY_SEED),
+    );
+    for (var i = 0u; i < 3u; i += 1u) {
+        key = hash_key(key, bitcast<u32>(q[i]));
+    }
+    key = max(key, vec2<u32>(1u));
+    let mask = arrayLength(&weld_keys) / 2u - 1u;
     var slot = ~0u;
     var probe = 0u;
     loop {
         if (probe > mask) {
             break;
         }
-        let candidate = (key + probe) & mask;
-        let result = atomicCompareExchangeWeak(&weld_keys[candidate], 0u, key);
-        if (result.exchanged || result.old_value == key) {
-            slot = candidate;
-            break;
+        let candidate = (key.x + probe) & mask;
+        let result = atomicCompareExchangeWeak(&weld_keys[2u * candidate], 0u, key.x);
+        if (!result.exchanged && result.old_value == 0u) {
+            continue;
         }
-        if (result.old_value != 0u) {
-            probe += 1u;
+        if (result.exchanged || result.old_value == key.x) {
+            var second = atomicCompareExchangeWeak(&weld_keys[2u * candidate + 1u], 0u, key.y);
+            while (!second.exchanged && second.old_value == 0u) {
+                second = atomicCompareExchangeWeak(&weld_keys[2u * candidate + 1u], 0u, key.y);
+            }
+            if (second.exchanged || second.old_value == key.y) {
+                slot = candidate;
+                break;
+            }
         }
+        probe += 1u;
     }
     pass_vertex_slots[vertex_pass.first_vertex + index] = slot;
     if (slot != ~0u) {

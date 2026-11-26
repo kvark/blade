@@ -1351,7 +1351,8 @@ impl DiffTracer {
             group: ParamGroup::new("diff vertices", slot_count * 4, gpu),
             slot_count,
             vertex_slots: device_buffer("diff vertex slots", 4 * u64::from(vertex_count.max(4))),
-            weld_keys: device_buffer("diff weld keys", 4 * u64::from(slot_count)),
+            // Two words a key, see `weld_vertices` in the shader.
+            weld_keys: device_buffer("diff weld keys", 8 * u64::from(slot_count)),
             slot_positions: device_buffer("diff slot positions", 16 * u64::from(slot_count)),
             normal_sums: device_buffer("diff normal sums", 16 * u64::from(slot_count)),
             normal_grads: device_buffer("diff normal grads", 16 * u64::from(slot_count)),
@@ -1406,7 +1407,12 @@ impl DiffTracer {
                 memory: blade_graphics::Memory::Device,
             })
         };
-        let edge_keys = edge_table("diff edge keys");
+        // Two words a key, see `edge_key` in the shader.
+        let edge_keys = gpu.create_buffer(blade_graphics::BufferDesc {
+            name: "diff edge keys",
+            size: 8 * edge_slots,
+            memory: blade_graphics::Memory::Device,
+        });
         let edge_counts = edge_table("diff edge counts");
         let edge_normals = gpu.create_buffer(blade_graphics::BufferDesc {
             name: "diff edge normals",
