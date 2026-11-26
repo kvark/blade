@@ -685,6 +685,11 @@ fn describe_texture_format(format: crate::TextureFormat) -> FormatInfo {
         Tf::R32Uint => (glow::R32UI, glow::RED, glow::UNSIGNED_INT),
         Tf::Rg32Uint => (glow::RG32UI, glow::RG, glow::UNSIGNED_INT),
         Tf::Rgba32Uint => (glow::RGBA32UI, glow::RGBA, glow::UNSIGNED_INT),
+        Tf::Depth16Unorm => (
+            glow::DEPTH_COMPONENT16,
+            glow::DEPTH_COMPONENT,
+            glow::UNSIGNED_SHORT,
+        ),
         Tf::Depth32Float => (glow::DEPTH_COMPONENT32F, glow::DEPTH_COMPONENT, glow::FLOAT),
         Tf::Depth32FloatStencil8Uint => (
             glow::DEPTH32F_STENCIL8,

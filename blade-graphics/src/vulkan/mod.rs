@@ -17,6 +17,11 @@ mod init;
 mod pipeline;
 mod resource;
 mod surface;
+mod xr_ext;
+
+pub use xr_ext::{
+    XrDepthImage, XrEnvironmentDepth, XrPassthrough, XrPassthroughColorMap, XrPassthroughStyle,
+};
 
 /// Shared Vulkan instance state used by both `Context::init` and `Context::enumerate`.
 struct VulkanInstance {
@@ -1082,6 +1087,7 @@ fn map_texture_format(format: crate::TextureFormat) -> vk::Format {
         Tf::R32Uint => vk::Format::R32_UINT,
         Tf::Rg32Uint => vk::Format::R32G32_UINT,
         Tf::Rgba32Uint => vk::Format::R32G32B32A32_UINT,
+        Tf::Depth16Unorm => vk::Format::D16_UNORM,
         Tf::Depth32Float => vk::Format::D32_SFLOAT,
         Tf::Depth32FloatStencil8Uint => vk::Format::D32_SFLOAT_S8_UINT,
         Tf::Stencil8Uint => vk::Format::S8_UINT,
