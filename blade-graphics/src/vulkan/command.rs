@@ -811,6 +811,7 @@ impl crate::traits::CommandEncoder for super::CommandEncoder {
         assert!(self.present.is_none());
         let wa = &self.device.workarounds;
         self.present = Some(if frame.xr_swapchain != 0 {
+            self.end_xr_raw_image(frame.internal.image);
             super::Presentation::Xr {
                 swapchain: frame.xr_swapchain,
                 view_count: frame.xr_view_count,

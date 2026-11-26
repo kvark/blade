@@ -213,12 +213,6 @@ impl Example {
             buffer_count: 1,
             manual_barriers: false,
         });
-        command_encoder.start();
-        command_encoder.init_texture(no_depth);
-        context
-            .wait_for(&context.submit(&mut command_encoder), !0)
-            .unwrap();
-
         let params_buf = context.create_buffer(gpu::BufferDesc {
             name: "passthrough-params",
             size: (std::mem::size_of::<Uniforms>() * MAX_XR_EYES) as u64,
@@ -255,6 +249,15 @@ impl Example {
             );
         }
 
+        // Blade's attachments and resources are in the general layout, which
+        // this takes them to once.
+        command_encoder.start();
+        command_encoder.init_texture(no_depth);
+        command_encoder.init_texture(depth_texture);
+        context
+            .wait_for(&context.submit(&mut command_encoder), !0)
+            .unwrap();
+
         Self {
             scene_surface,
             hud_surface,
@@ -279,11 +282,17 @@ impl Example {
         let Some(frame) = context.xr_begin_frame() else {
             return;
         };
-        let (Some(scene), Some(hud)) = (
-            self.scene_surface.acquire_image(),
-            self.hud_surface.acquire_image(),
-        ) else {
+        let scene = self.scene_surface.acquire_image();
+        let hud = self.hud_surface.acquire_image();
+        let (Some(scene), Some(hud)) = (scene, hud) else {
             log::error!("Unable to acquire the XR swapchain images");
+            // What was acquired goes back, and the frame ends empty.
+            if scene.is_some() {
+                self.scene_surface.release_image();
+            }
+            if hud.is_some() {
+                self.hud_surface.release_image();
+            }
             let _ = context.xr_end_frame(frame, gpu::XrBlendMode::Opaque, &[]);
             return;
         };
@@ -293,8 +302,12 @@ impl Example {
             .and_then(|depth| depth.acquire(context, &frame));
 
         self.command_encoder.start();
+        // Both are cleared, so what they held doesn't matter.
         self.command_encoder.init_texture(scene.texture());
         self.command_encoder.init_texture(hud.texture());
+        if let Some(ref depth) = environment_depth {
+            self.command_encoder.begin_xr_depth(depth);
+        }
 
         let time = self.start_time.elapsed().as_secs_f32();
         let model = Mat4::from_translation(Vec3::new(0.0, 0.0, -1.5)) * Mat4::from_rotation_y(time);
@@ -377,6 +390,12 @@ impl Example {
             rc.draw(0, 3, 0, 1);
         }
 
+        // Back in the layouts that the runtime takes them in.
+        self.command_encoder.end_xr_image(&scene);
+        self.command_encoder.end_xr_image(&hud);
+        if let Some(ref depth) = environment_depth {
+            self.command_encoder.end_xr_depth(depth);
+        }
         let sync_point = context.submit(&mut self.command_encoder);
         // The images go back to the runtime once the work is done, like
         // `CommandEncoder::present` does.
@@ -420,13 +439,17 @@ impl Example {
     /// Where the head was a moment ago, as for the time a camera took an
     /// image: Android camera timestamps are of `CLOCK_BOOTTIME` when their
     /// source is real time.
+    // `timespec` is narrower on 32-bit targets.
+    #[allow(clippy::useless_conversion)]
     fn report_head_pose(&self, context: &gpu::Context) {
         let mut now = libc::timespec {
             tv_sec: 0,
             tv_nsec: 0,
         };
-        unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut now) };
-        let captured = now.tv_sec * 1_000_000_000 + now.tv_nsec - 30_000_000;
+        if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut now) } != 0 {
+            return;
+        }
+        let captured = i64::from(now.tv_sec) * 1_000_000_000 + i64::from(now.tv_nsec) - 30_000_000;
         match context.xr_time_from_clock(libc::CLOCK_BOOTTIME, captured) {
             Some(time) => info!(
                 "Head 30 ms ago: {:?}, after {} frames",
@@ -552,10 +575,12 @@ pub fn main() {
             match event {
                 SessionStateChanged(e) => match e.state() {
                     xr::SessionState::READY => {
+                        // Passthrough and the depth of the environment need
+                        // a running session.
+                        context.xr_session().unwrap().begin(VIEW_TYPE).unwrap();
                         if matches!(state, AppState::Idle) {
                             state = AppState::Running(Box::new(Example::new(&context)));
                         }
-                        context.xr_session().unwrap().begin(VIEW_TYPE).unwrap();
                     }
                     xr::SessionState::STOPPING => {
                         context.xr_session().unwrap().end().unwrap();

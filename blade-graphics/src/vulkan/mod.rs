@@ -325,6 +325,7 @@ impl XrFrame {
 /// held until `XrSurface::release_image`.
 #[derive(Clone, Copy, Debug)]
 pub struct XrImage {
+    index: u32,
     internal: InternalFrame,
     swapchain: Swapchain,
     layer_count: u32,

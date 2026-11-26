@@ -443,7 +443,14 @@ impl super::Context {
                 },
                 ..Default::default()
             };
-            let raw = unsafe { self.device.core.create_image_view(&view_info, None) }.unwrap();
+            let raw = match unsafe { self.device.core.create_image_view(&view_info, None) } {
+                Ok(raw) => raw,
+                Err(e) => {
+                    log::error!("XR environment depth view: {e}");
+                    self.destroy_xr_environment_depth(&mut depth);
+                    return None;
+                }
+            };
             depth.textures.push(texture);
             depth.views.push(super::TextureView {
                 raw,
@@ -513,25 +520,33 @@ impl super::Context {
     /// is real time, or `CLOCK_MONOTONIC`. Needs `XR_KHR_convert_timespec_time`.
     // `timespec` is narrower on 32-bit targets.
     #[cfg(unix)]
-    #[allow(trivial_numeric_casts, clippy::unnecessary_cast)]
+    #[allow(
+        trivial_numeric_casts,
+        clippy::unnecessary_cast,
+        clippy::useless_conversion
+    )]
     pub fn xr_time_from_clock(&self, clock: libc::clockid_t, nanos: i64) -> Option<xr::Time> {
         let now = |clock| {
             let mut ts = libc::timespec {
                 tv_sec: 0,
                 tv_nsec: 0,
             };
-            unsafe { libc::clock_gettime(clock, &mut ts) };
-            ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64
+            (unsafe { libc::clock_gettime(clock, &mut ts) } == 0)
+                .then(|| ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64)
         };
         // The offset of the clock from the monotonic one, which the extension
         // takes, now.
         let monotonic = if clock == libc::CLOCK_MONOTONIC {
             nanos
         } else {
-            nanos - (now(clock) - now(libc::CLOCK_MONOTONIC))
+            nanos - (now(clock)? - now(libc::CLOCK_MONOTONIC)?)
         };
+        // Before the clock started, which no timespec is.
+        if monotonic < 0 {
+            return None;
+        }
         self.xr_time_from_timespec(libc::timespec {
-            tv_sec: (monotonic / 1_000_000_000) as _,
+            tv_sec: (monotonic / 1_000_000_000).try_into().ok()?,
             tv_nsec: (monotonic % 1_000_000_000) as _,
         })
     }
@@ -542,5 +557,95 @@ fn cvt(result: xr::sys::Result) -> xr::Result<()> {
         Ok(())
     } else {
         Err(result)
+    }
+}
+
+// The layouts that the runtime hands out and takes back its images in,
+// against the `GENERAL` layout that Blade keeps all textures in.
+impl super::CommandEncoder {
+    fn xr_layout_barrier(
+        &mut self,
+        image: vk::Image,
+        aspect_mask: vk::ImageAspectFlags,
+        old_layout: vk::ImageLayout,
+        new_layout: vk::ImageLayout,
+    ) {
+        let barrier = vk::ImageMemoryBarrier {
+            old_layout,
+            new_layout,
+            image,
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask,
+                base_mip_level: 0,
+                level_count: vk::REMAINING_MIP_LEVELS,
+                base_array_layer: 0,
+                layer_count: vk::REMAINING_ARRAY_LAYERS,
+            },
+            src_access_mask: vk::AccessFlags::MEMORY_WRITE
+                | self.device.workarounds.extra_sync_src_access,
+            dst_access_mask: vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
+            ..Default::default()
+        };
+        unsafe {
+            self.device.core.cmd_pipeline_barrier(
+                self.buffers[0].raw,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier],
+            );
+        }
+    }
+
+    /// Make an acquired XR swapchain image ready to render to, keeping what
+    /// it holds, from the layout that the runtime hands it out in.
+    /// `init_texture` does the same, discarding it.
+    pub fn begin_xr_image(&mut self, image: &super::XrImage) {
+        self.xr_layout_barrier(
+            image.internal.image,
+            vk::ImageAspectFlags::COLOR,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            vk::ImageLayout::GENERAL,
+        );
+    }
+
+    /// Give an XR swapchain image back the layout that the runtime takes it
+    /// in, after the work that renders to it, before it is released.
+    /// `present` does it for the image of a `Frame`.
+    pub fn end_xr_image(&mut self, image: &super::XrImage) {
+        self.end_xr_raw_image(image.internal.image);
+    }
+
+    pub(super) fn end_xr_raw_image(&mut self, image: vk::Image) {
+        self.xr_layout_barrier(
+            image,
+            vk::ImageAspectFlags::COLOR,
+            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        );
+    }
+
+    /// Make a depth image of the environment readable by shaders, from the
+    /// layout that the runtime hands it out in, until `end_xr_depth`.
+    pub fn begin_xr_depth(&mut self, depth: &XrDepthImage) {
+        self.xr_layout_barrier(
+            depth.texture.raw,
+            vk::ImageAspectFlags::DEPTH,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::ImageLayout::GENERAL,
+        );
+    }
+
+    /// Give a depth image of the environment back to the runtime, in the
+    /// layout it handed it out in, after the work that reads it.
+    pub fn end_xr_depth(&mut self, depth: &XrDepthImage) {
+        self.xr_layout_barrier(
+            depth.texture.raw,
+            vk::ImageAspectFlags::DEPTH,
+            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
     }
 }
