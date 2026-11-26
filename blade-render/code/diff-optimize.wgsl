@@ -76,9 +76,10 @@ struct AdamParams {
     upper_mask: u32,
     // Of `lower`, likewise.
     lower_mask: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    // Of those within `abs_bound` of 0, either way.
+    abs_mask: u32,
+    abs_bound: f32,
+    _pad: u32,
 }
 
 var<uniform> adam: AdamParams;
@@ -98,9 +99,10 @@ fn adam_step(
         return;
     }
     // A gradient that isn't finite would make the parameter NaN for good,
-    // through its moments.
+    // through its moments, and so would one whose square isn't: past the
+    // square root of the largest float, about 1.8e19.
     let raw = grads[index];
-    let grad = select(0.0, raw, raw == raw && abs(raw) < 1.0e30);
+    let grad = select(0.0, raw, abs(raw) < 1.0e18);
     grads[index] = 0.0;
     let bit = 1u << (index % adam.period);
     if ((adam.mask & bit) == 0u) {
@@ -116,6 +118,9 @@ fn adam_step(
     }
     if ((adam.upper_mask & bit) != 0u) {
         value = min(value, adam.upper);
+    }
+    if ((adam.abs_mask & bit) != 0u) {
+        value = clamp(value, -adam.abs_bound, adam.abs_bound);
     }
     params[index] = value;
 }
@@ -157,8 +162,9 @@ fn control_variate(
     if (control.valid != 0u) {
         let correction = control_previous[index] - control_estimate[index];
         let combined = estimate - control.weight * correction;
-        // Not where it isn't finite.
-        if (all(combined == combined)) {
+        // Not where it isn't finite, which NaN and infinity fail alike, or
+        // the estimate would keep it.
+        if (all(abs(combined) <= vec4<f32>(3.40282347e38))) {
             estimate = combined;
         }
     }

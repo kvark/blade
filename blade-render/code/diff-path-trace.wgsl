@@ -1022,7 +1022,7 @@ fn sample_bsdf_turned(mat: Material, transmission: f32, eta: f32, normal: vec3<f
 }
 
 // The Henyey-Greenstein phase function of the media stays this far from
-// the delta of a mean cosine of 1.
+// the delta of a mean cosine of 1. Has to match `diff::MAX_ANISOTROPY`.
 const MAX_ANISOTROPY: f32 = 0.95;
 
 fn phase_anisotropy(params: MaterialParams) -> f32 {
@@ -1151,7 +1151,9 @@ fn walk_path(
                     let d_albedo = adjoint * throughput * (*incident)[bounce];
                     let d_light = dot(d_albedo, albedo);
                     add_material_grad(index, 10u, d_light * (1.0 / medium.density - s));
-                    if (abs(medium.anisotropy) < MAX_ANISOTROPY) {
+                    // At the bound too, which Adam projects onto, so that it
+                    // can come back.
+                    if (abs(medium.anisotropy) <= MAX_ANISOTROPY) {
                         add_material_grad(index, 11u, d_light * phase_log_grad(g, dot(direction, scattered)));
                     }
                     add_material_grad(index, 12u, d_albedo.x);

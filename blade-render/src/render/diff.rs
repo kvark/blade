@@ -54,7 +54,8 @@ pub struct MaterialParams {
     /// mesh through its surface, of any of the BSDFs. It starts at zero.
     pub density: f32,
     /// The mean cosine of the Henyey-Greenstein phase function of the
-    /// medium, from 0 for isotropic up to forward scattering. It starts at
+    /// medium: negative for backward scattering, 0 for isotropic, and
+    /// positive for forward, within [`MAX_ANISOTROPY`] of 0. It starts at
     /// zero.
     pub anisotropy: f32,
     /// The single-scattering albedo of the medium, the part of its
@@ -803,7 +804,10 @@ struct AdamParams {
     upper_mask: u32,
     // Those that `lower` bounds.
     lower_mask: u32,
-    _pad: [u32; 3],
+    // Those within `abs_bound` of 0.
+    abs_mask: u32,
+    abs_bound: f32,
+    _pad: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -2661,9 +2665,7 @@ impl DiffTracer {
                 &adam,
                 MATERIAL_PARAM_COUNT,
                 flags.bits(),
-                Bounds::NonNegative {
-                    upper_mask: BOUNDED_MATERIAL_PARAMS.bits(),
-                },
+                Bounds::Materials,
             ),
             None => self.materials.clear_grads(encoder),
         }
@@ -2879,9 +2881,17 @@ impl LightState {
         temp: &mut crate::FrameResources,
     ) {
         let count = lights.len() as u32;
-        let mut fresh = Self::with_count(gpu, count, self.views);
-        mem::swap(self, &mut fresh);
-        fresh.destroy(gpu);
+        let fresh = Self::with_count(gpu, count, self.views);
+        let old = mem::replace(self, fresh);
+        // Work in flight may still use the old buffers, so they go with
+        // `temp`, like the staging buffer.
+        temp.buffers.extend([
+            old.group.params,
+            old.group.grads,
+            old.group.moments,
+            old.readback,
+            old.previous,
+        ]);
         self.group.clear(encoder);
         let bytes = u64::from(self.group.count) * 4;
         let staging = gpu.create_buffer(blade_graphics::BufferDesc {
@@ -3023,7 +3033,15 @@ enum Bounds {
         lower_mask: u32,
     },
     Unbounded,
+    /// Those of [`MaterialParams`]: non-negative, at most 1 for
+    /// [`BOUNDED_MATERIAL_PARAMS`], and the anisotropy, which may be
+    /// negative, within [`MAX_ANISOTROPY`] of 0.
+    Materials,
 }
+
+/// The mean cosine of the phase function that the tracer takes at most,
+/// either way, as the shader does.
+pub const MAX_ANISOTROPY: f32 = 0.95;
 
 fn adam_step(
     pipeline: &blade_graphics::ComputePipeline,
@@ -3034,10 +3052,20 @@ fn adam_step(
     mask: u32,
     bounds: Bounds,
 ) {
-    let (lower, upper_mask, lower_mask) = match bounds {
-        Bounds::NonNegative { upper_mask } => (0.0, upper_mask, !0),
-        Bounds::NonNegativeOnly { lower_mask } => (0.0, 0, lower_mask),
-        Bounds::Unbounded => (f32::MIN, 0, !0),
+    let (lower, upper_mask, lower_mask, abs_mask, abs_bound) = match bounds {
+        Bounds::NonNegative { upper_mask } => (0.0, upper_mask, !0, 0, 0.0),
+        Bounds::NonNegativeOnly { lower_mask } => (0.0, 0, lower_mask, 0, 0.0),
+        Bounds::Unbounded => (f32::MIN, 0, !0, 0, 0.0),
+        Bounds::Materials => {
+            let anisotropy = MaterialParamFlags::ANISOTROPY.bits();
+            (
+                0.0,
+                BOUNDED_MATERIAL_PARAMS.bits(),
+                !anisotropy,
+                anisotropy,
+                MAX_ANISOTROPY,
+            )
+        }
     };
     group.step += 1;
     let step = group.step as i32;
@@ -3060,7 +3088,9 @@ fn adam_step(
                 mask,
                 upper_mask,
                 lower_mask,
-                _pad: [0; 3],
+                abs_mask,
+                abs_bound,
+                _pad: 0,
             },
             params: group.params.into(),
             grads: group.grads.into(),
