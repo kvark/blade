@@ -51,14 +51,30 @@ struct CommandScopeDevice {}
 #[derive(Clone, Copy, Debug)]
 struct TimestampCalibration {
     cpu: Instant,
-    gpu_ticks: u64,
+    /// The GPU tick sampled together with `cpu`. `None` without
+    /// `VK_EXT_calibrated_timestamps`, until [`Self::anchored`] pins it to
+    /// the submission's first timestamp.
+    gpu_ticks: Option<u64>,
     period: f32,
     valid_bits: u32,
 }
 
 impl TimestampCalibration {
+    /// Pin an uncalibrated submission's first timestamp to the CPU time it
+    /// was submitted. Durations between timestamps stay exact; absolute
+    /// times are late by however long the GPU took to start on it.
+    fn anchored(self, first_timestamp: u64) -> Self {
+        Self {
+            gpu_ticks: Some(self.gpu_ticks.unwrap_or(first_timestamp)),
+            ..self
+        }
+    }
+
     fn delta_ticks(self, timestamp: u64) -> u64 {
-        timestamp.wrapping_sub(self.gpu_ticks) & timestamp_mask(self.valid_bits)
+        let gpu_ticks = self
+            .gpu_ticks
+            .expect("timestamp calibration is not anchored");
+        timestamp.wrapping_sub(gpu_ticks) & timestamp_mask(self.valid_bits)
     }
 
     fn map(self, timestamp: u64) -> Instant {
@@ -96,16 +112,25 @@ fn timestamp_mask(valid_bits: u32) -> u64 {
 struct TimingDevice {
     period: f32,
     valid_bits: u32,
-    calibrated_timestamps: ext::calibrated_timestamps::Device,
+    /// `None` when the device lacks `VK_EXT_calibrated_timestamps`.
+    calibrated_timestamps: Option<ext::calibrated_timestamps::Device>,
 }
 
 impl TimingDevice {
     fn calibrate(&self) -> TimestampCalibration {
+        let Some(ref calibrated_timestamps) = self.calibrated_timestamps else {
+            return TimestampCalibration {
+                cpu: Instant::now(),
+                gpu_ticks: None,
+                period: self.period,
+                valid_bits: self.valid_bits,
+            };
+        };
         let info =
             [vk::CalibratedTimestampInfoEXT::default().time_domain(vk::TimeDomainEXT::DEVICE)];
         let before = Instant::now();
         let (timestamps, max_deviation) = unsafe {
-            self.calibrated_timestamps
+            calibrated_timestamps
                 .get_calibrated_timestamps(&info)
                 .unwrap()
         };
@@ -117,7 +142,7 @@ impl TimingDevice {
         );
         TimestampCalibration {
             cpu: before + call_duration.div_f64(2.0),
-            gpu_ticks: timestamps[0],
+            gpu_ticks: Some(timestamps[0]),
             period: self.period,
             valid_bits: self.valid_bits,
         }
