@@ -29,7 +29,6 @@ impl super::CrashHandler {
 
 impl super::TimingState {
     fn resolve(&self, device: &ash::Device) -> crate::Timing<'_> {
-        let calibration = self.calibration.expect("no last submission");
         let n = self.submitted_count;
         let mut timestamps = [0u64; super::QUERY_POOL_SIZE];
         unsafe {
@@ -42,6 +41,10 @@ impl super::TimingState {
                 )
                 .unwrap_or_else(|error| panic!("Unable to resolve GPU timestamps: {error}"));
         }
+        let calibration = self
+            .calibration
+            .expect("no last submission")
+            .anchored(timestamps[0]);
         crate::Timing {
             passes: self
                 .pass_names
@@ -1516,7 +1519,7 @@ mod tests {
         let cpu = Instant::now();
         let calibration = TimestampCalibration {
             cpu,
-            gpu_ticks: 250,
+            gpu_ticks: Some(250),
             period: 2.0,
             valid_bits: 8,
         };
@@ -1525,11 +1528,35 @@ mod tests {
         let ten_ns_earlier = cpu.checked_sub(Duration::from_nanos(10)).unwrap();
         assert_eq!(calibration.map(245), ten_ns_earlier);
         let full_width = TimestampCalibration {
-            gpu_ticks: 5,
+            gpu_ticks: Some(5),
             valid_bits: 64,
             ..calibration
         };
         assert_eq!(full_width.map(0), ten_ns_earlier);
+    }
+
+    #[test]
+    fn uncalibrated_timestamps_anchor_to_the_first_and_keep_durations() {
+        let cpu = Instant::now();
+        let uncalibrated = TimestampCalibration {
+            cpu,
+            gpu_ticks: None,
+            period: 2.0,
+            valid_bits: 8,
+        };
+        // Wraps between the first and the second timestamp.
+        let anchored = uncalibrated.anchored(250);
+        assert_eq!(anchored.map(250), cpu);
+        assert_eq!(anchored.map(4), cpu + Duration::from_nanos(20));
+        // Calibrated ones keep their sample.
+        let calibrated = TimestampCalibration {
+            gpu_ticks: Some(240),
+            ..uncalibrated
+        };
+        assert_eq!(
+            calibrated.anchored(250).map(250),
+            cpu + Duration::from_nanos(20)
+        );
     }
 
     #[test]

@@ -153,6 +153,9 @@ struct AdapterCapabilities {
     /// multiple of this value (0 when the extension is unsupported).
     min_imported_host_pointer_alignment: u64,
     timing: bool,
+    /// `VK_EXT_calibrated_timestamps`, which ties GPU timestamps to the CPU
+    /// clock. Timing works without it; see `TimingDevice`.
+    calibrated_timestamps: bool,
     timestamp_valid_bits: u32,
     dual_source_blending: bool,
     shader_float16: bool,
@@ -628,12 +631,18 @@ fn inspect_adapter(
     } else if queue_family.timestamp_valid_bits == 0 {
         log::info!("No timing because the selected queue has no timestamp bits");
         false
-    } else if !supported_extensions.contains(&vk::EXT_CALIBRATED_TIMESTAMPS_NAME) {
-        log::info!("No timing because calibrated timestamps are not supported");
-        false
     } else {
         true
     };
+    // Adreno (Quest 3, Quest 3S) has no calibrated timestamps. Pass
+    // durations only need the raw timestamps, so timing stays available and
+    // each submission is anchored to the CPU clock at submit instead.
+    let calibrated_timestamps = supported_extensions.contains(&vk::EXT_CALIBRATED_TIMESTAMPS_NAME);
+    if timing && !calibrated_timestamps {
+        log::info!(
+            "GPU timing without calibrated timestamps: durations are exact, start times approximate"
+        );
+    }
 
     let buffer_device_address = buffer_device_address_features.buffer_device_address == vk::TRUE
         && (properties.api_version >= vk::API_VERSION_1_2
@@ -883,6 +892,7 @@ fn inspect_adapter(
         external_memory_host,
         min_imported_host_pointer_alignment,
         timing,
+        calibrated_timestamps,
         timestamp_valid_bits: queue_family.timestamp_valid_bits,
         dual_source_blending,
         shader_float16,
@@ -1365,7 +1375,7 @@ impl super::Context {
             if use_low_priority {
                 device_extensions.push(vk::KHR_GLOBAL_PRIORITY_NAME);
             }
-            if desc.timing {
+            if desc.timing && capabilities.calibrated_timestamps {
                 device_extensions.push(vk::EXT_CALIBRATED_TIMESTAMPS_NAME);
             }
 
@@ -1606,10 +1616,9 @@ impl super::Context {
             Some(super::TimingDevice {
                 period: capabilities.properties.limits.timestamp_period,
                 valid_bits: capabilities.timestamp_valid_bits,
-                calibrated_timestamps: ext::calibrated_timestamps::Device::new(
-                    &instance.core,
-                    &device_core,
-                ),
+                calibrated_timestamps: capabilities
+                    .calibrated_timestamps
+                    .then(|| ext::calibrated_timestamps::Device::new(&instance.core, &device_core)),
             })
         } else {
             None
