@@ -15,7 +15,6 @@ openxr = { workspace = true }
 bytemuck = { workspace = true }
 glam = { workspace = true }
 log = { workspace = true }
-libc = "0.2.50"
 libloading = "0.8"
 ndk-glue = "0.7"
 ndk-context = "0.1"

@@ -454,7 +454,7 @@ fn android_main(app: AndroidApp) {
         .expect("No internal data path available");
     let cache_path = internal_path.join("asset-cache");
     let mut engine = blade_engine::Engine::new(
-        blade_engine::Presentation::Xr(gpu::XrDesc {
+        blade_engine::Presentation::Xr(gpu::xr::Desc {
             instance: xr_instance.clone(),
             system_id: system,
         }),

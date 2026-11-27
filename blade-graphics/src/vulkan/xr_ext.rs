@@ -1,6 +1,6 @@
 //! OpenXR extensions of Meta Quest: passthrough (`XR_FB_passthrough`),
 //! the depth of the environment (`XR_META_environment_depth`), and the clock
-//! of the system (`XR_KHR_convert_timespec_time`), along with locating spaces
+//! of the runtime (`XR_KHR_convert_timespec_time`), along with locating spaces
 //! at any time. Each needs its extension enabled on the `openxr::Instance`
 //! that the context is made with, and is `None` without it.
 
@@ -10,7 +10,7 @@ use std::{mem, ptr};
 
 /// Colors that passthrough maps the brightness of the cameras to.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub enum XrPassthroughColorMap {
+pub enum PassthroughColorMap {
     /// The colors of the cameras.
     #[default]
     None,
@@ -27,7 +27,7 @@ pub enum XrPassthroughColorMap {
     },
 }
 
-impl XrPassthroughColorMap {
+impl PassthroughColorMap {
     /// The colors from black to `color`, by brightness, such as a red tint.
     pub fn tint(color: [f32; 4]) -> Self {
         let mut map = Box::new([[0.0; 4]; 256]);
@@ -41,28 +41,28 @@ impl XrPassthroughColorMap {
 
 /// How the passthrough layer draws the world.
 #[derive(Clone, Debug, PartialEq)]
-pub struct XrPassthroughStyle {
+pub struct PassthroughStyle {
     /// From 0, transparent, to 1.
     pub opacity: f32,
     /// The color of the edges that it finds in the images, or with an alpha
     /// of 0, no edges.
     pub edge_color: [f32; 4],
-    pub color_map: XrPassthroughColorMap,
+    pub color_map: PassthroughColorMap,
 }
 
-impl Default for XrPassthroughStyle {
+impl Default for PassthroughStyle {
     fn default() -> Self {
         Self {
             opacity: 1.0,
             edge_color: [0.0; 4],
-            color_map: XrPassthroughColorMap::None,
+            color_map: PassthroughColorMap::None,
         }
     }
 }
 
 /// Passthrough of the cameras of the headset, as a layer of the frames, see
 /// `layer`, which usually comes first, below the scene drawn with alpha.
-pub struct XrPassthrough {
+pub struct Passthrough {
     session: xr::Session<xr::Vulkan>,
     passthrough: xr::sys::PassthroughFB,
     layer: xr::sys::PassthroughLayerFB,
@@ -70,10 +70,10 @@ pub struct XrPassthrough {
 }
 
 // The handles belong to the session, which is shared between threads.
-unsafe impl Send for XrPassthrough {}
-unsafe impl Sync for XrPassthrough {}
+unsafe impl Send for Passthrough {}
+unsafe impl Sync for Passthrough {}
 
-impl XrPassthrough {
+impl Passthrough {
     fn fp(&self) -> &xr::raw::PassthroughFB {
         self.session
             .instance()
@@ -84,7 +84,7 @@ impl XrPassthrough {
     }
 
     /// Change how the world is drawn, from the next frame.
-    pub fn set_style(&self, style: &XrPassthroughStyle) -> xr::Result<()> {
+    pub fn set_style(&self, style: &PassthroughStyle) -> xr::Result<()> {
         let color = |c: [f32; 4]| xr::Color4f {
             r: c[0],
             g: c[1],
@@ -95,8 +95,8 @@ impl XrPassthrough {
         let mono_to_mono;
         let bcs;
         let next: *const std::ffi::c_void = match style.color_map {
-            XrPassthroughColorMap::None => ptr::null(),
-            XrPassthroughColorMap::MonoToRgba(ref map) => {
+            PassthroughColorMap::None => ptr::null(),
+            PassthroughColorMap::MonoToRgba(ref map) => {
                 mono_to_rgba = xr::sys::PassthroughColorMapMonoToRgbaFB {
                     ty: xr::sys::PassthroughColorMapMonoToRgbaFB::TYPE,
                     next: ptr::null(),
@@ -104,7 +104,7 @@ impl XrPassthrough {
                 };
                 &mono_to_rgba as *const _ as *const _
             }
-            XrPassthroughColorMap::MonoToMono(ref map) => {
+            PassthroughColorMap::MonoToMono(ref map) => {
                 mono_to_mono = xr::sys::PassthroughColorMapMonoToMonoFB {
                     ty: xr::sys::PassthroughColorMapMonoToMonoFB::TYPE,
                     next: ptr::null(),
@@ -112,7 +112,7 @@ impl XrPassthrough {
                 };
                 &mono_to_mono as *const _ as *const _
             }
-            XrPassthroughColorMap::BrightnessContrastSaturation {
+            PassthroughColorMap::BrightnessContrastSaturation {
                 brightness,
                 contrast,
                 saturation,
@@ -147,11 +147,11 @@ impl XrPassthrough {
 
     /// The layer to give `Context::xr_end_frame`. Its alpha blends it over
     /// the layers below it.
-    pub fn layer(&self) -> super::XrLayer<'_> {
+    pub fn layer(&self) -> crate::xr::Layer<'_> {
         // The structure starts with the header, and holds the handles of
         // `self`, which outlive the borrow.
-        super::XrLayer::Raw(unsafe {
-            super::XrRawLayer::new(
+        crate::xr::Layer::Raw(unsafe {
+            crate::xr::RawLayer::new(
                 &*(&self.composition as *const xr::sys::CompositionLayerPassthroughFB
                     as *const xr::sys::CompositionLayerBaseHeader),
             )
@@ -159,7 +159,7 @@ impl XrPassthrough {
     }
 }
 
-impl Drop for XrPassthrough {
+impl Drop for Passthrough {
     fn drop(&mut self) {
         let fp = self.fp();
         unsafe {
@@ -170,8 +170,8 @@ impl Drop for XrPassthrough {
 }
 
 /// The depth of the environment, as the headset senses it, in images that
-/// the runtime fills, see `XrEnvironmentDepth::acquire`.
-pub struct XrEnvironmentDepth {
+/// the runtime fills, see `EnvironmentDepth::acquire`.
+pub struct EnvironmentDepth {
     session: xr::Session<xr::Vulkan>,
     provider: xr::sys::EnvironmentDepthProviderMETA,
     swapchain: xr::sys::EnvironmentDepthSwapchainMETA,
@@ -179,13 +179,13 @@ pub struct XrEnvironmentDepth {
     views: Vec<super::TextureView>,
 }
 
-unsafe impl Send for XrEnvironmentDepth {}
-unsafe impl Sync for XrEnvironmentDepth {}
+unsafe impl Send for EnvironmentDepth {}
+unsafe impl Sync for EnvironmentDepth {}
 
 /// One depth image of the environment, with the views it was taken from,
 /// which are not those of the frame.
 #[derive(Clone, Copy, Debug)]
-pub struct XrDepthImage {
+pub struct DepthImage {
     /// A 2D array of one layer for each eye, of `TextureFormat::Depth16Unorm`
     /// that a shader reads.
     pub texture: super::Texture,
@@ -193,14 +193,14 @@ pub struct XrDepthImage {
     pub view: super::TextureView,
     /// The views of the eyes that the depth is projected for, in the base
     /// space, which reprojecting the depth to the views of the frame takes.
-    pub views: [super::XrView; 2],
+    pub views: [crate::xr::View; 2],
     /// The planes of the projection that the depth is in, where `far` may
     /// be infinite.
     pub near: f32,
     pub far: f32,
 }
 
-impl XrEnvironmentDepth {
+impl EnvironmentDepth {
     fn fp(&self) -> &xr::raw::EnvironmentDepthMETA {
         self.session
             .instance()
@@ -234,8 +234,8 @@ impl XrEnvironmentDepth {
     pub fn acquire(
         &self,
         context: &super::Context,
-        frame: &super::XrFrame,
-    ) -> Option<XrDepthImage> {
+        frame: &crate::xr::Frame,
+    ) -> Option<DepthImage> {
         let xr_state = context.xr.as_ref()?.lock().unwrap();
         let space = xr_state.space.as_ref()?;
         let info = xr::sys::EnvironmentDepthImageAcquireInfoMETA {
@@ -260,16 +260,16 @@ impl XrEnvironmentDepth {
             return None;
         }
         let index = image.swapchain_index as usize;
-        let view_of = |view: &xr::sys::EnvironmentDepthImageViewMETA| super::XrView {
+        let view_of = |view: &xr::sys::EnvironmentDepthImageViewMETA| crate::xr::View {
             pose: super::surface::pose_from_xr(view.pose),
-            fov: super::XrFov {
+            fov: crate::xr::Fov {
                 angle_left: view.fov.angle_left,
                 angle_right: view.fov.angle_right,
                 angle_up: view.fov.angle_up,
                 angle_down: view.fov.angle_down,
             },
         };
-        Some(XrDepthImage {
+        Some(DepthImage {
             texture: *self.textures.get(index)?,
             view: *self.views.get(index)?,
             views: [view_of(&image.views[0]), view_of(&image.views[1])],
@@ -286,7 +286,7 @@ impl super::Context {
 
     /// Start passthrough of the cameras, drawn in `style`. Needs
     /// `XR_FB_passthrough`.
-    pub fn create_xr_passthrough(&self, style: &XrPassthroughStyle) -> Option<XrPassthrough> {
+    pub fn create_xr_passthrough(&self, style: &PassthroughStyle) -> Option<Passthrough> {
         let session = self.xr_session()?;
         let fp = session.instance().exts().fb_passthrough.as_ref()?;
         let mut passthrough = xr::sys::PassthroughFB::NULL;
@@ -323,7 +323,7 @@ impl super::Context {
             space: xr::sys::Space::NULL,
             layer_handle: layer,
         };
-        let passthrough = XrPassthrough {
+        let passthrough = Passthrough {
             session,
             passthrough,
             layer,
@@ -338,7 +338,7 @@ impl super::Context {
     /// Provide the depth of the environment. Needs
     /// `XR_META_environment_depth`, and on Quest the
     /// `com.oculus.permission.USE_SCENE` permission. It starts stopped.
-    pub fn create_xr_environment_depth(&self) -> Option<XrEnvironmentDepth> {
+    pub fn create_xr_environment_depth(&self) -> Option<EnvironmentDepth> {
         let session = self.xr_session()?;
         let fp = *session.instance().exts().meta_environment_depth.as_ref()?;
         let mut provider = xr::sys::EnvironmentDepthProviderMETA::NULL;
@@ -359,7 +359,7 @@ impl super::Context {
             next: ptr::null(),
             create_flags: xr::sys::EnvironmentDepthSwapchainCreateFlagsMETA::EMPTY,
         };
-        let mut depth = XrEnvironmentDepth {
+        let mut depth = EnvironmentDepth {
             session,
             provider,
             swapchain,
@@ -461,7 +461,7 @@ impl super::Context {
         Some(depth)
     }
 
-    pub fn destroy_xr_environment_depth(&self, depth: &mut XrEnvironmentDepth) {
+    pub fn destroy_xr_environment_depth(&self, depth: &mut EnvironmentDepth) {
         for view in depth.views.drain(..) {
             unsafe { self.device.core.destroy_image_view(view.raw, None) };
         }
@@ -490,7 +490,7 @@ impl super::Context {
     /// Where `space` is at `time`, in the base space, such as the head (the
     /// `VIEW` space) when a camera took an image. The runtime keeps a short
     /// history of the past.
-    pub fn xr_locate(&self, space: &xr::Space, time: xr::Time) -> Option<super::XrPose> {
+    pub fn xr_locate(&self, space: &xr::Space, time: xr::Time) -> Option<crate::xr::Pose> {
         let xr = self.xr.as_ref()?.lock().unwrap();
         let base = xr.space.as_ref()?;
         let location = space.locate(base, time).ok()?;
@@ -502,53 +502,25 @@ impl super::Context {
             .then(|| super::surface::pose_from_xr(location.pose))
     }
 
-    /// The XR time of a time of `CLOCK_MONOTONIC`. Needs
-    /// `XR_KHR_convert_timespec_time`.
-    pub fn xr_time_from_timespec(&self, monotonic: libc::timespec) -> Option<xr::Time> {
+    /// The XR time `age` before now, such as when a camera took an image:
+    /// its age is the time since its timestamp, in the camera's own clock.
+    /// Needs `XR_KHR_convert_timespec_time`, or on Windows
+    /// `XR_KHR_win32_convert_performance_counter_time`.
+    pub fn xr_time_ago(&self, age: std::time::Duration) -> Option<xr::Time> {
         let instance = self.xr_instance()?;
-        let fp = instance.exts().khr_convert_timespec_time.as_ref()?;
-        let mut time = xr::Time::from_nanos(0);
-        cvt(unsafe {
-            (fp.convert_timespec_time_to_time)(instance.as_raw(), &monotonic, &mut time)
-        })
-        .ok()?;
-        Some(time)
-    }
-
-    /// The XR time of `nanos` of the system clock `clock`, such as
-    /// `CLOCK_BOOTTIME` of the timestamps of Android cameras whose source
-    /// is real time, or `CLOCK_MONOTONIC`. Needs `XR_KHR_convert_timespec_time`.
-    // `timespec` is narrower on 32-bit targets.
-    #[cfg(unix)]
-    #[allow(
-        trivial_numeric_casts,
-        clippy::unnecessary_cast,
-        clippy::useless_conversion
-    )]
-    pub fn xr_time_from_clock(&self, clock: libc::clockid_t, nanos: i64) -> Option<xr::Time> {
-        let now = |clock| {
-            let mut ts = libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            };
-            (unsafe { libc::clock_gettime(clock, &mut ts) } == 0)
-                .then(|| ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64)
-        };
-        // The offset of the clock from the monotonic one, which the extension
-        // takes, now.
-        let monotonic = if clock == libc::CLOCK_MONOTONIC {
-            nanos
-        } else {
-            nanos - (now(clock)? - now(libc::CLOCK_MONOTONIC)?)
-        };
-        // Before the clock started, which no timespec is.
-        if monotonic < 0 {
+        #[cfg(not(windows))]
+        let loaded = instance.exts().khr_convert_timespec_time.is_some();
+        #[cfg(windows)]
+        let loaded = instance
+            .exts()
+            .khr_win32_convert_performance_counter_time
+            .is_some();
+        if !loaded {
             return None;
         }
-        self.xr_time_from_timespec(libc::timespec {
-            tv_sec: (monotonic / 1_000_000_000).try_into().ok()?,
-            tv_nsec: (monotonic % 1_000_000_000) as _,
-        })
+        let now = instance.now().ok()?;
+        let age = i64::try_from(age.as_nanos()).ok()?;
+        Some(xr::Time::from_nanos(now.as_nanos().checked_sub(age)?))
     }
 }
 
@@ -602,7 +574,7 @@ impl super::CommandEncoder {
     /// Make an acquired XR swapchain image ready to render to, keeping what
     /// it holds, from the layout that the runtime hands it out in.
     /// `init_texture` does the same, discarding it.
-    pub fn begin_xr_image(&mut self, image: &super::XrImage) {
+    pub fn begin_xr_image(&mut self, image: &crate::xr::Image) {
         self.xr_layout_barrier(
             image.internal.image,
             vk::ImageAspectFlags::COLOR,
@@ -614,7 +586,7 @@ impl super::CommandEncoder {
     /// Give an XR swapchain image back the layout that the runtime takes it
     /// in, after the work that renders to it, before it is released.
     /// `present` does it for the image of a `Frame`.
-    pub fn end_xr_image(&mut self, image: &super::XrImage) {
+    pub fn end_xr_image(&mut self, image: &crate::xr::Image) {
         self.end_xr_raw_image(image.internal.image);
     }
 
@@ -629,7 +601,7 @@ impl super::CommandEncoder {
 
     /// Make a depth image of the environment readable by shaders, from the
     /// layout that the runtime hands it out in, until `end_xr_depth`.
-    pub fn begin_xr_depth(&mut self, depth: &XrDepthImage) {
+    pub fn begin_xr_depth(&mut self, depth: &DepthImage) {
         self.xr_layout_barrier(
             depth.texture.raw,
             vk::ImageAspectFlags::DEPTH,
@@ -640,7 +612,7 @@ impl super::CommandEncoder {
 
     /// Give a depth image of the environment back to the runtime, in the
     /// layout it handed it out in, after the work that reads it.
-    pub fn end_xr_depth(&mut self, depth: &XrDepthImage) {
+    pub fn end_xr_depth(&mut self, depth: &DepthImage) {
         self.xr_layout_barrier(
             depth.texture.raw,
             vk::ImageAspectFlags::DEPTH,

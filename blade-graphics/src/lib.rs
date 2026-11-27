@@ -82,6 +82,7 @@ mod internal;
 mod shader;
 pub mod traits;
 pub mod util;
+pub mod xr;
 pub mod limits {
     /// Max number of passes inside a command encoder.
     pub const PASS_COUNT: usize = 1234;
@@ -126,40 +127,12 @@ impl fmt::Display for PlatformError {
 
 impl std::error::Error for PlatformError {}
 
-#[cfg(not(any(
-    vulkan,
-    windows,
-    target_os = "linux",
-    target_os = "android",
-    target_os = "freebsd"
-)))]
-pub mod openxr {
-    #[derive(Clone, Debug)]
-    pub enum Instance {}
-    #[derive(Clone, Debug)]
-    pub enum SystemId {}
-}
-
-#[derive(Clone)]
-pub struct XrDesc {
-    pub instance: openxr::Instance,
-    pub system_id: openxr::SystemId,
-}
-
-impl fmt::Debug for XrDesc {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("XrDesc")
-            .field("system_id", &self.system_id)
-            .finish()
-    }
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct ContextDesc {
     /// Ability to present contents to a window.
     pub presentation: bool,
     /// Enable VR/AR.
-    pub xr: Option<XrDesc>,
+    pub xr: Option<xr::Desc>,
     /// Enable ray tracing support (acceleration structures and ray queries).
     pub ray_tracing: bool,
     /// Enable validation of the GAPI, shaders,
@@ -1656,64 +1629,6 @@ pub struct SurfaceConfig {
     pub color_space: ColorSpace,
     pub transparent: bool,
     pub allow_exclusive_full_screen: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct XrSurfaceConfig {
-    pub size: Extent,
-    pub usage: TextureUsage,
-    pub color_space: ColorSpace,
-    pub view_count: u32,
-}
-
-impl Default for XrSurfaceConfig {
-    fn default() -> Self {
-        Self {
-            size: Extent::default(),
-            usage: TextureUsage::TARGET,
-            color_space: ColorSpace::Linear,
-            view_count: 2,
-        }
-    }
-}
-
-/// How the XR compositor blends the layers of a frame with the real world,
-/// see `Context::xr_end_frame`.
-#[derive(Clone, Copy, Debug, Default, Hash, Eq, PartialEq)]
-pub enum XrBlendMode {
-    /// The layers replace the view of the world.
-    #[default]
-    Opaque,
-    /// The layers add up to the light of the world, as on optical see-through
-    /// displays.
-    Additive,
-    /// The layers are blended over the world by their alpha, as for video
-    /// passthrough where the runtime does it without a passthrough layer.
-    AlphaBlend,
-}
-
-bitflags::bitflags! {
-    /// How the compositor treats one XR composition layer.
-    #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
-    pub struct XrLayerFlags: u32 {
-        /// Blend the layer over those below it by the alpha of its texture,
-        /// instead of replacing them.
-        const BLEND_SOURCE_ALPHA = 1 << 0;
-        /// The colors of the texture aren't multiplied by its alpha.
-        const UNPREMULTIPLIED_ALPHA = 1 << 1;
-        /// Ask the compositor to correct the chromatic aberration of the
-        /// lenses for this layer.
-        const CORRECT_CHROMATIC_ABERRATION = 1 << 2;
-    }
-}
-
-/// Which eyes see an XR layer that isn't per eye, such as a quad.
-#[derive(Clone, Copy, Debug, Default, Hash, Eq, PartialEq)]
-pub enum XrEyeVisibility {
-    #[default]
-    Both,
-    Left,
-    Right,
 }
 
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
