@@ -9,6 +9,8 @@ use std::slice;
 mod bunnymark_example;
 #[cfg(not(gles))]
 mod denoiser;
+#[cfg(not(gles))]
+mod pbr_harness;
 mod pbr_scene;
 #[cfg(not(gles))]
 #[path = "../examples/ray-query/example.rs"]
@@ -17,6 +19,8 @@ mod snapshot;
 
 /// Directory with the renderer shaders, needed by the asset hub.
 const SHADER_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/blade-render/code");
+
+use pbr_harness::PbrHarness;
 
 // --- Sky snapshot test structs ---
 
@@ -782,6 +786,451 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     context.destroy_buffer(input);
 }
 
+/// The analytic BSDF derivatives used by the differentiable path tracer
+/// must agree with central differences of the BSDF itself.
+#[test]
+#[ignore = "requires a working GPU context"]
+fn bsdf_gradient_gpu_test() {
+    const COUNT: usize = 256;
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    if !context.capabilities().compute {
+        println!("Skipping: compute is not supported");
+        return;
+    }
+    let output = context.create_buffer(gpu::BufferDesc {
+        name: "bsdf-gradient-output",
+        size: (COUNT * 160) as u64,
+        memory: gpu::Memory::Shared,
+    });
+    let source = [
+        include_str!("../blade-render/code/random.inc.wgsl"),
+        include_str!("../blade-render/code/brdf.inc.wgsl"),
+        include_str!("../blade-render/code/brdf-grad.inc.wgsl"),
+        include_str!("../blade-render/code/sampling.inc.wgsl"),
+        r#"
+struct Check {
+    analytic: vec4<f32>,
+    numeric: vec4<f32>,
+    analytic_normal: vec4<f32>,
+    numeric_normal: vec4<f32>,
+    analytic_transmission: vec4<f32>,
+    numeric_transmission: vec4<f32>,
+    // `numeric_normal` with twice the step, which disagrees with it where
+    // rounding leaves central differences off, at the sharpest peaks.
+    numeric_normal_wide: vec4<f32>,
+    // By turning the light direction along its two tangents, through the
+    // first and the last channel, as with the normal.
+    analytic_light: vec4<f32>,
+    numeric_light: vec4<f32>,
+    numeric_light_wide: vec4<f32>,
+}
+var<storage, read_write> output: array<Check>;
+
+// The same as `evaluate_bsdf`, without the sampling include, with a part
+// `transmission` of the diffuse albedo going through the surface as the
+// specular lobe mirrored about it.
+fn reference_surface(mat: Material, transmission: f32, eta: f32, normal: vec3<f32>, view_dir: vec3<f32>, light_dir: vec3<f32>) -> vec3<f32> {
+    let n_dot_l = dot(normal, light_dir);
+    if (n_dot_l >= 0.0) {
+        let brdf = evaluate_brdf(mat, normal, view_dir, light_dir);
+        return mat.diffuse_albedo * (1.0 - transmission) * brdf.diffuse + brdf.specular;
+    }
+    if (eta > 0.0) {
+        // Walter et al., carrying radiance.
+        var h = normalize(-(view_dir + eta * light_dir));
+        if (dot(h, normal) < 0.0) {
+            h = -h;
+        }
+        let h_dot_v = dot(h, view_dir);
+        let h_dot_l = dot(h, light_dir);
+        if (h_dot_v <= 0.0 || h_dot_l >= 0.0) {
+            return vec3<f32>(0.0);
+        }
+        let alpha = material_alpha(mat);
+        let fade_t = clamp(dot(normal, h) / 0.1, 0.0, 1.0);
+        let d = distribution_ggx(dot(normal, h), alpha) * fade_t * fade_t * (3.0 - 2.0 * fade_t);
+        let g = visibility_smith(dot(normal, view_dir), -n_dot_l, alpha) * 4.0 * dot(normal, view_dir) * -n_dot_l;
+        let f = fresnel_schlick(h_dot_v, mat.specular_f0);
+        let sum = h_dot_v + eta * h_dot_l;
+        let btdf = abs(h_dot_l) * h_dot_v / (-n_dot_l * dot(normal, view_dir))
+            * (vec3<f32>(1.0) - f) * g * d / (sum * sum);
+        return transmission * mat.diffuse_albedo * btdf * -n_dot_l;
+    }
+    let mirrored = light_dir - 2.0 * n_dot_l * normal;
+    let n_dot_v = dot(normal, view_dir);
+    let half_dir = normalize(view_dir + mirrored);
+    let alpha = material_alpha(mat);
+    let microfacet = distribution_ggx(max(dot(normal, half_dir), 0.0), alpha)
+        * visibility_smith(n_dot_v, -n_dot_l, alpha) * -n_dot_l;
+    let fresnel = fresnel_schlick(max(dot(view_dir, half_dir), 0.0), mat.specular_f0);
+    return transmission * mat.diffuse_albedo * (vec3<f32>(1.0) - fresnel) * microfacet;
+}
+
+fn direction(theta: f32, phi: f32) -> vec3<f32> {
+    return vec3<f32>(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
+}
+
+const H_NORMAL: f32 = 1.0e-3;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    // Low discrepancy, and away from the grazing and clamped ranges.
+    let i = f32(id.x) + 1.0;
+    let u = fract(i * vec4<f32>(0.6180340, 0.7548777, 0.5698403, 0.4142136));
+    let w = fract(i * vec4<f32>(0.3247180, 0.8191725, 0.2207440, 0.6823278));
+    let normal = vec3<f32>(0.0, 0.0, 1.0);
+    let view_dir = direction(0.1 + 1.2 * u.x, 6.2 * u.y);
+    // Every other configuration lights the surface from below, through it.
+    let below = (id.x & 1u) == 1u;
+    let light_dir = direction(select(0.1 + 1.2 * u.z, 3.04 - 1.2 * u.z, below), 6.2 * u.w);
+    var mat: Material;
+    mat.diffuse_albedo = 0.1 + 0.8 * w.xyz;
+    mat.specular_f0 = 0.02 + 0.9 * w.yzx;
+    mat.roughness = 0.15 + 0.8 * w.w;
+    let transmission = 0.2 + 0.6 * fract(i * 0.5497004);
+    // Every other one through the surface refracts, into a solid or out of
+    // it.
+    var eta = 0.0;
+    if ((id.x & 3u) == 3u) {
+        eta = 1.2 + 0.6 * fract(i * 0.3819660);
+        if ((id.x & 4u) == 4u) {
+            eta = 1.0 / eta;
+        }
+    }
+
+    let grad = evaluate_surface_gradient(mat, transmission, eta, normal, view_dir, light_dir);
+    let h = 1.0e-3;
+    var a = mat;
+    var b = mat;
+    a.diffuse_albedo.x += h;
+    b.diffuse_albedo.x -= h;
+    let d_albedo = (reference_surface(a, transmission, eta, normal, view_dir, light_dir) - reference_surface(b, transmission, eta, normal, view_dir, light_dir)) / (2.0 * h);
+    a = mat;
+    b = mat;
+    a.specular_f0.y += h;
+    b.specular_f0.y -= h;
+    let d_f0 = (reference_surface(a, transmission, eta, normal, view_dir, light_dir) - reference_surface(b, transmission, eta, normal, view_dir, light_dir)) / (2.0 * h);
+    a = mat;
+    b = mat;
+    a.roughness += h;
+    b.roughness -= h;
+    let d_roughness = (reference_surface(a, transmission, eta, normal, view_dir, light_dir) - reference_surface(b, transmission, eta, normal, view_dir, light_dir)) / (2.0 * h);
+
+    // Tilting the normal along the tangents, which is all that a unit normal
+    // can do, through the first and the last channel. The tracer normalizes
+    // the normal, which takes the component along it out of the derivative.
+    var d_normal = mat2x3<f32>();
+    var d_normal_wide = mat2x3<f32>();
+    for (var axis = 0u; axis < 2u; axis += 1u) {
+        var offset = vec3<f32>(0.0);
+        offset[axis] = H_NORMAL;
+        d_normal[axis] = (reference_surface(mat, transmission, eta, normalize(normal + offset), view_dir, light_dir)
+            - reference_surface(mat, transmission, eta, normalize(normal - offset), view_dir, light_dir)) / (2.0 * H_NORMAL);
+        d_normal_wide[axis] = (reference_surface(mat, transmission, eta, normalize(normal + 2.0 * offset), view_dir, light_dir)
+            - reference_surface(mat, transmission, eta, normalize(normal - 2.0 * offset), view_dir, light_dir)) / (4.0 * H_NORMAL);
+    }
+    // The light only turns, along the tangents of its direction.
+    let light_tangent = normalize(cross(light_dir, vec3<f32>(0.3, 0.5, 0.8)));
+    let light_tangents = mat2x3<f32>(light_tangent, cross(light_dir, light_tangent));
+    var d_light = mat2x3<f32>();
+    var d_light_wide = mat2x3<f32>();
+    for (var axis = 0u; axis < 2u; axis += 1u) {
+        let offset = H_NORMAL * light_tangents[axis];
+        d_light[axis] = (reference_surface(mat, transmission, eta, normal, view_dir, normalize(light_dir + offset))
+            - reference_surface(mat, transmission, eta, normal, view_dir, normalize(light_dir - offset))) / (2.0 * H_NORMAL);
+        d_light_wide[axis] = (reference_surface(mat, transmission, eta, normal, view_dir, normalize(light_dir + 2.0 * offset))
+            - reference_surface(mat, transmission, eta, normal, view_dir, normalize(light_dir - 2.0 * offset))) / (4.0 * H_NORMAL);
+    }
+    let d_light_x = bsdf_light_grad(grad, vec3<f32>(1.0, 0.0, 0.0)) * light_tangents;
+    let d_light_z = bsdf_light_grad(grad, vec3<f32>(0.0, 0.0, 1.0)) * light_tangents;
+    let d_normal_x = bsdf_normal_grad(grad, vec3<f32>(1.0, 0.0, 0.0));
+    let d_normal_z = bsdf_normal_grad(grad, vec3<f32>(0.0, 0.0, 1.0));
+    let d_transmission = (reference_surface(mat, transmission + h, eta, normal, view_dir, light_dir)
+        - reference_surface(mat, transmission - h, eta, normal, view_dir, light_dir)) / (2.0 * h);
+    let d_eta = select(vec3<f32>(0.0), (reference_surface(mat, transmission, eta + h, normal, view_dir, light_dir)
+        - reference_surface(mat, transmission, eta - h, normal, view_dir, light_dir)) / (2.0 * h), eta > 0.0);
+
+    let value = reference_surface(mat, transmission, eta, normal, view_dir, light_dir);
+    output[id.x] = Check(
+        vec4<f32>(grad.d_diffuse_albedo.x, grad.d_specular_f0.y, grad.d_roughness.x, grad.value.z),
+        vec4<f32>(d_albedo.x, d_f0.y, d_roughness.x, value.z),
+        vec4<f32>(d_normal_x.xy, d_normal_z.xy),
+        vec4<f32>(d_normal[0].x, d_normal[1].x, d_normal[0].z, d_normal[1].z),
+        vec4<f32>(grad.d_transmission.x, grad.d_eta.x, grad.value.xy),
+        vec4<f32>(d_transmission.x, d_eta.x, value.xy),
+        vec4<f32>(d_normal_wide[0].x, d_normal_wide[1].x, d_normal_wide[0].z, d_normal_wide[1].z),
+        vec4<f32>(d_light_x, d_light_z),
+        vec4<f32>(d_light[0].x, d_light[1].x, d_light[0].z, d_light[1].z),
+        vec4<f32>(d_light_wide[0].x, d_light_wide[1].x, d_light_wide[0].z, d_light_wide[1].z),
+    );
+}
+"#,
+    ]
+    .concat();
+    let shader = context.create_shader(gpu::ShaderDesc {
+        source: &source,
+        naga_module: None,
+    });
+    let global_layout = DispatchGlobals::layout();
+    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        name: "bsdf-gradient-test",
+        data_layouts: &[&global_layout],
+        compute: shader.at("main"),
+        full_subgroup_size: None,
+    });
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "bsdf-gradient-test",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    encoder.start();
+    if let mut compute = encoder.compute("bsdf-gradient")
+        && let mut pass = compute.with(&pipeline)
+    {
+        pass.bind(
+            0,
+            &DispatchGlobals {
+                input: output.into(),
+                output: output.into(),
+            },
+        );
+        pass.dispatch([(COUNT / 64) as u32, 1, 1]);
+    }
+    let sync_point = context.submit(&mut encoder);
+    assert!(context.wait_for(&sync_point, 2000).unwrap());
+
+    let checks = unsafe { slice::from_raw_parts(output.data() as *const [[f32; 4]; 10], COUNT) };
+    let mut nonzero = 0;
+    let mut through = 0;
+    let mut unreliable = 0;
+    for (
+        index,
+        [
+            analytic,
+            numeric,
+            analytic_normal,
+            numeric_normal,
+            analytic_more,
+            numeric_more,
+            numeric_wide,
+            analytic_light,
+            numeric_light,
+            numeric_light_wide,
+        ],
+    ) in checks.iter().enumerate()
+    {
+        let tolerance = |a: f32, n: f32| 1.0e-3 + 1.0e-2 * a.abs().max(n.abs());
+        if numeric_normal
+            .iter()
+            .zip(numeric_wide)
+            .chain(numeric_light.iter().zip(numeric_light_wide))
+            .any(|(&n, &w)| (n - w).abs() > tolerance(n, w))
+        {
+            unreliable += 1;
+            continue;
+        }
+        let names = [
+            "albedo",
+            "f0",
+            "roughness",
+            "value",
+            "normal.x",
+            "normal.y",
+            "normal.x",
+            "normal.y",
+            "transmission",
+            "eta",
+            "value.x",
+            "value.y",
+            "light.x",
+            "light.y",
+            "light.x",
+            "light.y",
+        ];
+        let analytic = analytic
+            .iter()
+            .chain(analytic_normal)
+            .chain(analytic_more)
+            .chain(analytic_light);
+        let numeric = numeric
+            .iter()
+            .chain(numeric_normal)
+            .chain(numeric_more)
+            .chain(numeric_light);
+        for ((name, &a), &n) in names.iter().zip(analytic).zip(numeric) {
+            assert!(
+                (a - n).abs() <= tolerance(a, n),
+                "configuration {index}: d/d{name} is {a}, central difference is {n}"
+            );
+        }
+        if checks[index][0][2] != 0.0 {
+            nonzero += 1;
+            if index % 2 == 1 {
+                through += 1;
+            }
+        }
+    }
+    assert!(
+        through > COUNT / 4,
+        "only {through} configurations were lit through"
+    );
+    let refracted = checks
+        .iter()
+        .enumerate()
+        .filter(|(index, check)| index % 4 == 3 && check[4][2] != 0.0 && check[4][1] != 0.0)
+        .count();
+    assert!(
+        refracted > COUNT / 16,
+        "only {refracted} configurations were refracted"
+    );
+    assert!(
+        unreliable < COUNT / 20,
+        "central differences were unreliable for {unreliable} configurations"
+    );
+    // Most configurations face both directions away from the surface.
+    assert!(
+        nonzero > COUNT / 2,
+        "only {nonzero} configurations were lit"
+    );
+
+    context.destroy_command_encoder(&mut encoder);
+    context.destroy_compute_pipeline(&mut pipeline);
+    context.destroy_buffer(output);
+}
+
+/// Drawing directions from the lobes of the differentiable tracer has the
+/// density that it claims: the lobes integrate to the same by drawing from
+/// them as by drawing uniformly, and as many draws succeed as the density
+/// integrates to, through solids from either side too.
+#[test]
+#[ignore = "requires a working GPU context"]
+fn bsdf_sampling_gpu_test() {
+    const COUNT: usize = 64;
+    let context = unsafe { gpu::Context::init(gpu::ContextDesc::default()).unwrap() };
+    if !context.capabilities().compute {
+        println!("Skipping: compute is not supported");
+        return;
+    }
+    let output = context.create_buffer(gpu::BufferDesc {
+        name: "bsdf-sampling-output",
+        size: (COUNT * 32) as u64,
+        memory: gpu::Memory::Shared,
+    });
+    let source = [
+        include_str!("../blade-render/code/random.inc.wgsl"),
+        include_str!("../blade-render/code/brdf.inc.wgsl"),
+        include_str!("../blade-render/code/brdf-grad.inc.wgsl"),
+        include_str!("../blade-render/code/sampling.inc.wgsl"),
+        r#"
+struct Estimate {
+    // Of the integral of the value, by drawing from the lobes and uniformly,
+    // and of the density, by counting the draws and uniformly.
+    drawn: vec2<f32>,
+    uniform: vec2<f32>,
+    density: vec4<f32>,
+}
+var<storage, read_write> output: array<Estimate>;
+
+fn direction(theta: f32, phi: f32) -> vec3<f32> {
+    return vec3<f32>(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = f32(id.x) + 1.0;
+    let u = fract(i * vec4<f32>(0.6180340, 0.7548777, 0.5698403, 0.4142136));
+    let normal = vec3<f32>(0.0, 0.0, 1.0);
+    let view_dir = direction(0.1 + 1.3 * u.x, 6.2 * u.y);
+    var mat: Material;
+    mat.diffuse_albedo = vec3<f32>(0.2 + 0.6 * u.z);
+    mat.specular_f0 = vec3<f32>(0.04 + 0.5 * u.w);
+    mat.roughness = 0.3 + 0.6 * fract(i * 0.3247180);
+    let transmission = select(0.0, 0.3 + 0.6 * fract(i * 0.8191725), id.x % 4u != 0u);
+    var eta = 0.0;
+    if (id.x % 4u == 2u) {
+        eta = 1.5;
+    } else if (id.x % 4u == 3u) {
+        eta = 1.0 / 1.5;
+    }
+    var rng = random_init(id.x, 7u);
+    let samples = 65536u;
+    var drawn = 0.0;
+    var uniform = 0.0;
+    var succeeded = 0.0;
+    var density = 0.0;
+    for (var k = 0u; k < samples; k += 1u) {
+        let bs = sample_surface(mat, transmission, eta, normal, view_dir, false, &rng);
+        if (bs.pdf > 0.0) {
+            drawn += evaluate_surface_gradient(mat, transmission, eta, normal, view_dir, bs.dir).value.x / bs.pdf;
+            succeeded += 1.0;
+        }
+        let z = 1.0 - 2.0 * random_gen(&rng);
+        let r = sqrt(max(0.0, 1.0 - z * z));
+        let phi = 2.0 * PI * random_gen(&rng);
+        let dir = vec3<f32>(r * cos(phi), r * sin(phi), z);
+        uniform += 4.0 * PI * evaluate_surface_gradient(mat, transmission, eta, normal, view_dir, dir).value.x;
+        density += 4.0 * PI * surface_pdf(mat, transmission, eta, normal, view_dir, dir);
+    }
+    let n = f32(samples);
+    output[id.x] = Estimate(vec2<f32>(drawn / n, 0.0), vec2<f32>(uniform / n, 0.0),
+        vec4<f32>(succeeded / n, density / n, 0.0, 0.0));
+}
+"#,
+    ]
+    .concat();
+    let shader = context.create_shader(gpu::ShaderDesc {
+        source: &source,
+        naga_module: None,
+    });
+    let global_layout = DispatchGlobals::layout();
+    let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        name: "bsdf-sampling-test",
+        data_layouts: &[&global_layout],
+        compute: shader.at("main"),
+        full_subgroup_size: None,
+    });
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "bsdf-sampling-test",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    encoder.start();
+    if let mut compute = encoder.compute("bsdf-sampling")
+        && let mut pass = compute.with(&pipeline)
+    {
+        pass.bind(
+            0,
+            &DispatchGlobals {
+                input: output.into(),
+                output: output.into(),
+            },
+        );
+        pass.dispatch([(COUNT / 64) as u32, 1, 1]);
+    }
+    let sync_point = context.submit(&mut encoder);
+    assert!(context.wait_for(&sync_point, 60000).unwrap());
+
+    let estimates = unsafe { slice::from_raw_parts(output.data() as *const [f32; 8], COUNT) };
+    for (index, e) in estimates.iter().enumerate() {
+        let [drawn, _, uniform, _, succeeded, density, _, _] = *e;
+        println!(
+            "configuration {index}: integral {drawn:.4} drawn, {uniform:.4} uniformly; density {succeeded:.4} drawn, {density:.4} uniformly"
+        );
+        assert!(
+            (drawn - uniform).abs() < 0.03 + 0.05 * uniform,
+            "configuration {index}: the lobes integrate to {drawn} drawn from them, and {uniform} uniformly"
+        );
+        assert!(
+            (succeeded - density).abs() < 0.02 + 0.03 * density,
+            "configuration {index}: {succeeded} of the draws succeeded, where the density integrates to {density}"
+        );
+    }
+
+    context.destroy_command_encoder(&mut encoder);
+    context.destroy_compute_pipeline(&mut pipeline);
+    context.destroy_buffer(output);
+}
+
 #[cfg(not(gles))]
 #[test]
 #[ignore = "requires a working GPU context"]
@@ -1412,67 +1861,6 @@ const CANONICAL_FRAMES: usize = 32;
 /// as a mean absolute difference of the 8-bit channels.
 #[cfg(not(gles))]
 const CANONICAL_MAX_DIFFERENCE: f64 = 12.0;
-
-struct PbrHarness {
-    context: std::sync::Arc<gpu::Context>,
-    choir: std::sync::Arc<choir::Choir>,
-    workers: Vec<choir::WorkerHandle>,
-    asset_hub: blade_render::AssetHub,
-    shaders: blade_render::Shaders,
-}
-
-impl PbrHarness {
-    /// Bring up the asset hub and cook the renderer shaders.
-    fn new(context: gpu::Context, cache_name: &str, ray_tracing: bool) -> Self {
-        let context = std::sync::Arc::new(context);
-        let choir = choir::Choir::new();
-        #[cfg(not(any(gles, target_arch = "wasm32")))]
-        let workers = (0..2)
-            .map(|i| choir.add_worker(&format!("{cache_name}-{i}")))
-            .collect::<Vec<_>>();
-        #[cfg(any(gles, target_arch = "wasm32"))]
-        let workers = Vec::new();
-        let cache_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("test-assets")
-            .join(cache_name);
-        let asset_hub = blade_render::AssetHub::new(&cache_path, &choir, &context);
-        let (shaders, shader_task) =
-            blade_render::Shaders::load(SHADER_DIR.as_ref(), &asset_hub, ray_tracing);
-        if workers.is_empty() {
-            shader_task.join_active();
-        } else {
-            shader_task.join();
-        }
-        Self {
-            context,
-            choir,
-            workers,
-            asset_hub,
-            shaders,
-        }
-    }
-
-    fn create_grid_model(
-        &self,
-        roughness_range: [f32; 2],
-    ) -> blade_asset::Handle<blade_render::Model> {
-        let geometries = pbr_scene::material_grid(roughness_range);
-        let model = self
-            .asset_hub
-            .models
-            .baker
-            .create_model("pbr-material-grid", geometries);
-        self.asset_hub.models.insert(model)
-    }
-
-    fn destroy(mut self) {
-        self.asset_hub.destroy();
-        // let the workers finish before the choir goes away
-        self.workers.clear();
-        drop(self.choir);
-    }
-}
 
 /// Rasterize a grid of spheres covering the metallic-roughness space,
 /// plus a row of emissive materials.

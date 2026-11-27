@@ -1,4 +1,8 @@
 mod debug;
+pub mod diff;
+pub mod large_steps;
+pub mod marching;
+pub mod remesh;
 
 use crate::{
     CameraParams, DebugLine, DummyResources, EnvironmentMap, RenderConfig, Shaders,
@@ -580,6 +584,8 @@ pub struct RayTracer {
     frame_index: usize,
     frame_scene_built: usize,
     scene_models: Vec<blade_asset::Handle<crate::Model>>,
+    /// Object-to-world transform of every instance of the current scene.
+    instance_transforms: Vec<blade_graphics::Transform>,
     scene_topology_changed: bool,
     is_frozen: bool,
     reset_accumulation: bool,
@@ -1146,6 +1152,7 @@ impl RayTracer {
             frame_index: 0,
             frame_scene_built: 0,
             scene_models: Vec::new(),
+            instance_transforms: Vec::new(),
             scene_topology_changed: false,
             is_frozen: false,
             reset_accumulation: true,
@@ -1162,6 +1169,9 @@ impl RayTracer {
             gpu.destroy_buffer(self.hit_buffer);
         }
         gpu.destroy_acceleration_structure(self.acceleration_structure);
+        if self.prev_acceleration_structure != blade_graphics::AccelerationStructure::default() {
+            gpu.destroy_acceleration_structure(self.prev_acceleration_structure);
+        }
         // env map, dummy, and debug
         self.env_map.destroy(gpu);
         self.dummy.destroy(gpu);
@@ -1368,13 +1378,17 @@ impl RayTracer {
         self.env_map
             .assign(env_view, env_extent, command_encoder, gpu);
 
-        self.prev_acceleration_structure = std::mem::take(&mut self.acceleration_structure);
-        if self.prev_acceleration_structure != blade_graphics::AccelerationStructure::default() {
-            // The old current scene becomes the previous scene used by this
-            // frame. Transfer ownership to this frame so FramePacer destroys
-            // it only after this frame's fence signals.
-            temp.acceleration_structures
-                .push(self.prev_acceleration_structure);
+        // The old current scene becomes the previous scene, which stays
+        // until the next build, for this frame and for rendering the
+        // previous scene, see `diff::DiffConfig::control_variate`. The one
+        // before goes to this frame, so FramePacer destroys it only after
+        // this frame's fence signals.
+        let older = std::mem::replace(
+            &mut self.prev_acceleration_structure,
+            std::mem::take(&mut self.acceleration_structure),
+        );
+        if older != blade_graphics::AccelerationStructure::default() {
+            temp.acceleration_structures.push(older);
         }
         let geometry_count = objects
             .iter()
@@ -1411,6 +1425,7 @@ impl RayTracer {
         let dummy_black = self.textures.alloc(self.dummy.black_view);
 
         let mut geometry_index = 0;
+        self.instance_transforms.clear();
         let mut instances = Vec::with_capacity(objects.len());
         let mut blases = Vec::with_capacity(objects.len());
         let mut dynamic_blas_work = Vec::new();
@@ -1615,6 +1630,7 @@ impl RayTracer {
             };
             object.blas.previous_generation = current_generation;
 
+            self.instance_transforms.push(transform);
             instances.push(blade_graphics::AccelerationStructureInstance {
                 acceleration_structure_index: blases.len() as u32,
                 transform,

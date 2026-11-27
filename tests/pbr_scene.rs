@@ -25,7 +25,7 @@ const EMISSIVE_COLORS: [[f32; 3]; COLUMNS] = [
     [0.3, 0.3, 0.3],
 ];
 
-fn encode_normal(v: [f32; 3]) -> u32 {
+pub fn encode_normal(v: [f32; 3]) -> u32 {
     let quantize = |f: f32| ((f.clamp(-1.0, 1.0) * 127.0 + 0.5) as i8) as u8 as u32;
     quantize(v[0]) | (quantize(v[1]) << 8) | (quantize(v[2]) << 16)
 }
