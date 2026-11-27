@@ -494,7 +494,7 @@ impl Renderer {
 pub enum Presentation<'a> {
     #[cfg(not(target_os = "android"))]
     Window(&'a winit::window::Window),
-    Xr(gpu::XrDesc),
+    Xr(gpu::xr::Desc),
     #[cfg(target_os = "android")]
     #[doc(hidden)]
     __Marker(std::marker::PhantomData<&'a ()>),
@@ -505,7 +505,7 @@ enum TargetSurface {
     #[cfg(not(target_os = "android"))]
     Window(gpu::Surface),
     #[cfg(target_os = "android")]
-    Xr(gpu::XrSurface),
+    Xr(gpu::xr::Surface),
 }
 
 /// Blade Engine encapsulates all the context for applications,

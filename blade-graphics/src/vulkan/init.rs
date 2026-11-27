@@ -1864,7 +1864,7 @@ impl super::Context {
                             return Err(NotSupportedError::NoSupportedDeviceFound);
                         }
                     };
-                    Some(Mutex::new(super::XrSessionState {
+                    Some(Mutex::new(super::xr::SessionState {
                         instance: xr_desc.instance.clone(),
                         system_id: xr_desc.system_id,
                         session,

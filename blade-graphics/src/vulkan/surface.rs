@@ -51,7 +51,7 @@ impl super::Surface {
                     image_index: Some(index),
                     xr_swapchain: 0,
                     xr_view_count: 0,
-                    xr_views: [super::XrView::default(); super::MAX_XR_EYES],
+                    xr_views: [crate::xr::View::default(); super::MAX_XR_VIEWS],
                 }
             }
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
@@ -62,7 +62,7 @@ impl super::Surface {
                     image_index: None,
                     xr_swapchain: 0,
                     xr_view_count: 0,
-                    xr_views: [super::XrView::default(); super::MAX_XR_EYES],
+                    xr_views: [crate::xr::View::default(); super::MAX_XR_VIEWS],
                 }
             }
             Err(other) => {
@@ -73,14 +73,14 @@ impl super::Surface {
                     image_index: None,
                     xr_swapchain: 0,
                     xr_view_count: 0,
-                    xr_views: [super::XrView::default(); super::MAX_XR_EYES],
+                    xr_views: [crate::xr::View::default(); super::MAX_XR_VIEWS],
                 }
             }
         }
     }
 }
 
-impl super::XrSurface {
+impl crate::xr::Surface {
     /// Begin the next XR frame and acquire an image of this swapchain for
     /// it, whose views are all the frame has: `CommandEncoder::present`
     /// ends the frame with one projection layer of it. For more layers,
@@ -114,7 +114,7 @@ impl super::XrSurface {
     /// rendered to. It has to be released with `release_image` after the
     /// work that renders to it is submitted, and before the frame that
     /// shows it ends.
-    pub fn acquire_image(&mut self) -> Option<super::XrImage> {
+    pub fn acquire_image(&mut self) -> Option<crate::xr::Image> {
         let image_index = self.raw.acquire_image().ok()?;
         if let Err(e) = self.raw.wait_image(xr::Duration::INFINITE) {
             // Acquired, so it goes back.
@@ -122,7 +122,7 @@ impl super::XrSurface {
             let _ = self.raw.release_image();
             return None;
         }
-        Some(super::XrImage {
+        Some(crate::xr::Image {
             index: image_index,
             internal: self.frames[image_index as usize],
             swapchain: self.swapchain,
@@ -541,7 +541,7 @@ impl super::Context {
                 present_semaphore,
                 image,
                 view,
-                xr_views: [vk::ImageView::null(); super::MAX_XR_EYES],
+                xr_views: [vk::ImageView::null(); super::MAX_XR_VIEWS],
             });
         }
         surface.swapchain = super::Swapchain {
@@ -557,7 +557,7 @@ impl super::Context {
         swapchain: usize,
         view_count: u32,
         target_size: [u16; 2],
-        views: [super::XrView; super::MAX_XR_EYES],
+        views: [crate::xr::View; super::MAX_XR_VIEWS],
     ) {
         let swapchain = unsafe { &mut *(swapchain as *mut xr::Swapchain<xr::Vulkan>) };
         swapchain.release_image().unwrap();
@@ -594,7 +594,7 @@ impl super::Context {
     /// Returns `None` when the runtime doesn't want the frame rendered, in
     /// which case it is already ended. Otherwise the frame has to be ended
     /// with `xr_end_frame`, after the images it shows are released.
-    pub fn xr_begin_frame(&self) -> Option<super::XrFrame> {
+    pub fn xr_begin_frame(&self) -> Option<crate::xr::Frame> {
         let xr_state = self.xr.as_ref()?;
         let mut xr = xr_state.lock().unwrap();
         let frame_state = xr.frame_wait.wait().ok()?;
@@ -630,12 +630,12 @@ impl super::Context {
         };
         // Kept after the frame ends, for `xr_locate_space` in between frames.
         xr.predicted_display_time = Some(display_time);
-        let mut views = [super::XrView::default(); super::MAX_XR_EYES];
-        let view_count = located.len().min(super::MAX_XR_EYES);
+        let mut views = [crate::xr::View::default(); super::MAX_XR_VIEWS];
+        let view_count = located.len().min(super::MAX_XR_VIEWS);
         for (out, view) in views.iter_mut().zip(&located) {
-            *out = super::XrView {
+            *out = crate::xr::View {
                 pose: pose_from_xr(view.pose),
-                fov: super::XrFov {
+                fov: crate::xr::Fov {
                     angle_left: view.fov.angle_left,
                     angle_right: view.fov.angle_right,
                     angle_up: view.fov.angle_up,
@@ -643,25 +643,25 @@ impl super::Context {
                 },
             };
         }
-        Some(super::XrFrame {
+        Some(crate::xr::Frame {
             display_time,
             view_count: view_count as u32,
             views,
         })
     }
 
-    /// The blend mode that the runtime prefers, which `XrSurface::acquire_frame`
+    /// The blend mode that the runtime prefers, which `xr::Surface::acquire_frame`
     /// ends its frames with.
-    pub fn xr_default_blend_mode(&self) -> crate::XrBlendMode {
+    pub fn xr_default_blend_mode(&self) -> crate::xr::BlendMode {
         self.xr_blend_modes()
             .first()
             .copied()
-            .unwrap_or(crate::XrBlendMode::Opaque)
+            .unwrap_or(crate::xr::BlendMode::Opaque)
     }
 
     /// The blend modes that `xr_end_frame` can take, in the order that the
     /// runtime prefers them.
-    pub fn xr_blend_modes(&self) -> Vec<crate::XrBlendMode> {
+    pub fn xr_blend_modes(&self) -> Vec<crate::xr::BlendMode> {
         let Some(xr) = self.xr.as_ref() else {
             return Vec::new();
         };
@@ -669,9 +669,9 @@ impl super::Context {
         xr.environment_blend_modes
             .iter()
             .filter_map(|&mode| match mode {
-                xr::EnvironmentBlendMode::OPAQUE => Some(crate::XrBlendMode::Opaque),
-                xr::EnvironmentBlendMode::ADDITIVE => Some(crate::XrBlendMode::Additive),
-                xr::EnvironmentBlendMode::ALPHA_BLEND => Some(crate::XrBlendMode::AlphaBlend),
+                xr::EnvironmentBlendMode::OPAQUE => Some(crate::xr::BlendMode::Opaque),
+                xr::EnvironmentBlendMode::ADDITIVE => Some(crate::xr::BlendMode::Additive),
+                xr::EnvironmentBlendMode::ALPHA_BLEND => Some(crate::xr::BlendMode::AlphaBlend),
                 _ => None,
             })
             .collect()
@@ -684,9 +684,9 @@ impl super::Context {
     /// the work that renders to them is submitted.
     pub fn xr_end_frame(
         &self,
-        frame: super::XrFrame,
-        blend_mode: crate::XrBlendMode,
-        layers: &[super::XrLayer],
+        frame: crate::xr::Frame,
+        blend_mode: crate::xr::BlendMode,
+        layers: &[crate::xr::Layer],
     ) -> xr::Result<()> {
         let xr_state = self.xr.as_ref().expect("XR is not enabled in this context");
         let mut xr_state = xr_state.lock().unwrap();
@@ -696,7 +696,7 @@ impl super::Context {
             let projection_views = layers
                 .iter()
                 .map(|layer| match *layer {
-                    super::XrLayer::Projection(ref projection) => {
+                    crate::xr::Layer::Projection(ref projection) => {
                         // One view per array layer of the swapchain.
                         let views = projection.views.unwrap_or(frame.views());
                         let count = views.len().min(projection.surface.view_count as usize);
@@ -713,7 +713,7 @@ impl super::Context {
             let mut quads = Vec::new();
             for (layer, views) in layers.iter().zip(&projection_views) {
                 match *layer {
-                    super::XrLayer::Projection(ref projection) => {
+                    crate::xr::Layer::Projection(ref projection) => {
                         projections.push(
                             xr::CompositionLayerProjection::new()
                                 .layer_flags(map_xr_layer_flags(projection.flags))
@@ -721,7 +721,7 @@ impl super::Context {
                                 .views(views),
                         );
                     }
-                    super::XrLayer::Quad(ref quad) => {
+                    crate::xr::Layer::Quad(ref quad) => {
                         assert!(
                             quad.array_index < quad.surface.view_count,
                             "XR quad layer {} is past the {} layers of its swapchain",
@@ -734,9 +734,9 @@ impl super::Context {
                                 .layer_flags(map_xr_layer_flags(quad.flags))
                                 .space(quad.space.unwrap_or(&base_space))
                                 .eye_visibility(match quad.eye_visibility {
-                                    crate::XrEyeVisibility::Both => xr::EyeVisibility::BOTH,
-                                    crate::XrEyeVisibility::Left => xr::EyeVisibility::LEFT,
-                                    crate::XrEyeVisibility::Right => xr::EyeVisibility::RIGHT,
+                                    crate::xr::EyeVisibility::Both => xr::EyeVisibility::BOTH,
+                                    crate::xr::EyeVisibility::Left => xr::EyeVisibility::LEFT,
+                                    crate::xr::EyeVisibility::Right => xr::EyeVisibility::RIGHT,
                                 })
                                 .sub_image(
                                     xr::SwapchainSubImage::new()
@@ -757,7 +757,7 @@ impl super::Context {
                                 }),
                         );
                     }
-                    super::XrLayer::Raw(_) => {}
+                    crate::xr::Layer::Raw(_) => {}
                 }
             }
             let (mut next_projection, mut next_quad) = (projections.iter(), quads.iter());
@@ -765,11 +765,11 @@ impl super::Context {
                 .iter()
                 .map(|layer| -> &xr::CompositionLayerBase<'_, xr::Vulkan> {
                     match *layer {
-                        super::XrLayer::Projection(_) => next_projection.next().unwrap(),
-                        super::XrLayer::Quad(_) => next_quad.next().unwrap(),
+                        crate::xr::Layer::Projection(_) => next_projection.next().unwrap(),
+                        crate::xr::Layer::Quad(_) => next_quad.next().unwrap(),
                         // `CompositionLayerBase` is a transparent wrapper of
-                        // the header, which `XrRawLayer::new` vouches for.
-                        super::XrLayer::Raw(raw) => unsafe {
+                        // the header, which `xr::RawLayer::new` vouches for.
+                        crate::xr::Layer::Raw(raw) => unsafe {
                             &*(raw.header as *const xr::sys::CompositionLayerBaseHeader
                                 as *const xr::CompositionLayerBase<'_, xr::Vulkan>)
                         },
@@ -777,9 +777,9 @@ impl super::Context {
                 })
                 .collect::<Vec<_>>();
             let mode = match blend_mode {
-                crate::XrBlendMode::Opaque => xr::EnvironmentBlendMode::OPAQUE,
-                crate::XrBlendMode::Additive => xr::EnvironmentBlendMode::ADDITIVE,
-                crate::XrBlendMode::AlphaBlend => xr::EnvironmentBlendMode::ALPHA_BLEND,
+                crate::xr::BlendMode::Opaque => xr::EnvironmentBlendMode::OPAQUE,
+                crate::xr::BlendMode::Additive => xr::EnvironmentBlendMode::ADDITIVE,
+                crate::xr::BlendMode::AlphaBlend => xr::EnvironmentBlendMode::ALPHA_BLEND,
             };
             xr_state
                 .frame_stream
@@ -800,7 +800,7 @@ impl super::Context {
     pub fn xr_recommended_surface_config(
         &self,
         view_type: xr::ViewConfigurationType,
-    ) -> Option<crate::XrSurfaceConfig> {
+    ) -> Option<crate::xr::SurfaceConfig> {
         let xr = self.xr.as_ref()?;
         let xr = xr.lock().unwrap();
         let views = xr
@@ -808,8 +808,8 @@ impl super::Context {
             .enumerate_view_configuration_views(xr.system_id, view_type)
             .ok()?;
         let first = *views.first()?;
-        let view_count = (views.len() as u32).min(super::MAX_XR_EYES as u32);
-        Some(crate::XrSurfaceConfig {
+        let view_count = (views.len() as u32).min(super::MAX_XR_VIEWS as u32);
+        Some(crate::xr::SurfaceConfig {
             size: crate::Extent {
                 width: first.recommended_image_rect_width,
                 height: first.recommended_image_rect_height,
@@ -823,7 +823,7 @@ impl super::Context {
         })
     }
 
-    pub fn create_xr_surface(&self) -> Option<super::XrSurface> {
+    pub fn create_xr_surface(&self) -> Option<crate::xr::Surface> {
         let config =
             self.xr_recommended_surface_config(xr::ViewConfigurationType::PRIMARY_STEREO)?;
         self.create_xr_surface_configured(config)
@@ -831,8 +831,8 @@ impl super::Context {
 
     pub fn create_xr_surface_configured(
         &self,
-        config: crate::XrSurfaceConfig,
-    ) -> Option<super::XrSurface> {
+        config: crate::xr::SurfaceConfig,
+    ) -> Option<crate::xr::Surface> {
         let xr = self.xr.as_ref()?;
         let mut surface = {
             let xr = xr.lock().unwrap();
@@ -851,7 +851,7 @@ impl super::Context {
                     mip_count: 1,
                 })
                 .ok()?;
-            super::XrSurface {
+            crate::xr::Surface {
                 raw,
                 frames: Vec::new(),
                 swapchain: super::Swapchain {
@@ -867,7 +867,7 @@ impl super::Context {
         Some(surface)
     }
 
-    pub fn destroy_xr_surface(&self, surface: &mut super::XrSurface) {
+    pub fn destroy_xr_surface(&self, surface: &mut crate::xr::Surface) {
         for frame in surface.frames.drain(..) {
             for view in frame.xr_views {
                 if view != vk::ImageView::null() {
@@ -888,17 +888,17 @@ impl super::Context {
 
     fn reconfigure_xr_surface(
         &self,
-        surface: &mut super::XrSurface,
-        config: crate::XrSurfaceConfig,
+        surface: &mut crate::xr::Surface,
+        config: crate::xr::SurfaceConfig,
     ) {
         self.destroy_xr_surface(surface);
         let xr = self.xr.as_ref().expect("XR is not enabled in this context");
         let xr = xr.lock().unwrap();
         assert!(
-            config.view_count as usize <= super::MAX_XR_EYES,
-            "XR view count {} exceeds MAX_XR_EYES={}",
+            config.view_count as usize <= super::MAX_XR_VIEWS,
+            "XR view count {} exceeds MAX_XR_VIEWS={}",
             config.view_count,
-            super::MAX_XR_EYES
+            super::MAX_XR_VIEWS
         );
         let (raw_format, format) = select_xr_swapchain_format(&xr.session, config.color_space);
 
@@ -947,7 +947,7 @@ impl super::Context {
                     .create_image_view(&view_create_info, None)
                     .unwrap()
             };
-            let mut xr_views = [vk::ImageView::null(); super::MAX_XR_EYES];
+            let mut xr_views = [vk::ImageView::null(); super::MAX_XR_VIEWS];
             for eye in 0..config.view_count.max(1) {
                 let xr_view_info = vk::ImageViewCreateInfo {
                     image,
@@ -1004,7 +1004,7 @@ impl super::Context {
 
 fn xr_projection_layer_views<'a>(
     swapchain: &'a xr::Swapchain<xr::Vulkan>,
-    views: &'a [super::XrView],
+    views: &'a [crate::xr::View],
     target_size: [u16; 2],
 ) -> Vec<xr::CompositionLayerProjectionView<'a, xr::Vulkan>> {
     let rect = xr::Rect2Di {
@@ -1110,8 +1110,8 @@ fn select_xr_swapchain_format(
     .expect("No compatible XR swapchain format available")
 }
 
-pub(super) fn pose_from_xr(pose: xr::Posef) -> super::XrPose {
-    super::XrPose {
+pub(super) fn pose_from_xr(pose: xr::Posef) -> crate::xr::Pose {
+    crate::xr::Pose {
         orientation: [
             pose.orientation.x,
             pose.orientation.y,
@@ -1122,7 +1122,7 @@ pub(super) fn pose_from_xr(pose: xr::Posef) -> super::XrPose {
     }
 }
 
-fn pose_to_xr(pose: super::XrPose) -> xr::Posef {
+fn pose_to_xr(pose: crate::xr::Pose) -> xr::Posef {
     let [x, y, z, w] = pose.orientation;
     let [px, py, pz] = pose.position;
     xr::Posef {
@@ -1135,15 +1135,15 @@ fn pose_to_xr(pose: super::XrPose) -> xr::Posef {
     }
 }
 
-fn map_xr_layer_flags(flags: crate::XrLayerFlags) -> xr::CompositionLayerFlags {
+fn map_xr_layer_flags(flags: crate::xr::LayerFlags) -> xr::CompositionLayerFlags {
     let mut out = xr::CompositionLayerFlags::EMPTY;
-    if flags.contains(crate::XrLayerFlags::BLEND_SOURCE_ALPHA) {
+    if flags.contains(crate::xr::LayerFlags::BLEND_SOURCE_ALPHA) {
         out |= xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA;
     }
-    if flags.contains(crate::XrLayerFlags::UNPREMULTIPLIED_ALPHA) {
+    if flags.contains(crate::xr::LayerFlags::UNPREMULTIPLIED_ALPHA) {
         out |= xr::CompositionLayerFlags::UNPREMULTIPLIED_ALPHA;
     }
-    if flags.contains(crate::XrLayerFlags::CORRECT_CHROMATIC_ABERRATION) {
+    if flags.contains(crate::xr::LayerFlags::CORRECT_CHROMATIC_ABERRATION) {
         out |= xr::CompositionLayerFlags::CORRECT_CHROMATIC_ABERRATION;
     }
     out

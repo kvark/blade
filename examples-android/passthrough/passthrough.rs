@@ -56,7 +56,7 @@ struct HudData {
     depth_tex: gpu::TextureView,
 }
 
-fn view_matrix_from_pose(pose: gpu::XrPose) -> Mat4 {
+fn view_matrix_from_pose(pose: gpu::xr::Pose) -> Mat4 {
     let orientation = Quat::from_xyzw(
         pose.orientation[0],
         pose.orientation[1],
@@ -67,7 +67,7 @@ fn view_matrix_from_pose(pose: gpu::XrPose) -> Mat4 {
     Mat4::from_rotation_translation(orientation, position).inverse()
 }
 
-fn projection_matrix_from_fov(fov: gpu::XrFov, near_z: f32, far_z: f32) -> Mat4 {
+fn projection_matrix_from_fov(fov: gpu::xr::Fov, near_z: f32, far_z: f32) -> Mat4 {
     let tan_left = fov.angle_left.tan();
     let tan_right = fov.angle_right.tan();
     let tan_down = fov.angle_down.tan();
@@ -91,10 +91,10 @@ fn projection_matrix_from_fov(fov: gpu::XrFov, near_z: f32, far_z: f32) -> Mat4 
 }
 
 struct Example {
-    scene_surface: gpu::XrSurface,
-    hud_surface: gpu::XrSurface,
-    passthrough: Option<gpu::XrPassthrough>,
-    depth: Option<gpu::XrEnvironmentDepth>,
+    scene_surface: gpu::xr::Surface,
+    hud_surface: gpu::xr::Surface,
+    passthrough: Option<gpu::xr::Passthrough>,
+    depth: Option<gpu::xr::EnvironmentDepth>,
     // Bound in place of the depth of the environment, without it.
     no_depth: gpu::Texture,
     no_depth_view: gpu::TextureView,
@@ -120,17 +120,17 @@ impl Example {
             .create_xr_surface_configured(scene_config)
             .expect("Unable to create the XR scene swapchain");
         let hud_surface = context
-            .create_xr_surface_configured(gpu::XrSurfaceConfig {
+            .create_xr_surface_configured(gpu::xr::SurfaceConfig {
                 size: HUD_SIZE,
                 view_count: 1,
                 ..scene_config
             })
             .expect("Unable to create the XR HUD swapchain");
 
-        let style = gpu::XrPassthroughStyle {
+        let style = gpu::xr::PassthroughStyle {
             opacity: 1.0,
             edge_color: [0.2, 0.9, 1.0, 1.0],
-            color_map: gpu::XrPassthroughColorMap::tint([1.0, 0.15, 0.1, 1.0]),
+            color_map: gpu::xr::PassthroughColorMap::tint([1.0, 0.15, 0.1, 1.0]),
         };
         let passthrough = context.create_xr_passthrough(&style);
         if passthrough.is_none() {
@@ -293,7 +293,7 @@ impl Example {
             if hud.is_some() {
                 self.hud_surface.release_image();
             }
-            let _ = context.xr_end_frame(frame, gpu::XrBlendMode::Opaque, &[]);
+            let _ = context.xr_end_frame(frame, gpu::xr::BlendMode::Opaque, &[]);
             return;
         };
         let environment_depth = self
@@ -407,25 +407,25 @@ impl Example {
         if let Some(ref passthrough) = self.passthrough {
             layers.push(passthrough.layer());
         }
-        layers.push(gpu::XrLayer::Projection(gpu::XrProjectionLayer {
+        layers.push(gpu::xr::Layer::Projection(gpu::xr::ProjectionLayer {
             surface: &self.scene_surface,
             views: None,
             space: None,
-            flags: gpu::XrLayerFlags::BLEND_SOURCE_ALPHA,
+            flags: gpu::xr::LayerFlags::BLEND_SOURCE_ALPHA,
         }));
-        layers.push(gpu::XrLayer::Quad(gpu::XrQuadLayer {
+        layers.push(gpu::xr::Layer::Quad(gpu::xr::QuadLayer {
             surface: &self.hud_surface,
             array_index: 0,
             space: Some(&self.view_space),
-            pose: gpu::XrPose {
+            pose: gpu::xr::Pose {
                 orientation: [0.0, 0.0, 0.0, 1.0],
                 position: [0.0, -0.25, -1.0],
             },
             size: [0.5, 0.25],
-            eye_visibility: gpu::XrEyeVisibility::Both,
-            flags: gpu::XrLayerFlags::BLEND_SOURCE_ALPHA,
+            eye_visibility: gpu::xr::EyeVisibility::Both,
+            flags: gpu::xr::LayerFlags::BLEND_SOURCE_ALPHA,
         }));
-        if let Err(e) = context.xr_end_frame(frame, gpu::XrBlendMode::Opaque, &layers) {
+        if let Err(e) = context.xr_end_frame(frame, gpu::xr::BlendMode::Opaque, &layers) {
             log::error!("XR frame end failed: {e}");
         }
         self.rendered_frames += 1;
@@ -437,20 +437,11 @@ impl Example {
     }
 
     /// Where the head was a moment ago, as for the time a camera took an
-    /// image: Android camera timestamps are of `CLOCK_BOOTTIME` when their
-    /// source is real time.
-    // `timespec` is narrower on 32-bit targets.
-    #[allow(clippy::useless_conversion)]
+    /// image. With a camera, the age is the time since its timestamp, in the
+    /// camera's own clock: `CLOCK_BOOTTIME` for Android cameras whose
+    /// timestamp source is real time.
     fn report_head_pose(&self, context: &gpu::Context) {
-        let mut now = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut now) } != 0 {
-            return;
-        }
-        let captured = i64::from(now.tv_sec) * 1_000_000_000 + i64::from(now.tv_nsec) - 30_000_000;
-        match context.xr_time_from_clock(libc::CLOCK_BOOTTIME, captured) {
+        match context.xr_time_ago(Duration::from_millis(30)) {
             Some(time) => info!(
                 "Head 30 ms ago: {:?}, after {} frames",
                 context.xr_locate(&self.view_space, time),
@@ -552,7 +543,7 @@ pub fn main() {
         .unwrap();
     let context = unsafe {
         gpu::Context::init(gpu::ContextDesc {
-            xr: Some(gpu::XrDesc {
+            xr: Some(gpu::xr::Desc {
                 instance: xr_instance.clone(),
                 system_id: system,
             }),

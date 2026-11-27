@@ -1,5 +1,4 @@
 use ash::{ext, khr, vk};
-use openxr as xr;
 use std::{
     mem,
     num::NonZeroU32,
@@ -17,11 +16,8 @@ mod init;
 mod pipeline;
 mod resource;
 mod surface;
+pub(crate) mod xr;
 mod xr_ext;
-
-pub use xr_ext::{
-    XrDepthImage, XrEnvironmentDepth, XrPassthrough, XrPassthroughColorMap, XrPassthroughStyle,
-};
 
 /// Shared Vulkan instance state used by both `Context::init` and `Context::enumerate`.
 struct VulkanInstance {
@@ -31,9 +27,9 @@ struct VulkanInstance {
 }
 
 const QUERY_POOL_SIZE: usize = crate::limits::PASS_COUNT + 1;
-// Views of an XR frame, and layers of an XR swapchain: two for stereo, four
-// for the stereo views with foveated insets.
-const MAX_XR_EYES: usize = 4;
+// The views of an XR frame, of which an XR swapchain has an array layer
+// each: two for stereo, and four for stereo with foveated insets.
+const MAX_XR_VIEWS: usize = 4;
 
 mod cooperative_matrix2;
 
@@ -217,7 +213,7 @@ struct InternalFrame {
     present_semaphore: vk::Semaphore,
     image: vk::Image,
     view: vk::ImageView,
-    xr_views: [vk::ImageView; MAX_XR_EYES],
+    xr_views: [vk::ImageView; MAX_XR_VIEWS],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -237,31 +233,6 @@ pub struct Surface {
     full_screen_exclusive: bool,
 }
 
-pub struct XrSurface {
-    raw: openxr::Swapchain<openxr::Vulkan>,
-    frames: Vec<InternalFrame>,
-    swapchain: Swapchain,
-    view_count: u32,
-}
-
-pub struct XrSessionState {
-    pub instance: xr::Instance,
-    pub system_id: xr::SystemId,
-    pub session: xr::Session<xr::Vulkan>,
-    pub frame_wait: xr::FrameWaiter,
-    pub frame_stream: xr::FrameStream<xr::Vulkan>,
-    pub view_type: xr::ViewConfigurationType,
-    /// The blend mode of the frames that `XrSurface::acquire_frame` begins,
-    /// the first that the runtime lists.
-    pub environment_blend_mode: xr::EnvironmentBlendMode,
-    /// Every blend mode that the runtime supports, in its order of
-    /// preference.
-    pub environment_blend_modes: Vec<xr::EnvironmentBlendMode>,
-    /// The base space of the views, and of the layers that don't name one.
-    pub space: Option<xr::Space>,
-    pub predicted_display_time: Option<xr::Time>,
-}
-
 #[derive(Clone, Copy, Debug)]
 enum Presentation {
     Window {
@@ -274,149 +245,8 @@ enum Presentation {
         swapchain: usize,
         view_count: u32,
         target_size: [u16; 2],
-        views: [XrView; MAX_XR_EYES],
+        views: [crate::xr::View; MAX_XR_VIEWS],
     },
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct XrPose {
-    pub orientation: [f32; 4],
-    pub position: [f32; 3],
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct XrFov {
-    pub angle_left: f32,
-    pub angle_right: f32,
-    pub angle_up: f32,
-    pub angle_down: f32,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct XrView {
-    pub pose: XrPose,
-    pub fov: XrFov,
-}
-
-/// An XR frame, from `Context::xr_begin_frame` to `Context::xr_end_frame`,
-/// which takes it, with the composition layers that make it up.
-#[must_use = "an XR frame has to be ended with `Context::xr_end_frame`"]
-#[derive(Debug)]
-pub struct XrFrame {
-    display_time: xr::Time,
-    view_count: u32,
-    views: [XrView; MAX_XR_EYES],
-}
-
-impl XrFrame {
-    /// When the frame is expected to be displayed, which the views are
-    /// predicted for.
-    pub fn display_time(&self) -> xr::Time {
-        self.display_time
-    }
-
-    /// The views of the eyes at the display time, in the base space.
-    pub fn views(&self) -> &[XrView] {
-        &self.views[..self.view_count as usize]
-    }
-}
-
-/// An image of an XR swapchain, acquired with `XrSurface::acquire_image` and
-/// held until `XrSurface::release_image`.
-#[derive(Clone, Copy, Debug)]
-pub struct XrImage {
-    index: u32,
-    internal: InternalFrame,
-    swapchain: Swapchain,
-    layer_count: u32,
-}
-
-impl XrImage {
-    /// The whole image, with all of its array layers.
-    pub fn texture(&self) -> Texture {
-        Texture {
-            raw: self.internal.image,
-            memory_handle: !0,
-            target_size: self.swapchain.target_size,
-            format: self.swapchain.format,
-            external: None,
-        }
-    }
-
-    /// A view of all of the array layers.
-    pub fn texture_view(&self) -> TextureView {
-        TextureView {
-            raw: self.internal.view,
-            target_size: self.swapchain.target_size,
-            aspects: crate::TexelAspects::COLOR,
-        }
-    }
-
-    /// A view of one array layer, such as that of one eye.
-    pub fn layer_view(&self, layer: u32) -> TextureView {
-        assert!(
-            layer < self.layer_count,
-            "XR swapchain layer {layer} is out of range"
-        );
-        TextureView {
-            raw: self.internal.xr_views[layer as usize],
-            target_size: self.swapchain.target_size,
-            aspects: crate::TexelAspects::COLOR,
-        }
-    }
-}
-
-/// A projection layer: one view per array layer of the swapchain, rendered
-/// from those views.
-pub struct XrProjectionLayer<'a> {
-    pub surface: &'a XrSurface,
-    /// The views it was rendered from, or those of the frame it ends.
-    pub views: Option<&'a [XrView]>,
-    /// The space of the views, or the base space.
-    pub space: Option<&'a xr::Space>,
-    pub flags: crate::XrLayerFlags,
-}
-
-/// A quad layer: a flat rectangle placed in a space, such as a HUD in the
-/// view space, which the compositor samples directly.
-pub struct XrQuadLayer<'a> {
-    pub surface: &'a XrSurface,
-    /// The array layer of the swapchain that it shows.
-    pub array_index: u32,
-    /// The space of the pose, or the base space.
-    pub space: Option<&'a xr::Space>,
-    /// The center of the quad, which faces along +Z of its orientation.
-    pub pose: XrPose,
-    /// Width and height, in meters.
-    pub size: [f32; 2],
-    pub eye_visibility: crate::XrEyeVisibility,
-    pub flags: crate::XrLayerFlags,
-}
-
-/// Any other composition layer that the runtime takes, such as that of
-/// `XR_FB_passthrough`, as its raw OpenXR structure.
-#[derive(Clone, Copy)]
-pub struct XrRawLayer<'a> {
-    header: &'a xr::sys::CompositionLayerBaseHeader,
-}
-
-impl<'a> XrRawLayer<'a> {
-    /// # Safety
-    ///
-    /// `header` has to be the start of a complete OpenXR composition layer
-    /// structure, whose handles and chained structures stay valid until
-    /// `Context::xr_end_frame` returns.
-    pub unsafe fn new(header: &'a xr::sys::CompositionLayerBaseHeader) -> Self {
-        Self { header }
-    }
-}
-
-/// One composition layer of an XR frame. The layers of a frame are
-/// composited in order, the first at the back.
-pub enum XrLayer<'a> {
-    Projection(XrProjectionLayer<'a>),
-    Quad(XrQuadLayer<'a>),
-    Raw(XrRawLayer<'a>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -426,7 +256,7 @@ pub struct Frame {
     internal: InternalFrame,
     xr_swapchain: usize,
     xr_view_count: u32,
-    xr_views: [XrView; MAX_XR_EYES],
+    xr_views: [crate::xr::View; MAX_XR_VIEWS],
 }
 
 impl Frame {
@@ -450,7 +280,7 @@ impl Frame {
 
     pub fn xr_texture_view(&self, eye: u32) -> TextureView {
         let eye = eye as usize;
-        assert!(eye < MAX_XR_EYES, "XR eye {} is out of range", eye);
+        assert!(eye < MAX_XR_VIEWS, "XR eye {} is out of range", eye);
         let raw = self.internal.xr_views[eye];
         assert_ne!(
             raw,
@@ -469,7 +299,7 @@ impl Frame {
         self.xr_view_count
     }
 
-    pub fn xr_view(&self, eye: u32) -> XrView {
+    pub fn xr_view(&self, eye: u32) -> crate::xr::View {
         let eye = eye as usize;
         assert!(
             eye < self.xr_view_count as usize,
@@ -481,7 +311,7 @@ impl Frame {
 }
 
 impl Context {
-    pub fn xr_session(&self) -> Option<xr::Session<xr::Vulkan>> {
+    pub fn xr_session(&self) -> Option<openxr::Session<openxr::Vulkan>> {
         self.xr
             .as_ref()
             .map(|xr| xr.lock().unwrap().session.clone())
@@ -489,14 +319,15 @@ impl Context {
 
     /// Locate an action space (e.g. controller aim) relative to the XR reference space
     /// at the last predicted display time.
-    pub fn xr_locate_space(&self, action_space: &xr::Space) -> Option<xr::Posef> {
+    pub fn xr_locate_space(&self, action_space: &openxr::Space) -> Option<openxr::Posef> {
         let xr = self.xr.as_ref()?.lock().unwrap();
         let time = xr.predicted_display_time?;
         let ref_space = xr.space.as_ref()?;
         let location = action_space.locate(ref_space, time).ok()?;
         let flags = location.location_flags;
         if flags.contains(
-            xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::ORIENTATION_VALID,
+            openxr::SpaceLocationFlags::POSITION_VALID
+                | openxr::SpaceLocationFlags::ORIENTATION_VALID,
         ) {
             Some(location.pose)
         } else {
@@ -540,7 +371,7 @@ pub struct Context {
     timing_supported: bool,
     memory_budget: bool,
     inner: VulkanInstance,
-    xr: Option<Mutex<XrSessionState>>,
+    xr: Option<Mutex<xr::SessionState>>,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]

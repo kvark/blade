@@ -36,7 +36,7 @@ fn model_matrix() -> Mat4 {
     Mat4::from_translation(Vec3::new(0.0, 0.0, -2.0))
 }
 
-fn view_matrix_from_pose(pose: gpu::XrPose) -> Mat4 {
+fn view_matrix_from_pose(pose: gpu::xr::Pose) -> Mat4 {
     let orientation = Quat::from_xyzw(
         pose.orientation[0],
         pose.orientation[1],
@@ -47,7 +47,7 @@ fn view_matrix_from_pose(pose: gpu::XrPose) -> Mat4 {
     Mat4::from_rotation_translation(orientation, position).inverse()
 }
 
-fn projection_matrix_from_fov(fov: gpu::XrFov, near_z: f32, far_z: f32) -> Mat4 {
+fn projection_matrix_from_fov(fov: gpu::xr::Fov, near_z: f32, far_z: f32) -> Mat4 {
     let tan_left = fov.angle_left.tan();
     let tan_right = fov.angle_right.tan();
     let tan_down = fov.angle_down.tan();
@@ -71,7 +71,7 @@ fn projection_matrix_from_fov(fov: gpu::XrFov, near_z: f32, far_z: f32) -> Mat4 
 }
 
 struct Example {
-    xr_surface: gpu::XrSurface,
+    xr_surface: gpu::xr::Surface,
     pipeline: gpu::RenderPipeline,
     command_encoder: gpu::CommandEncoder,
     params_buf: gpu::Buffer,
@@ -335,7 +335,7 @@ pub fn main() {
     mark!("XR mark: OpenXR system acquired");
     let context = unsafe {
         gpu::Context::init(gpu::ContextDesc {
-            xr: Some(gpu::XrDesc {
+            xr: Some(gpu::xr::Desc {
                 instance: xr_instance.clone(),
                 system_id: system,
             }),
